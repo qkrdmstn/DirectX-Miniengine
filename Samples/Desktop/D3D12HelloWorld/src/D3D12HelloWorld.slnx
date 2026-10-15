@@ -3,19 +3,19 @@
     <Platform Name="x64" />
     <Platform Name="ARM64" />
   </Configurations>
-  <Project Path="HelloBundles/D3D12HelloBundles.vcxproj" />
-  <Project Path="HelloConstBuffers/D3D12HelloConstBuffers.vcxproj" />
-  <Project Path="HelloFrameBuffering/D3D12HelloFrameBuffering.vcxproj" />
-  <Project Path="HelloGenericPrograms/D3D12HelloGenericPrograms.vcxproj" />
-  <Project Path="HelloMeshNodes/D3D12HelloMeshNodes.vcxproj" />
-  <Project Path="HelloPartialGraphicsPrograms/D3D12HelloPartialGraphicsPrograms.vcxproj" />
-  <Project Path="HelloTexture/D3D12HelloTexture.vcxproj" />
-  <Project Path="HelloTightAlignment/D3D12HelloTightAlignment.vcxproj" />
-  <Project Path="HelloTriangle/D3D12HelloTriangle.vcxproj" />
-  <Project Path="HelloVADecode/D3D12HelloVADecode.vcxproj" />
-  <Project Path="HelloVAEncode/D3D12HelloVAEncode.vcxproj" />
-  <Project Path="HelloVAResourceInterop/D3D12HelloVAResourceInterop.vcxproj" />
-  <Project Path="HelloWindow/D3D12HelloWindow.vcxproj" />
-  <Project Path="HelloWorkGraphs/D3D12HelloWorkGraphs.vcxproj" />
-  <Project Path="WorkGraphsSandbox/D3D12WorkGraphsSandbox.vcxproj" />
+  <Project Path="HelloBundles/D3D12HelloBundles.vcxproj" Id="cae2b6c4-b644-4b92-8804-23e18310765b" />
+  <Project Path="HelloConstBuffers/D3D12HelloConstBuffers.vcxproj" Id="6f49d366-b5f1-432b-a3e8-5d1ca57865f9" />
+  <Project Path="HelloFrameBuffering/D3D12HelloFrameBuffering.vcxproj" Id="df8a573d-fd94-45f8-aed2-0befc00b9591" />
+  <Project Path="HelloGenericPrograms/D3D12HelloGenericPrograms.vcxproj" Id="7db43f09-7bd6-4e69-8987-9a919a142852" />
+  <Project Path="HelloMeshNodes/D3D12HelloMeshNodes.vcxproj" Id="b9680899-f009-406b-beee-d0214c1e7592" />
+  <Project Path="HelloPartialGraphicsPrograms/D3D12HelloPartialGraphicsPrograms.vcxproj" Id="ff87d9c7-631e-4409-a52b-ea14739e3fec" />
+  <Project Path="HelloTexture/D3D12HelloTexture.vcxproj" Id="16b13bb4-d82d-4ac1-8b40-c6bccc99954b" />
+  <Project Path="HelloTightAlignment/D3D12HelloTightAlignment.vcxproj" Id="69b1a348-df87-4335-bc68-fe8c060c7a60" />
+  <Project Path="HelloTriangle/D3D12HelloTriangle.vcxproj" Id="5018f6a3-6533-4744-b1fd-727d199fd2e9" />
+  <Project Path="HelloVADecode/D3D12HelloVADecode.vcxproj" Id="e16591b9-e382-431f-be17-8c94e5f6ad5e" />
+  <Project Path="HelloVAEncode/D3D12HelloVAEncode.vcxproj" Id="940957e3-82d6-4cd8-b39f-6fa47763973f" />
+  <Project Path="HelloVAResourceInterop/D3D12HelloVAResourceInterop.vcxproj" Id="17171787-c5d2-4014-9d1d-bc43074f36a1" />
+  <Project Path="HelloWindow/D3D12HelloWindow.vcxproj" Id="23e282d0-e846-485c-b7a1-da60f4bea3d2" />
+  <Project Path="HelloWorkGraphs/D3D12HelloWorkGraphs.vcxproj" Id="05080adc-d456-4058-8064-4791865f796b" />
+  <Project Path="WorkGraphsSandbox/D3D12WorkGraphsSandbox.vcxproj" Id="2725e8ec-0892-499b-acd5-0ea18157682a" />
 </Solution>
