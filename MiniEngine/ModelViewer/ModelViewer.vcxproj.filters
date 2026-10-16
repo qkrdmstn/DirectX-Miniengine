@@ -226,7 +226,7 @@
     </CopyFileToFolders>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="MyApplication.cpp">
+    <ClCompile Include="ModelViewer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
