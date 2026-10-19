@@ -33,6 +33,7 @@
 #include "ModelLoader.h"
 #include "ShadowCamera.h"
 #include "Display.h"
+#include "Utility.h"
 
 #define LEGACY_RENDERER
 
@@ -54,6 +55,7 @@ public:
 
     virtual void Update(float deltaT) override;
     virtual void RenderScene(void) override;
+    virtual void RenderUI(GraphicsContext& context) override;
 
 private:
 
@@ -64,10 +66,32 @@ private:
     D3D12_RECT m_MainScissor;
 
     ModelInstance m_ModelInst;
+    struct BoneSelection { uint32_t paletteId = 0; uint32_t jointIndex = 0; } m_BoneSelection;
+    bool m_BoneDebugEnabled = false;
+    bool m_WeightDebugEnabled = false;
+    bool m_WireframeEnabled = false;
+    bool m_AnimationsPaused = false;
+    vector<AnimationState::eMode> m_ResumeModes;
     ShadowCamera m_SunShadowCamera;
 };
 
 CREATE_APPLICATION(ModelViewer)
+
+static std::wstring BoneName(const Model& model, uint32_t nodeIndex, uint32_t jointIndex)
+{
+    if (nodeIndex < model.m_NodeNames.size() && !model.m_NodeNames[nodeIndex].empty())
+        return Utility::UTF8ToWideString(model.m_NodeNames[nodeIndex]);
+    return L"Joint_" + std::to_wstring(jointIndex);
+}
+
+static std::wstring ParentName(const Model& model, uint32_t nodeIndex)
+{
+    if (nodeIndex >= model.m_NodeNames.size())
+        return L"None";
+    if (!model.m_NodeNames[nodeIndex].empty())
+        return Utility::UTF8ToWideString(model.m_NodeNames[nodeIndex]);
+    return L"Node_" + std::to_wstring(nodeIndex);
+}
 
 ExpVar g_SunLightIntensity("Viewer/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
 NumVar g_SunOrientation("Viewer/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f);
@@ -182,6 +206,28 @@ void ModelViewer::Startup(void)
         m_ModelInst.LoopAllAnimations();
         m_ModelInst.Resize(10.0f);
 
+        const Model* model = m_ModelInst.GetModel();
+        if (model != nullptr)
+        {
+            for (uint32_t paletteId = 0; paletteId < model->m_SkinPalettes.size(); ++paletteId)
+            {
+                const SkinPalette& palette = model->m_SkinPalettes[paletteId];
+                if (palette.numJoints > 0 && !m_BoneDebugEnabled)
+                    m_BoneSelection.paletteId = paletteId;
+                m_BoneDebugEnabled |= palette.numJoints > 0;
+                for (uint32_t jointIndex = 0; jointIndex < palette.numJoints; ++jointIndex)
+                {
+                    const uint32_t nodeIndex = model->m_JointIndices[palette.startJoint + jointIndex];
+                    const uint32_t parent = nodeIndex < model->m_NodeParents.size()
+                        ? model->m_NodeParents[nodeIndex] : UINT32_MAX;
+                    const std::wstring name = BoneName(*model, nodeIndex, jointIndex);
+                    const std::wstring parentName = ParentName(*model, parent);
+                    Utility::Printf(L"Skin %u Joint %u Node %u %ls Parent %u %ls\n",
+                        paletteId, jointIndex, nodeIndex, name.c_str(), parent, parentName.c_str());
+                }
+            }
+        }
+
         MotionBlur::Enable = false;
     }
 
@@ -213,6 +259,71 @@ namespace Graphics
 void ModelViewer::Update(float deltaT)
 {
     ScopedTimer _prof(L"Update State");
+
+    const Model* model = m_ModelInst.GetModel();
+    if (model != nullptr && m_BoneDebugEnabled && m_BoneSelection.paletteId < model->m_SkinPalettes.size())
+    {
+        const SkinPalette& palette = model->m_SkinPalettes[m_BoneSelection.paletteId];
+        if (GameInput::IsFirstPressed(GameInput::kKey_b))
+            m_BoneDebugEnabled = false;
+        if (GameInput::IsFirstPressed(GameInput::kKey_h))
+            m_WeightDebugEnabled = !m_WeightDebugEnabled;
+        if (GameInput::IsFirstPressed(GameInput::kKey_v))
+            m_WireframeEnabled = !m_WireframeEnabled;
+        if (palette.numJoints > 0)
+        {
+            if (GameInput::IsFirstPressed(GameInput::kKey_j))
+                m_BoneSelection.jointIndex = (m_BoneSelection.jointIndex + palette.numJoints - 1) % palette.numJoints;
+            if (GameInput::IsFirstPressed(GameInput::kKey_k))
+                m_BoneSelection.jointIndex = (m_BoneSelection.jointIndex + 1) % palette.numJoints;
+        }
+        if (GameInput::IsFirstPressed(GameInput::kKey_i))
+        {
+            for (uint32_t step = 1; step <= model->m_SkinPalettes.size(); ++step)
+            {
+                uint32_t next = (m_BoneSelection.paletteId + step) % (uint32_t)model->m_SkinPalettes.size();
+                if (model->m_SkinPalettes[next].numJoints > 0)
+                {
+                    m_BoneSelection.paletteId = next;
+                    m_BoneSelection.jointIndex = 0;
+                    break;
+                }
+            }
+        }
+    }
+    else if (model != nullptr && m_BoneSelection.paletteId < model->m_SkinPalettes.size()
+        && model->m_SkinPalettes[m_BoneSelection.paletteId].numJoints > 0
+        && GameInput::IsFirstPressed(GameInput::kKey_b))
+        m_BoneDebugEnabled = true;
+
+    if (GameInput::IsFirstPressed(GameInput::kKey_space) && m_ModelInst.GetNumAnimations() > 0)
+    {
+        if (!m_AnimationsPaused)
+        {
+            m_ResumeModes.resize(m_ModelInst.GetNumAnimations(), AnimationState::kStopped);
+            bool anyPlaying = false;
+            for (uint32_t i = 0; i < m_ResumeModes.size(); ++i)
+            {
+                m_ResumeModes[i] = m_ModelInst.GetAnimationMode(i);
+                if (m_ResumeModes[i] != AnimationState::kStopped)
+                {
+                    m_ModelInst.PauseAnimation(i);
+                    anyPlaying = true;
+                }
+            }
+            m_AnimationsPaused = anyPlaying;
+        }
+        else
+        {
+            for (uint32_t i = 0; i < m_ResumeModes.size(); ++i)
+            {
+                if (m_ResumeModes[i] != AnimationState::kStopped)
+                    m_ModelInst.PlayAnimation(i, m_ResumeModes[i] == AnimationState::kLooping);
+            }
+            m_ResumeModes.clear();
+            m_AnimationsPaused = false;
+        }
+    }
 
     if (GameInput::IsFirstPressed(GameInput::kLShoulder))
         DebugZoom.Decrement();
@@ -251,6 +362,7 @@ void ModelViewer::Update(float deltaT)
 void ModelViewer::RenderScene(void)
 {
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
+    const Model* model = m_ModelInst.GetModel();
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
     const D3D12_VIEWPORT& viewport = m_MainViewport;
@@ -278,12 +390,13 @@ void ModelViewer::RenderScene(void)
         m_SunShadowCamera.UpdateMatrix(-SunDirection, Vector3(0, -500.0f, 0), Vector3(5000, 3000, 3000),
             (uint32_t)g_ShadowBuffer.GetWidth(), (uint32_t)g_ShadowBuffer.GetHeight(), 16);
 
-        GlobalConstants globals;
+        GlobalConstants globals = {};
         globals.ViewProjMatrix = m_Camera.GetViewProjMatrix();
         globals.SunShadowMatrix = m_SunShadowCamera.GetShadowMatrix();
         globals.CameraPos = m_Camera.GetPosition();
         globals.SunDirection = SunDirection;
         globals.SunIntensity = Vector3(Scalar(g_SunLightIntensity));
+        globals.DebugJointIndex = UINT32_MAX;
 
         // Begin rendering depth
         gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
@@ -293,6 +406,13 @@ void ModelViewer::RenderScene(void)
         sorter.SetCamera(m_Camera);
         sorter.SetViewport(viewport);
         sorter.SetScissor(scissor);
+        if (m_BoneDebugEnabled && model != nullptr
+            && m_BoneSelection.paletteId < model->m_SkinPalettes.size())
+        {
+            const SkinPalette& palette = model->m_SkinPalettes[m_BoneSelection.paletteId];
+            sorter.SetBoneDebug(m_WeightDebugEnabled, palette.startJoint, m_BoneSelection.jointIndex);
+            sorter.SetWireframe(m_WireframeEnabled);
+        }
         sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
         sorter.AddRenderTarget(g_SceneColorBuffer);
 
@@ -338,7 +458,7 @@ void ModelViewer::RenderScene(void)
                 sorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
             }
 
-            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+            //Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
 
             sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
         }
@@ -360,4 +480,32 @@ void ModelViewer::RenderScene(void)
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
     gfxContext.Finish();
+}
+
+void ModelViewer::RenderUI(GraphicsContext& context)
+{
+    const Model* model = m_ModelInst.GetModel();
+    if (!m_BoneDebugEnabled || model == nullptr || m_BoneSelection.paletteId >= model->m_SkinPalettes.size())
+        return;
+
+    const SkinPalette& palette = model->m_SkinPalettes[m_BoneSelection.paletteId];
+    if (m_BoneSelection.jointIndex >= palette.numJoints)
+        return;
+
+    const uint32_t nodeIndex = model->m_JointIndices[palette.startJoint + m_BoneSelection.jointIndex];
+    const uint32_t parent = nodeIndex < model->m_NodeParents.size()
+        ? model->m_NodeParents[nodeIndex] : UINT32_MAX;
+    const std::wstring name = BoneName(*model, nodeIndex, m_BoneSelection.jointIndex);
+    const std::wstring parentName = ParentName(*model, parent);
+
+    TextContext text(context);
+    text.Begin();
+    text.ResetCursor(20.0f, 70.0f);
+    text.DrawFormattedString(L"Skin %u/%u  Joint %u/%u  Node %u  %ls\n",
+        m_BoneSelection.paletteId, (uint32_t)model->m_SkinPalettes.size(),
+        m_BoneSelection.jointIndex, palette.numJoints, nodeIndex, name.c_str());
+    text.DrawFormattedString(L"Parent %u  %ls\n", parent, parentName.c_str());
+    text.DrawFormattedString(L"B: debug  J/K: joint  I: skin  H: weight %ls  V: wire %ls",
+        m_WeightDebugEnabled ? L"on" : L"off", m_WireframeEnabled ? L"on" : L"off");
+    text.End();
 }

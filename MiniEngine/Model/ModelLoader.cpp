@@ -297,5 +297,27 @@ std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool fo
         inFile.read((char*)model->m_JointIBMs.get(), header.numJoints * sizeof(Matrix4));
     }
 
+    model->m_SkinPalettes.resize(header.numSkins);
+    if (header.numSkins > 0)
+        inFile.read((char*)model->m_SkinPalettes.data(), header.numSkins * sizeof(SkinPalette));
+    for (const SkinPalette& palette : model->m_SkinPalettes)
+        if (palette.startJoint > header.numJoints || palette.numJoints > header.numJoints - palette.startJoint)
+            return nullptr;
+    model->m_NodeParents.resize(header.numNodes);
+    model->m_NodeNames.resize(header.numNodes);
+    for (uint32_t i = 0; i < header.numNodes; ++i)
+    {
+        uint32_t length;
+        inFile.read((char*)&model->m_NodeParents[i], sizeof(uint32_t));
+        inFile.read((char*)&length, sizeof(length));
+        if (!inFile || length > 4096)
+            return nullptr;
+        model->m_NodeNames[i].resize(length);
+        if (length > 0)
+            inFile.read(&model->m_NodeNames[i][0], length);
+        if (!inFile)
+            return nullptr;
+    }
+
     return model;
 }

@@ -47,6 +47,7 @@ void glTF::Asset::ProcessNodes( json& nodes )
         node.flags = 0;
         node.mesh = nullptr;
         node.linearIdx = -1;
+        node.name = thisNode.value("name", std::string());
 
         if (thisNode.find("camera") != thisNode.end())
         {

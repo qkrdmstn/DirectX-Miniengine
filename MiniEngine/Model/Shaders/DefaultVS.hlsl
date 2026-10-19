@@ -30,6 +30,11 @@ cbuffer GlobalConstants : register(b1)
     float3 ViewerPos;
     float3 SunDirection;
     float3 SunIntensity;
+    float _pad;
+    float IBLRange;
+    float IBLBias;
+    uint DebugJointIndex;
+    uint WeightDebugEnabled;
 }
 
 #ifdef ENABLE_SKINNING
@@ -72,12 +77,14 @@ struct VSOutput
 #endif
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
+    float influence : TEXCOORD4;
 };
 
 [RootSignature(Renderer_RootSig)]
 VSOutput main(VSInput vsInput)
 {
     VSOutput vsOutput;
+    vsOutput.influence = 0.0;
 
     float4 position = float4(vsInput.position, 1.0);
     float3 normal = vsInput.normal * 2 - 1;
@@ -88,6 +95,15 @@ VSOutput main(VSInput vsInput)
 #ifdef ENABLE_SKINNING
     // I don't like this hack.  The weights should be normalized already, but something is fishy.
     float4 weights = vsInput.jointWeights / dot(vsInput.jointWeights, 1);
+
+    if (DebugJointIndex != 0xffffffff)
+    {
+        vsOutput.influence =
+            (vsInput.jointIndices.x == DebugJointIndex ? weights.x : 0.0) +
+            (vsInput.jointIndices.y == DebugJointIndex ? weights.y : 0.0) +
+            (vsInput.jointIndices.z == DebugJointIndex ? weights.z : 0.0) +
+            (vsInput.jointIndices.w == DebugJointIndex ? weights.w : 0.0);
+    }
 
     float4x4 skinPosMat =
         Joints[vsInput.jointIndices.x].PosMatrix * weights.x +

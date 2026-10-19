@@ -95,9 +95,11 @@ public:
 
 private:
     OrbitCamera& operator=( const OrbitCamera& ) {return *this;}
+    void FrameModel();
 
     Math::BoundingSphere m_ModelBounds;
     Math::Vector3 m_WorldUp;
+    Math::Vector3 m_FocusCenter;
 
     float m_JoystickSensitivityX;
     float m_JoystickSensitivityY;
@@ -107,11 +109,13 @@ private:
 
     float m_CurrentHeading;
     float m_CurrentPitch;
-    float m_CurrentCloseness;
+    float m_Distance;
+    float m_MinDistance;
+    float m_MaxDistance;
+    float m_AspectRatio;
 
     bool m_Momentum;
 
     float m_LastYaw;
     float m_LastPitch;
-    float m_LastForward;
 };

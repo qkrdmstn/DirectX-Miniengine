@@ -15,6 +15,7 @@
 #include "CameraController.h"
 #include "Camera.h"
 #include "GameInput.h"
+#include "Display.h"
 
 using namespace Math;
 using namespace GameCore;
@@ -153,6 +154,7 @@ OrbitCamera::OrbitCamera( Camera& camera, Math::BoundingSphere focus, Vector3 wo
 {
     m_ModelBounds = focus;
     m_WorldUp = Normalize(worldUp);
+    m_FocusCenter = focus.GetCenter();
 
     m_JoystickSensitivityX = 2.0f;
     m_JoystickSensitivityY = 2.0f;
@@ -162,23 +164,51 @@ OrbitCamera::OrbitCamera( Camera& camera, Math::BoundingSphere focus, Vector3 wo
 
     m_CurrentPitch = 0.0f;
     m_CurrentHeading = 0.0f;
-    m_CurrentCloseness = 0.5f;
 
+    const float radius = XMMax((float)focus.GetRadius(), 0.001f);
+    m_MinDistance = XMMax(radius * 0.05f, 0.001f);
+    m_MaxDistance = radius * 100.0f;
+    m_AspectRatio = Graphics::g_DisplayWidth > 0 && Graphics::g_DisplayHeight > 0
+        ? (float)Graphics::g_DisplayHeight / Graphics::g_DisplayWidth : 9.0f / 16.0f;
+    m_TargetCamera.SetAspectRatio(m_AspectRatio);
+    m_TargetCamera.SetZRange(XMMax(radius * 0.001f, 0.0001f),
+        XMMax(m_TargetCamera.GetFarClip(), radius * 101.0f));
     m_Momentum = true;
+    m_LastYaw = 0.0f;
+    m_LastPitch = 0.0f;
+    FrameModel();
+}
 
+void OrbitCamera::FrameModel()
+{
+    m_FocusCenter = m_ModelBounds.GetCenter();
+
+    const float halfVerticalFov = m_TargetCamera.GetFOV() * 0.5f;
+    const float halfHorizontalFov = atanf(tanf(halfVerticalFov) / m_AspectRatio);
+    const float limitingHalfFov = XMMin(halfVerticalFov, halfHorizontalFov);
+    const float radius = XMMax((float)m_ModelBounds.GetRadius(), 0.001f);
+    m_Distance = Clamp(radius * 1.1f / sinf(limitingHalfFov), m_MinDistance, m_MaxDistance);
     m_LastYaw = 0.0f;
     m_LastPitch = 0.0f;
 }
 
 void OrbitCamera::Update( float deltaTime )
 {
-    (deltaTime);
+    if (Graphics::g_DisplayWidth > 0 && Graphics::g_DisplayHeight > 0)
+    {
+        const float aspectRatio = (float)Graphics::g_DisplayHeight / Graphics::g_DisplayWidth;
+        if (aspectRatio != m_AspectRatio)
+        {
+            m_AspectRatio = aspectRatio;
+            m_TargetCamera.SetAspectRatio(aspectRatio);
+        }
+    }
 
     float timeScale = Graphics::DebugZoom == 0 ? 1.0f : Graphics::DebugZoom == 1 ? 0.5f : 0.25f;
 
     float yaw = GameInput::GetTimeCorrectedAnalogInput( GameInput::kAnalogLeftStickX ) * timeScale * m_JoystickSensitivityX;
     float pitch = GameInput::GetTimeCorrectedAnalogInput( GameInput::kAnalogLeftStickY ) * timeScale * m_JoystickSensitivityY;
-    float closeness = GameInput::GetTimeCorrectedAnalogInput( GameInput::kAnalogRightStickY ) * timeScale;
+    float zoom = GameInput::GetTimeCorrectedAnalogInput( GameInput::kAnalogRightStickY ) * timeScale;
 
     if (m_Momentum)
     {
@@ -186,14 +216,20 @@ void OrbitCamera::Update( float deltaTime )
         ApplyMomentum(m_LastPitch, pitch, deltaTime);
     }
 
-    // don't apply momentum to mouse inputs
-    yaw += GameInput::GetAnalogInput(GameInput::kAnalogMouseX) * m_MouseSensitivityX;
-    pitch += GameInput::GetAnalogInput(GameInput::kAnalogMouseY) * m_MouseSensitivityY;
-    closeness += GameInput::GetAnalogInput(GameInput::kAnalogMouseScroll) * 0.1f;
+    // Mouse analog values are relative movement for this frame, not velocities.
+    const bool rotating = GameInput::IsPressed(GameInput::kMouse1)
+        && !GameInput::IsFirstPressed(GameInput::kMouse1);
+    const bool panning = GameInput::IsPressed(GameInput::kMouse2)
+        && !GameInput::IsFirstPressed(GameInput::kMouse2);
+    if (rotating)
+    {
+        yaw += GameInput::GetAnalogInput(GameInput::kAnalogMouseX) * m_MouseSensitivityX;
+        pitch += GameInput::GetAnalogInput(GameInput::kAnalogMouseY) * m_MouseSensitivityY;
+    }
+    zoom += GameInput::GetAnalogInput(GameInput::kAnalogMouseScroll) * 0.1f;
 
     m_CurrentPitch += pitch;
-    m_CurrentPitch = XMMin( XM_PIDIV2, m_CurrentPitch);
-    m_CurrentPitch = XMMax(-XM_PIDIV2, m_CurrentPitch);
+    m_CurrentPitch = Clamp(m_CurrentPitch, -XM_PIDIV2 + 0.01f, XM_PIDIV2 - 0.01f);
 
     m_CurrentHeading -= yaw;
     if (m_CurrentHeading > XM_PI)
@@ -201,11 +237,24 @@ void OrbitCamera::Update( float deltaTime )
     else if (m_CurrentHeading <= -XM_PI)
         m_CurrentHeading += XM_2PI; 
 
-    m_CurrentCloseness += closeness;
-    m_CurrentCloseness = Clamp(m_CurrentCloseness, 0.0f, 1.0f);
+    m_Distance = Clamp(m_Distance * Pow(0.2f, zoom), m_MinDistance, m_MaxDistance);
 
     Matrix3 orientation = Matrix3::MakeYRotation( m_CurrentHeading ) * Matrix3::MakeXRotation( m_CurrentPitch );
-    Vector3 position = orientation.GetZ() * (m_ModelBounds.GetRadius() * Lerp(3.0f, 1.0f, m_CurrentCloseness) + m_TargetCamera.GetNearClip());
-    m_TargetCamera.SetTransform(AffineTransform(orientation, position + m_ModelBounds.GetCenter()));
+    if (panning && !rotating && Graphics::g_DisplayHeight > 0)
+    {
+        // GameInput scales each mouse count by 0.0018; undo that for pixel-based panning.
+        const float unitsPerAnalog = 2.0f * m_Distance * tanf(m_TargetCamera.GetFOV() * 0.5f)
+            / (Graphics::g_DisplayHeight * 0.0018f);
+        m_FocusCenter -= orientation.GetX() *
+            (GameInput::GetAnalogInput(GameInput::kAnalogMouseX) * unitsPerAnalog);
+        m_FocusCenter -= orientation.GetY() *
+            (GameInput::GetAnalogInput(GameInput::kAnalogMouseY) * unitsPerAnalog);
+    }
+
+    if (GameInput::IsFirstPressed(GameInput::kKey_f))
+        FrameModel();
+
+    Vector3 position = orientation.GetZ() * m_Distance;
+    m_TargetCamera.SetTransform(AffineTransform(orientation, position + m_FocusCenter));
     m_TargetCamera.Update();
 }

@@ -429,7 +429,7 @@ namespace EngineProfiling
     void Update( void )
     {
         if (GameInput::IsFirstPressed( GameInput::kStartButton ) 
-            || GameInput::IsFirstPressed( GameInput::kKey_space ))
+            || GameInput::IsFirstPressed( GameInput::kKey_p ))
         {
             Paused = !Paused;
         }

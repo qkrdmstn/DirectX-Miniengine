@@ -170,12 +170,15 @@ void Renderer::CompileMesh(
 
 static uint32_t WalkGraph(
     std::vector<GraphNode>& sceneGraph,
+    std::vector<uint32_t>& nodeParents,
+    std::vector<std::string>& nodeNames,
     BoundingSphere& modelBSphere,
     AxisAlignedBox& modelBBox,
     std::vector<Mesh*>& meshList,
     std::vector<byte>& bufferMemory,
     const std::vector<glTF::Node*>& siblings,
     uint32_t curPos,
+    uint32_t parentNode,
     const Matrix4& xform
     )
 {
@@ -190,6 +193,8 @@ static uint32_t WalkGraph(
         thisGraphNode.matrixIdx = curPos;
         thisGraphNode.skeletonRoot = curNode->skeletonRoot;
         curNode->linearIdx = curPos;
+        nodeParents[curPos] = parentNode;
+        nodeNames[curPos] = curNode->name;
 
         // They might not be used, but we have space to hold the neutral values which could be
         // useful when updating the matrix via animation.
@@ -224,7 +229,8 @@ static uint32_t WalkGraph(
         if (curNode->children.size() > 0)
         {
             thisGraphNode.hasChildren = 1;
-            nextPos = WalkGraph(sceneGraph, modelBSphere, modelBBox, meshList, bufferMemory, curNode->children, nextPos, LocalXform);
+            nextPos = WalkGraph(sceneGraph, nodeParents, nodeNames, modelBSphere, modelBBox,
+                meshList, bufferMemory, curNode->children, nextPos, curPos, LocalXform);
         }
 
         // Are there more siblings?
@@ -414,6 +420,7 @@ void BuildSkins(ModelData& model, const glTF::Asset& asset)
         uint16_t numJoints = (uint16_t)skin.joints.size();
         uint16_t curOffset = (uint16_t)model.m_JointIndices.size();
         skinMap.push_back(std::make_pair(curOffset, numJoints));
+        model.m_SkinPalettes.push_back({ curOffset, numJoints });
 
         // Append remapped joint indices
         for (glTF::Node* joint : skin.joints)
@@ -447,6 +454,8 @@ bool Renderer::BuildModel(ModelData& model, const glTF::Asset& asset, int sceneI
 
     // Generate scene graph and meshes
     model.m_SceneGraph.resize(asset.m_nodes.size());
+    model.m_NodeParents.resize(asset.m_nodes.size(), UINT32_MAX);
+    model.m_NodeNames.resize(asset.m_nodes.size());
     const glTF::Scene* scene = sceneIdx < 0 ? asset.m_scene : &asset.m_scenes[sceneIdx];
     if (scene == nullptr)
         return false;
@@ -456,8 +465,12 @@ bool Renderer::BuildModel(ModelData& model, const glTF::Asset& asset, int sceneI
 
     model.m_BoundingSphere = BoundingSphere(kZero);
     model.m_BoundingBox = AxisAlignedBox(kZero);
-    uint32_t numNodes = WalkGraph(model.m_SceneGraph, model.m_BoundingSphere, model.m_BoundingBox, model.m_Meshes, bufferMemory, scene->nodes, 0, Matrix4(kIdentity));
+    uint32_t numNodes = WalkGraph(model.m_SceneGraph, model.m_NodeParents, model.m_NodeNames,
+        model.m_BoundingSphere, model.m_BoundingBox, model.m_Meshes, bufferMemory,
+        scene->nodes, 0, UINT32_MAX, Matrix4(kIdentity));
     model.m_SceneGraph.resize(numNodes);
+    model.m_NodeParents.resize(numNodes);
+    model.m_NodeNames.resize(numNodes);
 
     BuildAnimations(model, asset);
     BuildSkins(model, asset);
@@ -489,6 +502,7 @@ bool Renderer::SaveModel(const std::wstring& filePath, const ModelData& data)
     header.numAnimationCurves = (uint32_t)data.m_AnimationCurves.size();
     header.numAnimations = (uint32_t)data.m_Animations.size();
     header.numJoints = (uint32_t)data.m_JointIndices.size();
+    header.numSkins = (uint32_t)data.m_SkinPalettes.size();
     header.boundingSphere[0] = data.m_BoundingSphere.GetCenter().GetX();
     header.boundingSphere[1] = data.m_BoundingSphere.GetCenter().GetY();
     header.boundingSphere[2] = data.m_BoundingSphere.GetCenter().GetZ();
@@ -528,6 +542,18 @@ bool Renderer::SaveModel(const std::wstring& filePath, const ModelData& data)
         ASSERT(header.numJoints == (uint32_t)data.m_JointIBMs.size());
         outFile.write((char*)data.m_JointIndices.data(), header.numJoints * sizeof(uint16_t));
         outFile.write((char*)data.m_JointIBMs.data(), header.numJoints * sizeof(Matrix4));
+    }
+
+    if (header.numSkins > 0)
+        outFile.write((char*)data.m_SkinPalettes.data(), header.numSkins * sizeof(SkinPalette));
+    for (uint32_t i = 0; i < header.numNodes; ++i)
+    {
+        const uint32_t parent = i < data.m_NodeParents.size() ? data.m_NodeParents[i] : UINT32_MAX;
+        const std::string& name = i < data.m_NodeNames.size() ? data.m_NodeNames[i] : std::string();
+        const uint32_t length = (uint32_t)name.size();
+        outFile.write((char*)&parent, sizeof(parent));
+        outFile.write((char*)&length, sizeof(length));
+        outFile.write(name.data(), length);
     }
 
     return true;

@@ -86,9 +86,20 @@ namespace Renderer
 			std::memset(m_PassCounts, 0, sizeof(m_PassCounts));
 			m_CurrentPass = kZPass;
 			m_CurrentDraw = 0;
+            m_WeightDebug = false;
+            m_Wireframe = false;
+            m_SelectedStartJoint = UINT32_MAX;
+            m_SelectedJointIndex = UINT32_MAX;
 		}
 
 		void SetCamera( const BaseCamera& camera ) { m_Camera = &camera; }
+        void SetBoneDebug(bool enabled, uint32_t startJoint, uint32_t jointIndex)
+        {
+            m_WeightDebug = enabled;
+            m_SelectedStartJoint = startJoint;
+            m_SelectedJointIndex = jointIndex;
+        }
+        void SetWireframe(bool enabled) { m_Wireframe = enabled; }
 		void SetViewport( const D3D12_VIEWPORT& viewport ) { m_Viewport = viewport; }
 		void SetScissor( const D3D12_RECT& scissor ) { m_Scissor = scissor; }
 		void AddRenderTarget( ColorBuffer& RTV )
@@ -144,6 +155,10 @@ namespace Renderer
         uint32_t m_PassCounts[kNumPasses];
         DrawPass m_CurrentPass;
         uint32_t m_CurrentDraw;
+        bool m_WeightDebug;
+        bool m_Wireframe;
+        uint32_t m_SelectedStartJoint;
+        uint32_t m_SelectedJointIndex;
 
 		const BaseCamera* m_Camera;
 		D3D12_VIEWPORT m_Viewport;

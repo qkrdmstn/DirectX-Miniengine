@@ -98,6 +98,12 @@ struct Joint
     Math::Matrix3 nrmXform;
 };
 
+struct SkinPalette
+{
+    uint32_t startJoint; // Offset into the flattened joint array
+    uint32_t numJoints;  // Local jointIndices are relative to this palette
+};
+
 class Model
 {
 public:
@@ -125,6 +131,9 @@ public:
     std::unique_ptr<AnimationSet[]> m_Animations;
     std::unique_ptr<uint16_t[]> m_JointIndices;
     std::unique_ptr<Math::Matrix4[]> m_JointIBMs;
+    std::vector<SkinPalette> m_SkinPalettes;
+    std::vector<uint32_t> m_NodeParents;
+    std::vector<std::string> m_NodeNames;
 
 protected:
     void Destroy();
@@ -155,6 +164,11 @@ public:
     Math::OrientedBox GetBoundingBox() const;
 
     size_t GetNumAnimations(void) const { return m_AnimState.size(); }
+    const Model* GetModel(void) const { return m_Model.get(); }
+    AnimationState::eMode GetAnimationMode(uint32_t animIdx) const
+    {
+        return animIdx < m_AnimState.size() ? m_AnimState[animIdx].state : AnimationState::kStopped;
+    }
     void PlayAnimation(uint32_t animIdx, bool loop);
     void PauseAnimation(uint32_t animIdx);
     void ResetAnimation(uint32_t animIdx);

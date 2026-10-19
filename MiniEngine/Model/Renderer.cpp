@@ -431,9 +431,17 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
 #endif
     sm_PSOs.push_back(ColorPSO);
 
+    D3D12_RASTERIZER_DESC wireRasterizer = (psoFlags & kTwoSided) ? RasterizerTwoSided : RasterizerDefault;
+    wireRasterizer.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    ColorPSO.SetRasterizerState(wireRasterizer);
+    // The solid depth prepass already wrote depth; compare against it without writing depth.
+    ColorPSO.SetDepthStencilState(DepthStateReadOnly);
+    ColorPSO.Finalize();
+    sm_PSOs.push_back(ColorPSO);
+
     ASSERT(sm_PSOs.size() <= 256, "Ran out of room for unique PSOs");
 
-    return (uint8_t)sm_PSOs.size() - 2;
+    return (uint8_t)sm_PSOs.size() - 3;
 }
 
 void Renderer::DrawSkybox( GraphicsContext& gfxContext, const Camera& Camera, const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor )
@@ -505,7 +513,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_SortKeys.push_back(key.value);
         m_PassCounts[kTransparent]++;
     }
-    else if (SeparateZPass || alphaTest)
+    else if (SeparateZPass || alphaTest || m_Wireframe)
     {
         key.passID = kZPass;
         key.psoIdx = depthPSO;
@@ -623,7 +631,7 @@ void MeshSorter::RenderMeshes(
 				context.SetDepthStencilTarget(m_DSV->GetDSV());
 				break;
 			case kOpaque:
-				if (SeparateZPass)
+				if (SeparateZPass || m_Wireframe)
 				{
 					context.TransitionResource(*m_DSV, D3D12_RESOURCE_STATE_DEPTH_READ);
 					context.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -656,6 +664,14 @@ void MeshSorter::RenderMeshes(
             const SortObject& object = m_SortObjects[key.objectIdx];
             const Mesh& mesh = *object.mesh;
 
+            if (m_BatchType == kDefault && m_CurrentPass != kZPass)
+            {
+                globals.WeightDebugEnabled = m_WeightDebug ? 1 : 0;
+                globals.DebugJointIndex = m_WeightDebug && mesh.numJoints > m_SelectedJointIndex
+                    && mesh.startJoint == m_SelectedStartJoint ? m_SelectedJointIndex : UINT32_MAX;
+                context.SetDynamicConstantBufferView(kCommonCBV, sizeof(GlobalConstants), &globals);
+            }
+
             context.SetConstantBuffer(kMeshConstants, object.meshCBV);
             context.SetConstantBuffer(kMaterialConstants, object.materialCBV);
             context.SetDescriptorTable(kMaterialSRVs, s_TextureHeap[mesh.srvTable]);
@@ -665,7 +681,9 @@ void MeshSorter::RenderMeshes(
                 ASSERT(object.skeleton != nullptr, "Unspecified joint matrix array");
                 context.SetDynamicSRV(kSkinMatrices, sizeof(Joint) * mesh.numJoints, object.skeleton + mesh.startJoint);
             }
-            context.SetPipelineState(sm_PSOs[key.psoIdx]);
+            const uint32_t psoIndex = m_Wireframe && m_BatchType == kDefault && m_CurrentPass != kZPass
+                ? uint32_t(mesh.pso) + 2u : uint32_t(key.psoIdx);
+            context.SetPipelineState(sm_PSOs[psoIndex]);
 
             if (m_CurrentPass == kZPass)
             {

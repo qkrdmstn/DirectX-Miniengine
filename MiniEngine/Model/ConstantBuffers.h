@@ -66,4 +66,6 @@ __declspec(align(256)) struct GlobalConstants
     Math::Vector3 SunIntensity;
     float IBLRange;
     float IBLBias;
+    uint32_t DebugJointIndex;
+    uint32_t WeightDebugEnabled;
 };
