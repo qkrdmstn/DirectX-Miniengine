@@ -118,6 +118,7 @@ public:
     Math::BoundingSphere m_BoundingSphere; // Object-space bounding sphere
     Math::AxisAlignedBox m_BoundingBox;
     ByteAddressBuffer m_DataBuffer;
+    std::vector<uint8_t> m_GeometryCPU; // CPU copy of m_DataBuffer; kept only for skinned models
     ByteAddressBuffer m_MaterialConstants;
     uint32_t m_NumNodes;
     uint32_t m_NumMeshes;
@@ -165,6 +166,9 @@ public:
 
     size_t GetNumAnimations(void) const { return m_AnimState.size(); }
     const Model* GetModel(void) const { return m_Model.get(); }
+    // CPU copies of the matrices written by the last Update (indexed by matrixIdx / flat joint index)
+    const Math::Matrix4* GetNodeWorldMatrices(void) const { return m_NodeWorld.get(); }
+    const Joint* GetSkeleton(void) const { return m_Skeleton.get(); }
     AnimationState::eMode GetAnimationMode(uint32_t animIdx) const
     {
         return animIdx < m_AnimState.size() ? m_AnimState[animIdx].state : AnimationState::kStopped;
@@ -181,6 +185,7 @@ private:
     UploadBuffer m_MeshConstantsCPU;
     ByteAddressBuffer m_MeshConstantsGPU;
     std::unique_ptr<Math::AffineTransform[]> m_BoundingSphereTransforms;
+    std::unique_ptr<Math::Matrix4[]> m_NodeWorld;
     Math::UniformTransform m_Locator;
 
     std::unique_ptr<GraphNode[]> m_AnimGraph;   // A copy of the scene graph when instancing animation

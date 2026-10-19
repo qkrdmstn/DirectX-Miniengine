@@ -35,6 +35,7 @@
 #include "Display.h"
 #include "Utility.h"
 #include "../MeshCutting/ProceduralMesh.h"
+#include "../MeshCutting/BonePatch.h"
 #include "../MeshCutting/Rendering/ProceduralMeshRenderer.h"
 
 #define LEGACY_RENDERER
@@ -74,11 +75,10 @@ private:
     bool m_WireframeEnabled = false;
     bool m_AnimationsPaused = false;
     vector<AnimationState::eMode> m_ResumeModes;
-    MeshCutting::ProceduralMesh m_TestMesh;
-    MeshCutting::ProceduralMesh m_OtherTestMesh;
+    MeshCutting::ProceduralMesh m_BonePatch;
+    MeshCutting::BonePatchSource m_BonePatchSource;
     MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
-    MeshCutting::ProceduralMeshData m_BoxData;
-    bool m_TestMeshChanged = false;
+    std::wstring m_BonePatchStatus;
     ShadowCamera m_SunShadowCamera;
 
     void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
@@ -86,56 +86,6 @@ private:
 };
 
 CREATE_APPLICATION(ModelViewer)
-
-static MeshCutting::ProceduralMeshData MakeTestBox()
-{
-    MeshCutting::ProceduralMeshData data;
-    const float p[8][3] = {
-        {-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
-        {-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}
-    };
-    for (const auto& point : p)
-    {
-        MeshCutting::ProceduralVertex vertex = {};
-        vertex.position = { point[0], point[1], point[2] };
-        vertex.normal = { 0.0f, 1.0f, 0.0f };
-        vertex.uv = { (point[0] + 1.0f) * 0.5f, (point[2] + 1.0f) * 0.5f };
-        vertex.color = { 0.1f, 0.8f, 0.3f, 1.0f };
-        data.vertices.push_back(vertex);
-    }
-    data.indices = {
-        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7,
-        0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2,
-        1, 2, 6, 1, 6, 5, 0, 4, 7, 0, 7, 3
-    };
-    data.sections.push_back({ 0, (uint32_t)data.indices.size(), 0 });
-    return data;
-}
-
-static MeshCutting::ProceduralMeshData MakeTestGrid()
-{
-    MeshCutting::ProceduralMeshData data;
-    const uint32_t side = 16;
-    for (uint32_t y = 0; y <= side; ++y)
-        for (uint32_t x = 0; x <= side; ++x)
-        {
-            MeshCutting::ProceduralVertex vertex = {};
-            vertex.position = { (float)x * 0.2f - 1.6f, 0.0f, (float)y * 0.2f - 1.6f };
-            vertex.normal = { 0.0f, 1.0f, 0.0f };
-            vertex.uv = { (float)x / side, (float)y / side };
-            vertex.color = { 0.9f, 0.3f, 0.2f, 1.0f };
-            data.vertices.push_back(vertex);
-        }
-    for (uint32_t y = 0; y < side; ++y)
-        for (uint32_t x = 0; x < side; ++x)
-        {
-            uint32_t a = y * (side + 1) + x;
-            data.indices.insert(data.indices.end(), { a, a + side + 1, a + 1,
-                a + 1, a + side + 1, a + side + 2 });
-        }
-    data.sections.push_back({ 0, (uint32_t)data.indices.size(), 0 });
-    return data;
-}
 
 static std::wstring BoneName(const Model& model, uint32_t nodeIndex, uint32_t jointIndex)
 {
@@ -238,9 +188,6 @@ void ModelViewer::Startup(void)
 
     Renderer::Initialize();
     m_ProceduralRenderer.Initialize();
-    m_BoxData = MakeTestBox();
-    m_TestMesh.SetMesh(m_BoxData);
-    m_OtherTestMesh.SetMesh(m_BoxData);
 
     LoadIBLTextures();
 
@@ -304,8 +251,7 @@ void ModelViewer::Startup(void)
 
 void ModelViewer::Cleanup(void)
 {
-    m_ProceduralRenderer.ReleaseMesh(m_TestMesh);
-    m_ProceduralRenderer.ReleaseMesh(m_OtherTestMesh);
+    m_ProceduralRenderer.ReleaseMesh(m_BonePatch);
     m_ProceduralRenderer.Shutdown();
     m_ModelInst = nullptr;
 
@@ -326,42 +272,6 @@ namespace Graphics
 void ModelViewer::Update(float deltaT)
 {
     ScopedTimer _prof(L"Update State");
-
-    if (GameInput::IsFirstPressed(GameInput::kKey_1))
-    {
-        m_TestMesh.SetMesh(m_BoxData);
-        m_TestMeshChanged = false;
-    }
-    if (GameInput::IsFirstPressed(GameInput::kKey_2) && !m_TestMesh.GetData().vertices.empty())
-    {
-        auto vertices = m_TestMesh.GetData().vertices;
-        for (auto& vertex : vertices)
-        {
-            vertex.position.y += m_TestMeshChanged ? -0.4f : 0.4f;
-            vertex.color = m_TestMeshChanged ? DirectX::XMFLOAT4(0.1f, 0.8f, 0.3f, 1.0f)
-                : DirectX::XMFLOAT4(1.0f, 0.8f, 0.1f, 1.0f);
-        }
-        if (m_TestMesh.UpdateVertices(vertices))
-            m_TestMeshChanged = !m_TestMeshChanged;
-    }
-    if (GameInput::IsFirstPressed(GameInput::kKey_3))
-    {
-        auto data = m_BoxData;
-        data.indices.resize(data.indices.size() / 2);
-        data.sections[0].indexCount = (uint32_t)data.indices.size();
-        m_TestMesh.SetMesh(std::move(data));
-    }
-    if (GameInput::IsFirstPressed(GameInput::kKey_4))
-        m_TestMesh.SetMesh(m_BoxData);
-    if (GameInput::IsFirstPressed(GameInput::kKey_5))
-    {
-        if (m_TestMesh.GetData().vertices.empty())
-            m_TestMesh.SetMesh(m_BoxData);
-        else
-            m_TestMesh.Clear();
-    }
-    if (GameInput::IsFirstPressed(GameInput::kKey_6))
-        m_TestMesh.SetMesh(MakeTestGrid());
 
     const Model* model = m_ModelInst.GetModel();
     if (model != nullptr && m_BoneDebugEnabled && m_BoneSelection.paletteId < model->m_SkinPalettes.size())
@@ -392,6 +302,29 @@ void ModelViewer::Update(float deltaT)
                     break;
                 }
             }
+        }
+        if (GameInput::IsFirstPressed(GameInput::kKey_c))
+        {
+            // Copies with the pose of the last ModelInstance::Update, i.e. what is on screen now.
+            MeshCutting::ProceduralMeshData patch;
+            MeshCutting::BonePatchSource source;
+            std::string error;
+            if (MeshCutting::ExtractBonePatch(*model, m_ModelInst, m_BoneSelection.paletteId,
+                    m_BoneSelection.jointIndex, 0.0f, patch, source, &error)
+                && m_BonePatch.SetMesh(std::move(patch), &error))
+            {
+                m_BonePatchSource = std::move(source);
+                m_BonePatchStatus = L"Patch: " + std::to_wstring(m_BonePatch.GetData().indices.size() / 3) + L" tris, "
+                    + std::to_wstring(m_BonePatch.GetData().vertices.size()) + L" verts";
+            }
+            else
+                m_BonePatchStatus = L"Patch failed: " + Utility::UTF8ToWideString(error);
+        }
+        if (GameInput::IsFirstPressed(GameInput::kKey_x))
+        {
+            m_BonePatch.Clear();
+            m_BonePatchSource = {};
+            m_BonePatchStatus.clear();
         }
     }
     else if (model != nullptr && m_BoneSelection.paletteId < model->m_SkinPalettes.size()
@@ -593,11 +526,10 @@ void ModelViewer::RenderScene(void)
 void ModelViewer::RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
     const D3D12_RECT& scissor, uint32_t frameIndex)
 {
-    const Matrix4 testWorld(AffineTransform::MakeTranslation(Vector3(4.0f, 1.5f, 0.0f)));
-    const Matrix4 otherWorld(AffineTransform::MakeTranslation(Vector3(7.0f, 1.5f, 0.0f)));
-    m_ProceduralRenderer.Draw(gfxContext, m_TestMesh, testWorld, m_Camera.GetViewProjMatrix(),
-        g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor);
-    m_ProceduralRenderer.Draw(gfxContext, m_OtherTestMesh, otherWorld, m_Camera.GetViewProjMatrix(),
+    // Patch vertices are already in world space; shift the copy beside the original to compare them.
+    const float patchOffset = m_ModelInst.IsNull() ? 0.0f : float(m_ModelInst.GetRadius());
+    const Matrix4 patchWorld(AffineTransform::MakeTranslation(Vector3(patchOffset, 0.0f, 0.0f)));
+    m_ProceduralRenderer.Draw(gfxContext, m_BonePatch, patchWorld, m_Camera.GetViewProjMatrix(),
         g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor);
 
     // SSAO linearized depth before these draws; refresh it so velocity, TAA and DoF see the new depth.
@@ -607,12 +539,6 @@ void ModelViewer::RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D1
 
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
-    TextContext demoText(context);
-    demoText.Begin();
-    demoText.ResetCursor(20.0f, 180.0f);
-    demoText.DrawString(L"Procedural: 1 box  2 vertices/color  3 remove triangles  4 restore  5 clear/recreate  6 larger mesh");
-    demoText.End();
-
     const Model* model = m_ModelInst.GetModel();
     if (!m_BoneDebugEnabled || model == nullptr || m_BoneSelection.paletteId >= model->m_SkinPalettes.size())
         return;
@@ -634,7 +560,8 @@ void ModelViewer::RenderUI(GraphicsContext& context)
         m_BoneSelection.paletteId, (uint32_t)model->m_SkinPalettes.size(),
         m_BoneSelection.jointIndex, palette.numJoints, nodeIndex, name.c_str());
     text.DrawFormattedString(L"Parent %u  %ls\n", parent, parentName.c_str());
-    text.DrawFormattedString(L"B: debug  J/K: joint  I: skin  H: weight %ls  V: wire %ls",
+    text.DrawFormattedString(L"B: debug  J/K: joint  I: skin  H: weight %ls  V: wire %ls\n",
         m_WeightDebugEnabled ? L"on" : L"off", m_WireframeEnabled ? L"on" : L"off");
+    text.DrawFormattedString(L"C: copy joint patch  X: clear patch  %ls", m_BonePatchStatus.c_str());
     text.End();
 }

@@ -87,6 +87,7 @@ ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
         m_MeshConstantsCPU.Destroy();
         m_MeshConstantsGPU.Destroy();
         m_BoundingSphereTransforms = nullptr;
+        m_NodeWorld = nullptr;
         m_AnimGraph = nullptr;
         m_AnimState.clear();
         m_Skeleton = nullptr;
@@ -97,6 +98,7 @@ ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
         m_MeshConstantsGPU.Create(L"Mesh Constant GPU Buffer", sourceModel->m_NumNodes, sizeof(MeshConstants));
 
         m_BoundingSphereTransforms.reset(new AffineTransform[sourceModel->m_NumNodes]);
+        m_NodeWorld.reset(new Matrix4[sourceModel->m_NumNodes]);
         m_Skeleton.reset(new Joint[sourceModel->m_NumJoints]);
 
         if (sourceModel->m_NumAnimations > 0)
@@ -127,6 +129,7 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
         m_MeshConstantsCPU.Destroy();
         m_MeshConstantsGPU.Destroy();
         m_BoundingSphereTransforms = nullptr;
+        m_NodeWorld = nullptr;
         m_AnimGraph = nullptr;
         m_AnimState.clear();
         m_Skeleton = nullptr;
@@ -137,6 +140,7 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
         m_MeshConstantsGPU.Create(L"Mesh Constant GPU Buffer", sourceModel->m_NumNodes, sizeof(MeshConstants));
 
         m_BoundingSphereTransforms.reset(new AffineTransform[sourceModel->m_NumNodes]);
+        m_NodeWorld.reset(new Matrix4[sourceModel->m_NumNodes]);
         m_Skeleton.reset(new Joint[sourceModel->m_NumJoints]);
 
         if (sourceModel->m_NumAnimations > 0)
@@ -201,6 +205,7 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
             MeshConstants& cbv = cb[Node->matrixIdx];
             cbv.World = xform;
             cbv.WorldIT = InverseTranspose(xform.Get3x3());
+            m_NodeWorld[Node->matrixIdx] = xform;
 
             m_BoundingSphereTransforms[Node->matrixIdx] = AffineTransform(
                 (Vector3)xform.GetX(),

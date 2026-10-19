@@ -1,0 +1,268 @@
+#include "pch.h"
+#include "BonePatch.h"
+#include "../Model/Model.h"
+
+#include <DirectXPackedVector.h>
+#include <cstring>
+#include <unordered_map>
+
+using namespace Math;
+
+namespace MeshCutting
+{
+    namespace
+    {
+        bool Fail(std::string* error, const char* message)
+        {
+            if (error)
+                *error = message;
+            return false;
+        }
+
+        // Byte offsets inside one interleaved vertex, matching MeshConvert's output layout.
+        struct VertexLayout
+        {
+            uint32_t uv0 = UINT32_MAX;
+            uint32_t joints = 0;
+            uint32_t weights = 0;
+            uint32_t stride = 0;
+        };
+
+        VertexLayout ComputeLayout(uint16_t psoFlags)
+        {
+            VertexLayout layout;
+            uint32_t offset = 12 + 4; // POSITION R32G32B32_FLOAT, NORMAL R10G10B10A2_UNORM
+            if (psoFlags & PSOFlags::kHasTangent)
+                offset += 4;
+            if (psoFlags & PSOFlags::kHasUV0)
+            {
+                layout.uv0 = offset;
+                offset += 4;
+            }
+            if (psoFlags & PSOFlags::kHasUV1)
+                offset += 4;
+            layout.joints = offset;     // R16G16B16A16_UINT
+            layout.weights = offset + 8; // R16G16B16A16_UNORM
+            layout.stride = offset + 16;
+            return layout;
+        }
+
+        struct DecodedVertex
+        {
+            XMFLOAT3 position;
+            XMFLOAT3 normal;
+            XMFLOAT2 uv;
+            uint16_t joints[4];
+            float weights[4];
+        };
+
+        DecodedVertex Decode(const uint8_t* src, const VertexLayout& layout)
+        {
+            DecodedVertex v = {};
+            std::memcpy(&v.position, src, sizeof(XMFLOAT3));
+
+            uint32_t packedNormal;
+            std::memcpy(&packedNormal, src + 12, sizeof(packedNormal));
+            v.normal = {
+                float(packedNormal & 1023) / 1023.0f * 2.0f - 1.0f,
+                float((packedNormal >> 10) & 1023) / 1023.0f * 2.0f - 1.0f,
+                float((packedNormal >> 20) & 1023) / 1023.0f * 2.0f - 1.0f };
+
+            if (layout.uv0 != UINT32_MAX)
+            {
+                uint16_t half[2];
+                std::memcpy(half, src + layout.uv0, sizeof(half));
+                v.uv = { PackedVector::XMConvertHalfToFloat(half[0]), PackedVector::XMConvertHalfToFloat(half[1]) };
+            }
+
+            uint16_t weights[4];
+            std::memcpy(v.joints, src + layout.joints, sizeof(v.joints));
+            std::memcpy(weights, src + layout.weights, sizeof(weights));
+            float sum = 0.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                v.weights[i] = float(weights[i]) / 65535.0f;
+                sum += v.weights[i];
+            }
+            // DefaultVS renormalizes weights; do the same so influence and skinning match the GPU.
+            for (int i = 0; i < 4; ++i)
+                v.weights[i] = sum > 0.0f ? v.weights[i] / sum : 0.0f;
+            return v;
+        }
+
+        float Influence(const DecodedVertex& v, uint32_t jointIndex)
+        {
+            float influence = 0.0f;
+            for (int i = 0; i < 4; ++i)
+                if (v.joints[i] == jointIndex)
+                    influence += v.weights[i];
+            return influence;
+        }
+    }
+
+    bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
+        uint32_t paletteId, uint32_t jointIndex, float minWeight,
+        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
+    {
+        if (instance.GetModel() != &model)
+            return Fail(error, "Instance does not belong to the model");
+        if (paletteId >= model.m_SkinPalettes.size())
+            return Fail(error, "Skin palette out of range");
+        const SkinPalette& palette = model.m_SkinPalettes[paletteId];
+        if (jointIndex >= palette.numJoints)
+            return Fail(error, "Joint out of range for the palette");
+        if (model.m_GeometryCPU.empty())
+            return Fail(error, "Model has no CPU geometry copy");
+        const Joint* skeleton = instance.GetSkeleton();
+        const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
+        if (skeleton == nullptr || nodeWorld == nullptr)
+            return Fail(error, "Instance has no pose data");
+
+        const std::vector<uint8_t>& geometry = model.m_GeometryCPU;
+        ProceduralMeshData mesh;
+        BonePatchSource source;
+        source.paletteId = paletteId;
+        source.jointIndex = jointIndex;
+        source.minWeight = minWeight;
+
+        const uint8_t* meshPtr = model.m_MeshData.get();
+        for (uint32_t meshIndex = 0; meshIndex < model.m_NumMeshes; ++meshIndex)
+        {
+            const Mesh& srcMesh = *(const Mesh*)meshPtr;
+            meshPtr += sizeof(Mesh) + (srcMesh.numDraws - 1) * sizeof(Mesh::Draw);
+
+            if ((srcMesh.psoFlags & PSOFlags::kHasSkin) == 0 || srcMesh.numJoints == 0
+                || srcMesh.startJoint != palette.startJoint)
+                continue;
+
+            const VertexLayout layout = ComputeLayout(srcMesh.psoFlags);
+            if (layout.stride != srcMesh.vbStride)
+                return Fail(error, "Unexpected source vertex layout");
+            if (uint64_t(srcMesh.vbOffset) + srcMesh.vbSize > geometry.size()
+                || uint64_t(srcMesh.ibOffset) + srcMesh.ibSize > geometry.size())
+                return Fail(error, "Mesh buffers exceed geometry data");
+            if (srcMesh.meshCBV >= model.m_NumNodes)
+                return Fail(error, "Mesh world matrix index out of range");
+
+            const bool index32 = srcMesh.ibFormat == DXGI_FORMAT_R32_UINT;
+            if (!index32 && srcMesh.ibFormat != DXGI_FORMAT_R16_UINT)
+                return Fail(error, "Unsupported index format");
+            const uint32_t indexBytes = index32 ? 4u : 2u;
+            const uint32_t indexCount = srcMesh.ibSize / indexBytes;
+            const uint32_t vertexCount = srcMesh.vbSize / layout.stride;
+            const uint8_t* vb = geometry.data() + srcMesh.vbOffset;
+            const uint8_t* ib = geometry.data() + srcMesh.ibOffset;
+
+            const Matrix4& world = nodeWorld[srcMesh.meshCBV];
+            const Matrix3 worldIT = InverseTranspose(world.Get3x3());
+            const uint32_t meshSlot = uint32_t(source.meshes.size());
+            bool meshUsed = false;
+            std::unordered_map<uint32_t, uint32_t> remap; // source vertex -> patch vertex
+
+            const auto addVertex = [&](uint32_t vertex) -> uint32_t
+            {
+                const auto found = remap.find(vertex);
+                if (found != remap.end())
+                    return found->second;
+
+                const DecodedVertex v = Decode(vb + size_t(vertex) * layout.stride, layout);
+
+                // Same blend as DefaultVS: sum of weighted joint matrices, then the mesh world.
+                XMVECTOR pos = XMVectorZero();
+                XMVECTOR nrm = XMVectorZero();
+                const Vector4 bindPos(v.position.x, v.position.y, v.position.z, 1.0f);
+                const Vector3 bindNrm(v.normal.x, v.normal.y, v.normal.z);
+                for (int i = 0; i < 4; ++i)
+                {
+                    if (v.weights[i] <= 0.0f)
+                        continue;
+                    const Joint& joint = skeleton[srcMesh.startJoint + v.joints[i]];
+                    pos = XMVectorMultiplyAdd(joint.posXform * bindPos, XMVectorReplicate(v.weights[i]), pos);
+                    nrm = XMVectorMultiplyAdd(joint.nrmXform * bindNrm, XMVectorReplicate(v.weights[i]), nrm);
+                }
+                const Vector4 posed = world * Vector4(pos);
+                const Vector3 posedNormal = Normalize(worldIT * Vector3(nrm));
+
+                const float influence = Influence(v, jointIndex);
+                ProceduralVertex out;
+                out.position = { float(posed.GetX()), float(posed.GetY()), float(posed.GetZ()) };
+                out.normal = { float(posedNormal.GetX()), float(posedNormal.GetY()), float(posedNormal.GetZ()) };
+                out.uv = v.uv;
+                // Blue at no influence to red at full influence, like the H weight view.
+                out.color = { 0.15f + 0.85f * influence, 0.25f * (1.0f - influence), 1.0f - influence, 1.0f };
+
+                BonePatchVertex skin;
+                skin.meshSlot = meshSlot;
+                skin.sourceVertex = vertex;
+                skin.position = v.position;
+                skin.normal = v.normal;
+                std::memcpy(skin.joints, v.joints, sizeof(skin.joints));
+                std::memcpy(skin.weights, v.weights, sizeof(skin.weights));
+
+                const uint32_t patchIndex = uint32_t(mesh.vertices.size());
+                mesh.vertices.push_back(out);
+                source.vertices.push_back(skin);
+                remap.emplace(vertex, patchIndex);
+                return patchIndex;
+            };
+
+            for (uint32_t drawIdx = 0; drawIdx < srcMesh.numDraws; ++drawIdx)
+            {
+                const Mesh::Draw& draw = srcMesh.draw[drawIdx];
+                if (draw.primCount % 3 != 0 || draw.startIndex > indexCount
+                    || draw.primCount > indexCount - draw.startIndex)
+                    return Fail(error, "Draw range exceeds index data");
+
+                for (uint32_t i = 0; i < draw.primCount; i += 3)
+                {
+                    uint32_t tri[3];
+                    for (uint32_t k = 0; k < 3; ++k)
+                    {
+                        const uint32_t at = draw.startIndex + i + k;
+                        uint32_t index;
+                        if (index32)
+                            std::memcpy(&index, ib + size_t(at) * 4, 4);
+                        else
+                        {
+                            uint16_t index16;
+                            std::memcpy(&index16, ib + size_t(at) * 2, 2);
+                            index = index16;
+                        }
+                        tri[k] = draw.baseVertex + index;
+                        if (tri[k] >= vertexCount)
+                            return Fail(error, "Index refers beyond the vertex buffer");
+                    }
+
+                    bool selected = false;
+                    for (uint32_t k = 0; k < 3; ++k)
+                    {
+                        const DecodedVertex v = Decode(vb + size_t(tri[k]) * layout.stride, layout);
+                        for (int j = 0; j < 4; ++j)
+                            if (v.weights[j] > 0.0f && v.joints[j] >= srcMesh.numJoints)
+                                return Fail(error, "Vertex joint index exceeds the mesh palette");
+                        selected |= Influence(v, jointIndex) > minWeight;
+                    }
+                    if (!selected)
+                        continue;
+
+                    for (uint32_t k = 0; k < 3; ++k)
+                        mesh.indices.push_back(addVertex(tri[k]));
+                    meshUsed = true;
+                }
+            }
+
+            if (meshUsed)
+                source.meshes.push_back({ meshIndex, srcMesh.meshCBV, srcMesh.startJoint });
+        }
+
+        if (mesh.indices.empty())
+            return Fail(error, "Selected joint influences no triangles");
+
+        mesh.sections.push_back({ 0, uint32_t(mesh.indices.size()), 0 });
+        outMesh = std::move(mesh);
+        outSource = std::move(source);
+        if (error)
+            error->clear();
+        return true;
+    }
+}

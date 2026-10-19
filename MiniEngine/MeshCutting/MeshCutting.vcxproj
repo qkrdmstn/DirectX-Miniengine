@@ -145,10 +145,12 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="MeshCutting.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="BonePatch.h" />
     <ClInclude Include="ProceduralMesh.h" />
     <ClInclude Include="Rendering\ProceduralMeshRenderer.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="BonePatch.cpp" />
     <ClCompile Include="MeshCutting.cpp" />
     <ClCompile Include="ProceduralMesh.cpp" />
     <ClCompile Include="Rendering\ProceduralMeshRenderer.cpp">

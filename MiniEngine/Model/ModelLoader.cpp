@@ -229,15 +229,29 @@ std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool fo
 
 	if (header.geometrySize > 0)
 	{
+		model->m_GeometryCPU.resize(header.geometrySize);
+		inFile.read((char*)model->m_GeometryCPU.data(), header.geometrySize);
 		UploadBuffer modelData;
 		modelData.Create(L"Model Data Upload", header.geometrySize);
-		inFile.read((char*)modelData.Map(), header.geometrySize);
+		std::memcpy(modelData.Map(), model->m_GeometryCPU.data(), header.geometrySize);
 		modelData.Unmap();
 		model->m_DataBuffer.Create(L"Model Data", header.geometrySize, 1, modelData);
 	}
 
     inFile.read((char*)model->m_SceneGraph.get(), header.numNodes * sizeof(GraphNode));
     inFile.read((char*)model->m_MeshData.get(), header.meshDataSize);
+
+    // Only skinned models need CPU geometry (bone patch extraction); drop it for static scenes.
+    bool hasSkinnedMesh = false;
+    const uint8_t* skinScanPtr = model->m_MeshData.get();
+    for (uint32_t i = 0; i < header.numMeshes; ++i)
+    {
+        const Mesh& mesh = *(const Mesh*)skinScanPtr;
+        hasSkinnedMesh |= (mesh.psoFlags & PSOFlags::kHasSkin) != 0;
+        skinScanPtr += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
+    }
+    if (!hasSkinnedMesh)
+        std::vector<uint8_t>().swap(model->m_GeometryCPU);
 
 	if (header.numMaterials > 0)
 	{
