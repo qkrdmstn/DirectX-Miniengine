@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 
 #include <vector>
 #include "VectorMath.h"
@@ -7,8 +7,8 @@ namespace MeshCutting
 {
     struct InputStroke
     {
-        // È­¸é ÇÈ¼¿ ÁÂÇ¥¸¦ ÀÔ·Â ¼ø¼­´ë·Î ÀúÀå.
-        // x, y¸¦ »ç¿ëÇÏ°í z´Â 0À¸·Î µÐ´Ù.
+        // í™”ë©´ í”½ì…€ ì¢Œí‘œë¥¼ ìž…ë ¥ ìˆœì„œëŒ€ë¡œ ì €ìž¥.
+        // x, yë¥¼ ì‚¬ìš©í•˜ê³  zëŠ” 0ìœ¼ë¡œ ë‘”ë‹¤.
         std::vector<Math::Vector3> points;
     };
 

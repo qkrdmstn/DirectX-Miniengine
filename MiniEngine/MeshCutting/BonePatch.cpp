@@ -118,6 +118,29 @@ namespace MeshCutting
         if (skeleton == nullptr || nodeWorld == nullptr)
             return Fail(error, "Instance has no pose data");
 
+        // Marks the selected joint and its descendants, walking the node hierarchy upward.
+        std::vector<uint8_t> inSubtree(palette.numJoints, 0);
+        {
+            std::unordered_map<uint32_t, uint32_t> nodeToJoint;
+            for (uint32_t j = 0; j < palette.numJoints; ++j)
+                nodeToJoint.emplace(model.m_JointIndices[palette.startJoint + j], j);
+            for (uint32_t j = 0; j < palette.numJoints; ++j)
+            {
+                uint32_t node = model.m_JointIndices[palette.startJoint + j];
+                // Bounded by the node count so a malformed hierarchy cannot loop forever.
+                for (uint32_t depth = 0; depth <= model.m_NumNodes && node < model.m_NodeParents.size(); ++depth)
+                {
+                    const auto found = nodeToJoint.find(node);
+                    if (found != nodeToJoint.end() && found->second == jointIndex)
+                    {
+                        inSubtree[j] = 1;
+                        break;
+                    }
+                    node = model.m_NodeParents[node];
+                }
+            }
+        }
+
         const std::vector<uint8_t>& geometry = model.m_GeometryCPU;
         ProceduralMeshData mesh;
         BonePatchSource source;
@@ -125,6 +148,8 @@ namespace MeshCutting
         source.jointIndex = jointIndex;
         source.minWeight = minWeight;
 
+        Matrix4 poseWorld = Matrix4(kIdentity);     // world of the mesh that defined poseJointWorld
+        bool havePoseWorld = false;
         const uint8_t* meshPtr = model.m_MeshData.get();
         for (uint32_t meshIndex = 0; meshIndex < model.m_NumMeshes; ++meshIndex)
         {
@@ -143,6 +168,8 @@ namespace MeshCutting
                 return Fail(error, "Mesh buffers exceed geometry data");
             if (srcMesh.meshCBV >= model.m_NumNodes)
                 return Fail(error, "Mesh world matrix index out of range");
+            if (srcMesh.numJoints > palette.numJoints)
+                return Fail(error, "Mesh uses more joints than its palette");
 
             const bool index32 = srcMesh.ibFormat == DXGI_FORMAT_R32_UINT;
             if (!index32 && srcMesh.ibFormat != DXGI_FORMAT_R16_UINT)
@@ -157,6 +184,7 @@ namespace MeshCutting
             const Matrix3 worldIT = InverseTranspose(world.Get3x3());
             const uint32_t meshSlot = uint32_t(source.meshes.size());
             bool meshUsed = false;
+
             std::unordered_map<uint32_t, uint32_t> remap; // source vertex -> patch vertex
 
             const auto addVertex = [&](uint32_t vertex) -> uint32_t
@@ -234,19 +262,58 @@ namespace MeshCutting
                     }
 
                     bool selected = false;
+                    bool weightedInSubtree = false;
+                    bool weightedOutside = false;
                     for (uint32_t k = 0; k < 3; ++k)
                     {
                         const DecodedVertex v = Decode(vb + size_t(tri[k]) * layout.stride, layout);
                         for (int j = 0; j < 4; ++j)
-                            if (v.weights[j] > 0.0f && v.joints[j] >= srcMesh.numJoints)
+                        {
+                            if (v.weights[j] <= 0.0f)
+                                continue;
+                            if (v.joints[j] >= srcMesh.numJoints)
                                 return Fail(error, "Vertex joint index exceeds the mesh palette");
+                            if (inSubtree[v.joints[j]])
+                                weightedInSubtree = true;
+                            else
+                                weightedOutside = true;
+                        }
                         selected |= Influence(v, jointIndex) > minWeight;
                     }
                     if (!selected)
+                    {
+                        if (weightedInSubtree && weightedOutside)
+                            ++source.mixedOutsideTriangles;
                         continue;
+                    }
+
+                    if (!meshUsed)
+                    {
+                        // The first mesh that really contributes triangles defines the pose
+                        // snapshot: joint matrices live in the mesh's skinning space, so the mesh
+                        // world is prepended to put them in the space of the posed patch vertices.
+                        // A patch that mixes meshes with different world transforms has no single
+                        // such space, so it is rejected.
+                        if (source.poseJointWorld.empty())
+                        {
+                            source.poseJointWorld.reserve(palette.numJoints);
+                            for (uint32_t j = 0; j < palette.numJoints; ++j)
+                            {
+                                const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
+                                if (jointNode >= model.m_NumNodes)
+                                    return Fail(error, "Joint node index out of range");
+                                source.poseJointWorld.push_back(world * nodeWorld[jointNode]);
+                            }
+                            poseWorld = world;
+                            havePoseWorld = true;
+                        }
+                        else if (havePoseWorld && std::memcmp(&poseWorld, &world, sizeof(Matrix4)) != 0)
+                            return Fail(error, "Patch spans meshes with different world transforms");
+                    }
 
                     for (uint32_t k = 0; k < 3; ++k)
                         mesh.indices.push_back(addVertex(tri[k]));
+                    source.triangles.push_back({ meshSlot, drawIdx, i / 3 });
                     meshUsed = true;
                 }
             }
@@ -261,6 +328,40 @@ namespace MeshCutting
         mesh.sections.push_back({ 0, uint32_t(mesh.indices.size()), 0 });
         outMesh = std::move(mesh);
         outSource = std::move(source);
+        if (error)
+            error->clear();
+        return true;
+    }
+
+    bool MakeWeldInput(const ProceduralMeshData& mesh, const BonePatchSource& source,
+        WeldInput& out, std::string* error)
+    {
+        if (mesh.vertices.size() != source.vertices.size())
+            return Fail(error, "Mesh and source disagree on the vertex count");
+        if (mesh.indices.size() != source.triangles.size() * 3)
+            return Fail(error, "Mesh and source disagree on the triangle count");
+
+        WeldInput in;
+        in.vertices.resize(mesh.vertices.size());
+        for (size_t i = 0; i < mesh.vertices.size(); ++i)
+        {
+            const ProceduralVertex& rendered = mesh.vertices[i];
+            const BonePatchVertex& skin = source.vertices[i];
+            WeldInputVertex& v = in.vertices[i];
+            v.meshSlot = skin.meshSlot;
+            v.bindPosition = skin.position;
+            v.position = rendered.position;
+            v.normal = rendered.normal;
+            v.uv = rendered.uv;
+            v.color = rendered.color;
+            for (int k = 0; k < 4; ++k)
+            {
+                v.joints[k] = skin.joints[k];
+                v.weights[k] = skin.weights[k];
+            }
+        }
+        in.indices = mesh.indices;
+        out = std::move(in);
         if (error)
             error->clear();
         return true;

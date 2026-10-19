@@ -36,6 +36,8 @@
 #include "Utility.h"
 #include "../MeshCutting/ProceduralMesh.h"
 #include "../MeshCutting/BonePatch.h"
+#include "../MeshCutting/Geometry/PlaneSlicer.h"
+#include "../MeshCutting/Geometry/RenderBake.h"
 #include "../MeshCutting/Rendering/ProceduralMeshRenderer.h"
 
 #define LEGACY_RENDERER
@@ -79,8 +81,41 @@ private:
     MeshCutting::BonePatchSource m_BonePatchSource;
     MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
     std::wstring m_BonePatchStatus;
+    // Welded copy of the patch: the slicer input. Boundary edges are drawn as colored tubes.
+    MeshCutting::PatchPiece m_PatchPiece;
+    MeshCutting::WeldStats m_WeldStats;
+    MeshCutting::SliceStatus m_PieceStatus = MeshCutting::SliceStatus::InvalidInput;
+    std::string m_PieceDetail;
+    MeshCutting::ProceduralMesh m_BoundaryDebug;
+    bool m_BoundaryDebugEnabled = true;
+
+    // Slice preview. The base plane sits at the selected joint and points to its child joint;
+    // offset and tilt are added on top. The pieces on screen come from the last Ok slice.
+    bool m_SliceEnabled = false;
+    bool m_SliceDirty = false;
+    bool m_CapEnabled = true;               // M: CapMode::Create / None
+    bool m_BackCull = false;                // L: back-face culling PSO instead of two-sided
+    bool m_SectionTint = false;             // Z: color surface and cap sections differently
+    bool m_PlaneBaseValid = false;
+    Vector3 m_PlanePoint0, m_PlaneNormal0, m_PlaneAxisA, m_PlaneAxisB;
+    float m_PlaneOffset = 0.0f;
+    float m_PlaneTiltA = 0.0f;
+    float m_PlaneTiltB = 0.0f;
+    MeshCutting::SliceStatus m_SliceStatus = MeshCutting::SliceStatus::InvalidInput;
+    std::string m_SliceDetail;
+    std::wstring m_SliceInfo;
+    bool m_HavePieces = false;
+    DirectX::XMFLOAT3 m_ShownNormal = { 0.0f, 1.0f, 0.0f };
+    MeshCutting::ProceduralMesh m_PiecePositive, m_PieceNegative;
+    MeshCutting::ProceduralMesh m_PieceBoundaryPositive, m_PieceBoundaryNegative;
+    MeshCutting::ProceduralMesh m_PlaneDebug;
     ShadowCamera m_SunShadowCamera;
 
+    void RebuildPatchPiece(void);
+    void ComputeBasePlane(const Model& model);
+    MeshCutting::SlicePlane CurrentPlane(void) const;
+    void UpdateSlice(void);
+    void ClearSlice(void);
     void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
         const D3D12_RECT& scissor, uint32_t frameIndex);
 };
@@ -252,6 +287,12 @@ void ModelViewer::Startup(void)
 void ModelViewer::Cleanup(void)
 {
     m_ProceduralRenderer.ReleaseMesh(m_BonePatch);
+    m_ProceduralRenderer.ReleaseMesh(m_BoundaryDebug);
+    m_ProceduralRenderer.ReleaseMesh(m_PiecePositive);
+    m_ProceduralRenderer.ReleaseMesh(m_PieceNegative);
+    m_ProceduralRenderer.ReleaseMesh(m_PieceBoundaryPositive);
+    m_ProceduralRenderer.ReleaseMesh(m_PieceBoundaryNegative);
+    m_ProceduralRenderer.ReleaseMesh(m_PlaneDebug);
     m_ProceduralRenderer.Shutdown();
     m_ModelInst = nullptr;
 
@@ -272,6 +313,7 @@ namespace Graphics
 void ModelViewer::Update(float deltaT)
 {
     ScopedTimer _prof(L"Update State");
+
 
     const Model* model = m_ModelInst.GetModel();
     if (model != nullptr && m_BoneDebugEnabled && m_BoneSelection.paletteId < model->m_SkinPalettes.size())
@@ -315,7 +357,12 @@ void ModelViewer::Update(float deltaT)
             {
                 m_BonePatchSource = std::move(source);
                 m_BonePatchStatus = L"Patch: " + std::to_wstring(m_BonePatch.GetData().indices.size() / 3) + L" tris, "
-                    + std::to_wstring(m_BonePatch.GetData().vertices.size()) + L" verts";
+                    + std::to_wstring(m_BonePatch.GetData().vertices.size()) + L" verts, mixed outside "
+                    + std::to_wstring(m_BonePatchSource.mixedOutsideTriangles);
+                RebuildPatchPiece();
+                ClearSlice();
+                ComputeBasePlane(*model);
+                m_SliceDirty = m_SliceEnabled;      // a replaced patch is sliced again at once
             }
             else
                 m_BonePatchStatus = L"Patch failed: " + Utility::UTF8ToWideString(error);
@@ -325,6 +372,56 @@ void ModelViewer::Update(float deltaT)
             m_BonePatch.Clear();
             m_BonePatchSource = {};
             m_BonePatchStatus.clear();
+            RebuildPatchPiece();
+            ClearSlice();
+            m_PlaneBaseValid = false;
+            m_SliceEnabled = false;
+        }
+        if (GameInput::IsFirstPressed(GameInput::kKey_g))
+            m_BoundaryDebugEnabled = !m_BoundaryDebugEnabled;
+
+        if (m_PlaneBaseValid)
+        {
+            const float radius = float(MeshCutting::ComputePieceRadius(m_PatchPiece));
+            if (GameInput::IsFirstPressed(GameInput::kKey_t))
+            {
+                m_SliceEnabled = !m_SliceEnabled;
+                m_SliceDirty = true;
+            }
+            if (GameInput::IsFirstPressed(GameInput::kKey_m))
+            {
+                m_CapEnabled = !m_CapEnabled;
+                m_SliceDirty = true;
+            }
+            if (GameInput::IsFirstPressed(GameInput::kKey_l))
+                m_BackCull = !m_BackCull;
+            if (GameInput::IsFirstPressed(GameInput::kKey_z))
+                m_SectionTint = !m_SectionTint;
+            if (GameInput::IsFirstPressed(GameInput::kKey_r))
+            {
+                m_PlaneOffset = m_PlaneTiltA = m_PlaneTiltB = 0.0f;
+                m_SliceDirty = true;
+            }
+            const float move = radius * 0.4f * deltaT, turn = 0.8f * deltaT;
+            const auto hold = [&](GameInput::DigitalInput key, float& value, float amount)
+            {
+                if (GameInput::IsPressed(key))
+                {
+                    value += amount;
+                    m_SliceDirty = true;
+                }
+            };
+            hold(GameInput::kKey_lbracket, m_PlaneOffset, -move);
+            hold(GameInput::kKey_rbracket, m_PlaneOffset, move);
+            hold(GameInput::kKey_comma, m_PlaneTiltA, -turn);
+            hold(GameInput::kKey_period, m_PlaneTiltA, turn);
+            hold(GameInput::kKey_semicolon, m_PlaneTiltB, -turn);
+            hold(GameInput::kKey_apostrophe, m_PlaneTiltB, turn);
+            if (m_SliceEnabled && m_SliceDirty)
+            {
+                UpdateSlice();
+                m_SliceDirty = false;
+            }
         }
     }
     else if (model != nullptr && m_BoneSelection.paletteId < model->m_SkinPalettes.size()
@@ -523,14 +620,202 @@ void ModelViewer::RenderScene(void)
     m_ProceduralRenderer.NotifySubmitted(gfxContext.Finish());
 }
 
+// Welds the current patch into the slicer input and refreshes the boundary tubes. An empty source
+// (after X) just clears everything.
+void ModelViewer::RebuildPatchPiece(void)
+{
+    m_PatchPiece.Clear();
+    m_WeldStats = MeshCutting::WeldStats();
+    m_PieceDetail.clear();
+    m_PieceStatus = MeshCutting::SliceStatus::InvalidInput;
+    m_BoundaryDebug.Clear();
+
+    if (m_BonePatch.GetData().indices.empty())
+    {
+        m_PieceDetail = "no patch";
+        return;
+    }
+
+    MeshCutting::WeldInput weldInput;
+    std::string error;
+    if (!MeshCutting::MakeWeldInput(m_BonePatch.GetData(), m_BonePatchSource, weldInput, &error))
+    {
+        m_PieceDetail = error;
+        return;
+    }
+    m_PieceStatus = MeshCutting::BuildPatchPiece(weldInput, MeshCutting::kDefaultEpsilonScale,
+        m_PatchPiece, m_WeldStats, &m_PieceDetail);
+    if (m_PieceStatus != MeshCutting::SliceStatus::Ok)
+        return;
+
+    MeshCutting::ProceduralMeshData tubes;
+    MeshCutting::BakeBoundaryDebug(m_PatchPiece, float(MeshCutting::ComputePieceRadius(m_PatchPiece)) * 0.008f, tubes);
+    if (!tubes.indices.empty())
+        m_BoundaryDebug.SetMesh(std::move(tubes), &error);
+}
+
+// The plane starts at the selected joint and points along the bone to its child joint (or away
+// from its parent for a leaf joint), measured in the pose snapshot the patch was copied from.
+void ModelViewer::ComputeBasePlane(const Model& model)
+{
+    m_PlaneBaseValid = false;
+    m_PlaneOffset = m_PlaneTiltA = m_PlaneTiltB = 0.0f;
+    const std::vector<Matrix4>& pose = m_BonePatchSource.poseJointWorld;
+    if (m_BonePatchSource.paletteId >= model.m_SkinPalettes.size() || m_BonePatchSource.jointIndex >= pose.size())
+        return;
+    const SkinPalette& palette = model.m_SkinPalettes[m_BonePatchSource.paletteId];
+    const uint32_t joint = m_BonePatchSource.jointIndex;
+    const uint32_t node = model.m_JointIndices[palette.startJoint + joint];
+    const Vector3 origin = Vector3(pose[joint].GetW());
+
+    Vector3 direction(kZero);
+    bool found = false;
+    for (uint32_t j = 0; j < palette.numJoints && !found; ++j)
+    {
+        const uint32_t other = model.m_JointIndices[palette.startJoint + j];
+        if (other < model.m_NodeParents.size() && model.m_NodeParents[other] == node)
+        {
+            direction = Vector3(pose[j].GetW()) - origin;
+            found = true;
+        }
+    }
+    for (uint32_t j = 0; j < palette.numJoints && !found && node < model.m_NodeParents.size(); ++j)
+        if (model.m_JointIndices[palette.startJoint + j] == model.m_NodeParents[node])
+        {
+            direction = origin - Vector3(pose[j].GetW());
+            found = true;
+        }
+    if (!found || float(Length(direction)) < 1e-5f)
+        direction = Vector3(0.0f, 1.0f, 0.0f);
+    direction = Normalize(direction);
+
+    Vector3 up(0.0f, 1.0f, 0.0f);
+    if (fabsf(float(Dot(direction, up))) > 0.99f)
+        up = Vector3(1.0f, 0.0f, 0.0f);
+    m_PlanePoint0 = origin;
+    m_PlaneNormal0 = direction;
+    m_PlaneAxisA = Normalize(Cross(direction, up));
+    m_PlaneAxisB = Cross(direction, m_PlaneAxisA);
+    m_PlaneBaseValid = true;
+}
+
+MeshCutting::SlicePlane ModelViewer::CurrentPlane(void) const
+{
+    const Vector3 normal = Normalize(Quaternion(m_PlaneAxisB, m_PlaneTiltB) * (Quaternion(m_PlaneAxisA, m_PlaneTiltA) * m_PlaneNormal0));
+    const Vector3 point = m_PlanePoint0 + m_PlaneNormal0 * m_PlaneOffset;
+    MeshCutting::SlicePlane plane;
+    plane.point = { float(point.GetX()), float(point.GetY()), float(point.GetZ()) };
+    plane.normal = { float(normal.GetX()), float(normal.GetY()), float(normal.GetZ()) };
+    return plane;
+}
+
+void ModelViewer::ClearSlice(void)
+{
+    m_HavePieces = false;
+    m_SliceDirty = false;
+    m_SliceStatus = MeshCutting::SliceStatus::InvalidInput;
+    m_SliceDetail.clear();
+    m_SliceInfo.clear();
+    m_PiecePositive.Clear();
+    m_PieceNegative.Clear();
+    m_PieceBoundaryPositive.Clear();
+    m_PieceBoundaryNegative.Clear();
+    m_PlaneDebug.Clear();
+}
+
+// Slices the welded patch with the current plane. The pieces on screen are replaced only when the
+// slice is Ok; otherwise the old pieces stay and the status says why.
+void ModelViewer::UpdateSlice(void)
+{
+    if (!m_PlaneBaseValid || m_PieceStatus != MeshCutting::SliceStatus::Ok)
+        return;
+    const float radius = float(MeshCutting::ComputePieceRadius(m_PatchPiece));
+    const MeshCutting::SlicePlane plane = CurrentPlane();
+
+    std::string error;
+    MeshCutting::ProceduralMeshData planeMesh;
+    MeshCutting::BakePlaneDebug(plane, radius * 0.7f, radius * 0.008f, planeMesh);
+    if (!planeMesh.indices.empty())
+        m_PlaneDebug.SetMesh(std::move(planeMesh), &error);
+
+    MeshCutting::SliceOptions options;
+    options.cap = m_CapEnabled ? MeshCutting::CapMode::Create : MeshCutting::CapMode::None;
+    MeshCutting::SliceResult result;
+    m_SliceStatus = MeshCutting::SlicePatch(m_PatchPiece, plane, 1, options, result);
+    m_SliceDetail = result.detail;
+    if (m_SliceStatus != MeshCutting::SliceStatus::Ok)
+    {
+        m_SliceInfo.clear();
+        return;
+    }
+
+    const auto bake = [&](const MeshCutting::PatchPiece& piece, MeshCutting::ProceduralMesh& mesh, MeshCutting::ProceduralMesh& boundary)
+    {
+        MeshCutting::ProceduralMeshData data, tubes;
+        MeshCutting::BuildRenderMesh(piece, data);
+        mesh.SetMesh(std::move(data), &error);
+        MeshCutting::BakeBoundaryDebug(piece, radius * 0.008f, tubes);
+        if (tubes.indices.empty())
+            boundary.Clear();
+        else
+            boundary.SetMesh(std::move(tubes), &error);
+    };
+    bake(result.positive, m_PiecePositive, m_PieceBoundaryPositive);
+    bake(result.negative, m_PieceNegative, m_PieceBoundaryNegative);
+    m_ShownNormal = plane.normal;
+    m_HavePieces = true;
+
+    const double original = MeshCutting::TotalArea(m_PatchPiece, MeshCutting::FaceKind::Surface);
+    const double positive = MeshCutting::TotalArea(result.positive, MeshCutting::FaceKind::Surface);
+    const double negative = MeshCutting::TotalArea(result.negative, MeshCutting::FaceKind::Surface);
+    wchar_t info[200];
+    swprintf_s(info, L"loops %zu  + %zu faces %zu nodes   - %zu faces %zu nodes   area +%.2f -%.2f original %.2f (diff %.1e)",
+        result.loops.size(), result.positive.faces.size(), result.positive.nodes.size(), result.negative.faces.size(),
+        result.negative.nodes.size(), positive, negative, original, positive + negative - original);
+    m_SliceInfo = info;
+}
+
 void ModelViewer::RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
     const D3D12_RECT& scissor, uint32_t frameIndex)
 {
     // Patch vertices are already in world space; shift the copy beside the original to compare them.
     const float patchOffset = m_ModelInst.IsNull() ? 0.0f : float(m_ModelInst.GetRadius());
     const Matrix4 patchWorld(AffineTransform::MakeTranslation(Vector3(patchOffset, 0.0f, 0.0f)));
-    m_ProceduralRenderer.Draw(gfxContext, m_BonePatch, patchWorld, m_Camera.GetViewProjMatrix(),
-        g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor);
+    const Matrix4 viewProj = m_Camera.GetViewProjMatrix();
+    MeshCutting::ProceduralMeshRenderer::DrawOptions pieceOptions;
+    pieceOptions.cull = m_BackCull ? MeshCutting::ProceduralMeshRenderer::CullMode::Back
+        : MeshCutting::ProceduralMeshRenderer::CullMode::TwoSided;
+    pieceOptions.sectionTint = m_SectionTint;
+    const auto draw = [&](const MeshCutting::ProceduralMesh& mesh, const Matrix4& world,
+        const MeshCutting::ProceduralMeshRenderer::DrawOptions& options = MeshCutting::ProceduralMeshRenderer::DrawOptions())
+    {
+        m_ProceduralRenderer.Draw(gfxContext, mesh, world, viewProj, g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor, options);
+    };
+
+    if (m_SliceEnabled && m_HavePieces)
+    {
+        // The pieces and the plane share the display offset; the pieces are pulled apart along
+        // the plane normal so the cut can be seen.
+        const float gap = float(MeshCutting::ComputePieceRadius(m_PatchPiece)) * 0.05f;
+        const Vector3 shift = Vector3(m_ShownNormal.x, m_ShownNormal.y, m_ShownNormal.z) * gap;
+        const Matrix4 positiveWorld(AffineTransform::MakeTranslation(Vector3(patchOffset, 0.0f, 0.0f) + shift));
+        const Matrix4 negativeWorld(AffineTransform::MakeTranslation(Vector3(patchOffset, 0.0f, 0.0f) - shift));
+        draw(m_PiecePositive, positiveWorld, pieceOptions);
+        draw(m_PieceNegative, negativeWorld, pieceOptions);
+        if (m_BoundaryDebugEnabled)
+        {
+            draw(m_PieceBoundaryPositive, positiveWorld);
+            draw(m_PieceBoundaryNegative, negativeWorld);
+        }
+    }
+    else
+    {
+        draw(m_BonePatch, patchWorld);
+        if (m_BoundaryDebugEnabled)
+            draw(m_BoundaryDebug, patchWorld);
+    }
+    if (m_SliceEnabled)
+        draw(m_PlaneDebug, patchWorld);
 
     // SSAO linearized depth before these draws; refresh it so velocity, TAA and DoF see the new depth.
     if (SSAO::Enable || SSAO::ComputeLinearZ)
@@ -562,6 +847,29 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     text.DrawFormattedString(L"Parent %u  %ls\n", parent, parentName.c_str());
     text.DrawFormattedString(L"B: debug  J/K: joint  I: skin  H: weight %ls  V: wire %ls\n",
         m_WeightDebugEnabled ? L"on" : L"off", m_WireframeEnabled ? L"on" : L"off");
-    text.DrawFormattedString(L"C: copy joint patch  X: clear patch  %ls", m_BonePatchStatus.c_str());
+    text.DrawFormattedString(L"C: copy joint patch  X: clear patch  %ls\n", m_BonePatchStatus.c_str());
+    if (m_WeldStats.corners > 0)
+    {
+        text.DrawFormattedString(L"Weld: corners %u -> nodes %u (position-only %u, skin-split positions %u)\n",
+            m_WeldStats.corners, m_WeldStats.nodes, m_WeldStats.positionNodes, m_WeldStats.skinSplitPositions);
+        text.DrawFormattedString(L"G: boundary %ls  replacement %u (yellow)  unwelded seam %u (green)  non-manifold %u  %hs\n",
+            m_BoundaryDebugEnabled ? L"on" : L"off", m_WeldStats.replacementEdges, m_WeldStats.unweldedSeamEdges,
+            m_WeldStats.nonManifoldEdges, MeshCutting::SliceStatusName(m_PieceStatus));
+    }
+    if (m_PieceStatus != MeshCutting::SliceStatus::Ok && !m_PieceDetail.empty())
+        text.DrawFormattedString(L"%ls\n", Utility::UTF8ToWideString(m_PieceDetail.substr(0, 120)).c_str());
+    if (m_PlaneBaseValid)
+    {
+        text.DrawFormattedString(L"T: slice %ls  [ ]: offset %.2f  , .: tilt A %.0f  ; ': tilt B %.0f  R: reset\n",
+            m_SliceEnabled ? L"on" : L"off", m_PlaneOffset, m_PlaneTiltA * 57.29578f, m_PlaneTiltB * 57.29578f);
+        text.DrawFormattedString(L"M: cap %ls  L: cull %ls  Z: section tint %ls\n", m_CapEnabled ? L"on" : L"off",
+            m_BackCull ? L"back" : L"two-sided", m_SectionTint ? L"on" : L"off");
+        if (m_SliceEnabled)
+        {
+            text.DrawFormattedString(L"Slice: %hs  %ls\n", MeshCutting::SliceStatusName(m_SliceStatus), m_SliceInfo.c_str());
+            if (m_SliceStatus != MeshCutting::SliceStatus::Ok && !m_SliceDetail.empty())
+                text.DrawFormattedString(L"%ls\n", Utility::UTF8ToWideString(m_SliceDetail.substr(0, 120)).c_str());
+        }
+    }
     text.End();
 }

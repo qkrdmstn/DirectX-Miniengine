@@ -25,11 +25,22 @@ namespace MeshCutting
         ProceduralMeshRenderer(const ProceduralMeshRenderer&) = delete;
         ProceduralMeshRenderer& operator=(const ProceduralMeshRenderer&) = delete;
 
+        enum class CullMode { TwoSided, Back };
+
+        struct DrawOptions
+        {
+            CullMode cull = CullMode::TwoSided;     // Back: counter-clockwise faces only
+            // Debug aid: draw each section in a fixed color (section 0 gray, 1 cyan, 2 yellow, ...)
+            // so a cap can be told from the surface. Materials themselves are not supported yet.
+            bool sectionTint = false;
+        };
+
         void Initialize();
         void Draw(GraphicsContext& context, const ProceduralMesh& mesh,
             const Math::Matrix4& world, const Math::Matrix4& viewProj,
             ColorBuffer& color, DepthBuffer& depth,
-            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor);
+            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor,
+            const DrawOptions& options = DrawOptions());
         void NotifySubmitted(uint64_t fence);
         void ReleaseMesh(const ProceduralMesh& mesh);
         void Shutdown();
@@ -56,7 +67,8 @@ namespace MeshCutting
         void Upload(GraphicsContext& context, Buffer& buffer, const void* data, uint32_t bytes);
 
         RootSignature m_RootSignature;
-        GraphicsPSO m_Pso;
+        GraphicsPSO m_Pso;              // two-sided
+        GraphicsPSO m_PsoBackCull;      // back-face culling
         bool m_Initialized = false;
         bool m_PsoFinalized = false;
         DXGI_FORMAT m_ColorFormat = DXGI_FORMAT_UNKNOWN;

@@ -18,7 +18,8 @@ using namespace Graphics;
 namespace MeshCutting
 {
     ProceduralMeshRenderer::ProceduralMeshRenderer() :
-        m_Pso(L"Procedural Mesh Color")
+        m_Pso(L"Procedural Mesh Color"),
+        m_PsoBackCull(L"Procedural Mesh Color Back Cull")
     {
     }
 
@@ -32,8 +33,10 @@ namespace MeshCutting
         if (m_Initialized)
             return;
 
-        m_RootSignature.Reset(1, 0);
+        m_RootSignature.Reset(2, 0);
         m_RootSignature[0].InitAsConstantBuffer(0, D3D12_SHADER_VISIBILITY_VERTEX);
+        // Section tint: float4 color + uint mode (see ProceduralMeshPS.hlsl).
+        m_RootSignature[1].InitAsConstants(1, 5, D3D12_SHADER_VISIBILITY_PIXEL);
         m_RootSignature.Finalize(L"Procedural Mesh Root", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         static const D3D12_INPUT_ELEMENT_DESC layout[] =
@@ -53,6 +56,10 @@ namespace MeshCutting
         m_Pso.SetPrimitiveTopologyType(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE);
         m_Pso.SetVertexShader(g_pProceduralMeshVS, sizeof(g_pProceduralMeshVS));
         m_Pso.SetPixelShader(g_pProceduralMeshPS, sizeof(g_pProceduralMeshPS));
+
+        // Same state with back-face culling (RasterizerDefault: counter-clockwise is front).
+        m_PsoBackCull = m_Pso;
+        m_PsoBackCull.SetRasterizerState(RasterizerDefault);
         m_Initialized = true;
     }
 
@@ -117,7 +124,7 @@ namespace MeshCutting
     void ProceduralMeshRenderer::Draw(GraphicsContext& context, const ProceduralMesh& mesh,
         const Math::Matrix4& world, const Math::Matrix4& viewProj,
         ColorBuffer& color, DepthBuffer& depth,
-        const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor)
+        const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, const DrawOptions& options)
     {
         Initialize();
         if (!m_PsoFinalized || m_ColorFormat != color.GetFormat() || m_DepthFormat != depth.GetFormat())
@@ -126,6 +133,8 @@ namespace MeshCutting
             m_DepthFormat = depth.GetFormat();
             m_Pso.SetRenderTargetFormat(m_ColorFormat, m_DepthFormat);
             m_Pso.Finalize();
+            m_PsoBackCull.SetRenderTargetFormat(m_ColorFormat, m_DepthFormat);
+            m_PsoBackCull.Finalize();
             m_PsoFinalized = true;
         }
         const ProceduralMeshData& data = mesh.GetData();
@@ -165,23 +174,46 @@ namespace MeshCutting
         context.SetRenderTarget(color.GetRTV(), depth.GetDSV());
         context.SetViewportAndScissor(viewport, scissor);
         context.SetRootSignature(m_RootSignature);
-        context.SetPipelineState(m_Pso);
+        context.SetPipelineState(options.cull == CullMode::Back ? m_PsoBackCull : m_Pso);
         context.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         struct alignas(16) Transforms { Math::Matrix4 world; Math::Matrix4 viewProj; };
         const Transforms transforms{ world, viewProj };
         context.SetDynamicConstantBufferView(0, sizeof(transforms), &transforms);
         context.SetVertexBuffer(0, gpu.vertices->resource.VertexBufferView(0, vertexBytes, sizeof(ProceduralVertex)));
         context.SetIndexBuffer(gpu.indices->resource.IndexBufferView(0, indexBytes, true));
-        const auto drawSection = [&context](const MeshSection& section)
+        // Pixel constants: tint color (rgb, unused alpha) and a mode flag. Mode 0 keeps vertex colors.
+        static const float kSectionTint[][4] = {
+            { 0.85f, 0.85f, 0.85f, 1.0f }, { 0.1f, 0.8f, 0.9f, 1.0f }, { 0.95f, 0.8f, 0.1f, 1.0f },
+            { 0.9f, 0.3f, 0.7f, 1.0f }, { 0.4f, 0.9f, 0.3f, 1.0f } };
+        const uint32_t tintCount = uint32_t(_countof(kSectionTint));
+        const auto setTint = [&context, &options](uint32_t section)
         {
-            if (section.indexCount != 0)
-                context.DrawIndexed(section.indexCount, section.firstIndex);
+            struct { float color[4]; uint32_t mode; } constants = {};
+            if (options.sectionTint)
+            {
+                std::memcpy(constants.color, kSectionTint[section % tintCount], sizeof(constants.color));
+                constants.mode = 1;
+            }
+            context.SetConstantArray(1, 5, &constants);
         };
         if (data.sections.empty())
+        {
+            setTint(0);
             context.DrawIndexed(uint32_t(data.indices.size()));
+        }
         else
+        {
+            uint32_t sectionIndex = 0;
             for (const MeshSection& section : data.sections)
-                drawSection(section);
+            {
+                if (section.indexCount != 0)
+                {
+                    setTint(sectionIndex);
+                    context.DrawIndexed(section.indexCount, section.firstIndex);
+                }
+                ++sectionIndex;
+            }
+        }
 
         for (const BufferPtr& buffer : {gpu.vertices, gpu.indices})
         {

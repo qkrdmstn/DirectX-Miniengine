@@ -147,12 +147,36 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="BonePatch.h" />
     <ClInclude Include="ProceduralMesh.h" />
+    <ClInclude Include="Geometry\CapBuilder.h" />
+    <ClInclude Include="Geometry\CutLoops.h" />
+    <ClInclude Include="Geometry\PatchGeometry.h" />
+    <ClInclude Include="Geometry\PatchWeld.h" />
+    <ClInclude Include="Geometry\PlaneSlicer.h" />
+    <ClInclude Include="Geometry\RenderBake.h" />
     <ClInclude Include="Rendering\ProceduralMeshRenderer.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BonePatch.cpp" />
     <ClCompile Include="MeshCutting.cpp" />
     <ClCompile Include="ProceduralMesh.cpp" />
+    <ClCompile Include="Geometry\CapBuilder.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\CutLoops.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\PatchGeometry.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\PatchWeld.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\PlaneSlicer.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\RenderBake.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
     <ClCompile Include="Rendering\ProceduralMeshRenderer.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>
@@ -162,6 +186,10 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="tests\PlaneSlicerTests.cpp" />
+    <None Include="Docs\PlaneSlicingDesign.md" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Rendering\ProceduralMeshVS.hlsl">

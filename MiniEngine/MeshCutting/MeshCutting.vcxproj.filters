@@ -9,6 +9,15 @@
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
+    <Filter Include="Geometry">
+      <UniqueIdentifier>{6b1d4e0a-3f52-4c8e-9a67-2d9e5c1f7a30}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="tests">
+      <UniqueIdentifier>{c3a8f7d2-91b4-4e56-8d0c-5f2a6b9e1c47}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Docs">
+      <UniqueIdentifier>{e5f09b3c-7d16-42a8-b4e1-0a8c3d6f9254}</UniqueIdentifier>
+    </Filter>
     <Filter Include="리소스 파일">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
@@ -30,6 +39,24 @@
     <ClInclude Include="BonePatch.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="Geometry\CapBuilder.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
+    <ClInclude Include="Geometry\CutLoops.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
+    <ClInclude Include="Geometry\PatchGeometry.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
+    <ClInclude Include="Geometry\PatchWeld.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
+    <ClInclude Include="Geometry\PlaneSlicer.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
+    <ClInclude Include="Geometry\RenderBake.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
     <ClInclude Include="Rendering\ProceduralMeshRenderer.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
@@ -44,12 +71,38 @@
     <ClCompile Include="BonePatch.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="Geometry\CapBuilder.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\CutLoops.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\PatchGeometry.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\PatchWeld.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\PlaneSlicer.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\RenderBake.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
     <ClCompile Include="Rendering\ProceduralMeshRenderer.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="pch.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="tests\PlaneSlicerTests.cpp">
+      <Filter>tests</Filter>
+    </None>
+    <None Include="Docs\PlaneSlicingDesign.md">
+      <Filter>Docs</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Rendering\ProceduralMeshVS.hlsl" />
