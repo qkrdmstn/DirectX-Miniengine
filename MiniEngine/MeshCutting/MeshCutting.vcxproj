@@ -69,6 +69,12 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="..\PropertySheets\Build.props" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Platform)'=='x64'" Label="PropertySheets">
+    <Import Project="..\PropertySheets\Desktop.props" />
+  </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -139,15 +145,29 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="MeshCutting.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="ProceduralMesh.h" />
+    <ClInclude Include="Rendering\ProceduralMeshRenderer.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MeshCutting.cpp" />
+    <ClCompile Include="ProceduralMesh.cpp" />
+    <ClCompile Include="Rendering\ProceduralMeshRenderer.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Rendering\ProceduralMeshVS.hlsl">
+      <ShaderType>Vertex</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Rendering\ProceduralMeshPS.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
