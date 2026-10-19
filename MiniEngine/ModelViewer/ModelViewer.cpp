@@ -80,6 +80,9 @@ private:
     MeshCutting::ProceduralMeshData m_BoxData;
     bool m_TestMeshChanged = false;
     ShadowCamera m_SunShadowCamera;
+
+    void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
+        const D3D12_RECT& scissor, uint32_t frameIndex);
 };
 
 CREATE_APPLICATION(ModelViewer)
@@ -475,6 +478,8 @@ void ModelViewer::RenderScene(void)
 #ifdef LEGACY_RENDERER
         Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor);
 #endif
+        if (!SSAO::DebugDraw)
+            RenderProceduralMeshes(gfxContext, viewport, scissor, FrameIndex);
     }
     else
     {
@@ -560,16 +565,12 @@ void ModelViewer::RenderScene(void)
 
             //Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
 
+            // Procedural meshes are opaque, so they must land before transparent blending.
+            RenderProceduralMeshes(gfxContext, viewport, scissor, FrameIndex);
+
             sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
         }
     }
-
-    const Matrix4 testWorld(AffineTransform::MakeTranslation(Vector3(4.0f, 1.5f, 0.0f)));
-    const Matrix4 otherWorld(AffineTransform::MakeTranslation(Vector3(7.0f, 1.5f, 0.0f)));
-    m_ProceduralRenderer.Draw(gfxContext, m_TestMesh, testWorld, m_Camera.GetViewProjMatrix(),
-        g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor);
-    m_ProceduralRenderer.Draw(gfxContext, m_OtherTestMesh, otherWorld, m_Camera.GetViewProjMatrix(),
-        g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor);
 
     // Some systems generate a per-pixel velocity buffer to better track dynamic and skinned meshes.  Everything
     // is static in our scene, so we generate velocity from camera motion and the depth buffer.  A velocity buffer
@@ -589,11 +590,26 @@ void ModelViewer::RenderScene(void)
     m_ProceduralRenderer.NotifySubmitted(gfxContext.Finish());
 }
 
+void ModelViewer::RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
+    const D3D12_RECT& scissor, uint32_t frameIndex)
+{
+    const Matrix4 testWorld(AffineTransform::MakeTranslation(Vector3(4.0f, 1.5f, 0.0f)));
+    const Matrix4 otherWorld(AffineTransform::MakeTranslation(Vector3(7.0f, 1.5f, 0.0f)));
+    m_ProceduralRenderer.Draw(gfxContext, m_TestMesh, testWorld, m_Camera.GetViewProjMatrix(),
+        g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor);
+    m_ProceduralRenderer.Draw(gfxContext, m_OtherTestMesh, otherWorld, m_Camera.GetViewProjMatrix(),
+        g_SceneColorBuffer, g_SceneDepthBuffer, viewport, scissor);
+
+    // SSAO linearized depth before these draws; refresh it so velocity, TAA and DoF see the new depth.
+    if (SSAO::Enable || SSAO::ComputeLinearZ)
+        SSAO::LinearizeZ(gfxContext.GetComputeContext(), m_Camera, frameIndex);
+}
+
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
     TextContext demoText(context);
     demoText.Begin();
-    demoText.ResetCursor(20.0f, 130.0f);
+    demoText.ResetCursor(20.0f, 180.0f);
     demoText.DrawString(L"Procedural: 1 box  2 vertices/color  3 remove triangles  4 restore  5 clear/recreate  6 larger mesh");
     demoText.End();
 
