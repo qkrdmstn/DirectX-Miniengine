@@ -156,14 +156,14 @@ void ModelViewer::Startup(void)
 
     LoadIBLTextures();
 
-    std::wstring gltfFileName;
+    std::wstring gltfFileName = L"Models/CesiumMan.glb";
 
     bool forceRebuild = false;
     uint32_t rebuildValue;
     if (CommandLineArgs::GetInteger(L"rebuild", rebuildValue))
         forceRebuild = rebuildValue != 0;
 
-    if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
+    if (gltfFileName.empty())
     {
 #ifdef LEGACY_RENDERER
         Sponza::Startup(m_Camera);
