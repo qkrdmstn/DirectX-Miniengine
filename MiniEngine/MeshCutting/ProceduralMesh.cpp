@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "ProceduralMesh.h"
 
 #include <algorithm>
@@ -41,6 +41,7 @@ namespace MeshCutting
                 std::isfinite(value.z) && std::isfinite(value.w);
         }
 
+        // 모든 정점을 순회하며 유효성 검사를 수행하는 함수
         bool ValidateVertices(const std::vector<ProceduralVertex>& vertices,
             ProceduralMeshBounds& bounds, std::string* error)
         {
@@ -54,6 +55,8 @@ namespace MeshCutting
                 return true;
             }
 
+            
+            // 정점 위치 유효성 검사
             for (const ProceduralVertex& vertex : vertices)
             {
                 if (!Finite(vertex.position) || !Finite(vertex.normal) ||
@@ -61,6 +64,7 @@ namespace MeshCutting
                     return Fail(error, "Vertex contains a non-finite attribute");
             }
 
+            // bounds 설정
             bounds.valid = true;
             bounds.min = vertices[0].position;
             bounds.max = vertices[0].position;
@@ -74,6 +78,7 @@ namespace MeshCutting
                 bounds.max.z = std::max(bounds.max.z, vertex.position.z);
             }
 
+            // 중심점 계산 및 Radius 설정
             const double cx = (double(bounds.min.x) + bounds.max.x) * 0.5;
             const double cy = (double(bounds.min.y) + bounds.max.y) * 0.5;
             const double cz = (double(bounds.min.z) + bounds.max.z) * 0.5;
@@ -95,11 +100,14 @@ namespace MeshCutting
             return true;
         }
 
+        // 삼각형 구성 검사
         bool ValidateTopology(ProceduralMeshData& data, std::string* error)
         {
             if (data.indices.size() > std::numeric_limits<uint32_t>::max() ||
                 data.indices.size() > std::numeric_limits<uint32_t>::max() / sizeof(uint32_t))
                 return Fail(error, "Index buffer exceeds D3D12 byte-size limit");
+
+            // 삼각형을 담기 때문에, 3의 배수여야 한다.
             if (data.indices.size() % 3 != 0)
                 return Fail(error, "Index count must be a multiple of three");
             for (uint32_t index : data.indices)
@@ -108,12 +116,15 @@ namespace MeshCutting
                     return Fail(error, "Index refers beyond the vertex array");
             }
 
-            // Omitted sections mean one material-slot-zero draw over all triangles.
+            // section이 없는 경우, 모든 face를 0번 material로 렌더링한다.
             if (!data.indices.empty() && data.sections.empty())
                 data.sections.push_back({ 0, uint32_t(data.indices.size()), 0 });
+
+            // face가 비어있는데 section이 비어있지 않으면 실패
             if (data.indices.empty() && !data.sections.empty())
                 return Fail(error, "Empty index data cannot have sections");
 
+            // face가 두 section에 중복 포함돼있는지 검사한다.
             std::vector<MeshSection> sorted = data.sections;
             std::sort(sorted.begin(), sorted.end(), [](const MeshSection& a, const MeshSection& b)
                 { return a.firstIndex < b.firstIndex; });
@@ -150,12 +161,16 @@ namespace MeshCutting
 
     bool ProceduralMesh::UpdateVertices(const std::vector<ProceduralVertex>& vertices, std::string* error)
     {
+        // 이전 정점과 개수가 다르면 실패 (SetMesh로 초기화를 진행하라)
         if (vertices.size() != m_Data.vertices.size())
             return Fail(error, "UpdateVertices requires the existing vertex count");
+        
+        // 유효성 검사 및 bounds 설정
         ProceduralMeshBounds bounds;
         if (!ValidateVertices(vertices, bounds, error))
             return false;
 
+        // 실제 데이터 업데이트
         std::vector<ProceduralVertex> replacement = vertices;
         m_Data.vertices.swap(replacement);
         m_Bounds = bounds;
