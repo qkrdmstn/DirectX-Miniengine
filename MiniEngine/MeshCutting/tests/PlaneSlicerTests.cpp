@@ -7,10 +7,12 @@
 // Keep <outdir> outside the repository. The exit code is the number of failed checks.
 
 #include "../Geometry/CutPlane.h"
+#include "../Geometry/JointSet.h"
 #include "../Geometry/PatchGeometry.h"
 #include "../Geometry/PatchWeld.h"
 #include "../Geometry/PieceSkinning.h"
 #include "../Geometry/PlaneSlicer.h"
+#include "../Geometry/SegmentPick.h"
 #include "../Geometry/RenderBake.h"
 #include "../ProceduralMesh.h"
 
@@ -1511,6 +1513,222 @@ static void TestLoopsInsidePlane()
     CHECK(!LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 5.0f)), result.positive, missing, 0.0f, nullptr));
 }
 
+// ---------------------------------------------------------------- segment pick and joint set tests
+
+// Joints stacked along Y: joint i at (0, i, 0), parent i - 1.
+static SkeletonPose MakeChainPose(uint32_t count)
+{
+    SkeletonPose pose;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        pose.jointPositions.push_back({ 0.0f, float(i), 0.0f });
+        pose.parents.push_back(i == 0 ? kNoNode : i - 1);
+    }
+    return pose;
+}
+
+// Root (0,2,0) with two legs: hip 1 and knee 2 on the left (x = -0.5), hip 3 and knee 4 on the right (x = +0.5).
+static SkeletonPose MakeLegsPose()
+{
+    SkeletonPose pose;
+    pose.jointPositions = { { 0.0f, 2.0f, 0.0f }, { -0.5f, 1.8f, 0.0f }, { -0.5f, 1.0f, 0.0f }, { 0.5f, 1.8f, 0.0f }, { 0.5f, 1.0f, 0.0f } };
+    pose.parents = { kNoNode, 0, 1, 0, 3 };
+    return pose;
+}
+
+static void TestPickChain()
+{
+    const SkeletonPose chain = MakeChainPose(5);       // joints at y = 0..4
+    std::vector<SegmentHit> hits;
+
+    // Between joints 1 and 2: the parent end (joint 1) is the cut joint.
+    PickSegments(chain, MakeFrame(HorizontalPlane(0, 1.5f, 0, 1.0f)), hits);
+    CHECK(hits.size() == 1 && hits[0].parentJoint == 1 && hits[0].childJoint == 2);
+    CHECK(!hits.empty() && std::fabs(hits[0].t - 0.5f) < 1e-6f && std::fabs(hits[0].point.y - 1.5f) < 1e-6f);
+    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1 }));
+
+    // A quarter of the way down the bone: t is measured from the parent.
+    PickSegments(chain, MakeFrame(HorizontalPlane(0, 2.25f, 0, 1.0f)), hits);
+    CHECK(hits.size() == 1 && hits[0].parentJoint == 2 && std::fabs(hits[0].t - 0.25f) < 1e-6f);
+
+    // The flipped plane (normal down) crosses the same segment.
+    CutPlane flipped = HorizontalPlane(0, 1.5f, 0, 1.0f);
+    RotateAroundLocalAxis(flipped, 0, XM_PI);
+    PickSegments(chain, MakeFrame(flipped), hits);
+    CHECK(hits.size() == 1 && hits[0].parentJoint == 1 && hits[0].childJoint == 2);
+
+    // Beyond both ends of the chain: nothing to cut (no virtual segment past the last joint).
+    PickSegments(chain, MakeFrame(HorizontalPlane(0, 10.0f, 0, 1.0f)), hits);
+    CHECK(hits.empty());
+    PickSegments(chain, MakeFrame(HorizontalPlane(0, -5.0f, 0, 1.0f)), hits);
+    CHECK(hits.empty());
+}
+
+static void TestPickThroughJoint()
+{
+    // A plane exactly through a joint belongs to one segment only: the joint counts as the + side.
+    const SkeletonPose chain = MakeChainPose(5);
+    std::vector<SegmentHit> hits;
+    PickSegments(chain, MakeFrame(HorizontalPlane(0, 2.0f, 0, 1.0f)), hits);
+    CHECK(hits.size() == 1 && hits[0].parentJoint == 1 && hits[0].childJoint == 2 && hits[0].t == 1.0f);
+
+    // Through the last joint: the segment above it, at its end.
+    PickSegments(chain, MakeFrame(HorizontalPlane(0, 4.0f, 0, 1.0f)), hits);
+    CHECK(hits.size() == 1 && hits[0].parentJoint == 3 && hits[0].childJoint == 4 && hits[0].t == 1.0f);
+
+    // Through the root: the root is on the + side with everything above it, so no segment is crossed.
+    PickSegments(chain, MakeFrame(HorizontalPlane(0, 0.0f, 0, 1.0f)), hits);
+    CHECK(hits.empty());
+
+    // With the normal pointing down the same plane through joint 2 goes to the next segment instead,
+    // but it is still exactly one segment.
+    CutPlane flipped = HorizontalPlane(0, 2.0f, 0, 1.0f);
+    RotateAroundLocalAxis(flipped, 0, XM_PI);
+    PickSegments(chain, MakeFrame(flipped), hits);
+    CHECK(hits.size() == 1 && hits[0].parentJoint == 2 && hits[0].childJoint == 3 && hits[0].t == 0.0f);
+}
+
+static void TestPickSeveralSegments()
+{
+    const SkeletonPose legs = MakeLegsPose();
+    std::vector<SegmentHit> hits;
+
+    // A wide plane across both thighs: two hits in child order, two cut joints.
+    PickSegments(legs, MakeFrame(HorizontalPlane(0, 1.4f, 0, 1.0f)), hits);
+    CHECK(hits.size() == 2 && hits[0].childJoint == 2 && hits[1].childJoint == 4);
+    CHECK(hits.size() == 2 && hits[0].parentJoint == 1 && hits[1].parentJoint == 3);
+    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1, 3 }));
+    CHECK(hits.size() == 2 && hits[0].point.x == -0.5f && hits[1].point.x == 0.5f);
+
+    // Too small to reach the right leg: only the left one is crossed.
+    CutPlane left = HorizontalPlane(-0.5f, 1.4f, 0, 0.3f);
+    PickSegments(legs, MakeFrame(left), hits);
+    CHECK(hits.size() == 1 && hits[0].childJoint == 2);
+
+    // A thin plane (U only) turned to run along X catches both; turned to run along Z it misses both.
+    CutPlane blade = HorizontalPlane(0, 1.4f, 0, 1.0f);
+    blade.halfExtents = { 1.0f, 0.1f };
+    PickSegments(legs, MakeFrame(blade), hits);
+    CHECK(hits.size() == 2);
+    RotateAroundLocalAxis(blade, 2, XM_PIDIV2);
+    PickSegments(legs, MakeFrame(blade), hits);
+    CHECK(hits.empty());
+
+    // A plane that crosses nothing, and one far away.
+    PickSegments(legs, MakeFrame(HorizontalPlane(0, 0.2f, 0, 1.0f)), hits);
+    CHECK(hits.empty());
+    PickSegments(legs, MakeFrame(HorizontalPlane(5.0f, 1.4f, 0, 1.0f)), hits);
+    CHECK(hits.empty());
+}
+
+static void TestPickSharedParent()
+{
+    // Joint 1 has two children (2 and 3): a plane across both bones gives two hits and one cut joint.
+    SkeletonPose pose;
+    pose.jointPositions = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { -1.0f, 2.0f, 0.0f }, { 1.0f, 2.0f, 0.0f } };
+    pose.parents = { kNoNode, 0, 1, 1 };
+    std::vector<SegmentHit> hits;
+    PickSegments(pose, MakeFrame(HorizontalPlane(0, 1.5f, 0, 2.0f)), hits);
+    CHECK(hits.size() == 2 && hits[0].parentJoint == 1 && hits[1].parentJoint == 1);
+    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1 }));
+
+    // Only one of the two bones is crossed when the plane is small: still joint 1.
+    PickSegments(pose, MakeFrame(HorizontalPlane(-0.5f, 1.5f, 0, 0.2f)), hits);
+    CHECK(hits.size() == 1 && hits[0].childJoint == 2);
+    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1 }));
+}
+
+static void TestPickRejectsBadInput()
+{
+    std::vector<SegmentHit> hits;
+    SkeletonPose bad = MakeChainPose(3);
+    bad.parents.pop_back();
+    hits.push_back(SegmentHit());
+    PickSegments(bad, MakeFrame(HorizontalPlane(0, 0.5f, 0, 1.0f)), hits);
+    CHECK(hits.empty());                       // sizes differ; hits is cleared first
+
+    SkeletonPose selfParent = MakeChainPose(3);
+    selfParent.parents[1] = 1;
+    selfParent.parents[2] = 99;
+    PickSegments(selfParent, MakeFrame(HorizontalPlane(0, 1.5f, 0, 1.0f)), hits);
+    CHECK(hits.empty());                       // a joint that is its own parent or has a missing parent is skipped
+
+    CHECK(CutJoints({}).empty());
+    SegmentHit a, b;
+    a.parentJoint = 4;
+    b.parentJoint = 2;
+    CHECK(CutJoints({ a, b, a }) == std::vector<uint32_t>({ 2, 4 }));    // sorted, no duplicates
+}
+
+static void MakeVertex(uint32_t seed, uint16_t joints[4], float weights[4])
+{
+    // Deterministic pseudo-random skin: up to four slots, small joint numbers so slots often repeat.
+    uint32_t state = seed * 2654435761u + 12345u;
+    const auto next = [&state]() { state = state * 1664525u + 1013904223u; return (state >> 8) & 0xffff; };
+    float sum = 0.0f;
+    for (int i = 0; i < 4; ++i)
+    {
+        joints[i] = uint16_t(next() % 6);
+        weights[i] = (next() % 3 == 0) ? 0.0f : float(next() % 1000) / 1000.0f;
+        sum += weights[i];
+    }
+    for (int i = 0; i < 4; ++i)
+        weights[i] = sum > 0.0f ? weights[i] / sum : 0.0f;
+}
+
+static void TestJointSet()
+{
+    // Slots holding the same joint add up.
+    const uint16_t joints[4] = { 3, 5, 3, 0 };
+    const float weights[4] = { 0.25f, 0.5f, 0.125f, 0.125f };
+    CHECK(JointInfluence(joints, weights, 3) == 0.375f && JointInfluence(joints, weights, 5) == 0.5f);
+    CHECK(JointInfluence(joints, weights, 7) == 0.0f);
+    CHECK(JointSetInfluence(joints, weights, { 3, 5 }) == 0.875f && JointSetInfluence(joints, weights, {}) == 0.0f);
+
+    // A set with one joint is that joint, for every minWeight.
+    const float minWeights[3] = { 0.0f, 0.1f, 0.5f };
+    for (uint32_t v = 0; v < 400; ++v)
+    {
+        uint16_t j[4];
+        float w[4];
+        MakeVertex(v, j, w);
+        for (uint32_t joint = 0; joint < 6; ++joint)
+            for (float minWeight : minWeights)
+                CHECK(VertexInJointSet(j, w, { joint }, minWeight) == (JointInfluence(j, w, joint) > minWeight));
+    }
+
+    // A set of two is the union of the two single joint results, for vertices and for whole triangles
+    // (a triangle is taken when any of its vertices is).
+    for (uint32_t v = 0; v < 300; ++v)
+    {
+        uint16_t j[3][4];
+        float w[3][4];
+        for (int k = 0; k < 3; ++k)
+            MakeVertex(v * 3 + k, j[k], w[k]);
+        for (float minWeight : minWeights)
+        {
+            bool inA = false, inB = false, inBoth = false;
+            for (int k = 0; k < 3; ++k)
+            {
+                inA = inA || VertexInJointSet(j[k], w[k], { 1 }, minWeight);
+                inB = inB || VertexInJointSet(j[k], w[k], { 4 }, minWeight);
+                inBoth = inBoth || VertexInJointSet(j[k], w[k], { 1, 4 }, minWeight);
+            }
+            CHECK(inBoth == (inA || inB));
+        }
+    }
+
+    // A joint nobody uses selects nothing; an empty set selects nothing.
+    uint16_t j[4];
+    float w[4];
+    MakeVertex(7, j, w);
+    CHECK(!VertexInJointSet(j, w, { 9 }, 0.0f) && !VertexInJointSet(j, w, {}, 0.0f));
+
+    // Valid sets: ascending, no duplicates, inside the palette, not empty.
+    CHECK(IsValidJointSet({ 0 }, 1) && IsValidJointSet({ 1, 3, 4 }, 5));
+    CHECK(!IsValidJointSet({}, 5) && !IsValidJointSet({ 3, 1 }, 5) && !IsValidJointSet({ 1, 1 }, 5) && !IsValidJointSet({ 5 }, 5));
+}
+
 // ---------------------------------------------------------------- 2-5 tests (skinning)
 
 typedef std::vector<std::vector<DirectX::XMFLOAT4X4>> SlotMatrices;
@@ -1832,6 +2050,12 @@ int main()
     TestCutPlaneScale();
     TestCutPlaneToSlicePlane();
     TestLoopsInsidePlane();
+    TestPickChain();
+    TestPickThroughJoint();
+    TestPickSeveralSegments();
+    TestPickSharedParent();
+    TestPickRejectsBadInput();
+    TestJointSet();
 
     TestSkinIdentity();
     TestSkinSingleJoint();

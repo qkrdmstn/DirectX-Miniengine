@@ -72,6 +72,12 @@
     <ClInclude Include="Geometry\CutPlane.h">
       <Filter>Geometry</Filter>
     </ClInclude>
+    <ClInclude Include="Geometry\JointSet.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
+    <ClInclude Include="Geometry\SegmentPick.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
     <ClInclude Include="Geometry\RenderBake.h">
       <Filter>Geometry</Filter>
     </ClInclude>
@@ -114,6 +120,12 @@
       <Filter>Geometry</Filter>
     </ClCompile>
     <ClCompile Include="Geometry\CutPlane.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\JointSet.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\SegmentPick.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
     <ClCompile Include="Geometry\RenderBake.cpp">

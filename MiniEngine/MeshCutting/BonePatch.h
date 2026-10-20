@@ -5,6 +5,7 @@
 #include "ProceduralMesh.h"
 #include "Geometry/PatchWeld.h"
 #include "Geometry/PieceSkinning.h"
+#include "Geometry/SegmentPick.h"
 #include "VectorMath.h"
 #include <cstdint>
 #include <string>
@@ -50,7 +51,8 @@ namespace MeshCutting
     {
         // 미니엔진에서 구성해 둔 각 팔레트(관절 그룹)와 해당 팔레트에서의 관절 인덱스를 추적하기 위한 변수
         uint32_t paletteId = 0;
-        uint32_t jointIndex = 0;
+        uint32_t jointIndex = 0;            // joints의 첫 번째 값 (joint 하나로 추출했을 때의 그 joint)
+        std::vector<uint32_t> joints;       // 추출에 쓴 joint 집합 (오름차순, 중복 없음)
 
         float minWeight = 0.0f; // bone에 영향을 받는 삼각형을 고를 때 최소 영향력 기준
 
@@ -76,6 +78,19 @@ namespace MeshCutting
     bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, uint32_t jointIndex, float minWeight,
         ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error = nullptr);
+
+    // joint 집합 버전. 정점 하나라도 집합 안 joint 중 하나의 가중치가 minWeight를 넘으면 삼각형을 복사한다.
+    // 집합의 결과는 각 joint 결과의 합집합이고, 크기 1 집합은 위의 단일 joint 버전과 같다.
+    // joints는 오름차순이고 중복이 없어야 한다. mixedOutsideTriangles는 집합 전체의 자손을 기준으로 센다.
+    bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
+        uint32_t paletteId, const std::vector<uint32_t>& joints, float minWeight,
+        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error = nullptr);
+
+    // 패치 없이 팔레트 하나의 뼈대(joint 위치와 팔레트 안의 부모)를 현재 자세로 구한다.
+    // 위치는 poseJointWorld와 같은 공간(패치 정점과 같은 공간)이다. 부모는 노드 계층을 따라 올라가다 처음 만나는
+    // 같은 팔레트의 joint이고, 중간에 joint가 아닌 노드가 있어도 건너뛴다.
+    bool ComputePaletteSkeleton(const Model& model, const ModelInstance& instance, uint32_t paletteId,
+        SkeletonPose& out, std::string* error = nullptr);
 
     // 메시 하나에 대해 메시 월드 × 관절 스키닝 행렬을 계산합니다.
     // 최초 추출과 이후 매 프레임 갱신이 같은 행렬과 같은 혼합 계산을 사용합니다.

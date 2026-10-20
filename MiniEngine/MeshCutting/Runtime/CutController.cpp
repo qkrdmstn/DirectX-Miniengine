@@ -11,6 +11,12 @@ namespace MeshCutting
 {
     bool CutController::SetPatch(const Model& model, const ModelInstance& instance, uint32_t paletteId, uint32_t jointIndex)
     {
+        if (m_PlaneEditing)
+        {
+            m_PatchStatusText = L"Leave cut mode (T) to copy a joint patch with C";
+            return false;
+        }
+
         // Copies with the pose of the last ModelInstance::Update, i.e. what is on screen now.
         ProceduralMeshData patch;
         BonePatchSource source;
@@ -27,7 +33,6 @@ namespace MeshCutting
             ClearPreview();
             m_PreviousPoseJointWorld.clear();
             m_CurrentPoseJointWorld = m_Source.poseJointWorld;
-            m_PreviewDirty = m_PlaneEditing;    // no automatic cut: the preview follows, Enter cuts
             ++m_PatchVersion;
             return true;
         }
@@ -35,31 +40,58 @@ namespace MeshCutting
         return false;
     }
 
+    // X: the patch and the confirmed pieces. Not available in cut mode, where the plane decides the patch.
     void CutController::ClearPatch()
+    {
+        if (m_PlaneEditing)
+            return;
+        DropPatch();
+        ClearSlice();
+    }
+
+    // The patch only. The confirmed pieces and the plane stay.
+    void CutController::DropPatch()
     {
         m_ExtractedMesh.Clear();
         m_Source = {};
         m_PatchStatusText.clear();
         RebuildPatchPiece();
-        ClearSlice();
-        ClearPreview();     // the plane stays: it belongs to the world, not to the patch
+        ClearPreview();
+        m_PreviousPoseJointWorld.clear();
         ++m_PatchVersion;
     }
 
-    void CutController::ToggleEditPlane(const ModelInstance& instance)
+    void CutController::ToggleEditPlane(const ModelInstance& instance, uint32_t paletteId)
     {
         m_PlaneEditing = !m_PlaneEditing;
+        m_CutRequested = false;
+        DropPatch();    // a patch copied with C does not belong to the plane; the candidate patch replaces it
+        m_HaveAttempt = false;
+        m_AttemptJoints.clear();
+        m_Hits.clear();
+        m_CutJoints.clear();
+        m_CandidateError.clear();
+        m_WeightCycle = 0;
         if (m_PlaneEditing)
         {
+            m_EditPalette = paletteId;
             if (!m_PlaneValid)
                 PlacePlane(instance);
             m_PreviewDirty = true;
         }
-        else
-        {
-            ClearPreview();
-            m_CutRequested = false;
-        }
+    }
+
+    void CutController::CycleWeightJoint()
+    {
+        if (!m_CutJoints.empty())
+            m_WeightCycle = (m_WeightCycle + 1) % uint32_t(m_CutJoints.size());
+    }
+
+    uint32_t CutController::WeightJoint() const
+    {
+        if (!m_PlaneEditing || m_CutJoints.empty())
+            return kNoNode;
+        return m_CutJoints[m_WeightCycle % m_CutJoints.size()];
     }
 
     void CutController::ToggleCap()
@@ -150,68 +182,144 @@ namespace MeshCutting
         m_PatchRadius = float(ComputePieceRadius(m_PatchPiece));
     }
 
-    // Runs once per frame after ModelInstance::Update. The patch is skinned to the current pose, the
-    // slice plane (fixed in bone space) is rebuilt from the current joint matrices, and the cut pieces
-    // are either cut again (when the plane controls changed) or skinned to the new pose.
+    // In cut mode: finds the bone segments the plane crosses and, when their parent joints (the cut joints)
+    // are not the ones the current patch was extracted for, extracts and welds a new patch for them. The same
+    // joint set is never extracted twice in a row, even after a failure; the patch is only skinned then.
+    void CutController::UpdateCandidate(const Model& model, const ModelInstance& instance)
+    {
+        std::string error;
+        if (!ComputePaletteSkeleton(model, instance, m_EditPalette, m_Skeleton, &error))
+        {
+            m_Skeleton = SkeletonPose();
+            m_Hits.clear();
+            m_CutJoints.clear();
+            m_CandidateError = Utility::UTF8ToWideString(error);
+            // Without a valid selection the old candidate must not stay cuttable; the next good frame rebuilds it.
+            DropPatch();
+            m_HaveAttempt = false;
+            m_AttemptJoints.clear();
+            return;
+        }
+        m_CandidateError.clear();
+
+        PickSegments(m_Skeleton, MakeFrame(m_Plane), m_Hits);
+        m_CutJoints = MeshCutting::CutJoints(m_Hits);
+        m_WeightCycle = m_CutJoints.empty() ? 0 : m_WeightCycle % uint32_t(m_CutJoints.size());
+        if (m_HaveAttempt && m_CutJoints == m_AttemptJoints)
+            return;
+        m_HaveAttempt = true;
+        m_AttemptJoints = m_CutJoints;
+
+        if (m_CutJoints.empty())
+        {
+            DropPatch();
+            m_PatchStatusText = L"No bone segment crosses the plane";
+            return;
+        }
+
+        const int64_t start = SystemTime::GetCurrentTick();
+        ProceduralMeshData patch;
+        BonePatchSource source;
+        if (ExtractBonePatch(model, instance, m_EditPalette, m_CutJoints, 0.0f, patch, source, &error)
+            && m_ExtractedMesh.SetMesh(std::move(patch), &error))
+        {
+            m_Source = std::move(source);
+            RebuildPatchPiece();
+            ClearPreview();     // the old dry-run was for another patch, even if this one failed to weld
+            m_PatchStatusText = L"Candidate patch: " + std::to_wstring(m_ExtractedMesh.GetData().indices.size() / 3) + L" tris, joints";
+            for (uint32_t joint : m_Source.joints)
+                m_PatchStatusText += L" " + std::to_wstring(joint);
+            m_PreviousPoseJointWorld.clear();
+            m_CurrentPoseJointWorld = m_Source.poseJointWorld;
+            m_PreviewDirty = true;
+            ++m_PatchVersion;
+        }
+        else
+        {
+            DropPatch();
+            m_PatchStatusText = L"Candidate patch failed: " + Utility::UTF8ToWideString(error);
+        }
+        m_ExtractMs = float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
+        ++m_ExtractCount;
+    }
+
+    // Runs once per frame after ModelInstance::Update. In cut mode the candidate patch follows the plane;
+    // the patch is skinned to the current pose; a requested cut or the preview runs on it; the confirmed
+    // pieces are skinned to the new pose (they stay when the patch is gone).
     void CutController::Update(const Model& model, const ModelInstance& instance)
     {
         m_FramePoseValid = false;
-        if (m_PatchPiece.Empty() || m_PieceStatus != SliceStatus::Ok)
+        if (m_PlaneEditing && m_PlaneValid)
+            UpdateCandidate(model, instance);
+
+        const bool havePatch = !m_PatchPiece.Empty() && m_PieceStatus == SliceStatus::Ok;
+        if (!havePatch)
+            m_CutRequested = false;     // nothing to cut: do not keep the request for a later patch
+        if (!havePatch && !m_HavePieces)
             return;
         ScopedTimer _prof(L"Patch Pose Update");
 
         std::string error;
-        if (!BuildSkinMatrices(model, instance, m_Source, m_SkinMatrices, &error)
-            || !ComputePoseJointWorld(model, instance, m_Source, m_CurrentPoseJointWorld, &error))
-        {
-            m_SkinError = error;
-            return;
-        }
-
         int64_t skinTicks = 0;
-        const auto skin = [&](PatchPiece& piece)
+        const auto skin = [&](PatchPiece& piece, const std::vector<std::vector<DirectX::XMFLOAT4X4>>& matrices)
         {
             const int64_t start = SystemTime::GetCurrentTick();
-            const bool ok = SkinPatchPiece(piece, m_SkinMatrices, nullptr, &error);
+            const bool ok = SkinPatchPiece(piece, matrices, nullptr, &error);
             skinTicks += SystemTime::GetCurrentTick() - start;
             return ok;
         };
         uint32_t skinnedNodes = 0;
-        if (!skin(m_PatchPiece))
-        {
-            m_SkinError = error;
-            return;
-        }
-        skinnedNodes += uint32_t(m_PatchPiece.nodes.size());
-
-
-        // The preview is a dry-run of the current pose, so it is out of date when the animation moved.
-        const size_t poseBytes = m_CurrentPoseJointWorld.size() * sizeof(Matrix4);
-        if (m_PreviousPoseJointWorld.size() != m_CurrentPoseJointWorld.size()
-            || memcmp(m_PreviousPoseJointWorld.data(), m_CurrentPoseJointWorld.data(), poseBytes) != 0)
-        {
-            m_PreviousPoseJointWorld = m_CurrentPoseJointWorld;
-            m_PreviewDirty = true;
-        }
-
-        // One of: a confirmed cut (Enter), or a dry-run when something changed. Both read the patch
-        // skinned just above, so new pieces start in this pose.
         bool freshlyCut = false;
-        if (m_CutRequested)
+
+        if (havePatch)
         {
-            m_CutRequested = false;
-            if (m_PlaneValid)
-                freshlyCut = ConfirmCut();      // a failed cut leaves the old pieces, which keep following below
+            if (!BuildSkinMatrices(model, instance, m_Source, m_SkinMatrices, &error)
+                || !ComputePoseJointWorld(model, instance, m_Source, m_CurrentPoseJointWorld, &error))
+            {
+                m_SkinError = error;
+                return;
+            }
+            if (!skin(m_PatchPiece, m_SkinMatrices))
+            {
+                m_SkinError = error;
+                return;
+            }
+            skinnedNodes += uint32_t(m_PatchPiece.nodes.size());
+
+            // The preview is a dry-run of the current pose, so it is out of date when the animation moved.
+            const size_t poseBytes = m_CurrentPoseJointWorld.size() * sizeof(Matrix4);
+            if (m_PreviousPoseJointWorld.size() != m_CurrentPoseJointWorld.size()
+                || memcmp(m_PreviousPoseJointWorld.data(), m_CurrentPoseJointWorld.data(), poseBytes) != 0)
+            {
+                m_PreviousPoseJointWorld = m_CurrentPoseJointWorld;
+                m_PreviewDirty = true;
+            }
+
+            // One of: a confirmed cut (Enter), or a dry-run when something changed. Both read the patch
+            // skinned just above, so new pieces start in this pose.
+            if (m_CutRequested)
+            {
+                m_CutRequested = false;
+                if (m_PlaneValid)
+                    freshlyCut = ConfirmCut();      // a failed cut leaves the old pieces, which keep following below
+            }
+            else if (m_PlaneEditing && m_PreviewDirty && m_PlaneValid)
+                RunPreview();
         }
-        else if (m_PlaneEditing && m_PreviewDirty && m_PlaneValid)
-            RunPreview();
+
         if (m_HavePieces && !freshlyCut)
         {
-            // Cut once, skinned every frame: same topology, new positions.
+            // Cut once, skinned every frame: same topology, new positions. The pieces use the skin slots of
+            // the patch they were cut from, which is not necessarily the current patch.
+            if (!BuildSkinMatrices(model, instance, m_PieceSource, m_PieceSkinMatrices, &error))
+            {
+                m_SkinError = error;
+                return;
+            }
             PatchPiece* pieces[2] = { &m_SlicedPositive, &m_SlicedNegative };
             for (PatchPiece* piece : pieces)
             {
-                if (!skin(*piece))
+                if (!skin(*piece, m_PieceSkinMatrices))
                 {
                     m_SkinError = error;
                     return;
@@ -337,6 +445,12 @@ namespace MeshCutting
 
         m_ShownNormal = plane.normal;
         m_HavePieces = true;
+        // The pieces keep following the skin slots of this patch even after the candidate patch changes.
+        m_PieceSource = BonePatchSource();
+        m_PieceSource.paletteId = m_Source.paletteId;
+        m_PieceSource.jointIndex = m_Source.jointIndex;
+        m_PieceSource.joints = m_Source.joints;
+        m_PieceSource.meshes = m_Source.meshes;
         m_SlicedPositive = result.positive;
         m_SlicedNegative = result.negative;
         ++m_PieceGeneration;

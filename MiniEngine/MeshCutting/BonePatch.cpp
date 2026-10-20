@@ -1,8 +1,10 @@
 #include "pch.h"
 #include "BonePatch.h"
+#include "Geometry/JointSet.h"
 #include "../Model/Model.h"
 
 #include <DirectXPackedVector.h>
+#include <algorithm>
 #include <cstring>
 #include <unordered_map>
 
@@ -89,15 +91,6 @@ namespace MeshCutting
                 v.weights[i] = sum > 0.0f ? v.weights[i] / sum : 0.0f;
             return v;
         }
-
-        float Influence(const DecodedVertex& v, uint32_t jointIndex)
-        {
-            float influence = 0.0f;
-            for (int i = 0; i < 4; ++i)
-                if (v.joints[i] == jointIndex)
-                    influence += v.weights[i];
-            return influence;
-        }
     }
 
     void MakeSlotMatrices(const Matrix4& meshWorld, const Joint* paletteJoints, uint32_t jointCount,
@@ -158,13 +151,21 @@ namespace MeshCutting
         uint32_t paletteId, uint32_t jointIndex, float minWeight,
         ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
     {
+        return ExtractBonePatch(model, instance, paletteId, std::vector<uint32_t>{ jointIndex }, minWeight,
+            outMesh, outSource, error);
+    }
+
+    bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
+        uint32_t paletteId, const std::vector<uint32_t>& joints, float minWeight,
+        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
+    {
         if (instance.GetModel() != &model)
             return Fail(error, "Instance does not belong to the model");
         if (paletteId >= model.m_SkinPalettes.size())
             return Fail(error, "Skin palette out of range");
         const SkinPalette& palette = model.m_SkinPalettes[paletteId];
-        if (jointIndex >= palette.numJoints)
-            return Fail(error, "Joint out of range for the palette");
+        if (!IsValidJointSet(joints, palette.numJoints))
+            return Fail(error, "Joint set is empty, unsorted or out of range for the palette");
         if (model.m_GeometryCPU.empty())
             return Fail(error, "Model has no CPU geometry copy");
         const Joint* skeleton = instance.GetSkeleton();
@@ -172,7 +173,7 @@ namespace MeshCutting
         if (skeleton == nullptr || nodeWorld == nullptr)
             return Fail(error, "Instance has no pose data");
 
-        // Marks the selected joint and its descendants, walking the node hierarchy upward.
+        // Marks the selected joints and their descendants, walking the node hierarchy upward.
         std::vector<uint8_t> inSubtree(palette.numJoints, 0);
         {
             std::unordered_map<uint32_t, uint32_t> nodeToJoint;
@@ -185,7 +186,7 @@ namespace MeshCutting
                 for (uint32_t depth = 0; depth <= model.m_NumNodes && node < model.m_NodeParents.size(); ++depth)
                 {
                     const auto found = nodeToJoint.find(node);
-                    if (found != nodeToJoint.end() && found->second == jointIndex)
+                    if (found != nodeToJoint.end() && std::binary_search(joints.begin(), joints.end(), found->second))
                     {
                         inSubtree[j] = 1;
                         break;
@@ -199,7 +200,8 @@ namespace MeshCutting
         ProceduralMeshData mesh;
         BonePatchSource source;
         source.paletteId = paletteId;
-        source.jointIndex = jointIndex;
+        source.jointIndex = joints.front();
+        source.joints = joints;
         source.minWeight = minWeight;
 
         Matrix4 poseWorld = Matrix4(kIdentity);     // world of the mesh that defined poseJointWorld
@@ -266,7 +268,7 @@ namespace MeshCutting
                 }
                 const Vector3 posedNormal = Normalize(worldIT * Vector3(nrm));
 
-                const float influence = Influence(v, jointIndex);
+                const float influence = JointSetInfluence(v.joints, v.weights, joints);
                 ProceduralVertex out;
                 out.position = posed;
                 out.normal = { float(posedNormal.GetX()), float(posedNormal.GetY()), float(posedNormal.GetZ()) };
@@ -333,7 +335,7 @@ namespace MeshCutting
                             else
                                 weightedOutside = true;
                         }
-                        selected |= Influence(v, jointIndex) > minWeight;
+                        selected |= VertexInJointSet(v.joints, v.weights, joints, minWeight);
                     }
                     if (!selected)
                     {
@@ -383,6 +385,76 @@ namespace MeshCutting
         mesh.sections.push_back({ 0, uint32_t(mesh.indices.size()), 0 });
         outMesh = std::move(mesh);
         outSource = std::move(source);
+        if (error)
+            error->clear();
+        return true;
+    }
+
+    bool ComputePaletteSkeleton(const Model& model, const ModelInstance& instance, uint32_t paletteId,
+        SkeletonPose& out, std::string* error)
+    {
+        const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
+        if (instance.GetModel() != &model || nodeWorld == nullptr)
+            return Fail(error, "Instance has no pose data for this model");
+        if (paletteId >= model.m_SkinPalettes.size())
+            return Fail(error, "Skin palette out of range");
+        const SkinPalette& palette = model.m_SkinPalettes[paletteId];
+
+        // Every skinned mesh that uses the palette must have the same world matrix: the patch extraction takes
+        // the world of the first mesh that contributes triangles and rejects a patch that spans different ones, so
+        // picking in the space of just one of several different worlds could disagree with the patch.
+        const Matrix4* meshWorld = nullptr;
+        const uint8_t* meshPtr = model.m_MeshData.get();
+        for (uint32_t meshIndex = 0; meshIndex < model.m_NumMeshes; ++meshIndex)
+        {
+            const Mesh& srcMesh = *(const Mesh*)meshPtr;
+            meshPtr += sizeof(Mesh) + (srcMesh.numDraws - 1) * sizeof(Mesh::Draw);
+            if ((srcMesh.psoFlags & PSOFlags::kHasSkin) == 0 || srcMesh.numJoints == 0
+                || srcMesh.startJoint != palette.startJoint)
+                continue;
+            if (srcMesh.meshCBV >= model.m_NumNodes)
+                return Fail(error, "Mesh world matrix index out of range");
+            if (meshWorld == nullptr)
+                meshWorld = &nodeWorld[srcMesh.meshCBV];
+            else if (std::memcmp(meshWorld, &nodeWorld[srcMesh.meshCBV], sizeof(Matrix4)) != 0)
+                return Fail(error, "Meshes sharing this palette have different world transforms");
+        }
+        if (meshWorld == nullptr)
+            return Fail(error, "No skinned mesh uses this palette");
+
+        std::unordered_map<uint32_t, uint32_t> nodeToJoint;
+        for (uint32_t j = 0; j < palette.numJoints; ++j)
+        {
+            const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
+            if (jointNode >= model.m_NumNodes)
+                return Fail(error, "Joint node index out of range");
+            nodeToJoint.emplace(jointNode, j);
+        }
+
+        SkeletonPose pose;
+        pose.jointPositions.resize(palette.numJoints);
+        pose.parents.assign(palette.numJoints, kNoNode);
+        for (uint32_t j = 0; j < palette.numJoints; ++j)
+        {
+            const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
+            const Vector3 position((*meshWorld * nodeWorld[jointNode]).GetW());
+            pose.jointPositions[j] = { float(position.GetX()), float(position.GetY()), float(position.GetZ()) };
+
+            // The parent is the first joint of this palette above the node; nodes in between are skipped.
+            // Bounded by the node count so a malformed hierarchy cannot loop forever.
+            uint32_t node = jointNode < model.m_NodeParents.size() ? model.m_NodeParents[jointNode] : UINT32_MAX;
+            for (uint32_t depth = 0; depth <= model.m_NumNodes && node < model.m_NodeParents.size(); ++depth)
+            {
+                const auto found = nodeToJoint.find(node);
+                if (found != nodeToJoint.end())
+                {
+                    pose.parents[j] = found->second;
+                    break;
+                }
+                node = model.m_NodeParents[node];
+            }
+        }
+        out = std::move(pose);
         if (error)
             error->clear();
         return true;

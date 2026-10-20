@@ -156,6 +156,8 @@
     <ClInclude Include="Geometry\PieceSkinning.h" />
     <ClInclude Include="Geometry\PlaneSlicer.h" />
     <ClInclude Include="Geometry\CutPlane.h" />
+    <ClInclude Include="Geometry\JointSet.h" />
+    <ClInclude Include="Geometry\SegmentPick.h" />
     <ClInclude Include="Geometry\RenderBake.h" />
     <ClInclude Include="Rendering\ProceduralMeshRenderer.h" />
   </ItemGroup>
@@ -188,6 +190,12 @@
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <ClCompile Include="Geometry\CutPlane.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\JointSet.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\SegmentPick.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <ClCompile Include="Geometry\RenderBake.cpp">

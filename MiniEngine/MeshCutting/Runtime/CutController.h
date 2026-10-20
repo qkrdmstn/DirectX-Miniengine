@@ -34,7 +34,10 @@ namespace MeshCutting
         // Moving the plane only changes the preview (a dry-run on the uncut patch). The confirmed
         // pieces change only on RequestCut, or are dropped by DiscardCut.
         // The first T (or R) puts the plane at the model's bounds center, normal +Y, half size = radius / 2.
-        void ToggleEditPlane(const ModelInstance& instance);        // T: plane edit on/off (the result stays)
+        // Cut mode: the patch comes from the plane (the bones it crosses), not from J/K + C. Entering drops a
+        // patch copied with C; leaving drops the candidate patch. The confirmed pieces stay in both cases.
+        void ToggleEditPlane(const ModelInstance& instance, uint32_t paletteId);   // T
+        void CycleWeightJoint();                                    // Tab: which cut joint the weight view shows
         void ToggleCap();                                           // M: applies to the preview and the next cut
         void ResetPlane(const ModelInstance& instance);             // R
         void TranslatePlane(const Math::Vector3& worldDelta);       // Home/End/Delete/PgDn (camera axes)
@@ -66,6 +69,17 @@ namespace MeshCutting
         SlicePlane CurrentPlane() const { return ToSlicePlane(MakeFrame(m_Plane)); }
         float ModelRadius() const { return m_ModelRadius; }         // scale of the plane controls and debug tubes
 
+        // The candidate: what the plane crosses and the patch built from it (cut mode only).
+        uint32_t EditPalette() const { return m_EditPalette; }      // the palette the cut mode works on (chosen when T was pressed)
+        const SkeletonPose& Skeleton() const { return m_Skeleton; }        // the edited palette at the current pose
+        const std::vector<SegmentHit>& Hits() const { return m_Hits; }     // bone segments the plane crosses
+        const std::vector<uint32_t>& CutJoints() const { return m_CutJoints; }   // parent joints of the hits
+        bool NoSegment() const { return m_PlaneEditing && m_PlaneValid && m_Hits.empty(); }
+        uint32_t WeightJoint() const;                               // cut joint for the weight view, kNoNode if none
+        const std::wstring& CandidateError() const { return m_CandidateError; }
+        float ExtractMs() const { return m_ExtractMs; }             // last candidate extraction + weld
+        uint32_t ExtractCount() const { return m_ExtractCount; }    // how many candidate extractions ran
+
         bool HasPieces() const { return m_HavePieces; }
         const PatchPiece& SlicedPositive() const { return m_SlicedPositive; }
         const PatchPiece& SlicedNegative() const { return m_SlicedNegative; }
@@ -91,6 +105,8 @@ namespace MeshCutting
 
     private:
         void RebuildPatchPiece();
+        void DropPatch();               // the patch only (not the confirmed pieces)
+        void UpdateCandidate(const Model& model, const ModelInstance& instance);
         void PlacePlane(const ModelInstance& instance);
         float MinExtent() const { return m_ModelRadius * 0.01f; }
         float MaxExtent() const { return m_ModelRadius * 3.0f; }
@@ -131,6 +147,8 @@ namespace MeshCutting
         PatchPiece m_SlicedPositive, m_SlicedNegative;
         uint64_t m_PieceGeneration = 0;
         bool m_CutAttempted = false;
+        BonePatchSource m_PieceSource;  // meshes of the patch the pieces were cut from (their skin slots)
+        std::vector<std::vector<DirectX::XMFLOAT4X4>> m_PieceSkinMatrices;
         float m_CutMs = 0.0f;
 
         // preview: a dry-run of the plane on the uncut patch, kept only to be shown
@@ -140,6 +158,18 @@ namespace MeshCutting
         uint64_t m_PreviewGeneration = 0;
         float m_PreviewMs = 0.0f;
         std::vector<Math::Matrix4> m_PreviousPoseJointWorld;    // to notice that the animation moved
+
+        // candidate (cut mode): bone segments crossed by the plane and the patch extracted for their parent joints
+        uint32_t m_EditPalette = 0;
+        SkeletonPose m_Skeleton;
+        std::vector<SegmentHit> m_Hits;
+        std::vector<uint32_t> m_CutJoints;
+        std::vector<uint32_t> m_AttemptJoints;  // the last joint set an extraction was tried for
+        bool m_HaveAttempt = false;
+        uint32_t m_WeightCycle = 0;
+        std::wstring m_CandidateError;
+        float m_ExtractMs = 0.0f;
+        uint32_t m_ExtractCount = 0;
 
         // animation follow-up
         std::vector<std::vector<DirectX::XMFLOAT4X4>> m_SkinMatrices;

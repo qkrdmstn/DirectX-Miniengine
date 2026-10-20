@@ -38,6 +38,8 @@ namespace MeshCutting
         // The plane ring shows the status of the dry-run: green cuts, gray touches nothing, red fails.
         DirectX::XMFLOAT4 PlaneColor(const CutController& cut)
         {
+            if (cut.NoSegment())
+                return { 0.6f, 0.6f, 0.6f, 1.0f };
             if (!cut.HasPreview())
                 return { 0.0f, 1.0f, 1.0f, 1.0f };
             switch (cut.PreviewStatus())
@@ -126,6 +128,32 @@ namespace MeshCutting
             BakeCutPlaneDebug(cut.PlaneFrame(), cut.ModelRadius() * 0.006f, PlaneColor(cut), planeMesh);
             ReplaceOrUpdate(m_PlaneDebug, std::move(planeMesh));
         }
+
+        // The bone segments the plane crosses (yellow) and the crossing points (white crosses).
+        if (cut.PlaneEditing() && cut.PlaneValid())
+        {
+            ProceduralMeshData segments;
+            const float radius = cut.ModelRadius() * 0.01f;
+            const SkeletonPose& skeleton = cut.Skeleton();
+            for (const SegmentHit& hit : cut.Hits())
+            {
+                if (hit.parentJoint >= skeleton.jointPositions.size() || hit.childJoint >= skeleton.jointPositions.size())
+                    continue;
+                AppendDebugSegment(segments, skeleton.jointPositions[hit.parentJoint], skeleton.jointPositions[hit.childJoint],
+                    radius, { 1.0f, 0.85f, 0.1f, 1.0f });
+                const float arm = radius * 4.0f;
+                const DirectX::XMFLOAT3& p = hit.point;
+                const DirectX::XMFLOAT4 white = { 1.0f, 1.0f, 1.0f, 1.0f };
+                AppendDebugSegment(segments, { p.x - arm, p.y, p.z }, { p.x + arm, p.y, p.z }, radius * 0.7f, white);
+                AppendDebugSegment(segments, { p.x, p.y - arm, p.z }, { p.x, p.y + arm, p.z }, radius * 0.7f, white);
+                AppendDebugSegment(segments, { p.x, p.y, p.z - arm }, { p.x, p.y, p.z + arm }, radius * 0.7f, white);
+            }
+            if (!segments.indices.empty())
+                segments.sections.push_back({ 0, uint32_t(segments.indices.size()), 0 });
+            ReplaceOrUpdate(m_SegmentDebug, std::move(segments));
+        }
+        else if (!m_SegmentDebug.GetData().vertices.empty())
+            m_SegmentDebug.Clear();
 
         // Per-frame position refresh (only when the controller reached the end of its update).
         if (!cut.FramePoseValid())
@@ -228,12 +256,13 @@ namespace MeshCutting
             const Matrix4 worldIdentity(kIdentity);
             draw(m_PlaneDebug, worldIdentity);
             draw(m_PreviewLoops, worldIdentity);
+            draw(m_SegmentDebug, worldIdentity);
         }
     }
 
-    void CutDebugView::DrawUI(TextContext& text, const CutController& cut) const
+    void CutDebugView::DrawUI(TextContext& text, const CutController& cut, const std::function<std::wstring(uint32_t)>& jointName) const
     {
-        text.DrawFormattedString(L"C: copy joint patch  X: clear patch  %ls\n", cut.PatchStatusText().c_str());
+        text.DrawFormattedString(L"C: copy joint patch  X: clear patch (both only outside cut mode)  %ls\n", cut.PatchStatusText().c_str());
         if (cut.Weld().corners > 0)
         {
             const WeldStats& weld = cut.Weld();
@@ -263,6 +292,29 @@ namespace MeshCutting
                 text.DrawFormattedString(L"Plane: center (%.2f %.2f %.2f)  rot ~(%.0f %.0f %.0f) deg  half %.2f x %.2f  normal (%.2f %.2f %.2f)\n",
                     frame.center.x, frame.center.y, frame.center.z, rx, ry, rz, frame.halfExtents.x, frame.halfExtents.y,
                     frame.normal.x, frame.normal.y, frame.normal.z);
+            }
+            if (cut.PlaneEditing())
+            {
+                // What the plane crosses, the joints that will be cut, and what the weight view shows (Tab).
+                std::wstring joints;
+                for (uint32_t joint : cut.CutJoints())
+                    joints += L" " + std::to_wstring(joint) + L"(" + jointName(joint) + L")";
+                text.DrawFormattedString(L"Crossed segments %zu  cut joints:%ls\n", cut.Hits().size(),
+                    joints.empty() ? L" none" : joints.c_str());
+                const size_t shown = std::min<size_t>(cut.Hits().size(), 4);
+                for (size_t i = 0; i < shown; ++i)
+                {
+                    const SegmentHit& hit = cut.Hits()[i];
+                    text.DrawFormattedString(L"  %u(%ls) -> %u(%ls)  t %.2f\n", hit.parentJoint, jointName(hit.parentJoint).c_str(),
+                        hit.childJoint, jointName(hit.childJoint).c_str(), hit.t);
+                }
+                if (cut.Hits().size() > shown)
+                    text.DrawFormattedString(L"  ... %zu more\n", cut.Hits().size() - shown);
+                if (cut.WeightJoint() != kNoNode)
+                    text.DrawFormattedString(L"Tab: weight view joint %u (%ls)\n", cut.WeightJoint(), jointName(cut.WeightJoint()).c_str());
+                text.DrawFormattedString(L"Candidate patch: extraction %.3f ms, %u extractions so far\n", cut.ExtractMs(), cut.ExtractCount());
+                if (!cut.CandidateError().empty())
+                    text.DrawFormattedString(L"%ls\n", cut.CandidateError().c_str());
             }
             text.DrawFormattedString(L"M: cap %ls (next cut)  L: cull %ls  Z: section tint %ls  N: overlay on character %ls\n",
                 cut.CapEnabled() ? L"on" : L"off", m_BackCull ? L"back" : L"two-sided", m_SectionTint ? L"on" : L"off",
@@ -301,5 +353,6 @@ namespace MeshCutting
         renderer.ReleaseMesh(m_PieceBoundaryNegative);
         renderer.ReleaseMesh(m_PlaneDebug);
         renderer.ReleaseMesh(m_PreviewLoops);
+        renderer.ReleaseMesh(m_SegmentDebug);
     }
 }
