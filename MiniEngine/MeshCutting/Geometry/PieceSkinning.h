@@ -1,14 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include "PatchGeometry.h"
 
 namespace MeshCutting
 {
-    // Linear blend skinning of one point. matrices[joint] is the full transform of that joint
-    // (mesh world * joint.posXform, row-vector convention like XMVector4Transform); joints and
-    // weights are parallel arrays of entryCount entries. Entries with weight <= 0 are skipped and
-    // the blend runs in the given order, so the same call always gives the same bits.
-    // Callers check that every joint < matrixCount first. xyz of the result is the position.
+    // 바인드 포즈에서의 정점 하나를 영향 받는 joint에 대한 가중치를 선형으로 적용해 현재 월드 좌표계에서의 위치로 반환한다.
     DirectX::XMVECTOR SkinPoint(const DirectX::XMFLOAT4X4* matrices, uint32_t matrixCount,
         const uint16_t* joints, const float* weights, uint32_t entryCount,
         const DirectX::XMFLOAT3& bindPosition);

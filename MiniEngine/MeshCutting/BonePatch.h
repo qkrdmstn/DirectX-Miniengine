@@ -70,41 +70,33 @@ namespace MeshCutting
         uint32_t mixedOutsideTriangles = 0;
     };
 
-    // 삼각형의 정점 중 하나라도 선택 관절의 가중치가 minWeight를 넘으면 삼각형을 복사한다. 선택 관절 자신만 기준으로 삼는다.
-    // 자손 관절에만 영향을 받는 삼각형은 원본에 남긴다는 정책이다. 실제 분리 기능이 이 함수에 있는건 아니다.
-    // 인스턴스의 마지막 Update()에서 계산한 행렬로 자세를 적용한다.
-    // 결과 위치는 월드 좌표이므로, 그릴 때 주의해야 한다.
-    // 실패하면 출력 메시와 출처 정보는 변경하지 않는다.
+    // 선택한 joint에 대한 BonePatch 추출
     bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, uint32_t jointIndex, float minWeight,
         ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error = nullptr);
 
-    // joint 집합 버전. 정점 하나라도 집합 안 joint 중 하나의 가중치가 minWeight를 넘으면 삼각형을 복사한다.
-    // 집합의 결과는 각 joint 결과의 합집합이고, 크기 1 집합은 위의 단일 joint 버전과 같다.
+    // 여러 개의 joint에 대한 BonePatch 추출.
     // joints는 오름차순이고 중복이 없어야 한다. mixedOutsideTriangles는 집합 전체의 자손을 기준으로 센다.
     bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, const std::vector<uint32_t>& joints, float minWeight,
         ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error = nullptr);
 
-    // 패치 없이 팔레트 하나의 뼈대(joint 위치와 팔레트 안의 부모)를 현재 자세로 구한다.
-    // 위치는 poseJointWorld와 같은 공간(패치 정점과 같은 공간)이다. 부모는 노드 계층을 따라 올라가다 처음 만나는
-    // 같은 팔레트의 joint이고, 중간에 joint가 아닌 노드가 있어도 건너뛴다.
-    bool ComputePaletteSkeleton(const Model& model, const ModelInstance& instance, uint32_t paletteId,
-        SkeletonPose& out, std::string* error = nullptr);
-
-    // 메시 하나에 대해 메시 월드 × 관절 스키닝 행렬을 계산합니다.
-    // 최초 추출과 이후 매 프레임 갱신이 같은 행렬과 같은 혼합 계산을 사용합니다.
-    // 공통 함수인 SkinPoint를 사용해, 같은 자세에서 두 경로의 계산을 맞춘다는 설명입니다.
+    // 메시 하나에 대해 (메시 월드 × 관절 스키닝) 행렬을 계산합니다.
+    // (행렬의 역할: 바인드 포즈 좌표계에서의 초기 위치 -> 현재 포즈의 월드 좌표계에서의 위치로 변환)
     void MakeSlotMatrices(const Math::Matrix4& meshWorld, const Joint* paletteJoints, uint32_t jointCount,
         std::vector<DirectX::XMFLOAT4X4>& out);
 
-    // MaekSlotMatrices 함수를 이용해 스킨 애니메이션 전체에 대한 행렬을 정리합니다.
+    // MakeSlotMatrices 함수를 이용해 패치 전체의 스키닝 행렬을 정리합니다.
     bool BuildSkinMatrices(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
         std::vector<std::vector<DirectX::XMFLOAT4X4>>& slotMatrices, std::string* error = nullptr);
 
     // 현재 joint의 변환 행렬을 계산합니다.
     bool ComputePoseJointWorld(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
         std::vector<Math::Matrix4>& out, std::string* error = nullptr);
+
+    // 현재 자세에서 각 joint의 월드 위치와 팔레트 내의 부모를 패치 없이 계산한다.
+    bool ComputePaletteSkeleton(const Model& model, const ModelInstance& instance, uint32_t paletteId,
+        SkeletonPose& out, std::string* error = nullptr);
 
     // 절단하기 위한 데이터로 묶습니다.
     bool MakeWeldInput(const ProceduralMeshData& mesh, const BonePatchSource& source,

@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "BonePatch.h"
 #include "Geometry/JointSet.h"
 #include "../Model/Model.h"
@@ -21,7 +21,8 @@ namespace MeshCutting
             return false;
         }
 
-        // Byte offsets inside one interleaved vertex, matching MeshConvert's output layout.
+        // 미니엔진이 모델을 최초 load할 때에만 정점을 제공하고, 이후부턴 압축된 바이트 형태로 m_GeometryCPU 형태로 다루기 때문에 이를 해석하기 위한 Layout이 필요하다.
+        // 원본 메시의 정점 정보를 읽기 위한 레이아웃
         struct VertexLayout
         {
             uint32_t uv0 = UINT32_MAX;
@@ -30,6 +31,7 @@ namespace MeshCutting
             uint32_t stride = 0;
         };
 
+        // 원본 메시 데이터의 메모리 레이아웃 계산
         VertexLayout ComputeLayout(uint16_t psoFlags)
         {
             VertexLayout layout;
@@ -49,6 +51,7 @@ namespace MeshCutting
             return layout;
         }
 
+        // 원본으로부터 읽고, Procedural Mesh로 구성되기 전의 임시 저장소
         struct DecodedVertex
         {
             XMFLOAT3 position;
@@ -58,11 +61,13 @@ namespace MeshCutting
             float weights[4];
         };
 
+        // 계산한 레이아웃을 이용해 Vertex 하나의 정보를 디코딩한다.
         DecodedVertex Decode(const uint8_t* src, const VertexLayout& layout)
         {
             DecodedVertex v = {};
             std::memcpy(&v.position, src, sizeof(XMFLOAT3));
 
+            // 압축된 법선을 복원
             uint32_t packedNormal;
             std::memcpy(&packedNormal, src + 12, sizeof(packedNormal));
             v.normal = {
@@ -70,6 +75,7 @@ namespace MeshCutting
                 float((packedNormal >> 10) & 1023) / 1023.0f * 2.0f - 1.0f,
                 float((packedNormal >> 20) & 1023) / 1023.0f * 2.0f - 1.0f };
 
+            // uv 정보가 포함되어 있으면 읽기
             if (layout.uv0 != UINT32_MAX)
             {
                 uint16_t half[2];
@@ -77,6 +83,7 @@ namespace MeshCutting
                 v.uv = { PackedVector::XMConvertHalfToFloat(half[0]), PackedVector::XMConvertHalfToFloat(half[1]) };
             }
 
+            // bone 번호와 해당하는 각 가중치 읽기
             uint16_t weights[4];
             std::memcpy(v.joints, src + layout.joints, sizeof(v.joints));
             std::memcpy(weights, src + layout.weights, sizeof(weights));
@@ -86,9 +93,11 @@ namespace MeshCutting
                 v.weights[i] = float(weights[i]) / 65535.0f;
                 sum += v.weights[i];
             }
-            // DefaultVS renormalizes weights; do the same so influence and skinning match the GPU.
+
+            // 가중치의 합이 1이 되도록 정리
             for (int i = 0; i < 4; ++i)
                 v.weights[i] = sum > 0.0f ? v.weights[i] / sum : 0.0f;
+
             return v;
         }
     }
@@ -97,6 +106,8 @@ namespace MeshCutting
         std::vector<XMFLOAT4X4>& out)
     {
         out.resize(jointCount);
+
+        // 각 관절의 스키닝 행렬에 메시 월드 행렬 결합
         for (uint32_t j = 0; j < jointCount; ++j)
             XMStoreFloat4x4(&out[j], XMMATRIX(meshWorld * paletteJoints[j].posXform));
     }
@@ -104,14 +115,16 @@ namespace MeshCutting
     bool BuildSkinMatrices(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
         std::vector<std::vector<XMFLOAT4X4>>& slotMatrices, std::string* error)
     {
+        // 모델, 자세, 팔레트 유효성 검사
         const Joint* skeleton = instance.GetSkeleton();
         const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
         if (instance.GetModel() != &model || skeleton == nullptr || nodeWorld == nullptr)
             return Fail(error, "Instance has no pose data for this model");
         if (source.paletteId >= model.m_SkinPalettes.size())
             return Fail(error, "Skin palette out of range");
-        const SkinPalette& palette = model.m_SkinPalettes[source.paletteId];
 
+        // 각 메시마다 스키닝 행렬 결합
+        const SkinPalette& palette = model.m_SkinPalettes[source.paletteId];
         slotMatrices.resize(source.meshes.size());
         for (size_t slot = 0; slot < source.meshes.size(); ++slot)
         {
@@ -126,6 +139,7 @@ namespace MeshCutting
     bool ComputePoseJointWorld(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
         std::vector<Matrix4>& out, std::string* error)
     {
+        // 패치의 팔레트와 기준 메시 검사
         const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
         if (instance.GetModel() != &model || nodeWorld == nullptr || source.meshes.empty())
             return Fail(error, "Instance has no pose data for this patch");
@@ -139,6 +153,7 @@ namespace MeshCutting
         out.resize(palette.numJoints);
         for (uint32_t j = 0; j < palette.numJoints; ++j)
         {
+            // 각 joint에 대응하는 모델 노드 찾기
             const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
             if (jointNode >= model.m_NumNodes)
                 return Fail(error, "Joint node index out of range");
@@ -155,10 +170,14 @@ namespace MeshCutting
             outMesh, outSource, error);
     }
 
+    // 추출삼각형의 정점 중 하나라도 선택 관절의 가중치가 minWeight를 넘으면 삼각형을 복사한다.
+    // 자손 관절에만 영향을 받는 삼각형은 원본에 남긴다. 실제 분리 기능이 이 함수에 있는건 아니다.
+    // 인스턴스의 마지막 Update()에서 계산한 행렬로 자세를 적용, 결과 위치는 월드 좌표이므로, 그릴 때 주의해야 한다.
     bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, const std::vector<uint32_t>& joints, float minWeight,
         ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
     {
+        // 입력 모델, 팔레트, 조인트 목록 검사
         if (instance.GetModel() != &model)
             return Fail(error, "Instance does not belong to the model");
         if (paletteId >= model.m_SkinPalettes.size())
@@ -173,7 +192,7 @@ namespace MeshCutting
         if (skeleton == nullptr || nodeWorld == nullptr)
             return Fail(error, "Instance has no pose data");
 
-        // Marks the selected joints and their descendants, walking the node hierarchy upward.
+        // 선택 조인트들에 대한 자식 관계 확인
         std::vector<uint8_t> inSubtree(palette.numJoints, 0);
         {
             std::unordered_map<uint32_t, uint32_t> nodeToJoint;
@@ -196,6 +215,7 @@ namespace MeshCutting
             }
         }
 
+        // 출력 형식
         const std::vector<uint8_t>& geometry = model.m_GeometryCPU;
         ProceduralMeshData mesh;
         BonePatchSource source;
@@ -236,6 +256,7 @@ namespace MeshCutting
             const uint8_t* vb = geometry.data() + srcMesh.vbOffset;
             const uint8_t* ib = geometry.data() + srcMesh.ibOffset;
 
+            // 메시에 대한 스키닝 준비
             const Matrix4& world = nodeWorld[srcMesh.meshCBV];
             const Matrix3 worldIT = InverseTranspose(world.Get3x3());
             std::vector<XMFLOAT4X4> slotMatrices;
@@ -245,6 +266,7 @@ namespace MeshCutting
 
             std::unordered_map<uint32_t, uint32_t> remap; // source vertex -> patch vertex
 
+            // 정점 복사 람다 정점 하나를 패치에 추가하고 패치 정점 번호를 반환한다.
             const auto addVertex = [&](uint32_t vertex) -> uint32_t
             {
                 const auto found = remap.find(vertex);
@@ -291,6 +313,7 @@ namespace MeshCutting
                 return patchIndex;
             };
 
+            // 각 삼각형 순회
             for (uint32_t drawIdx = 0; drawIdx < srcMesh.numDraws; ++drawIdx)
             {
                 const Mesh::Draw& draw = srcMesh.draw[drawIdx];
@@ -368,6 +391,7 @@ namespace MeshCutting
                             return Fail(error, "Patch spans meshes with different world transforms");
                     }
 
+                    // 삼각형에 대한 정점 추가
                     for (uint32_t k = 0; k < 3; ++k)
                         mesh.indices.push_back(addVertex(tri[k]));
                     source.triangles.push_back({ meshSlot, drawIdx, i / 3 });
@@ -390,9 +414,11 @@ namespace MeshCutting
         return true;
     }
 
+    
     bool ComputePaletteSkeleton(const Model& model, const ModelInstance& instance, uint32_t paletteId,
         SkeletonPose& out, std::string* error)
     {
+        // 인스턴스, 포즈, 스킨 팔레트 유효성 검사
         const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
         if (instance.GetModel() != &model || nodeWorld == nullptr)
             return Fail(error, "Instance has no pose data for this model");
@@ -400,28 +426,30 @@ namespace MeshCutting
             return Fail(error, "Skin palette out of range");
         const SkinPalette& palette = model.m_SkinPalettes[paletteId];
 
-        // Every skinned mesh that uses the palette must have the same world matrix: the patch extraction takes
-        // the world of the first mesh that contributes triangles and rejects a patch that spans different ones, so
-        // picking in the space of just one of several different worlds could disagree with the patch.
+        // 현재 팔레트에 포함돼있는 스킨 메시들에 대한 월드 행렬 W를 결정
         const Matrix4* meshWorld = nullptr;
         const uint8_t* meshPtr = model.m_MeshData.get();
         for (uint32_t meshIndex = 0; meshIndex < model.m_NumMeshes; ++meshIndex)
         {
             const Mesh& srcMesh = *(const Mesh*)meshPtr;
             meshPtr += sizeof(Mesh) + (srcMesh.numDraws - 1) * sizeof(Mesh::Draw);
-            if ((srcMesh.psoFlags & PSOFlags::kHasSkin) == 0 || srcMesh.numJoints == 0
-                || srcMesh.startJoint != palette.startJoint)
+
+            // 입력받은 팔레트를 사용하는 메시인지 확인
+            if ((srcMesh.psoFlags & PSOFlags::kHasSkin) == 0 || srcMesh.numJoints == 0 || srcMesh.startJoint != palette.startJoint)
                 continue;
             if (srcMesh.meshCBV >= model.m_NumNodes)
                 return Fail(error, "Mesh world matrix index out of range");
+
             if (meshWorld == nullptr)
                 meshWorld = &nodeWorld[srcMesh.meshCBV];
+            // 같은 팔레트를 사용하지만, 다른 월드 변환 행렬 W를 가질 때
             else if (std::memcmp(meshWorld, &nodeWorld[srcMesh.meshCBV], sizeof(Matrix4)) != 0)
                 return Fail(error, "Meshes sharing this palette have different world transforms");
         }
         if (meshWorld == nullptr)
             return Fail(error, "No skinned mesh uses this palette");
 
+        // 각 노드 번호를 조인트 번호로 변환합니다.
         std::unordered_map<uint32_t, uint32_t> nodeToJoint;
         for (uint32_t j = 0; j < palette.numJoints; ++j)
         {
@@ -431,20 +459,24 @@ namespace MeshCutting
             nodeToJoint.emplace(jointNode, j);
         }
 
+        // 각 joint 마다 위치와 부모 joint를 저장합니다.
         SkeletonPose pose;
-        pose.jointPositions.resize(palette.numJoints);
-        pose.parents.assign(palette.numJoints, kNoNode);
+        pose.jointPositions.resize(palette.numJoints); // 조인트 수만큼 할당
+        pose.parents.assign(palette.numJoints, kNoNode); // 조인트 수만큼 부모 칸 할당
         for (uint32_t j = 0; j < palette.numJoints; ++j)
         {
+            // 조인트 번호
             const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
-            const Vector3 position((*meshWorld * nodeWorld[jointNode]).GetW());
+
+            // 월드 행렬을 통한 위치 계산
+            const Vector3 position((*meshWorld * nodeWorld[jointNode]).GetW()); 
             pose.jointPositions[j] = { float(position.GetX()), float(position.GetY()), float(position.GetZ()) };
 
-            // The parent is the first joint of this palette above the node; nodes in between are skipped.
-            // Bounded by the node count so a malformed hierarchy cannot loop forever.
+            // 현재 joint의 부모 노드부터 시작해서 위로 올라가며 joint인 부모 노드를 찾는다.
             uint32_t node = jointNode < model.m_NodeParents.size() ? model.m_NodeParents[jointNode] : UINT32_MAX;
             for (uint32_t depth = 0; depth <= model.m_NumNodes && node < model.m_NodeParents.size(); ++depth)
             {
+                // 현재 노드가 joint(뼈)이면 부모 joint 탐색 완료
                 const auto found = nodeToJoint.find(node);
                 if (found != nodeToJoint.end())
                 {
