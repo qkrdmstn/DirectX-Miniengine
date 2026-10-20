@@ -315,11 +315,9 @@ void ModelViewer::Update(float deltaT)
         if (GameInput::IsFirstPressed(GameInput::kKey_u))
             m_CutView.CycleWireMode();
 
-        if (m_Cut.PlaneBaseValid())
         {
-            const float radius = m_Cut.PatchRadius();
             if (GameInput::IsFirstPressed(GameInput::kKey_t))
-                m_Cut.ToggleEditPlane();
+                m_Cut.ToggleEditPlane(m_ModelInst);
             if (GameInput::IsFirstPressed(GameInput::kKey_m))
                 m_Cut.ToggleCap();
             if (GameInput::IsFirstPressed(GameInput::kKey_l))
@@ -332,22 +330,42 @@ void ModelViewer::Update(float deltaT)
             if (m_Cut.PlaneEditing())
             {
                 if (GameInput::IsFirstPressed(GameInput::kKey_r))
-                    m_Cut.ResetPlane();
+                    m_Cut.ResetPlane(m_ModelInst);
                 if (GameInput::IsFirstPressed(GameInput::kKey_return))
                     m_Cut.RequestCut();
-                const float move = radius * 0.4f * deltaT, turn = 0.8f * deltaT;
+
+                // Move: model radius per second. Turn: radians per second. Scale: e-fold per second.
+                const float move = m_Cut.ModelRadius() * deltaT, turn = 1.0f * deltaT;
+                const bool shift = GameInput::IsPressed(GameInput::kKey_lshift) || GameInput::IsPressed(GameInput::kKey_rshift);
+                const Vector3 up = m_Camera.GetUpVec(), right = m_Camera.GetRightVec();
+                if (GameInput::IsPressed(GameInput::kKey_home))
+                    m_Cut.TranslatePlane(up * move);
+                if (GameInput::IsPressed(GameInput::kKey_end))
+                    m_Cut.TranslatePlane(up * -move);
+                if (GameInput::IsPressed(GameInput::kKey_delete))
+                    m_Cut.TranslatePlane(right * -move);
+                if (GameInput::IsPressed(GameInput::kKey_pgdn))
+                    m_Cut.TranslatePlane(right * move);
                 if (GameInput::IsPressed(GameInput::kKey_lbracket))
-                    m_Cut.NudgePlane(-move, 0.0f, 0.0f);
+                    m_Cut.MovePlaneAlongNormal(-move);
                 if (GameInput::IsPressed(GameInput::kKey_rbracket))
-                    m_Cut.NudgePlane(move, 0.0f, 0.0f);
+                    m_Cut.MovePlaneAlongNormal(move);
                 if (GameInput::IsPressed(GameInput::kKey_comma))
-                    m_Cut.NudgePlane(0.0f, -turn, 0.0f);
+                    m_Cut.RotatePlane(0, -turn);
                 if (GameInput::IsPressed(GameInput::kKey_period))
-                    m_Cut.NudgePlane(0.0f, turn, 0.0f);
+                    m_Cut.RotatePlane(0, turn);
                 if (GameInput::IsPressed(GameInput::kKey_semicolon))
-                    m_Cut.NudgePlane(0.0f, 0.0f, -turn);
+                    m_Cut.RotatePlane(1, -turn);
                 if (GameInput::IsPressed(GameInput::kKey_apostrophe))
-                    m_Cut.NudgePlane(0.0f, 0.0f, turn);
+                    m_Cut.RotatePlane(1, turn);
+                if (GameInput::IsPressed(GameInput::kKey_insert))
+                    m_Cut.RotatePlane(2, -turn);
+                if (GameInput::IsPressed(GameInput::kKey_pgup))
+                    m_Cut.RotatePlane(2, turn);
+                if (GameInput::IsPressed(GameInput::kKey_minus))
+                    m_Cut.ScalePlane(expf(-deltaT), shift);
+                if (GameInput::IsPressed(GameInput::kKey_equals))
+                    m_Cut.ScalePlane(expf(deltaT), shift);
             }
             // The preview and the cut itself run in CutController::Update, after this frame's pose is known.
         }

@@ -7,6 +7,9 @@
 #include "TextRenderer.h"
 #include "Utility.h"
 
+#include <algorithm>
+#include <cmath>
+
 using namespace Math;
 
 namespace MeshCutting
@@ -115,6 +118,15 @@ namespace MeshCutting
             ReplaceOrUpdate(m_PreviewLoops, std::move(loops));
         }
 
+        // The plane belongs to the world, not to the patch: it is rebuilt every frame while editing,
+        // even when there is no patch to cut.
+        if (cut.PlaneEditing() && cut.PlaneValid())
+        {
+            ProceduralMeshData planeMesh;
+            BakeCutPlaneDebug(cut.PlaneFrame(), cut.ModelRadius() * 0.006f, PlaneColor(cut), planeMesh);
+            ReplaceOrUpdate(m_PlaneDebug, std::move(planeMesh));
+        }
+
         // Per-frame position refresh (only when the controller reached the end of its update).
         if (!cut.FramePoseValid())
             return;
@@ -149,12 +161,6 @@ namespace MeshCutting
             refreshSurface(cut.Patch(), m_PatchMesh);
             if (m_BoundaryEnabled)
                 refreshTubes(cut.Patch(), m_BoundaryDebug);
-        }
-        if (cut.PlaneEditing() && cut.PlaneBaseValid())
-        {
-            ProceduralMeshData planeMesh;
-            BakePlaneDebug(cut.CurrentPlane(), cut.PatchRadius() * 0.7f, tubeRadius, PlaneColor(cut), planeMesh);
-            ReplaceOrUpdate(m_PlaneDebug, std::move(planeMesh));
         }
     }
 
@@ -216,10 +222,12 @@ namespace MeshCutting
             if (m_BoundaryEnabled)
                 draw(m_BoundaryDebug, patchWorld);
         }
+        // The plane and the expected loops are in world space: draw them on the character, not beside it.
         if (cut.PlaneEditing())
         {
-            draw(m_PlaneDebug, patchWorld);
-            draw(m_PreviewLoops, patchWorld);
+            const Matrix4 worldIdentity(kIdentity);
+            draw(m_PlaneDebug, worldIdentity);
+            draw(m_PreviewLoops, worldIdentity);
         }
     }
 
@@ -239,10 +247,23 @@ namespace MeshCutting
         }
         if (cut.PatchStatus() != SliceStatus::Ok && !cut.PatchDetail().empty())
             text.DrawFormattedString(L"%ls\n", Utility::UTF8ToWideString(cut.PatchDetail().substr(0, 120)).c_str());
-        if (cut.PlaneBaseValid())
         {
-            text.DrawFormattedString(L"T: plane edit %ls  [ ]: offset %.2f  , .: tilt A %.0f  ; ': tilt B %.0f  R: reset  Enter: cut  Backspace: discard cut\n",
-                cut.PlaneEditing() ? L"on" : L"off", cut.PlaneOffset(), cut.PlaneTiltA() * 57.29578f, cut.PlaneTiltB() * 57.29578f);
+            text.DrawFormattedString(L"T: cut mode %ls  R: reset plane  Enter: cut  Backspace: discard cut\n",
+                cut.PlaneEditing() ? L"on" : L"off");
+            text.DrawFormattedString(L"Move: Home/End up-down  Delete/PgDn left-right  [ ] along normal   Rotate: , . (U)  ; ' (V)  Ins/PgUp (normal)\n");
+            text.DrawFormattedString(L"Size: - = all  Shift + - = : U only (Shift is also the fly camera's speed key)\n");
+            if (cut.PlaneValid())
+            {
+                const CutPlaneFrame frame = cut.PlaneFrame();
+                // Euler angles of the frame (x, y, z in degrees), for reading only.
+                const float deg = 57.29578f;
+                const float rx = atan2f(frame.axisV.z, frame.normal.z) * deg;
+                const float ry = asinf(std::max(-1.0f, std::min(1.0f, -frame.axisU.z))) * deg;
+                const float rz = atan2f(frame.axisU.y, frame.axisU.x) * deg;
+                text.DrawFormattedString(L"Plane: center (%.2f %.2f %.2f)  rot ~(%.0f %.0f %.0f) deg  half %.2f x %.2f  normal (%.2f %.2f %.2f)\n",
+                    frame.center.x, frame.center.y, frame.center.z, rx, ry, rz, frame.halfExtents.x, frame.halfExtents.y,
+                    frame.normal.x, frame.normal.y, frame.normal.z);
+            }
             text.DrawFormattedString(L"M: cap %ls (next cut)  L: cull %ls  Z: section tint %ls  N: overlay on character %ls\n",
                 cut.CapEnabled() ? L"on" : L"off", m_BackCull ? L"back" : L"two-sided", m_SectionTint ? L"on" : L"off",
                 m_OverlayEnabled ? L"on" : L"off");

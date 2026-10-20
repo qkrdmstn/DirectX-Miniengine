@@ -341,7 +341,7 @@ MeshCutting/
 - **cap 노드**: 현재 cap은 rim 노드를 공유하므로 cap 전용 노드는 없다(`SkinStats::capNodesSkipped == 0`을 테스트로 확인). Cap 종류 노드가 생기면 위치를 계산하지 않고 건너뛴다.
 - **추출과 같은 공식**: `ExtractBonePatch`의 위치 계산도 `SkinPoint`와 `MakeSlotMatrices`를 쓴다. 그래서 추출 시점 포즈의 패치와 나중에 스키닝한 패치는 같은 식에서 나온다. `SkinNode::meshSlot`은 `BonePatchSource::meshes`의 인덱스와 같은 값이다(`ExtractBonePatch`가 그 순서로 번호를 매김).
 - **렌더 갱신**: 위상은 그대로 두고 `UpdateRenderPositions`가 corner → node 위치만 복사해 `ProceduralMesh::UpdateVertices`로 올린다. **법선은 갱신하지 않는다**(현재 PS는 법선을 쓰지 않음). 조명을 쓰게 되면 piece별 법선 재계산이 필요하다.
-- **프레임 순서**: 입력 처리 → `ModelInstance::Update` → `UpdatePatchPose`(패치 스키닝, 평면 갱신, 필요하면 재슬라이스, piece 스키닝, 메시 갱신) → 렌더. 슬라이스는 이번 프레임 포즈로 스키닝된 패치에서 한다.
-- **평면은 본 로컬 공간에 고정**: 복사 시점에 선택 본의 로컬 프레임(점, 법선, 기울기 축 둘)을 저장하고, 매 프레임 현재 joint 행렬로 월드에 옮긴다. 오프셋·기울기의 의미는 그대로다.
-- **경계 디버그 튜브와 평면 표시**는 매 프레임 같은 위치를 따라가도록 다시 구워 정점만 갱신한다.
+- **프레임 순서**: 입력 처리 → `ModelInstance::Update` → `UpdatePatchPose`(패치 스키닝, 필요하면 재슬라이스, piece 스키닝, 메시 갱신) → 렌더. 슬라이스는 이번 프레임 포즈로 스키닝된 패치에서 한다.
+- **평면은 world 공간에 고정**: 절단 평면은 어떤 joint에도 묶이지 않는 world의 유한 사각형이다(정의, 조작, 루프 검사는 `PlaneFirstCutDesign.md` 2절). 이전에는 선택 본의 로컬 프레임에 고정하고 매 프레임 joint 행렬로 옮겼다.
+- **경계 디버그 튜브**는 매 프레임 같은 위치를 따라가도록 다시 구워 정점만 갱신한다. 평면은 world에 있으므로 따라가지 않는다.
 - **한계**: 두 piece를 벌리는 방향은 자른 순간 평면 법선(월드)으로 고정이다. 재슬라이스가 실패하면 직전 성공 piece가 계속 스키닝되어 화면에 남는다.

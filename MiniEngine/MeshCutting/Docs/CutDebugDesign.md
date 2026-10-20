@@ -18,7 +18,7 @@
 ModelViewer (키 입력 → 호출, 렌더 호출)
   ├─ CutController          # 상태와 절단 수행 (MeshCutting/Runtime/)
   │    ├─ 패치 원본 PatchPiece
-  │    ├─ 평면 편집 상태 (본 로컬 프레임 + offset/tilt)
+  │    ├─ 평면 편집 상태 (world 공간의 유한 사각 평면. `PlaneFirstCutDesign.md` 2절)
   │    ├─ 미리보기 결과 (dry-run, 적용하지 않음)
   │    └─ 확정 결과 (두 piece)
   └─ CutDebugView           # 표시 옵션과 디버그 메시 (MeshCutting/Debug/)
@@ -113,7 +113,7 @@ public:
 현재의 `m_SliceDirty`(변경 = 즉시 적용)는 없앤다. **평면을 움직여도 확정 결과는 바뀌지 않는다.**
 
 ### 3.3 Update 순서 (같은 프레임 포즈)
-1. 스킨 행렬과 `poseJointWorld` 계산 → 패치 스키닝 → 본 로컬 평면을 현재 포즈로 이동 (현재와 같음)
+1. 스킨 행렬과 `poseJointWorld` 계산 → 패치 스키닝. 평면은 world에 고정이라 포즈에 따라 움직이지 않는다 (`PlaneFirstCutDesign.md`)
 2. `m_CutRequested`이면: `SlicePatch(Patch(), CurrentPlane())`
    - `Ok` → 확정 결과 교체, `HasCut = true`, 미리보기 지움
    - 실패 → 확정 결과 유지, 상태와 detail 기록
@@ -141,7 +141,7 @@ public:
 | 키 | 기능 | 비고 |
 | --- | --- | --- |
 | T | 평면 편집 모드 켜기/끄기 | 의미 변경: 기존 "슬라이스 켜기/끄기" |
-| `[ ]` `, .` `; '` | 평면 offset / tilt A / tilt B | 기존과 같음. 미리보기만 갱신 |
+| 평면 이동·회전·크기 키 | | P-1에서 `PlaneFirstCutDesign.md` 2.3절의 키로 바뀌었다. 미리보기만 갱신 |
 | R | 평면 초기화 | 기존과 같음 |
 | **Enter** | 확정 절단 | 신규 (`kKey_return`) |
 | **Backspace** | 확정 결과 버리기 | 신규 (`kKey_back`) |
@@ -173,3 +173,9 @@ D-1과 D-2는 서로 독립이다. D-3은 D-0 뒤에 한다.
 - `SlicePatch`는 실패하면 status와 detail만 채우므로, 실패한 미리보기에서는 루프 튜브가 없고 상태 줄만 보인다(`OpenLoop`이어도 루프는 그려지지 않는다).
 - **키 충돌:** `Core/EngineTuning.cpp`는 Backspace로 튜닝 메뉴를 열고 닫으며, 메뉴가 열려 있으면 Enter로 선택한 변수에 Bang을 보낸다. `Core/EngineProfiling.cpp`는 Enter로 프로파일러 항목을 토글한다. 그래서 Backspace를 누르면 확정 결과 버리기와 튜닝 메뉴 토글이 함께 일어난다. 다른 키로 바꾸려면 `ModelViewer.cpp`의 `kKey_back` 한 줄만 고치면 된다.
 - `CutController`는 `Model`/`ModelInstance` 없이 만들 수 없는 `SetPatch`/`Update`를 거쳐야 하므로 단위 테스트로 플래그 동작을 검사하지 않았다. 순수 함수인 `BakeLoopDebug`만 테스트했다.
+
+## 8. 구현 메모 (P-1, 평면 우선 절단)
+- 3.1의 `NudgePlane`과 joint 로컬 평면(`ComputeBasePlane`/`UpdateBasePlane`)은 없어졌다. 평면은 `Geometry/CutPlane`의 `CutPlane`(world, 쿼터니언, halfExtents) 하나이고, 조작은 `TranslatePlane`, `MovePlaneAlongNormal`, `RotatePlane`, `ScalePlane`이다. 키는 `PlaneFirstCutDesign.md` 2.3절.
+- T는 패치가 없어도 절단 모드를 켠다(처음 켤 때, 또는 R로 평면을 놓는다). 패치가 없으면 미리보기를 계산하지 않고 Enter는 무시한다.
+- `LoopOutsidePlane`은 `SliceStatus`에 추가했지만 `SlicePatch`가 돌려주는 값이 아니다. 컨트롤러가 슬라이스 뒤 사각형 검사에 실패했을 때만 쓴다. 상태 전달 경로(미리보기 링 색, UI, 확정 절단 실패 시 이전 piece 유지)가 모두 `SliceStatus` 하나로 되어 있어서 별도 타입을 만들지 않았다.
+- 평면과 예상 루프는 world 그대로(캐릭터 위)에, 패치와 확정 piece는 기존처럼 표시 오프셋으로 그린다.

@@ -27,8 +27,6 @@ namespace MeshCutting
             ClearPreview();
             m_PreviousPoseJointWorld.clear();
             m_CurrentPoseJointWorld = m_Source.poseJointWorld;
-            m_PlaneOffset = m_PlaneTiltA = m_PlaneTiltB = 0.0f;
-            ComputeBasePlane(model);
             m_PreviewDirty = m_PlaneEditing;    // no automatic cut: the preview follows, Enter cuts
             ++m_PatchVersion;
             return true;
@@ -44,17 +42,19 @@ namespace MeshCutting
         m_PatchStatusText.clear();
         RebuildPatchPiece();
         ClearSlice();
-        m_PlaneBaseValid = false;
-        m_PlaneEditing = false;
-        ClearPreview();
+        ClearPreview();     // the plane stays: it belongs to the world, not to the patch
         ++m_PatchVersion;
     }
 
-    void CutController::ToggleEditPlane()
+    void CutController::ToggleEditPlane(const ModelInstance& instance)
     {
         m_PlaneEditing = !m_PlaneEditing;
         if (m_PlaneEditing)
+        {
+            if (!m_PlaneValid)
+                PlacePlane(instance);
             m_PreviewDirty = true;
+        }
         else
         {
             ClearPreview();
@@ -68,23 +68,51 @@ namespace MeshCutting
         m_PreviewDirty = true;      // the confirmed pieces keep the cap they were cut with
     }
 
-    void CutController::ResetPlane()
+    void CutController::ResetPlane(const ModelInstance& instance)
     {
-        m_PlaneOffset = m_PlaneTiltA = m_PlaneTiltB = 0.0f;
+        PlacePlane(instance);
+    }
+
+    void CutController::TranslatePlane(const Vector3& worldDelta)
+    {
+        if (!m_PlaneValid)
+            return;
+        Translate(m_Plane, { float(worldDelta.GetX()), float(worldDelta.GetY()), float(worldDelta.GetZ()) });
         m_PreviewDirty = true;
     }
 
-    void CutController::NudgePlane(float offset, float tiltA, float tiltB)
+    void CutController::MovePlaneAlongNormal(float distance)
     {
-        m_PlaneOffset += offset;
-        m_PlaneTiltA += tiltA;
-        m_PlaneTiltB += tiltB;
+        if (!m_PlaneValid)
+            return;
+        const CutPlaneFrame frame = MakeFrame(m_Plane);
+        Translate(m_Plane, { frame.normal.x * distance, frame.normal.y * distance, frame.normal.z * distance });
         m_PreviewDirty = true;
     }
 
+    void CutController::RotatePlane(int localAxis, float radians)
+    {
+        if (!m_PlaneValid)
+            return;
+        RotateAroundLocalAxis(m_Plane, localAxis, radians);
+        m_PreviewDirty = true;
+    }
+
+    void CutController::ScalePlane(float factor, bool uOnly)
+    {
+        if (!m_PlaneValid)
+            return;
+        if (uOnly)
+            ScaleU(m_Plane, factor, MinExtent(), MaxExtent());
+        else
+            ScaleUniform(m_Plane, factor, MinExtent(), MaxExtent());
+        m_PreviewDirty = true;
+    }
+
+    // Without a patch there is nothing to cut, so a request would only wait for the next C.
     void CutController::RequestCut()
     {
-        if (m_PlaneEditing && m_PlaneBaseValid)
+        if (m_PlaneEditing && m_PlaneValid && !m_PatchPiece.Empty())
             m_CutRequested = true;
     }
 
@@ -156,8 +184,6 @@ namespace MeshCutting
         }
         skinnedNodes += uint32_t(m_PatchPiece.nodes.size());
 
-        // The plane is fixed in the selected bone's local space: carry it to this frame's joint matrix.
-        UpdateBasePlane();
 
         // The preview is a dry-run of the current pose, so it is out of date when the animation moved.
         const size_t poseBytes = m_CurrentPoseJointWorld.size() * sizeof(Matrix4);
@@ -174,10 +200,10 @@ namespace MeshCutting
         if (m_CutRequested)
         {
             m_CutRequested = false;
-            if (m_PlaneBaseValid)
+            if (m_PlaneValid)
                 freshlyCut = ConfirmCut();      // a failed cut leaves the old pieces, which keep following below
         }
-        else if (m_PlaneEditing && m_PreviewDirty && m_PlaneBaseValid)
+        else if (m_PlaneEditing && m_PreviewDirty && m_PlaneValid)
             RunPreview();
         if (m_HavePieces && !freshlyCut)
         {
@@ -203,81 +229,22 @@ namespace MeshCutting
         m_FramePoseValid = true;
     }
 
-    // The plane starts at the selected joint and points along the bone to its child joint (or away
-    // from its parent for a leaf joint), measured in the joint matrices of the current pose.
-    void CutController::ComputeBasePlane(const Model& model)
+    // Puts the plane at the model's bounds center, normal world +Y (horizontal), half size radius / 2.
+    void CutController::PlacePlane(const ModelInstance& instance)
     {
-        m_PlaneBaseValid = false;
-        const std::vector<Matrix4>& pose = m_CurrentPoseJointWorld;
-        if (m_Source.paletteId >= model.m_SkinPalettes.size() || m_Source.jointIndex >= pose.size())
-            return;
-        const SkinPalette& palette = model.m_SkinPalettes[m_Source.paletteId];
-        const uint32_t joint = m_Source.jointIndex;
-        const uint32_t node = model.m_JointIndices[palette.startJoint + joint];
-        const Vector3 origin = Vector3(pose[joint].GetW());
+        const Vector3 center = instance.GetCenter();
+        m_ModelRadius = float(instance.GetRadius());
+        if (!(m_ModelRadius > 0.0f))
+            m_ModelRadius = 1.0f;
 
-        Vector3 direction(kZero);
-        bool found = false;
-        for (uint32_t j = 0; j < palette.numJoints && !found; ++j)
-        {
-            const uint32_t other = model.m_JointIndices[palette.startJoint + j];
-            if (other < model.m_NodeParents.size() && model.m_NodeParents[other] == node)
-            {
-                direction = Vector3(pose[j].GetW()) - origin;
-                found = true;
-            }
-        }
-        for (uint32_t j = 0; j < palette.numJoints && !found && node < model.m_NodeParents.size(); ++j)
-            if (model.m_JointIndices[palette.startJoint + j] == model.m_NodeParents[node])
-            {
-                direction = origin - Vector3(pose[j].GetW());
-                found = true;
-            }
-        if (!found || float(Length(direction)) < 1e-5f)
-            direction = Vector3(0.0f, 1.0f, 0.0f);
-        direction = Normalize(direction);
-
-        Vector3 up(0.0f, 1.0f, 0.0f);
-        if (fabsf(float(Dot(direction, up))) > 0.99f)
-            up = Vector3(1.0f, 0.0f, 0.0f);
-        const Vector3 axisA = Normalize(Cross(direction, up));
-        const Vector3 axisB = Cross(direction, axisA);
-
-        // Keep the frame in the joint's local space; UpdateBasePlane carries it to each frame's pose.
-        const Matrix4 toLocal = Invert(pose[joint]);
-        const Matrix3 toLocal3 = toLocal.Get3x3();
-        m_PlaneLocalPoint = Vector3(toLocal * origin);
-        // The normal is a covector (it must stay perpendicular to the plane under non-uniform scale):
-        // it goes local with the transpose and comes back with the inverse transpose.
-        m_PlaneLocalNormal = Normalize(Transpose(pose[joint].Get3x3()) * direction);
-        m_PlaneLocalAxisA = Normalize(toLocal3 * axisA);
-        m_PlaneLocalAxisB = Normalize(toLocal3 * axisB);
-        m_PlaneBaseValid = true;
-        UpdateBasePlane();
-    }
-
-    // Carries the stored bone-local plane frame to the current pose of the selected joint.
-    void CutController::UpdateBasePlane()
-    {
-        const uint32_t joint = m_Source.jointIndex;
-        if (!m_PlaneBaseValid || joint >= m_CurrentPoseJointWorld.size())
-            return;
-        const Matrix4& world = m_CurrentPoseJointWorld[joint];
-        const Matrix3 world3 = world.Get3x3();
-        m_PlanePoint0 = Vector3(world * m_PlaneLocalPoint);
-        m_PlaneNormal0 = Normalize(InverseTranspose(world3) * m_PlaneLocalNormal);
-        m_PlaneAxisA = Normalize(world3 * m_PlaneLocalAxisA);
-        m_PlaneAxisB = Normalize(world3 * m_PlaneLocalAxisB);
-    }
-
-    SlicePlane CutController::CurrentPlane() const
-    {
-        const Vector3 normal = Normalize(Quaternion(m_PlaneAxisB, m_PlaneTiltB) * (Quaternion(m_PlaneAxisA, m_PlaneTiltA) * m_PlaneNormal0));
-        const Vector3 point = m_PlanePoint0 + m_PlaneNormal0 * m_PlaneOffset;
-        SlicePlane plane;
-        plane.point = { float(point.GetX()), float(point.GetY()), float(point.GetZ()) };
-        plane.normal = { float(normal.GetX()), float(normal.GetY()), float(normal.GetZ()) };
-        return plane;
+        m_Plane = CutPlane();
+        m_Plane.center = { float(center.GetX()), float(center.GetY()), float(center.GetZ()) };
+        // Local +Z becomes world +Y: a quarter turn about X (Z -> -Y), so turn by -90 degrees.
+        DirectX::XMStoreFloat4(&m_Plane.rotation, DirectX::XMQuaternionRotationAxis(DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), -DirectX::XM_PIDIV2));
+        m_Plane.halfExtents = { m_ModelRadius * 0.5f, m_ModelRadius * 0.5f };
+        ClampExtents(m_Plane, MinExtent(), MaxExtent());
+        m_PlaneValid = true;
+        m_PreviewDirty = true;
     }
 
     void CutController::ClearSlice()
@@ -309,13 +276,34 @@ namespace MeshCutting
         return options;
     }
 
+    // The slicer cuts with the infinite plane; the rectangle only decides afterwards whether the cut is
+    // accepted: every loop point must lie inside it (with a small margin). On failure only status and
+    // detail are filled, like SlicePatch.
+    SliceStatus CutController::SliceWithPlane(SliceResult& result)
+    {
+        const CutPlaneFrame frame = MakeFrame(m_Plane);
+        const SliceStatus status = SlicePatch(m_PatchPiece, ToSlicePlane(frame), 1, MakeSliceOptions(), result);
+        if (status != SliceStatus::Ok)
+            return status;
+
+        std::string detail;
+        if (!LoopsInsidePlane(frame, result.positive, result.loops, m_ModelRadius * 0.01f, &detail))
+        {
+            result = SliceResult();
+            result.status = SliceStatus::LoopOutsidePlane;
+            result.detail = detail;
+            return SliceStatus::LoopOutsidePlane;
+        }
+        return SliceStatus::Ok;
+    }
+
     // Dry-run of the current plane on the uncut patch. The result is only kept to be shown; the
     // confirmed pieces are not touched.
     void CutController::RunPreview()
     {
         m_PreviewDirty = false;
         const int64_t start = SystemTime::GetCurrentTick();
-        m_PreviewStatus = SlicePatch(m_PatchPiece, CurrentPlane(), 1, MakeSliceOptions(), m_Preview);
+        m_PreviewStatus = SliceWithPlane(m_Preview);
         const float ms = float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
         m_PreviewMs = m_PreviewMs == 0.0f ? ms : m_PreviewMs + (ms - m_PreviewMs) * 0.1f;
         m_HavePreview = true;
@@ -338,7 +326,7 @@ namespace MeshCutting
 
         SliceResult result;
         const int64_t start = SystemTime::GetCurrentTick();
-        m_SliceStatus = SlicePatch(m_PatchPiece, plane, 1, MakeSliceOptions(), result);
+        m_SliceStatus = SliceWithPlane(result);
         m_CutMs = float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
         m_SliceDetail = result.detail;
         if (m_SliceStatus != SliceStatus::Ok)

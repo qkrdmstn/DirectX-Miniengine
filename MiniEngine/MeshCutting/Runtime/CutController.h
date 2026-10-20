@@ -2,6 +2,7 @@
 
 #include "../BonePatch.h"
 #include "../ProceduralMesh.h"
+#include "../Geometry/CutPlane.h"
 #include "../Geometry/PatchGeometry.h"
 #include "../Geometry/PatchWeld.h"
 #include "../Geometry/PieceSkinning.h"
@@ -16,9 +17,10 @@ class ModelInstance;
 
 namespace MeshCutting
 {
-    // State and logic of the cutting demo, without any drawing: the copied patch, the slice plane
-    // (fixed in the selected bone's local space), the cut pieces and the per-frame skinning that
-    // keeps all of them on the pose the GPU draws. CutDebugView draws what is exposed here.
+    // State and logic of the cutting demo, without any drawing: the copied patch, the cut plane
+    // (a finite rectangle fixed in world space, see Docs/PlaneFirstCutDesign.md), the cut pieces and
+    // the per-frame skinning that keeps the patch and the pieces on the pose the GPU draws.
+    // CutDebugView draws what is exposed here.
     class CutController
     {
     public:
@@ -31,15 +33,19 @@ namespace MeshCutting
         // ---- plane controls and cutting ----
         // Moving the plane only changes the preview (a dry-run on the uncut patch). The confirmed
         // pieces change only on RequestCut, or are dropped by DiscardCut.
-        void ToggleEditPlane();                                     // T: plane edit on/off (the result stays)
+        // The first T (or R) puts the plane at the model's bounds center, normal +Y, half size = radius / 2.
+        void ToggleEditPlane(const ModelInstance& instance);        // T: plane edit on/off (the result stays)
         void ToggleCap();                                           // M: applies to the preview and the next cut
-        void ResetPlane();                                          // R
-        void NudgePlane(float offset, float tiltA, float tiltB);    // [ ] , . ; '  (amounts are deltas)
+        void ResetPlane(const ModelInstance& instance);             // R
+        void TranslatePlane(const Math::Vector3& worldDelta);       // Home/End/Delete/PgDn (camera axes)
+        void MovePlaneAlongNormal(float distance);                  // [ ]
+        void RotatePlane(int localAxis, float radians);             // , . ; ' Insert PgUp  (0 = U, 1 = V, 2 = normal)
+        void ScalePlane(float factor, bool uOnly);                  // - =  (Shift: U only)
         void RequestCut();                                          // Enter: one cut in the next Update (plane edit only)
         void DiscardCut();                                          // Backspace: drop the confirmed pieces
 
         // Once per frame, right after ModelInstance::Update: skins the patch and the pieces to the
-        // current pose, moves the plane with the bone, then runs the requested cut or the preview.
+        // current pose, then runs the requested cut or the preview. The plane stays where it is in world space.
         void Update(const Model& model, const ModelInstance& instance);
 
         // ---- read-only state for the view and the UI ----
@@ -52,13 +58,13 @@ namespace MeshCutting
         uint64_t PatchVersion() const { return m_PatchVersion; }    // changes on C and X
         float PatchRadius() const { return m_PatchRadius; }
 
-        bool PlaneBaseValid() const { return m_PlaneBaseValid; }
+        bool PlaneValid() const { return m_PlaneValid; }            // the plane has been placed (first T or R)
         bool PlaneEditing() const { return m_PlaneEditing; }
         bool CapEnabled() const { return m_CapEnabled; }
-        float PlaneOffset() const { return m_PlaneOffset; }
-        float PlaneTiltA() const { return m_PlaneTiltA; }
-        float PlaneTiltB() const { return m_PlaneTiltB; }
-        SlicePlane CurrentPlane() const;
+        const CutPlane& Plane() const { return m_Plane; }
+        CutPlaneFrame PlaneFrame() const { return MakeFrame(m_Plane); }
+        SlicePlane CurrentPlane() const { return ToSlicePlane(MakeFrame(m_Plane)); }
+        float ModelRadius() const { return m_ModelRadius; }         // scale of the plane controls and debug tubes
 
         bool HasPieces() const { return m_HavePieces; }
         const PatchPiece& SlicedPositive() const { return m_SlicedPositive; }
@@ -85,9 +91,12 @@ namespace MeshCutting
 
     private:
         void RebuildPatchPiece();
-        void ComputeBasePlane(const Model& model);
-        void UpdateBasePlane();
-        bool ConfirmCut();              // true when new pieces replaced the old ones
+        void PlacePlane(const ModelInstance& instance);
+        float MinExtent() const { return m_ModelRadius * 0.01f; }
+        float MaxExtent() const { return m_ModelRadius * 3.0f; }
+        // SlicePatch with the current plane, then the finite-rectangle check on the cut loops.
+        SliceStatus SliceWithPlane(SliceResult& result);
+        bool ConfirmCut();             // true when new pieces replaced the old ones
         void RunPreview();
         void ClearSlice();              // drops the confirmed pieces (and any pending cut request)
         void ClearPreview();
@@ -104,18 +113,14 @@ namespace MeshCutting
         uint64_t m_PatchVersion = 0;
         float m_PatchRadius = 0.0f;     // bounds radius when the patch was copied (keeps debug sizes stable)
 
-        // slice plane: the frame is stored in the selected joint's local space (copy time) and carried
-        // to the world with the joint's current matrix every frame, so it follows the bone, twist included
+        // cut plane: a finite rectangle in world space (the space of the posed patch), tied to no joint
         bool m_PlaneEditing = false;
         bool m_PreviewDirty = false;    // plane, cap, patch or pose changed: the dry-run is out of date
         bool m_CutRequested = false;    // Enter: one confirmed cut in the next Update
         bool m_CapEnabled = true;
-        bool m_PlaneBaseValid = false;
-        Math::Vector3 m_PlaneLocalPoint, m_PlaneLocalNormal, m_PlaneLocalAxisA, m_PlaneLocalAxisB;
-        Math::Vector3 m_PlanePoint0, m_PlaneNormal0, m_PlaneAxisA, m_PlaneAxisB;    // world frame of this frame
-        float m_PlaneOffset = 0.0f;
-        float m_PlaneTiltA = 0.0f;
-        float m_PlaneTiltB = 0.0f;
+        bool m_PlaneValid = false;
+        CutPlane m_Plane;
+        float m_ModelRadius = 0.0f;     // of the instance when the plane was placed
 
         // cut result: the pieces on screen come from the last Ok slice and are skinned every frame
         SliceStatus m_SliceStatus = SliceStatus::InvalidInput;

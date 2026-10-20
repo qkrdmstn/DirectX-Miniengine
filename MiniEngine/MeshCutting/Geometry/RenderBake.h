@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CutPlane.h"
 #include "PatchGeometry.h"
 #include "../ProceduralMesh.h"
 
@@ -33,9 +34,9 @@ namespace MeshCutting
     // recomputed). Returns false and leaves vertices alone when the sizes differ.
     bool UpdateRenderPositions(const PatchPiece& piece, std::vector<ProceduralVertex>& vertices);
 
-    // A ring in the plane (radius ringRadius, drawn in ringColor) plus a normal arrow, as thin tubes.
-    // out is cleared.
-    void BakePlaneDebug(const SlicePlane& plane, float ringRadius, float tubeRadius, const DirectX::XMFLOAT4& ringColor,
+    // The cut plane as thin tubes: the rectangle border and a few cross lines in color, plus a white
+    // arrow along the normal. out is cleared.
+    void BakeCutPlaneDebug(const CutPlaneFrame& frame, float tubeRadius, const DirectX::XMFLOAT4& color,
         ProceduralMeshData& out);
 
     // The cut loops of a slice result (positive piece numbering) as closed rings of thin tubes, so the

@@ -120,7 +120,8 @@ namespace MeshCutting
         OpenLoop,               // cut loop runs into a Replacement/UnweldedSeam boundary
         NonManifoldLoop,        // cut edges do not form simple loops
         InvalidLoop,            // self/mutual crossing, unsupported nesting, wrong winding
-        CapTriangulationFailed
+        CapTriangulationFailed,
+        LoopOutsidePlane        // set by the caller (CutController), never by SlicePatch: a cut loop leaves the finite CutPlane
     };
 
     const char* SliceStatusName(SliceStatus status);

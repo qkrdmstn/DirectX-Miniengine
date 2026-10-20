@@ -156,35 +156,41 @@ namespace MeshCutting
         return true;
     }
 
-    void BakePlaneDebug(const SlicePlane& plane, float ringRadius, float tubeRadius, const DirectX::XMFLOAT4& ringColor,
+    void BakeCutPlaneDebug(const CutPlaneFrame& frame, float tubeRadius, const DirectX::XMFLOAT4& color,
         ProceduralMeshData& out)
     {
         out = ProceduralMeshData();
-        PlaneBasis basis;
-        if (!MakePlaneBasis(plane, basis))
-            return;
         const DirectX::XMFLOAT4 arrowColor = { 1.0f, 1.0f, 1.0f, 1.0f };
-        const auto at = [&](double a, double b, double c)
+        const float hx = frame.halfExtents.x, hy = frame.halfExtents.y;
+        const auto at = [&](float a, float b, float c)
         {
-            return DirectX::XMFLOAT3(float(basis.origin[0] + a * basis.u[0] + b * basis.v[0] + c * basis.n[0]),
-                float(basis.origin[1] + a * basis.u[1] + b * basis.v[1] + c * basis.n[1]),
-                float(basis.origin[2] + a * basis.u[2] + b * basis.v[2] + c * basis.n[2]));
+            return DirectX::XMFLOAT3(frame.center.x + a * frame.axisU.x + b * frame.axisV.x + c * frame.normal.x,
+                frame.center.y + a * frame.axisU.y + b * frame.axisV.y + c * frame.normal.y,
+                frame.center.z + a * frame.axisU.z + b * frame.axisV.z + c * frame.normal.z);
         };
-        const int segments = 48;
-        const double kTwoPi = 6.283185307179586;
-        for (int i = 0; i < segments; ++i)
+
+        // The rectangle border.
+        AppendDebugSegment(out, at(-hx, -hy, 0.0f), at(hx, -hy, 0.0f), tubeRadius, color);
+        AppendDebugSegment(out, at(hx, -hy, 0.0f), at(hx, hy, 0.0f), tubeRadius, color);
+        AppendDebugSegment(out, at(hx, hy, 0.0f), at(-hx, hy, 0.0f), tubeRadius, color);
+        AppendDebugSegment(out, at(-hx, hy, 0.0f), at(-hx, -hy, 0.0f), tubeRadius, color);
+
+        // Cross lines inside: the two center lines and one at half the way to each side, thinner.
+        const float fractions[3] = { -0.5f, 0.0f, 0.5f };
+        for (float f : fractions)
         {
-            const double a0 = kTwoPi * i / segments, a1 = kTwoPi * (i + 1) / segments;
-            AppendDebugSegment(out, at(ringRadius * std::cos(a0), ringRadius * std::sin(a0), 0.0),
-                at(ringRadius * std::cos(a1), ringRadius * std::sin(a1), 0.0), tubeRadius, ringColor);
+            AppendDebugSegment(out, at(-hx, f * hy, 0.0f), at(hx, f * hy, 0.0f), tubeRadius * 0.5f, color);
+            AppendDebugSegment(out, at(f * hx, -hy, 0.0f), at(f * hx, hy, 0.0f), tubeRadius * 0.5f, color);
         }
-        AppendDebugSegment(out, at(-ringRadius, 0.0, 0.0), at(ringRadius, 0.0, 0.0), tubeRadius * 0.6f, ringColor);
-        AppendDebugSegment(out, at(0.0, -ringRadius, 0.0), at(0.0, ringRadius, 0.0), tubeRadius * 0.6f, ringColor);
-        // The arrow points to the positive side.
-        const double length = ringRadius * 0.7;
-        AppendDebugSegment(out, at(0.0, 0.0, 0.0), at(0.0, 0.0, length), tubeRadius, arrowColor);
-        AppendDebugSegment(out, at(0.0, 0.0, length), at(ringRadius * 0.08, 0.0, length * 0.85), tubeRadius, arrowColor);
-        AppendDebugSegment(out, at(0.0, 0.0, length), at(-ringRadius * 0.08, 0.0, length * 0.85), tubeRadius, arrowColor);
+
+        // The arrow points to the positive side (the side the plane normal points to).
+        const float length = std::min(hx, hy) * 0.7f;
+        const float head = length * 0.15f;
+        AppendDebugSegment(out, at(0.0f, 0.0f, 0.0f), at(0.0f, 0.0f, length), tubeRadius, arrowColor);
+        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(head, 0.0f, length - 2.0f * head), tubeRadius, arrowColor);
+        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(-head, 0.0f, length - 2.0f * head), tubeRadius, arrowColor);
+        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(0.0f, head, length - 2.0f * head), tubeRadius, arrowColor);
+        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(0.0f, -head, length - 2.0f * head), tubeRadius, arrowColor);
         if (!out.indices.empty())
             out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
     }

@@ -155,6 +155,7 @@
     <ClInclude Include="Geometry\PatchWeld.h" />
     <ClInclude Include="Geometry\PieceSkinning.h" />
     <ClInclude Include="Geometry\PlaneSlicer.h" />
+    <ClInclude Include="Geometry\CutPlane.h" />
     <ClInclude Include="Geometry\RenderBake.h" />
     <ClInclude Include="Rendering\ProceduralMeshRenderer.h" />
   </ItemGroup>
@@ -184,6 +185,9 @@
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <ClCompile Include="Geometry\PlaneSlicer.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Geometry\CutPlane.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <ClCompile Include="Geometry\RenderBake.cpp">

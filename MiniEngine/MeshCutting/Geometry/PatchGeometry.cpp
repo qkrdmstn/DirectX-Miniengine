@@ -96,6 +96,7 @@ namespace MeshCutting
         case SliceStatus::NonManifoldLoop: return "NonManifoldLoop";
         case SliceStatus::InvalidLoop: return "InvalidLoop";
         case SliceStatus::CapTriangulationFailed: return "CapTriangulationFailed";
+        case SliceStatus::LoopOutsidePlane: return "LoopOutsidePlane";
         }
         return "Unknown";
     }

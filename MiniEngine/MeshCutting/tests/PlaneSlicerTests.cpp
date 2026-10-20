@@ -6,6 +6,7 @@
 //   <outdir>\PlaneSlicerTests.exe
 // Keep <outdir> outside the repository. The exit code is the number of failed checks.
 
+#include "../Geometry/CutPlane.h"
 #include "../Geometry/PatchGeometry.h"
 #include "../Geometry/PatchWeld.h"
 #include "../Geometry/PieceSkinning.h"
@@ -22,7 +23,7 @@
 #include <vector>
 
 using namespace MeshCutting;
-using DirectX::XMFLOAT3;
+using namespace DirectX;
 
 static int g_failures = 0;
 static int g_checks = 0;
@@ -1304,6 +1305,212 @@ static void TestLoopDebugBake()
     CHECK(tubes.indices.empty() && tubes.sections.empty());
 }
 
+// ---------------------------------------------------------------- cut plane tests
+
+static double Dot3(const XMFLOAT3& a, const XMFLOAT3& b) { return double(a.x) * b.x + double(a.y) * b.y + double(a.z) * b.z; }
+
+static XMFLOAT3 Cross3(const XMFLOAT3& a, const XMFLOAT3& b)
+{
+    return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
+}
+
+// Unit axes, mutually perpendicular, u x v = n.
+static bool FrameIsOrthonormal(const CutPlaneFrame& f, double tolerance)
+{
+    const XMFLOAT3 c = Cross3(f.axisU, f.axisV);
+    return std::fabs(Dot3(f.axisU, f.axisU) - 1.0) < tolerance && std::fabs(Dot3(f.axisV, f.axisV) - 1.0) < tolerance
+        && std::fabs(Dot3(f.normal, f.normal) - 1.0) < tolerance && std::fabs(Dot3(f.axisU, f.axisV)) < tolerance
+        && std::fabs(Dot3(f.axisU, f.normal)) < tolerance && std::fabs(Dot3(f.axisV, f.normal)) < tolerance
+        && std::fabs(c.x - f.normal.x) < tolerance && std::fabs(c.y - f.normal.y) < tolerance && std::fabs(c.z - f.normal.z) < tolerance;
+}
+
+static double QuaternionLength(const CutPlane& plane)
+{
+    const XMFLOAT4& q = plane.rotation;
+    return std::sqrt(double(q.x) * q.x + double(q.y) * q.y + double(q.z) * q.z + double(q.w) * q.w);
+}
+
+// The plane the controller starts with: center, local +Z turned to world +Y by a -90 degree turn about X.
+static CutPlane HorizontalPlane(float cx, float cy, float cz, float half)
+{
+    CutPlane plane;
+    plane.center = { cx, cy, cz };
+    XMStoreFloat4(&plane.rotation, XMQuaternionRotationAxis(XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), -XM_PIDIV2));
+    plane.halfExtents = { half, half };
+    return plane;
+}
+
+static void TestCutPlaneFrame()
+{
+    // Identity: axes are the world axes.
+    const CutPlaneFrame identity = MakeFrame(CutPlane());
+    CHECK(identity.axisU.x == 1.0f && identity.axisV.y == 1.0f && identity.normal.z == 1.0f);
+    CHECK(FrameIsOrthonormal(identity, 1e-6));
+
+    // The starting plane is horizontal with the normal up.
+    const CutPlaneFrame horizontal = MakeFrame(HorizontalPlane(0, 0, 0, 1));
+    CHECK(std::fabs(horizontal.normal.x) < 1e-6f && std::fabs(horizontal.normal.y - 1.0f) < 1e-6f && std::fabs(horizontal.normal.z) < 1e-6f);
+    CHECK(FrameIsOrthonormal(horizontal, 1e-6));
+
+    // Turning about each local axis keeps the frame orthonormal; a quarter turn about U maps V to the normal.
+    CutPlane plane;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        RotateAroundLocalAxis(plane, axis, 0.7f);
+        CHECK(FrameIsOrthonormal(MakeFrame(plane), 1e-5));
+    }
+    CutPlane quarter;
+    RotateAroundLocalAxis(quarter, 0, XM_PIDIV2);
+    const CutPlaneFrame turned = MakeFrame(quarter);
+    CHECK(std::fabs(turned.axisU.x - 1.0f) < 1e-6f);                     // the turn axis is unchanged
+    CHECK(std::fabs(turned.normal.y + 1.0f) < 1e-5f);                    // +Z goes to -Y
+    CHECK(std::fabs(turned.axisV.z - 1.0f) < 1e-5f);                     // +Y goes to +Z
+
+    // A bad rotation counts as the identity.
+    CutPlane broken;
+    broken.rotation = { 0.0f, 0.0f, 0.0f, 0.0f };
+    CHECK(FrameIsOrthonormal(MakeFrame(broken), 1e-6));
+}
+
+static void TestCutPlaneAccumulatedRotation()
+{
+    // Many small turns about all three local axes: the quaternion stays unit length and the frame orthonormal.
+    CutPlane plane = HorizontalPlane(1, 2, 3, 0.5f);
+    for (int i = 0; i < 20000; ++i)
+        RotateAroundLocalAxis(plane, i % 3, (i % 2 == 0 ? 0.013f : -0.007f) * float(1 + i % 5));
+    CHECK(std::fabs(QuaternionLength(plane) - 1.0) < 1e-5);
+    CHECK(FrameIsOrthonormal(MakeFrame(plane), 1e-4));
+
+    // Turns are about the plane's own axis: after tilting the plane, the next turn about U leaves U where it was.
+    CutPlane tilted;
+    RotateAroundLocalAxis(tilted, 1, 0.9f);
+    const CutPlaneFrame before = MakeFrame(tilted);
+    RotateAroundLocalAxis(tilted, 0, 0.4f);
+    const CutPlaneFrame after = MakeFrame(tilted);
+    CHECK(std::fabs(Dot3(before.axisU, after.axisU) - 1.0) < 1e-5);
+    CHECK(std::fabs(Dot3(before.normal, after.normal) - std::cos(0.4)) < 1e-5);
+}
+
+static void TestCutPlaneContains()
+{
+    CutPlane plane;
+    plane.halfExtents = { 2.0f, 1.0f };
+    const CutPlaneFrame frame = MakeFrame(plane);
+    CHECK(ContainsInPlane(frame, { 0, 0, 0 }, 0.0f));
+    CHECK(ContainsInPlane(frame, { 2.0f, 1.0f, 0 }, 0.0f));          // on the border
+    CHECK(!ContainsInPlane(frame, { 2.1f, 0, 0 }, 0.0f));
+    CHECK(!ContainsInPlane(frame, { 0, 1.1f, 0 }, 0.0f));
+    CHECK(ContainsInPlane(frame, { 2.1f, 0, 0 }, 0.2f));              // margin
+    CHECK(!ContainsInPlane(frame, { 2.1f, 0, 0 }, 0.05f));
+    CHECK(ContainsInPlane(frame, { 1.0f, 0.5f, 7.0f }, 0.0f));        // the distance along the normal is ignored
+
+    // Turned about the normal by 90 degrees the long side points along world Y.
+    RotateAroundLocalAxis(plane, 2, XM_PIDIV2);
+    const CutPlaneFrame turned = MakeFrame(plane);
+    CHECK(ContainsInPlane(turned, { 0, 1.9f, 0 }, 0.0f));
+    CHECK(!ContainsInPlane(turned, { 1.9f, 0, 0 }, 0.0f));
+
+    // Moved: the rectangle follows the center.
+    Translate(plane, { 5.0f, 0.0f, 0.0f });
+    const CutPlaneFrame moved = MakeFrame(plane);
+    CHECK(ContainsInPlane(moved, { 5.0f, 1.9f, 0 }, 0.0f) && !ContainsInPlane(moved, { 0.0f, 0.0f, 0 }, 0.0f));
+}
+
+static void TestCutPlaneScale()
+{
+    CutPlane plane;
+    plane.halfExtents = { 1.0f, 0.5f };
+    ScaleUniform(plane, 2.0f, 0.1f, 3.0f);
+    CHECK(plane.halfExtents.x == 2.0f && plane.halfExtents.y == 1.0f);
+    // The ratio is kept when one side reaches the limit: x would be 6, so the factor drops to 1.5.
+    ScaleUniform(plane, 3.0f, 0.1f, 3.0f);
+    CHECK(std::fabs(plane.halfExtents.x - 3.0f) < 1e-6f && std::fabs(plane.halfExtents.y - 1.5f) < 1e-6f);
+    ScaleUniform(plane, 100.0f, 0.1f, 3.0f);
+    CHECK(std::fabs(plane.halfExtents.x - 3.0f) < 1e-6f && std::fabs(plane.halfExtents.y - 1.5f) < 1e-6f);
+    // Shrinking stops at the minimum of the smaller side.
+    ScaleUniform(plane, 0.0001f, 0.1f, 3.0f);
+    CHECK(std::fabs(plane.halfExtents.y - 0.1f) < 1e-6f && std::fabs(plane.halfExtents.x - 0.2f) < 1e-6f);
+
+    // U only: y is untouched and x stays in range.
+    CutPlane blade;
+    blade.halfExtents = { 1.0f, 1.0f };
+    ScaleU(blade, 0.5f, 0.1f, 3.0f);
+    CHECK(blade.halfExtents.x == 0.5f && blade.halfExtents.y == 1.0f);
+    ScaleU(blade, 1000.0f, 0.1f, 3.0f);
+    CHECK(blade.halfExtents.x == 3.0f && blade.halfExtents.y == 1.0f);
+    ScaleU(blade, 1e-6f, 0.1f, 3.0f);
+    CHECK(blade.halfExtents.x == 0.1f);
+
+    // Bad factors change nothing.
+    ScaleUniform(blade, -1.0f, 0.1f, 3.0f);
+    ScaleU(blade, 0.0f, 0.1f, 3.0f);
+    CHECK(blade.halfExtents.x == 0.1f && blade.halfExtents.y == 1.0f);
+
+    // A plane created outside the range is clamped.
+    CutPlane wild;
+    wild.halfExtents = { 50.0f, 0.0f };
+    ClampExtents(wild, 0.1f, 3.0f);
+    CHECK(wild.halfExtents.x == 3.0f && wild.halfExtents.y == 0.1f);
+}
+
+static void TestCutPlaneToSlicePlane()
+{
+    // The rectangle turns into the same infinite plane as the hand-made one: the same cut comes out.
+    const PatchPiece box = MakeBox();
+    SliceResult expected, actual;
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), expected), SliceStatus::Ok, expected.detail);
+    const SlicePlane converted = ToSlicePlane(MakeFrame(HorizontalPlane(0, 1, 0, 5.0f)));
+    CHECK(std::fabs(converted.normal.y - 1.0f) < 1e-6f && std::fabs(converted.point.y - 1.0f) < 1e-6f);
+    CHECK_STATUS(SlicePatch(box, converted, 1, CapOptions(), actual), SliceStatus::Ok, actual.detail);
+    CHECK(actual.positive.faces.size() == expected.positive.faces.size() && actual.negative.faces.size() == expected.negative.faces.size());
+    CHECK(std::fabs(TotalSurfaceArea(actual.positive) - TotalSurfaceArea(expected.positive)) < 1e-4);
+
+    // Turned over, the normal points down and the + and - pieces swap.
+    CutPlane over = HorizontalPlane(0, 1, 0, 5.0f);
+    RotateAroundLocalAxis(over, 0, XM_PI);
+    const SlicePlane flipped = ToSlicePlane(MakeFrame(over));
+    CHECK(flipped.normal.y < -0.99f);
+    SliceResult flippedResult;
+    CHECK_STATUS(SlicePatch(box, flipped, 1, CapOptions(), flippedResult), SliceStatus::Ok, flippedResult.detail);
+    CHECK(std::fabs(TotalSurfaceArea(flippedResult.positive) - TotalSurfaceArea(expected.negative)) < 1e-4);
+}
+
+static void TestLoopsInsidePlane()
+{
+    // The box (x, z in [-1, 1], y in [0, 2]) cut at y = 1 has a square loop with corners at +-1 and
+    // collinear points in the middle of each side.
+    const PatchPiece box = MakeBox();
+    SliceResult result;
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.size() == 1);
+
+    std::string detail;
+    CHECK(LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 1.01f)), result.positive, result.loops, 0.0f, &detail));
+    CHECK(!LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 0.9f)), result.positive, result.loops, 0.0f, &detail));
+    CHECK(detail.find("outside") != std::string::npos);
+    CHECK(LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 0.9f)), result.positive, result.loops, 0.2f, nullptr));   // margin
+
+    // One side too short: a long thin plane misses part of the loop, a plane off to the side too.
+    CutPlane blade = HorizontalPlane(0, 1, 0, 1.01f);
+    blade.halfExtents.x = 0.5f;
+    CHECK(!LoopsInsidePlane(MakeFrame(blade), result.positive, result.loops, 0.0f, nullptr));
+    const CutPlane shifted = HorizontalPlane(0.6f, 1, 0, 1.01f);
+    CHECK(!LoopsInsidePlane(MakeFrame(shifted), result.positive, result.loops, 0.0f, nullptr));
+
+    // Turned about the normal by 45 degrees the square loop's corners reach 1.41 along the plane axes.
+    CutPlane turned = HorizontalPlane(0, 1, 0, 1.2f);
+    RotateAroundLocalAxis(turned, 2, XM_PIDIV4);
+    CHECK(!LoopsInsidePlane(MakeFrame(turned), result.positive, result.loops, 0.0f, nullptr));
+    turned.halfExtents = { 1.5f, 1.5f };
+    CHECK(LoopsInsidePlane(MakeFrame(turned), result.positive, result.loops, 0.0f, nullptr));
+
+    // No loops (nothing to check) passes; a loop that names a missing node fails.
+    const std::vector<std::vector<uint32_t>> none;
+    CHECK(LoopsInsidePlane(MakeFrame(CutPlane()), result.positive, none, 0.0f, nullptr));
+    const std::vector<std::vector<uint32_t>> missing = { { 0, 9999 } };
+    CHECK(!LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 5.0f)), result.positive, missing, 0.0f, nullptr));
+}
+
 // ---------------------------------------------------------------- 2-5 tests (skinning)
 
 typedef std::vector<std::vector<DirectX::XMFLOAT4X4>> SlotMatrices;
@@ -1619,6 +1826,12 @@ int main()
     TestSplitFacesRecordCutId();
     TestSplitByOriginBake();
     TestLoopDebugBake();
+    TestCutPlaneFrame();
+    TestCutPlaneAccumulatedRotation();
+    TestCutPlaneContains();
+    TestCutPlaneScale();
+    TestCutPlaneToSlicePlane();
+    TestLoopsInsidePlane();
 
     TestSkinIdentity();
     TestSkinSingleJoint();
