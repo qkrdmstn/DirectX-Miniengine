@@ -64,8 +64,8 @@ Geometry 작업 자료는 Model/Core 타입을 받지 않고, BonePatch가 `Weld
 
 ### 1.3 파일 전체를 읽을 때의 경계
 
-`MeshCutting.h`의 `InputStroke`는 화면 픽셀 좌표를 담지만, `ReceiveStroke`는 입력을 버리는 자리표시 함수다. (`MeshCutting.h:8`, `MeshCutting.cpp:6`)
-따라서 이번 키보드 평면 절단의 진입 함수는 `ReceiveStroke`가 아니라 [미커밋] `CutController::SetPatch/Update`다. (`MiniEngine/ModelViewer/ModelViewer.cpp:307`, `MiniEngine/ModelViewer/ModelViewer.cpp:395`)
+화면 입력용 `InputStroke`/`ReceiveStroke`(`MeshCutting.h/.cpp`)는 호출도 동작도 없는 자리표시라 삭제했다.
+키보드 평면 절단의 진입 함수는 `CutController::SetPatch/ToggleEditPlane/Update`다. 흐름은 `Docs/CodeMap.md` 참고.
 프로젝트는 BonePatch, ProceduralMesh, Geometry, Rendering과 [미커밋] Runtime/Debug 소스를 등록한다. (`MeshCutting.vcxproj:162`, `MeshCutting.vcxproj:165`, `MeshCutting.vcxproj:168`, `MeshCutting.vcxproj:171`)
 셰이더는 `FxCompile`, PlaneSlicerTests는 `None` 항목이다. 일반 라이브러리 빌드와 테스트 main을 구별한다. (`MeshCutting.vcxproj:203`, `MeshCutting.vcxproj:207`)
 ModelViewer는 MeshCutting 프로젝트를 참조한다. (`MiniEngine/ModelViewer/ModelViewer.vcxproj:80`)
@@ -121,7 +121,7 @@ UV seam의 서로 다른 corner가 한 node를 가리키는 사례는 테스트�
 | `SliceOptions` | cap 모드, epsilonScale, capUvScale | 호출자 지역 값 | epsilon은 piece radius 비율 | `Geometry/PlaneSlicer.h:13`, `Geometry/PlaneSlicer.cpp:466` |
 | `SliceResult` | status, 두 piece, loops/depth/area, detail | SlicePatch 출력; [미커밋] UpdateSlice 지역 값 | loops는 positive piece의 node 번호 | `Geometry/PlaneSlicer.h:20`, `Runtime/CutController.cpp:271` |
 | `CutLoop` | node 순서, signedArea, depth, parent | ExtractCutLoops 생성, Run의 지역 배열 | node는 각 piece-local, area는 plane 2D | `Geometry/CutLoops.h:7`, `Geometry/PlaneSlicer.cpp:513` |
-| `CapRecord` | cutId, plane, attach 예약 필드, rimNodes/loopSizes | BuildCap 생성, piece.caps 소유 | plane은 절단 당시 world, rim은 해당 piece-local | `Geometry/PatchGeometry.h:79`, `Geometry/CapBuilder.cpp:336` |
+| `CapRecord` | cutId, plane, rimNodes/loopSizes | BuildCap 생성, piece.caps 소유 | plane은 절단 당시 world, rim은 해당 piece-local | `Geometry/PatchGeometry.h:79`, `Geometry/CapBuilder.cpp:336` |
 | `ProceduralVertex` | position/normal/uv/color | 추출기 또는 RenderBake 생성 | 데모 position은 world; shader World는 표시 offset | `ProceduralMesh.h:10`, `Debug/CutDebugView.cpp:135` [미커밋] |
 | `MeshSection` | firstIndex/indexCount/materialSlot | 추출기/베이크 생성, mesh data 소유 | index 배열의 범위 | `ProceduralMesh.h:18`, `Geometry/RenderBake.cpp:116` |
 | `ProceduralMeshData` | 렌더 정점·uint32 indices·sections | CPU 생성자들 출력, ProceduralMesh가 소유 | GPU 스킨 속성은 들어 있지 않음 | `ProceduralMesh.h:25`, `ProceduralMesh.h:10` |
@@ -448,7 +448,7 @@ world에서 만든 프레임을 joint-local로 저장하고 다시 현재 joint 
 투영은 `dot(p-origin,u)`, `dot(p-origin,v)`이며 loop와 cap이 같은 basis 생성 함수를 사용한다. (`Geometry/CutLoops.cpp:172`, `Geometry/CapBuilder.cpp:228`)
 positive piece의 바깥 cap normal은 -n, negative는 +n이다. (`Geometry/CapBuilder.cpp:279`)
 cap UV는 이 2D 투영에 capUvScale을 곱한 값이다. (`Geometry/CapBuilder.cpp:292`)
-cap의 attachJoint/attachJointWorldAtCut는 예약 필드이며 BuildCap은 기본값을 둔다. 강체 부착 실행 경로는 확인 못 함. (`Geometry/PatchGeometry.h:84`, `Geometry/CapBuilder.cpp:336`)
+cap의 부착 예약 필드(attachJoint, attachJointWorldAtCut)는 생산자와 소비자가 없어 `CapRecord`에서 삭제했다. 강체 부착 실행 경로는 없다.
 cap 위치는 Surface node를 공유하므로 스키닝 후 위치가 변해도 record의 planePoint/planeNormal을 매 프레임 재작성하지 않는다. (`Geometry/CapBuilder.cpp:290`, `Geometry/PieceSkinning.cpp:110`)
 
 ## 6. GPU 경계와 버퍼 수명
@@ -707,7 +707,7 @@ pending 제출과 fence 완료 조건을 통과한 예전 버퍼만 free 목록�
 | PlaneSlicingDesign 첫머리의 “아래 코드는 아직 없음” | Geometry 파이프라인과 SkinPatchPiece 구현이 존재 | 문서 상태 문구와 구현 노트가 병존: `Docs/PlaneSlicingDesign.md:7`, `Docs/PlaneSlicingDesign.md:338`, `Geometry/PlaneSlicer.cpp:453` |
 | 초기 표의 양면 PSO 하나 | solid 양면/후면 + [미커밋] wire 양면/후면 | 오래된 출발점 서술: `Docs/PlaneSlicingDesign.md:14`, `Rendering/ProceduralMeshRenderer.h:75` |
 | mapbox earcut + T-junction 사후 보정 | 자체 BridgeHole/EarClip, rim 에지 짝 검사 | 후반 구현 노트가 정정: `Docs/PlaneSlicingDesign.md:95`, `Docs/PlaneSlicingDesign.md:327`, `Geometry/CapBuilder.cpp:144`, `Geometry/CapBuilder.cpp:324` |
-| CapDrive 선택·부착 데이터 미리 저장 | CapDrive 선택 타입 확인 못 함; attachJoint 기본값과 identity만 예약 | FollowRim 공유 노드만 확인: `Docs/PlaneSlicingDesign.md:91`, `Docs/PlaneSlicingDesign.md:93`, `Geometry/PatchGeometry.h:84`, `Geometry/CapBuilder.cpp:336` |
+| CapDrive 선택·부착 데이터 미리 저장 | CapDrive 선택 타입 확인 못 함; 부착 데이터는 CapRecord에서 삭제함 | FollowRim 공유 노드만 확인: `Docs/PlaneSlicingDesign.md:91`, `Docs/PlaneSlicingDesign.md:93`, `Geometry/PatchGeometry.h:84`, `Geometry/CapBuilder.cpp:336` |
 | 구조체 예시의 PatchPiece에 originNodes 없음 | 실제로 SkinNode vector 보관·복사 | 후반 구현 노트에 반영: `Docs/PlaneSlicingDesign.md:149`, `Docs/PlaneSlicingDesign.md:329`, `Geometry/PatchGeometry.h:96`, `Geometry/PlaneSlicer.cpp:374` |
 | 초기 CapRecord 예시의 Math::Matrix4와 단일 rimNodes | 실제 XMFLOAT4X4, loopSizes도 보관 | 구현 노트/코드 확장: `Docs/PlaneSlicingDesign.md:145`, `Docs/PlaneSlicingDesign.md:328`, `Geometry/PatchGeometry.h:85`, `Geometry/PatchGeometry.h:91` |
 | UpdatePatchPose가 스키닝과 메시 갱신을 함께 수행 | [미커밋] Controller::Update와 렌더 시 View::Sync로 분리 | 함수명/실행 위치 변경: `Docs/PlaneSlicingDesign.md:344`, `MiniEngine/ModelViewer/ModelViewer.cpp:395`, `Debug/CutDebugView.cpp:133` |

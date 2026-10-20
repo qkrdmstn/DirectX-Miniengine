@@ -52,14 +52,14 @@ namespace MeshCutting
         void Update(const Model& model, const ModelInstance& instance);
 
         // ---- read-only state for the view and the UI ----
-        const ProceduralMesh& ExtractedMesh() const { return m_ExtractedMesh; }    // patch as extracted (CPU copy)
-        const PatchPiece& Patch() const { return m_PatchPiece; }
-        const WeldStats& Weld() const { return m_WeldStats; }
-        SliceStatus PatchStatus() const { return m_PieceStatus; }
-        const std::string& PatchDetail() const { return m_PieceDetail; }
-        const std::wstring& PatchStatusText() const { return m_PatchStatusText; }
-        uint64_t PatchVersion() const { return m_PatchVersion; }    // changes on C and X
-        float PatchRadius() const { return m_PatchRadius; }
+        const ProceduralMesh& ExtractedMesh() const { return m_Patch.extracted; }    // patch as extracted (CPU copy)
+        const PatchPiece& Patch() const { return m_Patch.piece; }
+        const WeldStats& Weld() const { return m_Patch.weld; }
+        SliceStatus PatchStatus() const { return m_Patch.status; }
+        const std::string& PatchDetail() const { return m_Patch.detail; }
+        const std::wstring& PatchStatusText() const { return m_Patch.statusText; }
+        uint64_t PatchVersion() const { return m_Patch.version; }    // changes on C and X
+        float PatchRadius() const { return m_Patch.radius; }
 
         bool PlaneValid() const { return m_PlaneValid; }            // the plane has been placed (first T or R)
         bool PlaneEditing() const { return m_PlaneEditing; }
@@ -70,33 +70,33 @@ namespace MeshCutting
         float ModelRadius() const { return m_ModelRadius; }         // scale of the plane controls and debug tubes
 
         // The candidate: what the plane crosses and the patch built from it (cut mode only).
-        uint32_t EditPalette() const { return m_EditPalette; }      // the palette the cut mode works on (chosen when T was pressed)
-        const SkeletonPose& Skeleton() const { return m_Skeleton; }        // the edited palette at the current pose
-        const std::vector<SegmentHit>& Hits() const { return m_Hits; }     // bone segments the plane crosses
-        const std::vector<uint32_t>& CutJoints() const { return m_CutJoints; }   // parent joints of the hits
-        bool NoSegment() const { return m_PlaneEditing && m_PlaneValid && m_Hits.empty(); }
+        uint32_t EditPalette() const { return m_Candidate.palette; }      // the palette the cut mode works on (chosen when T was pressed)
+        const SkeletonPose& Skeleton() const { return m_Candidate.skeleton; }        // the edited palette at the current pose
+        const std::vector<SegmentHit>& Hits() const { return m_Candidate.hits; }     // bone segments the plane crosses
+        const std::vector<uint32_t>& CutJoints() const { return m_Candidate.cutJoints; }   // parent joints of the hits
+        bool NoSegment() const { return m_PlaneEditing && m_PlaneValid && m_Candidate.hits.empty(); }
         uint32_t WeightJoint() const;                               // cut joint for the weight view, kNoNode if none
-        const std::wstring& CandidateError() const { return m_CandidateError; }
-        float ExtractMs() const { return m_ExtractMs; }             // last candidate extraction + weld
-        uint32_t ExtractCount() const { return m_ExtractCount; }    // how many candidate extractions ran
+        const std::wstring& CandidateError() const { return m_Candidate.error; }
+        float ExtractMs() const { return m_Candidate.extractMs; }             // last candidate extraction + weld
+        uint32_t ExtractCount() const { return m_Candidate.extractCount; }    // how many candidate extractions ran
 
-        bool HasPieces() const { return m_HavePieces; }
-        const PatchPiece& SlicedPositive() const { return m_SlicedPositive; }
-        const PatchPiece& SlicedNegative() const { return m_SlicedNegative; }
-        uint64_t PieceGeneration() const { return m_PieceGeneration; }  // changes when the pieces are replaced or cleared
-        const DirectX::XMFLOAT3& ShownNormal() const { return m_ShownNormal; }
-        bool CutAttempted() const { return m_CutAttempted; }       // Enter was handled since the patch was copied
-        SliceStatus LastSliceStatus() const { return m_SliceStatus; }   // of the last confirmed cut attempt
-        const std::string& LastSliceDetail() const { return m_SliceDetail; }
-        const std::wstring& SliceInfo() const { return m_SliceInfo; }
-        float CutMs() const { return m_CutMs; }                    // time of the last confirmed SlicePatch
+        bool HasPieces() const { return m_Confirmed.have; }
+        const PatchPiece& SlicedPositive() const { return m_Confirmed.positive; }
+        const PatchPiece& SlicedNegative() const { return m_Confirmed.negative; }
+        uint64_t PieceGeneration() const { return m_Confirmed.generation; }  // changes when the pieces are replaced or cleared
+        const DirectX::XMFLOAT3& ShownNormal() const { return m_Confirmed.shownNormal; }
+        bool CutAttempted() const { return m_Confirmed.attempted; }       // Enter was handled since the patch was copied
+        SliceStatus LastSliceStatus() const { return m_Confirmed.status; }   // of the last confirmed cut attempt
+        const std::string& LastSliceDetail() const { return m_Confirmed.detail; }
+        const std::wstring& SliceInfo() const { return m_Confirmed.info; }
+        float CutMs() const { return m_Confirmed.ms; }                    // time of the last confirmed SlicePatch
 
         // The dry-run of the current plane. Its pieces are never drawn; only its loops are.
-        bool HasPreview() const { return m_HavePreview; }          // a dry-run ran for the current plane
-        const SliceResult& Preview() const { return m_Preview; }   // loops/pieces are filled only when PreviewStatus() is Ok
-        SliceStatus PreviewStatus() const { return m_PreviewStatus; }
-        uint64_t PreviewGeneration() const { return m_PreviewGeneration; }  // changes on every dry-run and every clear
-        float PreviewMs() const { return m_PreviewMs; }            // smoothed time of the dry-run SlicePatch
+        bool HasPreview() const { return m_Preview.have; }          // a dry-run ran for the current plane
+        const SliceResult& Preview() const { return m_Preview.result; }   // loops/pieces are filled only when PreviewStatus() is Ok
+        SliceStatus PreviewStatus() const { return m_Preview.status; }
+        uint64_t PreviewGeneration() const { return m_Preview.generation; }  // changes on every dry-run and every clear
+        float PreviewMs() const { return m_Preview.ms; }            // smoothed time of the dry-run SlicePatch
 
         bool FramePoseValid() const { return m_FramePoseValid; }    // the last Update reached the end
         uint32_t SkinnedNodes() const { return m_SkinnedNodes; }
@@ -118,62 +118,117 @@ namespace MeshCutting
         void ClearPreview();
         SliceOptions MakeSliceOptions() const;
 
-        // patch
-        ProceduralMesh m_ExtractedMesh;
-        BonePatchSource m_Source;
-        std::wstring m_PatchStatusText;
-        PatchPiece m_PatchPiece;        // welded copy of the patch: the slicer input
-        WeldStats m_WeldStats;
-        SliceStatus m_PieceStatus = SliceStatus::InvalidInput;
-        std::string m_PieceDetail;
-        uint64_t m_PatchVersion = 0;
-        float m_PatchRadius = 0.0f;     // bounds radius when the patch was copied (keeps debug sizes stable)
+        // ---- state, grouped by what it belongs to ----
+        // patch -> (slice) -> preview / confirmed cut. Candidate is the cut mode's choice of the patch.
+
+        // The patch that is sliced: copied with C, or extracted for the cut joints in cut mode.
+        // Written by SetPatch / UpdateCandidate / DropPatch, skinned every frame by Update.
+        struct PatchState
+        {
+            ProceduralMesh extracted;       // patch as extracted (CPU copy)
+            BonePatchSource source;
+            std::wstring statusText;
+            PatchPiece piece;               // welded copy of the patch: the slicer input
+            WeldStats weld;
+            SliceStatus status = SliceStatus::InvalidInput;     // of the welding
+            std::string detail;
+            uint64_t version = 0;           // changes on every new or dropped patch (the view rebakes on it)
+            float radius = 0.0f;            // bounds radius when the patch was copied (keeps debug sizes stable)
+            std::vector<std::vector<DirectX::XMFLOAT4X4>> skinMatrices;     // per source mesh, at this frame's pose
+            std::vector<Math::Matrix4> poseJointWorld;                      // palette joints, at this frame's pose
+        };
+
+        // Cut mode's choice: the bone segments the plane crosses and the joint set the patch was extracted for.
+        // Written by UpdateCandidate every frame in cut mode.
+        struct CandidateState
+        {
+            uint32_t palette = 0;           // chosen when T was pressed
+            SkeletonPose skeleton;
+            std::vector<SegmentHit> hits;
+            std::vector<uint32_t> cutJoints;
+            std::vector<uint32_t> attemptJoints;    // the last joint set an extraction was tried for
+            bool haveAttempt = false;
+            uint32_t weightCycle = 0;
+            std::wstring error;
+            float extractMs = 0.0f;
+            uint32_t extractCount = 0;
+
+            // Forgets what the plane crossed and the attempt cache, so the next frame extracts again.
+            void ResetSelection()
+            {
+                hits.clear();
+                cutJoints.clear();
+                attemptJoints.clear();
+                haveAttempt = false;
+            }
+        };
+
+        // A dry-run of the plane on the uncut patch, kept only to be shown. Written by RunPreview.
+        struct PreviewState
+        {
+            SliceResult result;
+            bool have = false;
+            SliceStatus status = SliceStatus::InvalidInput;
+            uint64_t generation = 0;        // changes on every dry-run and every clear (the view rebakes on it)
+            float ms = 0.0f;
+            bool dirty = false;             // plane, cap, patch or pose changed: the dry-run is out of date
+            std::vector<Math::Matrix4> previousPose;    // to notice that the animation moved
+
+            // Forgets the dry-run; the generation changes so the view drops its loops.
+            void Clear()
+            {
+                have = false;
+                dirty = false;
+                status = SliceStatus::InvalidInput;
+                result = SliceResult();
+                ++generation;
+            }
+        };
+
+        // The pieces of the last Ok cut and the report of the last attempt. Written by ConfirmCut, skinned
+        // every frame by Update with the skin slots of the patch they were cut from.
+        struct ConfirmedCut
+        {
+            bool have = false;
+            PatchPiece positive, negative;
+            DirectX::XMFLOAT3 shownNormal = { 0.0f, 1.0f, 0.0f };
+            uint64_t generation = 0;        // changes when the pieces are replaced or cleared (the view rebakes on it)
+            BonePatchSource source;         // meshes of the patch the pieces were cut from (their skin slots)
+            std::vector<std::vector<DirectX::XMFLOAT4X4>> skinMatrices;
+            bool attempted = false;
+            SliceStatus status = SliceStatus::InvalidInput;     // of the last attempt, Ok or not
+            std::string detail;
+            std::wstring info;
+            float ms = 0.0f;
+
+            // Drops the pieces and the report; the generation changes so the view drops its meshes.
+            void Clear()
+            {
+                have = false;
+                attempted = false;
+                status = SliceStatus::InvalidInput;
+                detail.clear();
+                info.clear();
+                positive.Clear();
+                negative.Clear();
+                ++generation;
+            }
+        };
+
+        PatchState m_Patch;
+        CandidateState m_Candidate;
+        PreviewState m_Preview;
+        ConfirmedCut m_Confirmed;
 
         // cut plane: a finite rectangle in world space (the space of the posed patch), tied to no joint
         bool m_PlaneEditing = false;
-        bool m_PreviewDirty = false;    // plane, cap, patch or pose changed: the dry-run is out of date
         bool m_CutRequested = false;    // Enter: one confirmed cut in the next Update
         bool m_CapEnabled = true;
         bool m_PlaneValid = false;
         CutPlane m_Plane;
         float m_ModelRadius = 0.0f;     // of the instance when the plane was placed
 
-        // cut result: the pieces on screen come from the last Ok slice and are skinned every frame
-        SliceStatus m_SliceStatus = SliceStatus::InvalidInput;
-        std::string m_SliceDetail;
-        std::wstring m_SliceInfo;
-        bool m_HavePieces = false;
-        DirectX::XMFLOAT3 m_ShownNormal = { 0.0f, 1.0f, 0.0f };
-        PatchPiece m_SlicedPositive, m_SlicedNegative;
-        uint64_t m_PieceGeneration = 0;
-        bool m_CutAttempted = false;
-        BonePatchSource m_PieceSource;  // meshes of the patch the pieces were cut from (their skin slots)
-        std::vector<std::vector<DirectX::XMFLOAT4X4>> m_PieceSkinMatrices;
-        float m_CutMs = 0.0f;
-
-        // preview: a dry-run of the plane on the uncut patch, kept only to be shown
-        SliceResult m_Preview;
-        bool m_HavePreview = false;
-        SliceStatus m_PreviewStatus = SliceStatus::InvalidInput;
-        uint64_t m_PreviewGeneration = 0;
-        float m_PreviewMs = 0.0f;
-        std::vector<Math::Matrix4> m_PreviousPoseJointWorld;    // to notice that the animation moved
-
-        // candidate (cut mode): bone segments crossed by the plane and the patch extracted for their parent joints
-        uint32_t m_EditPalette = 0;
-        SkeletonPose m_Skeleton;
-        std::vector<SegmentHit> m_Hits;
-        std::vector<uint32_t> m_CutJoints;
-        std::vector<uint32_t> m_AttemptJoints;  // the last joint set an extraction was tried for
-        bool m_HaveAttempt = false;
-        uint32_t m_WeightCycle = 0;
-        std::wstring m_CandidateError;
-        float m_ExtractMs = 0.0f;
-        uint32_t m_ExtractCount = 0;
-
         // animation follow-up
-        std::vector<std::vector<DirectX::XMFLOAT4X4>> m_SkinMatrices;
-        std::vector<Math::Matrix4> m_CurrentPoseJointWorld;
         uint32_t m_SkinnedNodes = 0;    // nodes skinned in the last frame (patch + pieces)
         float m_SkinMs = 0.0f;          // smoothed CPU time of the SkinPatchPiece calls
         std::string m_SkinError;

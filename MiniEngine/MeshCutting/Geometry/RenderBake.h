@@ -6,16 +6,7 @@
 
 namespace MeshCutting
 {
-    // Debug colors of tagged edges (Interior has none).
-    DirectX::XMFLOAT4 EdgeKindColor(EdgeKind kind);
-
-    // Appends a thin three-sided tube from a to b. Two-sided shading makes winding irrelevant.
-    void AppendDebugSegment(ProceduralMeshData& out, const DirectX::XMFLOAT3& a,
-        const DirectX::XMFLOAT3& b, float radius, const DirectX::XMFLOAT4& color);
-
-    // One tube per tagged boundary edge, colored by kind. Edges are visited in key order so the
-    // output does not depend on hash order. out is cleared first.
-    void BakeBoundaryDebug(const PatchPiece& piece, float radius, ProceduralMeshData& out);
+    // ---- Render data: the piece as a ProceduralMesh, and its per-frame position update ----
 
     struct RenderBakeOptions
     {
@@ -33,6 +24,21 @@ namespace MeshCutting
     // of a baked piece: topology, UVs, normals and colors stay as they were (normals are not
     // recomputed). Returns false and leaves vertices alone when the sizes differ.
     bool UpdateRenderPositions(const PatchPiece& piece, std::vector<ProceduralVertex>& vertices);
+
+    // ---- Debug shapes: thin tubes for boundaries, loops and the cut plane (CutDebugView bakes them) ----
+    // They stay here, not in Debug/, because they are plain geometry with no D3D12 dependency and the
+    // standalone tests (tests/PlaneSlicerTests.cpp) build only Geometry/.
+
+    // Debug colors of tagged edges (Interior has none).
+    DirectX::XMFLOAT4 EdgeKindColor(EdgeKind kind);
+
+    // Appends a thin three-sided tube from a to b. Two-sided shading makes winding irrelevant.
+    void AppendDebugSegment(ProceduralMeshData& out, const DirectX::XMFLOAT3& a,
+        const DirectX::XMFLOAT3& b, float radius, const DirectX::XMFLOAT4& color);
+
+    // One tube per tagged boundary edge, colored by kind. Edges are visited in key order so the
+    // output does not depend on hash order. out is cleared first.
+    void BakeBoundaryDebug(const PatchPiece& piece, float radius, ProceduralMeshData& out);
 
     // The cut plane as thin tubes: the rectangle border and a few cross lines in color, plus a white
     // arrow along the normal. out is cleared.

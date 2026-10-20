@@ -90,7 +90,7 @@ enum class EdgeKind : uint8_t
 
 - 기본(`CapDrive::FollowRim`): 경계 노드가 표면 스키닝을 따르므로 cap과 표면이 위상적으로 수밀하다. 경계에 틈이 생기지 않는다. 대신 크게 굽히면 cap이 평면성을 잃을 수 있다.
 - NDC 방식(`CapDrive::RigidToJoint`, 3~4주차): 절단 시점의 부착 본 world 행렬과 노드의 본 로컬 위치를 저장해 두고 강체로 움직인다. 경계 틈이 생길 수 있으며, 두 방식을 비교하는 것 자체가 실험 항목이다.
-- 두 방식에 필요한 데이터(경계 노드 ↔ 표면 노드 대응, cutId, 부착 본, 절단 시점 행렬)는 **2-4에서 미리 저장한다**.
+- 두 방식에 필요한 데이터(경계 노드 ↔ 표면 노드 대응, cutId)는 2-4에서 저장한다. 부착 본과 절단 시점 행렬은 쓰는 곳이 없어 `CapRecord`에서 뺐다(필요해지면 그때 다시 넣는다).
 
 earcut은 공선점을 걸러낼 수 있다. 그래서 cap 생성 뒤 **모든 절단 에지가 cap 삼각형의 에지로 쓰였는지** 검사한다. 빠진 노드 b가 있으면 에지 (a, c)를 가진 cap 삼각형을 (a, b, x)와 (b, c, x)로 나눈다. 이렇게 해서 T-junction을 막는다.
 
@@ -141,8 +141,6 @@ namespace MeshCutting
     {
         uint32_t cutId;
         DirectX::XMFLOAT3 planePoint, planeNormal;   // piece 바깥 방향 법선
-        uint32_t attachJoint = UINT32_MAX;           // RigidToJoint용, 3~4주차에 채운다
-        Math::Matrix4 attachJointWorldAtCut;
         std::vector<uint32_t> rimNodes;              // 루프 순서
     };
 
@@ -294,7 +292,7 @@ MeshCutting/
 12. **실패 시 out**: 이전 성공 결과가 담긴 out을 재사용해도 실패 후 piece가 비어 있음
 
 ## 8. 이 단계에서 하지 않는 것
-- 원본 숨김(3주차), `RigidToJoint` 구동과 본 분리·물리(3~4주차). 필요한 식별자와 행렬은 2-0·2-4에서 저장만 한다.
+- 원본 숨김(3주차), `RigidToJoint` 구동과 본 분리·물리(3~4주차). 필요한 식별자는 2-0·2-4에서 저장하고, 부착 본과 행렬은 필요해질 때 추가한다.
 - 평면과 겹치는 면의 소유 규칙, 구멍 속 섬, cap을 지나는 재절단, 여러 본 패치 병합.
 - 성능 목표. 단계별 시간은 계측만 하고 값은 측정한 다음에 적는다.
 

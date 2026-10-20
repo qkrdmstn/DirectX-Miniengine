@@ -6,6 +6,60 @@
 
 namespace MeshCutting
 {
+    // ---- Render data: the piece as a ProceduralMesh, and its per-frame position update ----
+
+    void BuildRenderMesh(const PatchPiece& piece, ProceduralMeshData& out, const RenderBakeOptions& options)
+    {
+        out = ProceduralMeshData();
+        if (piece.faces.empty())
+            return;
+        out.vertices.reserve(piece.corners.size());
+        for (const RenderCorner& corner : piece.corners)
+        {
+            ProceduralVertex vertex;
+            vertex.position = piece.nodes[corner.node].position;
+            vertex.normal = corner.normal;
+            vertex.uv = corner.uv;
+            vertex.color = corner.color;
+            out.vertices.push_back(vertex);
+        }
+        // Passes: surface (all, or never divided), divided surface (only with splitByOrigin), cap.
+        for (int pass = 0; pass < 3; ++pass)
+        {
+            if (pass == 1 && !options.splitByOrigin)
+                continue;
+            const FaceKind kind = pass == 2 ? FaceKind::Cap : FaceKind::Surface;
+            const uint32_t first = uint32_t(out.indices.size());
+            for (const Face& face : piece.faces)
+            {
+                if (face.kind != kind)
+                    continue;
+                if (options.splitByOrigin && kind == FaceKind::Surface && (face.cutId != 0) != (pass == 1))
+                    continue;
+                out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
+            }
+            const uint32_t count = uint32_t(out.indices.size()) - first;
+            if (count > 0)
+                out.sections.push_back({ first, count, pass == 2 ? 1u : 0u });
+        }
+    }
+
+    bool UpdateRenderPositions(const PatchPiece& piece, std::vector<ProceduralVertex>& vertices)
+    {
+        if (vertices.size() != piece.corners.size())
+            return false;
+        for (size_t i = 0; i < vertices.size(); ++i)
+        {
+            if (piece.corners[i].node >= piece.nodes.size())
+                return false;
+        }
+        for (size_t i = 0; i < vertices.size(); ++i)
+            vertices[i].position = piece.nodes[piece.corners[i].node].position;
+        return true;
+    }
+
+    // ---- Debug shapes: thin tubes for boundaries, loops and the cut plane (CutDebugView bakes them) ----
+
     DirectX::XMFLOAT4 EdgeKindColor(EdgeKind kind)
     {
         switch (kind)
@@ -104,56 +158,6 @@ namespace MeshCutting
         }
         if (!out.indices.empty())
             out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
-    }
-
-    void BuildRenderMesh(const PatchPiece& piece, ProceduralMeshData& out, const RenderBakeOptions& options)
-    {
-        out = ProceduralMeshData();
-        if (piece.faces.empty())
-            return;
-        out.vertices.reserve(piece.corners.size());
-        for (const RenderCorner& corner : piece.corners)
-        {
-            ProceduralVertex vertex;
-            vertex.position = piece.nodes[corner.node].position;
-            vertex.normal = corner.normal;
-            vertex.uv = corner.uv;
-            vertex.color = corner.color;
-            out.vertices.push_back(vertex);
-        }
-        // Passes: surface (all, or never divided), divided surface (only with splitByOrigin), cap.
-        for (int pass = 0; pass < 3; ++pass)
-        {
-            if (pass == 1 && !options.splitByOrigin)
-                continue;
-            const FaceKind kind = pass == 2 ? FaceKind::Cap : FaceKind::Surface;
-            const uint32_t first = uint32_t(out.indices.size());
-            for (const Face& face : piece.faces)
-            {
-                if (face.kind != kind)
-                    continue;
-                if (options.splitByOrigin && kind == FaceKind::Surface && (face.cutId != 0) != (pass == 1))
-                    continue;
-                out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
-            }
-            const uint32_t count = uint32_t(out.indices.size()) - first;
-            if (count > 0)
-                out.sections.push_back({ first, count, pass == 2 ? 1u : 0u });
-        }
-    }
-
-    bool UpdateRenderPositions(const PatchPiece& piece, std::vector<ProceduralVertex>& vertices)
-    {
-        if (vertices.size() != piece.corners.size())
-            return false;
-        for (size_t i = 0; i < vertices.size(); ++i)
-        {
-            if (piece.corners[i].node >= piece.nodes.size())
-                return false;
-        }
-        for (size_t i = 0; i < vertices.size(); ++i)
-            vertices[i].position = piece.nodes[piece.corners[i].node].position;
-        return true;
     }
 
     void BakeCutPlaneDebug(const CutPlaneFrame& frame, float tubeRadius, const DirectX::XMFLOAT4& color,

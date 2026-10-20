@@ -36,9 +36,6 @@
     <ClInclude Include="pch.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-    <ClInclude Include="MeshCutting.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
     <ClInclude Include="ProceduralMesh.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
@@ -86,9 +83,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="MeshCutting.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
     <ClCompile Include="ProceduralMesh.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>

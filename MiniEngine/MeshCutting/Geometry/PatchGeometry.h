@@ -81,13 +81,7 @@ namespace MeshCutting
         uint32_t cutId = 0;
         DirectX::XMFLOAT3 planePoint = { 0.0f, 0.0f, 0.0f };
         DirectX::XMFLOAT3 planeNormal = { 0.0f, 1.0f, 0.0f };   // pointing out of the piece
-        uint32_t attachJoint = kNoNode;                         // RigidToJoint data, stored only
-        DirectX::XMFLOAT4X4 attachJointWorldAtCut = {
-            1.0f, 0.0f, 0.0f, 0.0f,
-            0.0f, 1.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f };
-        std::vector<uint32_t> rimNodes;     // all loops, outer loops first, each in loop order
+        std::vector<uint32_t> rimNodes;    // all loops, outer loops first, each in loop order
         std::vector<uint32_t> loopSizes;    // node count of every loop in rimNodes
     };
 
