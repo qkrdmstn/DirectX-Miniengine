@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -555,7 +555,7 @@ void ModelViewer::RenderUI(GraphicsContext& context)
 
     TextContext text(context);
     text.Begin();
-    text.ResetCursor(20.0f, 70.0f);
+    text.ResetCursor(20.0f, (float)g_DisplayHeight - 340.0f);
     text.DrawFormattedString(L"Skin %u/%u  Joint %u/%u  Node %u  %ls\n",
         m_BoneSelection.paletteId, (uint32_t)model->m_SkinPalettes.size(),
         m_BoneSelection.jointIndex, palette.numJoints, nodeIndex, name.c_str());
