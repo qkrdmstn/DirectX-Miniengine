@@ -317,7 +317,7 @@ void ModelViewer::Update(float deltaT)
 
         {
             if (GameInput::IsFirstPressed(GameInput::kKey_t))
-                m_Cut.ToggleEditPlane(m_ModelInst);
+                m_Cut.ToggleEditPlane(m_ModelInst, m_BoneSelection.paletteId);
             if (GameInput::IsFirstPressed(GameInput::kKey_m))
                 m_Cut.ToggleCap();
             if (GameInput::IsFirstPressed(GameInput::kKey_l))
@@ -333,6 +333,8 @@ void ModelViewer::Update(float deltaT)
                     m_Cut.ResetPlane(m_ModelInst);
                 if (GameInput::IsFirstPressed(GameInput::kKey_return))
                     m_Cut.RequestCut();
+                if (GameInput::IsFirstPressed(GameInput::kKey_tab))
+                    m_Cut.CycleWeightJoint();
 
                 // Move: model radius per second. Turn: radians per second. Scale: e-fold per second.
                 const float move = m_Cut.ModelRadius() * deltaT, turn = 1.0f * deltaT;
@@ -495,8 +497,16 @@ void ModelViewer::RenderScene(void)
         if (m_BoneDebugEnabled && model != nullptr
             && m_BoneSelection.paletteId < model->m_SkinPalettes.size())
         {
-            const SkinPalette& palette = model->m_SkinPalettes[m_BoneSelection.paletteId];
-            sorter.SetBoneDebug(m_WeightDebugEnabled, palette.startJoint, m_BoneSelection.jointIndex);
+            // In cut mode the weight view shows a joint the plane cuts (Tab picks which); otherwise J/K's joint.
+            uint32_t weightPalette = m_BoneSelection.paletteId, weightJoint = m_BoneSelection.jointIndex;
+            const uint32_t cutJoint = m_Cut.WeightJoint();
+            if (cutJoint != MeshCutting::kNoNode && m_Cut.EditPalette() < model->m_SkinPalettes.size())
+            {
+                weightPalette = m_Cut.EditPalette();
+                weightJoint = cutJoint;
+            }
+            const SkinPalette& palette = model->m_SkinPalettes[weightPalette];
+            sorter.SetBoneDebug(m_WeightDebugEnabled, palette.startJoint, weightJoint);
             sorter.SetWireframe(m_WireframeEnabled);
         }
         sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
@@ -607,6 +617,13 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     text.DrawFormattedString(L"Parent %u  %ls\n", parent, parentName.c_str());
     text.DrawFormattedString(L"B: debug  J/K: joint  I: skin  H: weight %ls  V: wire %ls\n",
         m_WeightDebugEnabled ? L"on" : L"off", m_WireframeEnabled ? L"on" : L"off");
-    m_CutView.DrawUI(text, m_Cut);
+    const uint32_t cutPalette = m_Cut.EditPalette();
+    m_CutView.DrawUI(text, m_Cut, [model, cutPalette](uint32_t joint) -> std::wstring
+        {
+            if (cutPalette >= model->m_SkinPalettes.size() || joint >= model->m_SkinPalettes[cutPalette].numJoints)
+                return L"?";
+            const SkinPalette& cutSkin = model->m_SkinPalettes[cutPalette];
+            return BoneName(*model, model->m_JointIndices[cutSkin.startJoint + joint], joint);
+        });
     text.End();
 }
