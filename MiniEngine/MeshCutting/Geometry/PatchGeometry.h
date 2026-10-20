@@ -62,7 +62,7 @@ namespace MeshCutting
         uint32_t corner[3] = { 0, 0, 0 };
         FaceKind kind = FaceKind::Surface;
         uint32_t sourceTriangle = kNoNode;  // BonePatchSource::triangles index (kNoNode for Cap)
-        uint32_t cutId = 0;                 // Cap faces: the cut that made them
+        uint32_t cutId = 0;                 // Cap: the cut that made it. Surface: the cut that divided it (0 = never divided)
     };
 
     // Kind of a tagged edge. Interior edges carry no entry in PatchPiece::boundary.

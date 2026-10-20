@@ -53,7 +53,7 @@ namespace MeshCutting
             uint32_t CutNodeOf(uint32_t nodeA, uint32_t nodeB);
             uint32_t WholeCorner(int side, uint32_t inputCorner);
             uint32_t CutCorner(int side, uint32_t cornerA, uint32_t cornerB, uint32_t cutNode, uint32_t faceIndex);
-            void AddFace(int side, const Face& source, uint32_t c0, uint32_t c1, uint32_t c2);
+            void AddFace(int side, const Face& source, bool split, uint32_t c0, uint32_t c1, uint32_t c2);
             bool BuildPiece(int side, PatchPiece& piece);
             bool InheritedKind(uint32_t globalA, uint32_t globalB, EdgeKind& kind) const;
             bool IsCutNode(uint32_t global) const { return global >= m_In.nodes.size(); }
@@ -259,9 +259,11 @@ namespace MeshCutting
             return id;
         }
 
-        void Slicer::AddFace(int side, const Face& source, uint32_t c0, uint32_t c1, uint32_t c2)
+        void Slicer::AddFace(int side, const Face& source, bool split, uint32_t c0, uint32_t c1, uint32_t c2)
         {
             Face face = source;
+            if (split)
+                face.cutId = m_CutId;           // a surface face this cut divided (cap faces are never split)
             face.corner[0] = c0;
             face.corner[1] = c1;
             face.corner[2] = c2;
@@ -291,7 +293,7 @@ namespace MeshCutting
 
             const auto whole = [&](int side)
             {
-                AddFace(side, face, WholeCorner(side, c[0]), WholeCorner(side, c[1]), WholeCorner(side, c[2]));
+                AddFace(side, face, false, WholeCorner(side, c[0]), WholeCorner(side, c[1]), WholeCorner(side, c[2]));
             };
             if (negative == 0)
             {
@@ -318,8 +320,8 @@ namespace MeshCutting
                     return false;
                 const int sideA = s[a] > 0 ? 0 : 1, sideB = 1 - sideA;
                 const uint32_t cornerP[2] = { CutCorner(0, c[a], c[b], p, faceIndex), CutCorner(1, c[a], c[b], p, faceIndex) };
-                AddFace(sideA, face, WholeCorner(sideA, c[z]), WholeCorner(sideA, c[a]), cornerP[sideA]);
-                AddFace(sideB, face, WholeCorner(sideB, c[z]), cornerP[sideB], WholeCorner(sideB, c[b]));
+                AddFace(sideA, face, true, WholeCorner(sideA, c[z]), WholeCorner(sideA, c[a]), cornerP[sideA]);
+                AddFace(sideB, face, true, WholeCorner(sideB, c[z]), cornerP[sideB], WholeCorner(sideB, c[b]));
                 return true;
             }
 
@@ -336,9 +338,9 @@ namespace MeshCutting
             const int loneSide = s[lone] > 0 ? 0 : 1, otherSide = 1 - loneSide;
             const uint32_t corner1[2] = { CutCorner(0, c[lone], c[x], p1, faceIndex), CutCorner(1, c[lone], c[x], p1, faceIndex) };
             const uint32_t corner2[2] = { CutCorner(0, c[y], c[lone], p2, faceIndex), CutCorner(1, c[y], c[lone], p2, faceIndex) };
-            AddFace(loneSide, face, WholeCorner(loneSide, c[lone]), corner1[loneSide], corner2[loneSide]);
-            AddFace(otherSide, face, corner1[otherSide], WholeCorner(otherSide, c[x]), WholeCorner(otherSide, c[y]));
-            AddFace(otherSide, face, corner1[otherSide], WholeCorner(otherSide, c[y]), corner2[otherSide]);
+            AddFace(loneSide, face, true, WholeCorner(loneSide, c[lone]), corner1[loneSide], corner2[loneSide]);
+            AddFace(otherSide, face, true, corner1[otherSide], WholeCorner(otherSide, c[x]), WholeCorner(otherSide, c[y]));
+            AddFace(otherSide, face, true, corner1[otherSide], WholeCorner(otherSide, c[y]), corner2[otherSide]);
             return true;
         }
 

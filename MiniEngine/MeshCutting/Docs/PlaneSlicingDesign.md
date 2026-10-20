@@ -134,7 +134,7 @@ namespace MeshCutting
         uint32_t corner[3];
         FaceKind kind;
         uint32_t sourceTriangle;        // BonePatchSource::triangles 인덱스 (Cap이면 UINT32_MAX)
-        uint32_t cutId;                 // Cap이면 만든 절단
+        uint32_t cutId;                 // Cap이면 만든 절단. Surface이면 그 면을 분할한 절단 (분할된 적 없으면 0)
     };
 
     struct CapRecord                    // 절단 하나 = cap 하나 (양쪽 piece에 각각)

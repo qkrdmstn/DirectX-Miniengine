@@ -12,6 +12,12 @@
     <Filter Include="Geometry">
       <UniqueIdentifier>{6b1d4e0a-3f52-4c8e-9a67-2d9e5c1f7a30}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Runtime">
+      <UniqueIdentifier>{a4c2e7b1-5d38-4f90-8b16-3e7d9a0c5f12}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Debug">
+      <UniqueIdentifier>{d81f3a96-2c4e-47b5-9e03-6b5a1f8d7c24}</UniqueIdentifier>
+    </Filter>
     <Filter Include="tests">
       <UniqueIdentifier>{c3a8f7d2-91b4-4e56-8d0c-5f2a6b9e1c47}</UniqueIdentifier>
     </Filter>
@@ -38,6 +44,12 @@
     </ClInclude>
     <ClInclude Include="BonePatch.h">
       <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="Debug\CutDebugView.h">
+      <Filter>Debug</Filter>
+    </ClInclude>
+    <ClInclude Include="Runtime\CutController.h">
+      <Filter>Runtime</Filter>
     </ClInclude>
     <ClInclude Include="Geometry\CapBuilder.h">
       <Filter>Geometry</Filter>
@@ -73,6 +85,12 @@
     </ClCompile>
     <ClCompile Include="BonePatch.cpp">
       <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="Debug\CutDebugView.cpp">
+      <Filter>Debug</Filter>
+    </ClCompile>
+    <ClCompile Include="Runtime\CutController.cpp">
+      <Filter>Runtime</Filter>
     </ClCompile>
     <ClCompile Include="Geometry\CapBuilder.cpp">
       <Filter>Geometry</Filter>

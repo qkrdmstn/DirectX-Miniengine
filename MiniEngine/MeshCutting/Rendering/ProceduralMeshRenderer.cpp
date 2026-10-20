@@ -17,9 +17,19 @@ using namespace Graphics;
 
 namespace MeshCutting
 {
+    namespace
+    {
+        // Wireframe depth bias (reversed-Z: positive = toward the camera). The bias is in units of the
+        // smallest depth step of the format, scaled by the polygon slope.
+        constexpr INT kWireDepthBias = 200;
+        constexpr float kWireSlopeScaledDepthBias = 1.5f;
+    }
+
     ProceduralMeshRenderer::ProceduralMeshRenderer() :
         m_Pso(L"Procedural Mesh Color"),
-        m_PsoBackCull(L"Procedural Mesh Color Back Cull")
+        m_PsoBackCull(L"Procedural Mesh Color Back Cull"),
+        m_PsoWire(L"Procedural Mesh Wire"),
+        m_PsoWireBackCull(L"Procedural Mesh Wire Back Cull")
     {
     }
 
@@ -35,8 +45,8 @@ namespace MeshCutting
 
         m_RootSignature.Reset(2, 0);
         m_RootSignature[0].InitAsConstantBuffer(0, D3D12_SHADER_VISIBILITY_VERTEX);
-        // Section tint: float4 color + uint mode (see ProceduralMeshPS.hlsl).
-        m_RootSignature[1].InitAsConstants(1, 5, D3D12_SHADER_VISIBILITY_PIXEL);
+        // Tint: float4 color + uint mode + uint section index (see ProceduralMeshPS.hlsl).
+        m_RootSignature[1].InitAsConstants(1, 6, D3D12_SHADER_VISIBILITY_PIXEL);
         m_RootSignature.Finalize(L"Procedural Mesh Root", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         static const D3D12_INPUT_ELEMENT_DESC layout[] =
@@ -60,6 +70,25 @@ namespace MeshCutting
         // Same state with back-face culling (RasterizerDefault: counter-clockwise is front).
         m_PsoBackCull = m_Pso;
         m_PsoBackCull.SetRasterizerState(RasterizerDefault);
+
+        // Wireframe: tested against the depth buffer but never written, and pushed toward the camera.
+        // MiniEngine is reversed-Z (GREATER_EQUAL, near = large depth), so a positive bias moves the
+        // lines in front of a solid draw of the same mesh. Values are in the header comment of
+        // CutDebugDesign.md; they were tuned on screen.
+        D3D12_RASTERIZER_DESC wireTwoSided = RasterizerTwoSided;
+        wireTwoSided.FillMode = D3D12_FILL_MODE_WIREFRAME;
+        wireTwoSided.DepthBias = kWireDepthBias;
+        wireTwoSided.SlopeScaledDepthBias = kWireSlopeScaledDepthBias;
+        D3D12_RASTERIZER_DESC wireBackCull = RasterizerDefault;
+        wireBackCull.FillMode = D3D12_FILL_MODE_WIREFRAME;
+        wireBackCull.DepthBias = kWireDepthBias;
+        wireBackCull.SlopeScaledDepthBias = kWireSlopeScaledDepthBias;
+        m_PsoWire = m_Pso;
+        m_PsoWire.SetRasterizerState(wireTwoSided);
+        m_PsoWire.SetDepthStencilState(DepthStateReadOnly);
+        m_PsoWireBackCull = m_Pso;
+        m_PsoWireBackCull.SetRasterizerState(wireBackCull);
+        m_PsoWireBackCull.SetDepthStencilState(DepthStateReadOnly);
         m_Initialized = true;
     }
 
@@ -135,6 +164,10 @@ namespace MeshCutting
             m_Pso.Finalize();
             m_PsoBackCull.SetRenderTargetFormat(m_ColorFormat, m_DepthFormat);
             m_PsoBackCull.Finalize();
+            m_PsoWire.SetRenderTargetFormat(m_ColorFormat, m_DepthFormat);
+            m_PsoWire.Finalize();
+            m_PsoWireBackCull.SetRenderTargetFormat(m_ColorFormat, m_DepthFormat);
+            m_PsoWireBackCull.Finalize();
             m_PsoFinalized = true;
         }
         const ProceduralMeshData& data = mesh.GetData();
@@ -174,27 +207,36 @@ namespace MeshCutting
         context.SetRenderTarget(color.GetRTV(), depth.GetDSV());
         context.SetViewportAndScissor(viewport, scissor);
         context.SetRootSignature(m_RootSignature);
-        context.SetPipelineState(options.cull == CullMode::Back ? m_PsoBackCull : m_Pso);
+        const bool wire = options.fill == FillMode::Wireframe;
+        const bool backCull = options.cull == CullMode::Back;
+        context.SetPipelineState(wire ? (backCull ? m_PsoWireBackCull : m_PsoWire) : (backCull ? m_PsoBackCull : m_Pso));
         context.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         struct alignas(16) Transforms { Math::Matrix4 world; Math::Matrix4 viewProj; };
         const Transforms transforms{ world, viewProj };
         context.SetDynamicConstantBufferView(0, sizeof(transforms), &transforms);
         context.SetVertexBuffer(0, gpu.vertices->resource.VertexBufferView(0, vertexBytes, sizeof(ProceduralVertex)));
         context.SetIndexBuffer(gpu.indices->resource.IndexBufferView(0, indexBytes, true));
-        // Pixel constants: tint color (rgb, unused alpha) and a mode flag. Mode 0 keeps vertex colors.
+        // Pixel constants: color, a mode and the section index (ProceduralMeshPS.hlsl).
+        //   0 vertex color   1 solid section color   2 one wire color   3 wire palette by section
         static const float kSectionTint[][4] = {
             { 0.85f, 0.85f, 0.85f, 1.0f }, { 0.1f, 0.8f, 0.9f, 1.0f }, { 0.95f, 0.8f, 0.1f, 1.0f },
             { 0.9f, 0.3f, 0.7f, 1.0f }, { 0.4f, 0.9f, 0.3f, 1.0f } };
         const uint32_t tintCount = uint32_t(_countof(kSectionTint));
-        const auto setTint = [&context, &options](uint32_t section)
+        const auto setTint = [&context, &options, wire](uint32_t section)
         {
-            struct { float color[4]; uint32_t mode; } constants = {};
-            if (options.sectionTint)
+            struct { float color[4]; uint32_t mode; uint32_t section; } constants = {};
+            constants.section = section;
+            if (wire)
+            {
+                std::memcpy(constants.color, &options.wireColor, sizeof(constants.color));
+                constants.mode = options.sectionTint ? 3 : 2;
+            }
+            else if (options.sectionTint)
             {
                 std::memcpy(constants.color, kSectionTint[section % tintCount], sizeof(constants.color));
                 constants.mode = 1;
             }
-            context.SetConstantArray(1, 5, &constants);
+            context.SetConstantArray(1, 6, &constants);
         };
         if (data.sections.empty())
         {

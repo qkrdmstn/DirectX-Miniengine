@@ -13,6 +13,7 @@
 #include "../Geometry/RenderBake.h"
 #include "../ProceduralMesh.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -1135,6 +1136,174 @@ static void TestRecut()
     CHECK(upper.caps.size() == 1 && CountKind(upper, EdgeKind::CapSeam) == 8);
 }
 
+// ---------------------------------------------------------------- debug tests (face origin)
+
+// A surface face carries the cut that divided it; a face moved over whole keeps its old value.
+// The octahedron cut through one node has (0, +, -) faces, whose opposite edge is divided.
+static void CheckDividedFacesHaveCutId(const SliceResult& result, const PatchPiece& input, uint32_t cutId, const char* label)
+{
+    // Per source triangle: faces going in, faces coming out (both pieces). More faces out than in
+    // means this cut divided one of them; otherwise every face keeps a cutId it already had.
+    std::vector<uint32_t> in(input.faces.size() + 64, 0), out(in.size(), 0);
+    for (const Face& face : input.faces)
+        if (face.kind == FaceKind::Surface)
+            ++in[face.sourceTriangle];
+    for (const PatchPiece* piece : { &result.positive, &result.negative })
+        for (const Face& face : piece->faces)
+            if (face.kind == FaceKind::Surface)
+                ++out[face.sourceTriangle];
+    uint32_t divided = 0;
+    for (uint32_t t = 0; t < in.size(); ++t)
+    {
+        if (out[t] == 0)
+            continue;
+        const bool wasDivided = out[t] > in[t];
+        bool marked = false;
+        for (const PatchPiece* piece : { &result.positive, &result.negative })
+            for (const Face& face : piece->faces)
+            {
+                if (face.kind != FaceKind::Surface || face.sourceTriangle != t)
+                    continue;
+                marked = marked || face.cutId == cutId;
+                bool known = face.cutId == cutId && wasDivided;
+                for (const Face& old : input.faces)
+                    known = known || (old.kind == FaceKind::Surface && old.sourceTriangle == t && old.cutId == face.cutId);
+                if (!known)
+                {
+                    std::printf("  %s: face of triangle %u has cutId %u\n", label, t, face.cutId);
+                    CHECK(false);
+                }
+            }
+        CHECK(wasDivided == marked);
+        divided += wasDivided;
+    }
+    CHECK(divided > 0);
+}
+
+static uint32_t CountSectionFaces(const ProceduralMeshData& baked, uint32_t section)
+{
+    return section < baked.sections.size() ? baked.sections[section].indexCount / 3 : 0;
+}
+
+static void TestSplitFacesRecordCutId()
+{
+    // Plane through one node: (0, +, -) faces and lone-corner faces.
+    const PatchPiece octa = MakeOctahedron();
+    SliceResult oneNode;
+    CHECK_STATUS(SlicePatch(octa, MakePlane(1, 0, 0, 1, 2, 0), 1, NoCapOptions(), oneNode), SliceStatus::Ok, oneNode.detail);
+    CheckDividedFacesHaveCutId(oneNode, octa, 1, "octahedron");
+
+    // Nothing was cut before, so every face is either undivided (0) or divided by cut 1.
+    for (const PatchPiece* piece : { &oneNode.positive, &oneNode.negative })
+        for (const Face& face : piece->faces)
+            CHECK(face.cutId == 0 || face.cutId == 1);
+
+    // Second cut: cut 2 marks the faces it divides.
+    const PatchPiece box = MakeBox();
+    SliceResult first, second;
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, 0.5f, 0, 0.3f, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
+    CheckDividedFacesHaveCutId(first, box, 1, "box cut 1");
+    CHECK_STATUS(SlicePatch(first.positive, MakePlane(0, 1.5f, 0, 0, 1, 0.2f), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
+    CheckDividedFacesHaveCutId(second, first.positive, 2, "box cut 2");
+    // A face moved over whole keeps the value it had (top face triangle 2 is untouched by a cut at y = 1).
+    PatchPiece marked = MakeBox();
+    marked.faces[2].cutId = 7;
+    SliceResult keep;
+    CHECK_STATUS(SlicePatch(marked, MakePlane(0, 1, 0, 0, 1, 0), 8, NoCapOptions(), keep), SliceStatus::Ok, keep.detail);
+    uint32_t sevens = 0;
+    for (const Face& face : keep.positive.faces)
+        sevens += face.kind == FaceKind::Surface && face.sourceTriangle == 2 && face.cutId == 7;
+    CHECK(sevens == 1);
+    // Cap faces keep meaning "the cut that made the cap".
+    for (const Face& face : second.negative.faces)
+        if (face.kind == FaceKind::Cap)
+            CHECK(face.cutId == 1 || face.cutId == 2);
+}
+
+static void TestSplitByOriginBake()
+{
+    const PatchPiece box = MakeBox();
+    SliceResult result;
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, 0.5f, 0, 0.3f, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+
+    RenderBakeOptions split;
+    split.splitByOrigin = true;
+    for (const PatchPiece* piece : { &result.positive, &result.negative })
+    {
+        ProceduralMeshData plain, tinted, defaulted;
+        BuildRenderMesh(*piece, plain);
+        BuildRenderMesh(*piece, defaulted, RenderBakeOptions());
+        BuildRenderMesh(*piece, tinted, split);
+
+        // The default is the old output: surface + cap, same vertices and indices as an explicit default.
+        CHECK(plain.sections.size() == 2 && plain.sections[0].materialSlot == 0 && plain.sections[1].materialSlot == 1);
+        CHECK(plain.indices == defaulted.indices && plain.vertices.size() == defaulted.vertices.size());
+
+        // Split: [never divided][divided][cap]; section sizes add up to the face count.
+        CHECK(tinted.sections.size() == 3);
+        CHECK(tinted.sections[0].materialSlot == 0 && tinted.sections[1].materialSlot == 0 && tinted.sections[2].materialSlot == 1);
+        CHECK(CountSectionFaces(tinted, 0) + CountSectionFaces(tinted, 1) + CountSectionFaces(tinted, 2) == piece->faces.size());
+        CHECK(CountSectionFaces(tinted, 0) + CountSectionFaces(tinted, 1) == CountSectionFaces(plain, 0));
+        CHECK(CountSectionFaces(tinted, 2) == CountSectionFaces(plain, 1));
+        CHECK(tinted.sections[1].firstIndex == tinted.sections[0].indexCount);
+        CHECK(tinted.vertices.size() == plain.vertices.size());
+
+        // Each section holds the faces it names.
+        uint32_t divided = 0, whole = 0;
+        for (const Face& face : piece->faces)
+            if (face.kind == FaceKind::Surface)
+                (face.cutId != 0 ? divided : whole) += 1;
+        CHECK(CountSectionFaces(tinted, 0) == whole && CountSectionFaces(tinted, 1) == divided);
+
+        // The index order is the only difference: same set of triangles.
+        std::vector<uint32_t> a = plain.indices, b = tinted.indices;
+        std::vector<std::array<uint32_t, 3>> ta, tb;
+        for (size_t i = 0; i + 2 < a.size(); i += 3)
+        {
+            ta.push_back({ a[i], a[i + 1], a[i + 2] });
+            tb.push_back({ b[i], b[i + 1], b[i + 2] });
+        }
+        std::sort(ta.begin(), ta.end());
+        std::sort(tb.begin(), tb.end());
+        CHECK(ta == tb);
+
+        ProceduralMesh mesh;
+        std::string error;
+        CHECK(mesh.SetMesh(tinted, &error));
+    }
+
+    // An empty section is not created: an undivided piece has no "divided" section.
+    ProceduralMeshData untouched;
+    BuildRenderMesh(box, untouched, split);
+    CHECK(untouched.sections.size() == 1 && untouched.sections[0].materialSlot == 0);
+}
+
+// The preview loops: one closed ring of tubes per cut loop (6 vertices, 18 indices per edge).
+static void TestLoopDebugBake()
+{
+    const PatchPiece box = MakeBox();
+    SliceResult result;
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.size() == 1);
+    ProceduralMeshData tubes;
+    BakeLoopDebug(result.positive, result.loops, 0.02f, { 1.0f, 0.2f, 1.0f, 1.0f }, tubes);
+    const size_t edges = result.loops.empty() ? 0 : result.loops[0].size();
+    CHECK(edges == 8 && tubes.vertices.size() == edges * 6 && tubes.indices.size() == edges * 18);
+    CHECK(tubes.sections.size() == 1 && tubes.sections[0].indexCount == tubes.indices.size());
+    // The tubes sit on the cut plane (y = 1), around the cut loop nodes.
+    for (const ProceduralVertex& vertex : tubes.vertices)
+        CHECK(std::fabs(vertex.position.y - 1.0f) <= 0.02f + 1e-5f);
+    ProceduralMesh mesh;
+    std::string error;
+    CHECK(mesh.SetMesh(tubes, &error));
+
+    // No loops, or loops that name missing nodes: nothing to draw.
+    BakeLoopDebug(result.positive, {}, 0.02f, { 1.0f, 1.0f, 1.0f, 1.0f }, tubes);
+    CHECK(tubes.vertices.empty() && tubes.sections.empty());
+    BakeLoopDebug(result.positive, { { 0, 9999 } }, 0.02f, { 1.0f, 1.0f, 1.0f, 1.0f }, tubes);
+    CHECK(tubes.indices.empty() && tubes.sections.empty());
+}
+
 // ---------------------------------------------------------------- 2-5 tests (skinning)
 
 typedef std::vector<std::vector<DirectX::XMFLOAT4X4>> SlotMatrices;
@@ -1447,6 +1616,9 @@ int main()
     TestCapWithHole();
     TestCapOfConcaveLoop();
     TestRecut();
+    TestSplitFacesRecordCutId();
+    TestSplitByOriginBake();
+    TestLoopDebugBake();
 
     TestSkinIdentity();
     TestSkinSingleJoint();

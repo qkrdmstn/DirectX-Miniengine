@@ -26,12 +26,18 @@ namespace MeshCutting
         ProceduralMeshRenderer& operator=(const ProceduralMeshRenderer&) = delete;
 
         enum class CullMode { TwoSided, Back };
+        enum class FillMode { Solid, Wireframe };
 
         struct DrawOptions
         {
             CullMode cull = CullMode::TwoSided;     // Back: counter-clockwise faces only
-            // Debug aid: draw each section in a fixed color (section 0 gray, 1 cyan, 2 yellow, ...)
-            // so a cap can be told from the surface. Materials themselves are not supported yet.
+            // Wireframe draws the triangle edges with depth test but no depth write and a depth bias
+            // toward the camera, so it can be drawn over the same mesh in Solid without z-fighting.
+            FillMode fill = FillMode::Solid;
+            DirectX::XMFLOAT4 wireColor = { 0.05f, 0.05f, 0.05f, 1.0f };  // used when sectionTint is off
+            // Debug aid: draw each section in a fixed color (Solid: section 0 gray, 1 cyan, 2 yellow, ...;
+            // Wireframe: a brighter palette) so a cap can be told from the surface. Materials themselves
+            // are not supported yet.
             bool sectionTint = false;
         };
 
@@ -69,6 +75,8 @@ namespace MeshCutting
         RootSignature m_RootSignature;
         GraphicsPSO m_Pso;              // two-sided
         GraphicsPSO m_PsoBackCull;      // back-face culling
+        GraphicsPSO m_PsoWire;          // wireframe, two-sided
+        GraphicsPSO m_PsoWireBackCull;  // wireframe, back-face culling
         bool m_Initialized = false;
         bool m_PsoFinalized = false;
         DXGI_FORMAT m_ColorFormat = DXGI_FORMAT_UNKNOWN;

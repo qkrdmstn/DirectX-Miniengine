@@ -147,6 +147,8 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="BonePatch.h" />
     <ClInclude Include="ProceduralMesh.h" />
+    <ClInclude Include="Debug\CutDebugView.h" />
+    <ClInclude Include="Runtime\CutController.h" />
     <ClInclude Include="Geometry\CapBuilder.h" />
     <ClInclude Include="Geometry\CutLoops.h" />
     <ClInclude Include="Geometry\PatchGeometry.h" />
@@ -160,6 +162,12 @@
     <ClCompile Include="BonePatch.cpp" />
     <ClCompile Include="MeshCutting.cpp" />
     <ClCompile Include="ProceduralMesh.cpp" />
+    <ClCompile Include="Debug\CutDebugView.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Runtime\CutController.cpp">
+      <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
+    </ClCompile>
     <ClCompile Include="Geometry\CapBuilder.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>

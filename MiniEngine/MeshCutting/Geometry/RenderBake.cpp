@@ -89,7 +89,24 @@ namespace MeshCutting
             out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
     }
 
-    void BuildRenderMesh(const PatchPiece& piece, ProceduralMeshData& out)
+    void BakeLoopDebug(const PatchPiece& piece, const std::vector<std::vector<uint32_t>>& loops, float radius,
+        const DirectX::XMFLOAT4& color, ProceduralMeshData& out)
+    {
+        out = ProceduralMeshData();
+        for (const std::vector<uint32_t>& loop : loops)
+        {
+            for (size_t i = 0; i < loop.size(); ++i)
+            {
+                const uint32_t a = loop[i], b = loop[(i + 1) % loop.size()];
+                if (a < piece.nodes.size() && b < piece.nodes.size())
+                    AppendDebugSegment(out, piece.nodes[a].position, piece.nodes[b].position, radius, color);
+            }
+        }
+        if (!out.indices.empty())
+            out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
+    }
+
+    void BuildRenderMesh(const PatchPiece& piece, ProceduralMeshData& out, const RenderBakeOptions& options)
     {
         out = ProceduralMeshData();
         if (piece.faces.empty())
@@ -104,16 +121,24 @@ namespace MeshCutting
             vertex.color = corner.color;
             out.vertices.push_back(vertex);
         }
-        for (int pass = 0; pass < 2; ++pass)
+        // Passes: surface (all, or never divided), divided surface (only with splitByOrigin), cap.
+        for (int pass = 0; pass < 3; ++pass)
         {
-            const FaceKind kind = pass == 0 ? FaceKind::Surface : FaceKind::Cap;
+            if (pass == 1 && !options.splitByOrigin)
+                continue;
+            const FaceKind kind = pass == 2 ? FaceKind::Cap : FaceKind::Surface;
             const uint32_t first = uint32_t(out.indices.size());
             for (const Face& face : piece.faces)
-                if (face.kind == kind)
-                    out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
+            {
+                if (face.kind != kind)
+                    continue;
+                if (options.splitByOrigin && kind == FaceKind::Surface && (face.cutId != 0) != (pass == 1))
+                    continue;
+                out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
+            }
             const uint32_t count = uint32_t(out.indices.size()) - first;
             if (count > 0)
-                out.sections.push_back({ first, count, pass == 0 ? 0u : 1u });
+                out.sections.push_back({ first, count, pass == 2 ? 1u : 0u });
         }
     }
 
@@ -131,13 +156,13 @@ namespace MeshCutting
         return true;
     }
 
-    void BakePlaneDebug(const SlicePlane& plane, float ringRadius, float tubeRadius, ProceduralMeshData& out)
+    void BakePlaneDebug(const SlicePlane& plane, float ringRadius, float tubeRadius, const DirectX::XMFLOAT4& ringColor,
+        ProceduralMeshData& out)
     {
         out = ProceduralMeshData();
         PlaneBasis basis;
         if (!MakePlaneBasis(plane, basis))
             return;
-        const DirectX::XMFLOAT4 ringColor = { 0.0f, 1.0f, 1.0f, 1.0f };
         const DirectX::XMFLOAT4 arrowColor = { 1.0f, 1.0f, 1.0f, 1.0f };
         const auto at = [&](double a, double b, double c)
         {
