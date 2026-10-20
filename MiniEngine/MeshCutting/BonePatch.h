@@ -83,20 +83,15 @@ namespace MeshCutting
     void MakeSlotMatrices(const Math::Matrix4& meshWorld, const Joint* paletteJoints, uint32_t jointCount,
         std::vector<DirectX::XMFLOAT4X4>& out);
 
-    // slotMatrices[meshSlot] for the patch's source meshes, from the instance's current pose
-    // (the pose of its last Update). meshSlot is the index into source.meshes, which is the
-    // meshSlot of every SkinNode (ExtractBonePatch numbers meshes in that order).
+    // MaekSlotMatrices 함수를 이용해 스킨 애니메이션 전체에 대한 행렬을 정리합니다.
     bool BuildSkinMatrices(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
         std::vector<std::vector<DirectX::XMFLOAT4X4>>& slotMatrices, std::string* error = nullptr);
 
-    // World matrices of the palette joints at the instance's current pose, in the same space as
-    // BonePatchSource::poseJointWorld (the first source mesh's world * joint node world).
+    // 현재 joint의 변환 행렬을 계산합니다.
     bool ComputePoseJointWorld(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
         std::vector<Math::Matrix4>& out, std::string* error = nullptr);
 
-    // Flattens an extraction result into the plain input of Geometry/BuildPatchPiece, so the
-    // slicing code never sees Model or Core types. The two inputs must come from the same
-    // ExtractBonePatch call.
+    // 절단하기 위한 데이터로 묶습니다.
     bool MakeWeldInput(const ProceduralMeshData& mesh, const BonePatchSource& source,
         WeldInput& out, std::string* error = nullptr);
 }
