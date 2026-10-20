@@ -8,6 +8,7 @@
 
 #include "../Geometry/PatchGeometry.h"
 #include "../Geometry/PatchWeld.h"
+#include "../Geometry/PieceSkinning.h"
 #include "../Geometry/PlaneSlicer.h"
 #include "../Geometry/RenderBake.h"
 #include "../ProceduralMesh.h"
@@ -1134,6 +1135,279 @@ static void TestRecut()
     CHECK(upper.caps.size() == 1 && CountKind(upper, EdgeKind::CapSeam) == 8);
 }
 
+// ---------------------------------------------------------------- 2-5 tests (skinning)
+
+typedef std::vector<std::vector<DirectX::XMFLOAT4X4>> SlotMatrices;
+
+static DirectX::XMFLOAT4X4 ToFloat4x4(DirectX::FXMMATRIX m)
+{
+    DirectX::XMFLOAT4X4 out;
+    DirectX::XMStoreFloat4x4(&out, m);
+    return out;
+}
+
+static SlotMatrices IdentitySlots(size_t joints)
+{
+    SlotMatrices slots(1);
+    slots[0].assign(joints, ToFloat4x4(DirectX::XMMatrixIdentity()));
+    return slots;
+}
+
+// Two moderate, different rigid motions: skinning a node between them shears the box a little.
+static SlotMatrices PoseA()
+{
+    SlotMatrices slots(1);
+    slots[0].push_back(ToFloat4x4(DirectX::XMMatrixRotationY(0.4f) * DirectX::XMMatrixTranslation(3.0f, 1.0f, -2.0f)));
+    slots[0].push_back(ToFloat4x4(DirectX::XMMatrixRotationZ(0.25f) * DirectX::XMMatrixTranslation(3.5f, 2.0f, -1.7f)));
+    return slots;
+}
+
+static SlotMatrices PoseB()
+{
+    SlotMatrices slots(1);
+    slots[0].push_back(ToFloat4x4(DirectX::XMMatrixRotationY(-0.3f) * DirectX::XMMatrixTranslation(-2.0f, 0.5f, 4.0f)));
+    slots[0].push_back(ToFloat4x4(DirectX::XMMatrixRotationX(0.35f) * DirectX::XMMatrixTranslation(-1.5f, 2.5f, 4.3f)));
+    return slots;
+}
+
+// A closed box skinned by joints 0 and 1: weight of joint 1 grows with height. The nodes are
+// posed with `slots`, so the piece is consistent with that pose.
+static PatchPiece MakeSkinnedBox(const SlotMatrices& slots)
+{
+    PatchPiece box = MakeBox();
+    for (size_t i = 0; i < box.nodes.size(); ++i)
+    {
+        SkinNode& skin = box.originNodes[i];
+        skin.bindPosition = box.nodes[i].position;
+        skin.jointCount = 2;
+        skin.joints[0] = 0;
+        skin.joints[1] = 1;
+        const float w1 = box.nodes[i].position.y * 0.5f * 0.8f + 0.1f;      // 0.1 .. 0.9
+        skin.weights[0] = 1.0f - w1;
+        skin.weights[1] = w1;
+    }
+    SkinStats stats;
+    std::string detail;
+    const bool ok = SkinPatchPiece(box, slots, &stats, &detail);
+    ++g_checks;
+    if (!ok)
+    {
+        ++g_failures;
+        std::printf("FAIL MakeSkinnedBox: %s\n", detail.c_str());
+    }
+    return box;
+}
+
+static double MaxNodeDelta(const PatchPiece& a, const PatchPiece& b)
+{
+    double worst = 0.0;
+    if (a.nodes.size() != b.nodes.size())
+        return 1e30;
+    for (size_t i = 0; i < a.nodes.size(); ++i)
+    {
+        const double dx = double(a.nodes[i].position.x) - b.nodes[i].position.x;
+        const double dy = double(a.nodes[i].position.y) - b.nodes[i].position.y;
+        const double dz = double(a.nodes[i].position.z) - b.nodes[i].position.z;
+        worst = std::max(worst, std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    return worst;
+}
+
+static bool SamePosition(const XMFLOAT3& a, const XMFLOAT3& b)
+{
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
+// 1. Identity matrices put every original node at its bind position, whatever it held before.
+static void TestSkinIdentity()
+{
+    PatchPiece box = MakeBox();
+    const PatchPiece reference = box;
+    for (GeomNode& node : box.nodes)
+        node.position = { node.position.x + 100.0f, -7.0f, 3.0f };
+    SkinStats stats;
+    std::string detail;
+    CHECK(SkinPatchPiece(box, IdentitySlots(1), &stats, &detail));
+    CHECK(MaxNodeDelta(box, reference) == 0.0);
+    CHECK(stats.originNodesEvaluated == 8 && stats.surfaceNodesWritten == 8 && stats.capNodesSkipped == 0);
+}
+
+// 2. One joint with a rotation and a translation: bind * R * T, row-vector convention.
+static void TestSkinSingleJoint()
+{
+    PatchPiece tri = MakePiece({ { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, { { 0, 1, 2 } });
+    for (SkinNode& skin : tri.originNodes)
+        skin.joints[0] = 1;
+    SlotMatrices slots = IdentitySlots(2);
+    slots[0][1] = ToFloat4x4(DirectX::XMMatrixRotationZ(1.5707963267948966f) * DirectX::XMMatrixTranslation(5.0f, 0.0f, 0.0f));
+    std::string detail;
+    CHECK(SkinPatchPiece(tri, slots, nullptr, &detail));
+    const XMFLOAT3 expected[3] = { { 5, 1, 0 }, { 4, 0, 0 }, { 5, 0, 1 } };    // (1,0,0)->(0,1,0)+5x, ...
+    for (int i = 0; i < 3; ++i)
+        CHECK(std::fabs(tri.nodes[i].position.x - expected[i].x) < 1e-5f && std::fabs(tri.nodes[i].position.y - expected[i].y) < 1e-5f
+            && std::fabs(tri.nodes[i].position.z - expected[i].z) < 1e-5f);
+}
+
+// 3. Two joints with weights 0.25 / 0.75, computed by hand:
+//    0.25 * (5,1,1) + 0.75 * (1,9,1) = (2,7,1).
+static void TestSkinTwoJointBlend()
+{
+    PatchPiece tri = MakePiece({ { 1, 1, 1 }, { 2, 2, 2 }, { 3, 3, 3 } }, { { 0, 1, 2 } });
+    SkinNode& skin = tri.originNodes[0];
+    skin.jointCount = 2;
+    skin.joints[0] = 0;
+    skin.joints[1] = 1;
+    skin.weights[0] = 0.25f;
+    skin.weights[1] = 0.75f;
+    SlotMatrices slots(1);
+    slots[0].push_back(ToFloat4x4(DirectX::XMMatrixTranslation(4.0f, 0.0f, 0.0f)));
+    slots[0].push_back(ToFloat4x4(DirectX::XMMatrixTranslation(0.0f, 8.0f, 0.0f)));
+    CHECK(SkinPatchPiece(tri, slots));
+    CHECK(std::fabs(tri.nodes[0].position.x - 2.0f) < 1e-6f && std::fabs(tri.nodes[0].position.y - 7.0f) < 1e-6f
+        && std::fabs(tri.nodes[0].position.z - 1.0f) < 1e-6f);
+    // The same blend straight from SkinPoint.
+    XMFLOAT3 point;
+    DirectX::XMStoreFloat3(&point, SkinPoint(slots[0].data(), 2, skin.joints, skin.weights, 2, skin.bindPosition));
+    CHECK(point.x == tri.nodes[0].position.x && point.y == tri.nodes[0].position.y && point.z == tri.nodes[0].position.z);
+}
+
+// 4. A piece cut in a pose and skinned with the same matrices again lands on the cut positions:
+//    cut nodes are driven by their SurfaceOrigin, with no joint or weight of their own.
+static void TestSkinMatchesSliceNodes()
+{
+    const SlotMatrices pose = PoseA();
+    const PatchPiece box = MakeSkinnedBox(pose);
+    SliceResult result;
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, 2.0f, 0, 0.3f, 1.0f, 0.2f), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    for (PatchPiece* piece : { &result.positive, &result.negative })
+    {
+        PatchPiece skinned = *piece;
+        for (GeomNode& node : skinned.nodes)
+            node.position = { 0.0f, 0.0f, 0.0f };
+        SkinStats stats;
+        std::string detail;
+        CHECK(SkinPatchPiece(skinned, pose, &stats, &detail));
+        const double tolerance = 1e-5 * ComputePieceRadius(*piece);
+        CHECK(MaxNodeDelta(skinned, *piece) <= tolerance);
+        CHECK(stats.capNodesSkipped == 0);
+        CHECK(stats.originNodesEvaluated <= box.originNodes.size());
+    }
+}
+
+// 5. Seam corners and cap rim corners follow their node: after a pose change every corner of a node
+//    bakes to the same bits. Cap faces use no nodes of their own.
+static void TestSkinKeepsSeamsAndCapsTogether()
+{
+    PatchPiece tube;
+    WeldStats stats;
+    std::string detail;
+    CHECK_STATUS(BuildPatchPiece(MakeTubeWeldInput(8, true, 0), kDefaultEpsilonScale, tube, stats, &detail), SliceStatus::Ok, detail);
+    SliceResult result;
+    CHECK_STATUS(SlicePatch(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+
+    for (PatchPiece* piece : { &result.positive, &result.negative })
+    {
+        for (const GeomNode& node : piece->nodes)
+            CHECK(node.kind == NodeKind::Surface);          // no cap-only nodes exist
+        ProceduralMeshData baked;
+        BuildRenderMesh(*piece, baked);
+        const SlotMatrices pose = PoseA();
+        SkinStats skinStats;
+        CHECK(SkinPatchPiece(*piece, pose, &skinStats, &detail));
+        CHECK(skinStats.capNodesSkipped == 0);
+        CHECK(UpdateRenderPositions(*piece, baked.vertices));
+
+        std::vector<int> firstCorner(piece->nodes.size(), -1);
+        bool seamSeen = false, capSeen = false;
+        for (size_t c = 0; c < piece->corners.size(); ++c)
+        {
+            const uint32_t node = piece->corners[c].node;
+            if (firstCorner[node] < 0)
+            {
+                firstCorner[node] = int(c);
+                continue;
+            }
+            seamSeen = true;                                // a node with more than one corner (UV seam or cap)
+            CHECK(SamePosition(baked.vertices[c].position, baked.vertices[firstCorner[node]].position));
+            CHECK(SamePosition(baked.vertices[c].position, piece->nodes[node].position));
+        }
+        for (const Face& face : piece->faces)
+            capSeen = capSeen || face.kind == FaceKind::Cap;
+        CHECK(seamSeen && capSeen);
+    }
+}
+
+// 6. A piece with its own skin state (separated bones) is refused and left alone.
+static void TestSkinRefusesSkinState()
+{
+    PatchPiece box = MakeBox();
+    box.skinStateId = 3;
+    const PatchPiece before = box;
+    std::string detail;
+    CHECK(!SkinPatchPiece(box, IdentitySlots(1), nullptr, &detail));
+    CHECK(detail.find("skin state") != std::string::npos);
+    CHECK(MaxNodeDelta(box, before) == 0.0);
+}
+
+// 7. Cutting a piece twice: the second generation skins back to its own positions as well.
+static void TestSkinAfterTwoCuts()
+{
+    const SlotMatrices pose = PoseA();
+    const PatchPiece box = MakeSkinnedBox(pose);
+    double yLow = 1e30, yHigh = -1e30;
+    for (const GeomNode& node : box.nodes)
+    {
+        yLow = std::min<double>(yLow, node.position.y);
+        yHigh = std::max<double>(yHigh, node.position.y);
+    }
+    SliceResult first, second;
+    const float yMid = float((yLow + yHigh) * 0.5);
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, yMid, 0, 0, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
+    // Cut the upper half again, a quarter of the way up. Only the surface is crossed.
+    double upLow = 1e30, upHigh = -1e30;
+    for (const GeomNode& node : first.positive.nodes)
+    {
+        upLow = std::min<double>(upLow, node.position.y);
+        upHigh = std::max<double>(upHigh, node.position.y);
+    }
+    const float yQuarter = float(upLow + (upHigh - upLow) * 0.4);
+    CHECK_STATUS(SlicePatch(first.positive, MakePlane(0, yQuarter, 0, 0, 1, 0), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
+    for (PatchPiece* piece : { &second.positive, &second.negative })
+    {
+        PatchPiece skinned = *piece;
+        for (GeomNode& node : skinned.nodes)
+            node.position = { 9.0f, 9.0f, 9.0f };
+        std::string detail;
+        CHECK(SkinPatchPiece(skinned, pose, nullptr, &detail));
+        CHECK(MaxNodeDelta(skinned, *piece) <= 1e-5 * ComputePieceRadius(*piece));
+    }
+    // A cut node of the second generation depends on at most three origin nodes.
+    for (const GeomNode& node : second.positive.nodes)
+        CHECK(node.origin.node[0] != kNoNode);
+    // New pose: the second-generation piece moves with the same matrices.
+    PatchPiece moved = second.positive;
+    CHECK(SkinPatchPiece(moved, PoseB()));
+    CHECK(MaxNodeDelta(moved, second.positive) > 0.1);
+}
+
+// Bad input is refused without touching the piece.
+static void TestSkinRefusesBadInput()
+{
+    PatchPiece box = MakeSkinnedBox(PoseA());
+    const PatchPiece before = box;
+    std::string detail;
+    CHECK(!SkinPatchPiece(box, IdentitySlots(1), nullptr, &detail));           // joint 1 has no matrix
+    CHECK(detail.find("joint") != std::string::npos && MaxNodeDelta(box, before) == 0.0);
+
+    CHECK(!SkinPatchPiece(box, SlotMatrices(), nullptr, &detail));             // no slots at all
+    CHECK(detail.find("slot") != std::string::npos && MaxNodeDelta(box, before) == 0.0);
+
+    PatchPiece badOrigin = before;
+    badOrigin.nodes[2].origin.node[0] = 99;
+    CHECK(!SkinPatchPiece(badOrigin, PoseA(), nullptr, &detail));
+    CHECK(detail.find("origin") != std::string::npos && MaxNodeDelta(badOrigin, before) == 0.0);
+}
+
 // ---------------------------------------------------------------- main
 
 int main()
@@ -1173,6 +1447,15 @@ int main()
     TestCapWithHole();
     TestCapOfConcaveLoop();
     TestRecut();
+
+    TestSkinIdentity();
+    TestSkinSingleJoint();
+    TestSkinTwoJointBlend();
+    TestSkinMatchesSliceNodes();
+    TestSkinKeepsSeamsAndCapsTogether();
+    TestSkinRefusesSkinState();
+    TestSkinAfterTwoCuts();
+    TestSkinRefusesBadInput();
 
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures;

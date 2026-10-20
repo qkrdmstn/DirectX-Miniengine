@@ -51,6 +51,9 @@
     <ClInclude Include="Geometry\PatchWeld.h">
       <Filter>Geometry</Filter>
     </ClInclude>
+    <ClInclude Include="Geometry\PieceSkinning.h">
+      <Filter>Geometry</Filter>
+    </ClInclude>
     <ClInclude Include="Geometry\PlaneSlicer.h">
       <Filter>Geometry</Filter>
     </ClInclude>
@@ -81,6 +84,9 @@
       <Filter>Geometry</Filter>
     </ClCompile>
     <ClCompile Include="Geometry\PatchWeld.cpp">
+      <Filter>Geometry</Filter>
+    </ClCompile>
+    <ClCompile Include="Geometry\PieceSkinning.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
     <ClCompile Include="Geometry\PlaneSlicer.cpp">

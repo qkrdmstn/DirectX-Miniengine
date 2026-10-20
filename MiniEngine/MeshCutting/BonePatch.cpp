@@ -100,6 +100,60 @@ namespace MeshCutting
         }
     }
 
+    void MakeSlotMatrices(const Matrix4& meshWorld, const Joint* paletteJoints, uint32_t jointCount,
+        std::vector<XMFLOAT4X4>& out)
+    {
+        out.resize(jointCount);
+        for (uint32_t j = 0; j < jointCount; ++j)
+            XMStoreFloat4x4(&out[j], XMMATRIX(meshWorld * paletteJoints[j].posXform));
+    }
+
+    bool BuildSkinMatrices(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
+        std::vector<std::vector<XMFLOAT4X4>>& slotMatrices, std::string* error)
+    {
+        const Joint* skeleton = instance.GetSkeleton();
+        const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
+        if (instance.GetModel() != &model || skeleton == nullptr || nodeWorld == nullptr)
+            return Fail(error, "Instance has no pose data for this model");
+        if (source.paletteId >= model.m_SkinPalettes.size())
+            return Fail(error, "Skin palette out of range");
+        const SkinPalette& palette = model.m_SkinPalettes[source.paletteId];
+
+        slotMatrices.resize(source.meshes.size());
+        for (size_t slot = 0; slot < source.meshes.size(); ++slot)
+        {
+            const BonePatchMesh& mesh = source.meshes[slot];
+            if (mesh.worldMatrixIndex >= model.m_NumNodes || mesh.startJoint != palette.startJoint)
+                return Fail(error, "Patch mesh does not match the skin palette");
+            MakeSlotMatrices(nodeWorld[mesh.worldMatrixIndex], skeleton + palette.startJoint, palette.numJoints, slotMatrices[slot]);
+        }
+        return true;
+    }
+
+    bool ComputePoseJointWorld(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
+        std::vector<Matrix4>& out, std::string* error)
+    {
+        const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
+        if (instance.GetModel() != &model || nodeWorld == nullptr || source.meshes.empty())
+            return Fail(error, "Instance has no pose data for this patch");
+        if (source.paletteId >= model.m_SkinPalettes.size())
+            return Fail(error, "Skin palette out of range");
+        const SkinPalette& palette = model.m_SkinPalettes[source.paletteId];
+        if (source.meshes[0].worldMatrixIndex >= model.m_NumNodes)
+            return Fail(error, "Patch mesh world matrix index out of range");
+
+        const Matrix4& world = nodeWorld[source.meshes[0].worldMatrixIndex];
+        out.resize(palette.numJoints);
+        for (uint32_t j = 0; j < palette.numJoints; ++j)
+        {
+            const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
+            if (jointNode >= model.m_NumNodes)
+                return Fail(error, "Joint node index out of range");
+            out[j] = world * nodeWorld[jointNode];
+        }
+        return true;
+    }
+
     bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, uint32_t jointIndex, float minWeight,
         ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
@@ -182,6 +236,8 @@ namespace MeshCutting
 
             const Matrix4& world = nodeWorld[srcMesh.meshCBV];
             const Matrix3 worldIT = InverseTranspose(world.Get3x3());
+            std::vector<XMFLOAT4X4> slotMatrices;
+            MakeSlotMatrices(world, skeleton + srcMesh.startJoint, palette.numJoints, slotMatrices);
             const uint32_t meshSlot = uint32_t(source.meshes.size());
             bool meshUsed = false;
 
@@ -195,25 +251,24 @@ namespace MeshCutting
 
                 const DecodedVertex v = Decode(vb + size_t(vertex) * layout.stride, layout);
 
-                // Same blend as DefaultVS: sum of weighted joint matrices, then the mesh world.
-                XMVECTOR pos = XMVectorZero();
+                // Same blend as DefaultVS (weighted joint transforms, mesh world included). The
+                // position uses the shared SkinPoint, so later per-frame skinning agrees with it.
+                XMFLOAT3 posed;
+                XMStoreFloat3(&posed, SkinPoint(slotMatrices.data(), uint32_t(slotMatrices.size()), v.joints, v.weights, 4, v.position));
                 XMVECTOR nrm = XMVectorZero();
-                const Vector4 bindPos(v.position.x, v.position.y, v.position.z, 1.0f);
                 const Vector3 bindNrm(v.normal.x, v.normal.y, v.normal.z);
                 for (int i = 0; i < 4; ++i)
                 {
                     if (v.weights[i] <= 0.0f)
                         continue;
                     const Joint& joint = skeleton[srcMesh.startJoint + v.joints[i]];
-                    pos = XMVectorMultiplyAdd(joint.posXform * bindPos, XMVectorReplicate(v.weights[i]), pos);
                     nrm = XMVectorMultiplyAdd(joint.nrmXform * bindNrm, XMVectorReplicate(v.weights[i]), nrm);
                 }
-                const Vector4 posed = world * Vector4(pos);
                 const Vector3 posedNormal = Normalize(worldIT * Vector3(nrm));
 
                 const float influence = Influence(v, jointIndex);
                 ProceduralVertex out;
-                out.position = { float(posed.GetX()), float(posed.GetY()), float(posed.GetZ()) };
+                out.position = posed;
                 out.normal = { float(posedNormal.GetX()), float(posedNormal.GetY()), float(posedNormal.GetZ()) };
                 out.uv = v.uv;
                 // Blue at no influence to red at full influence, like the H weight view.

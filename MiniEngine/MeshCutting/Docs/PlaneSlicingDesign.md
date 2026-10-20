@@ -334,3 +334,14 @@ MeshCutting/
 - **노드 용접**: -0과 +0은 같은 위치로 본다. UnweldedSeam 판정은 같은 슬롯의 바인드 위치 쌍, 또는 다른 슬롯의 포즈 위치 쌍이 겹치는 경계 에지다.
 - **패치 추출은 선택 본만**(자손 제외). 분리 단위(본 + 자손)는 4주차. `mixedOutsideTriangles`로 양쪽에 걸친 삼각형 수를 보고한다.
 - **ModelViewer 키**: T 슬라이스, [ ] 오프셋, , . 와 ; ' 기울기, R 초기화, G 경계 표시, M cap 켜기/끄기, L 후면 컬링, Z section tint.
+
+## 12. 구현 노트 (2-5: piece별 매 프레임 스키닝, 상태 0)
+
+- **스키닝 (`Geometry/PieceSkinning.*`)**: `SkinPatchPiece`는 `PatchPiece`와 meshSlot별 행렬 배열(`XMFLOAT4X4`, `mesh world * joint.posXform`)만 받는다. 원본 노드는 `Σ weight · M_joint · bindPosition`(joint 오름차순), 잘린 노드는 `Σ bary · LBS(origin node)`(사용 칸만, node 오름차순)로 위치를 갱신한다. 본 ID와 웨이트는 보간하지 않는다. 원본 노드의 LBS는 호출마다 한 번만 계산해 재사용한다. `skinStateId != 0`, 범위 밖 joint·slot·origin은 실패하고 piece는 바뀌지 않는다.
+- **cap 노드**: 현재 cap은 rim 노드를 공유하므로 cap 전용 노드는 없다(`SkinStats::capNodesSkipped == 0`을 테스트로 확인). Cap 종류 노드가 생기면 위치를 계산하지 않고 건너뛴다.
+- **추출과 같은 공식**: `ExtractBonePatch`의 위치 계산도 `SkinPoint`와 `MakeSlotMatrices`를 쓴다. 그래서 추출 시점 포즈의 패치와 나중에 스키닝한 패치는 같은 식에서 나온다. `SkinNode::meshSlot`은 `BonePatchSource::meshes`의 인덱스와 같은 값이다(`ExtractBonePatch`가 그 순서로 번호를 매김).
+- **렌더 갱신**: 위상은 그대로 두고 `UpdateRenderPositions`가 corner → node 위치만 복사해 `ProceduralMesh::UpdateVertices`로 올린다. **법선은 갱신하지 않는다**(현재 PS는 법선을 쓰지 않음). 조명을 쓰게 되면 piece별 법선 재계산이 필요하다.
+- **프레임 순서**: 입력 처리 → `ModelInstance::Update` → `UpdatePatchPose`(패치 스키닝, 평면 갱신, 필요하면 재슬라이스, piece 스키닝, 메시 갱신) → 렌더. 슬라이스는 이번 프레임 포즈로 스키닝된 패치에서 한다.
+- **평면은 본 로컬 공간에 고정**: 복사 시점에 선택 본의 로컬 프레임(점, 법선, 기울기 축 둘)을 저장하고, 매 프레임 현재 joint 행렬로 월드에 옮긴다. 오프셋·기울기의 의미는 그대로다.
+- **경계 디버그 튜브와 평면 표시**는 매 프레임 같은 위치를 따라가도록 다시 구워 정점만 갱신한다.
+- **한계**: 두 piece를 벌리는 방향은 자른 순간 평면 법선(월드)으로 고정이다. 재슬라이스가 실패하면 직전 성공 piece가 계속 스키닝되어 화면에 남는다.

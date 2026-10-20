@@ -117,6 +117,20 @@ namespace MeshCutting
         }
     }
 
+    bool UpdateRenderPositions(const PatchPiece& piece, std::vector<ProceduralVertex>& vertices)
+    {
+        if (vertices.size() != piece.corners.size())
+            return false;
+        for (size_t i = 0; i < vertices.size(); ++i)
+        {
+            if (piece.corners[i].node >= piece.nodes.size())
+                return false;
+        }
+        for (size_t i = 0; i < vertices.size(); ++i)
+            vertices[i].position = piece.nodes[piece.corners[i].node].position;
+        return true;
+    }
+
     void BakePlaneDebug(const SlicePlane& plane, float ringRadius, float tubeRadius, ProceduralMeshData& out)
     {
         out = ProceduralMeshData();

@@ -2,6 +2,7 @@
 
 #include "ProceduralMesh.h"
 #include "Geometry/PatchWeld.h"
+#include "Geometry/PieceSkinning.h"
 #include "VectorMath.h"
 #include <cstdint>
 #include <string>
@@ -9,6 +10,7 @@
 
 class Model;
 class ModelInstance;
+struct Joint;
 
 namespace MeshCutting
 {
@@ -67,6 +69,23 @@ namespace MeshCutting
     bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, uint32_t jointIndex, float minWeight,
         ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error = nullptr);
+
+    // Joint transforms of one mesh: out[j] = mesh world * skeleton[j].posXform for the palette's
+    // joints. Extraction and the per-frame follow-up use the same matrices and the same blend
+    // (Geometry/SkinPoint), so a patch posed at extraction time is exactly a patch skinned later.
+    void MakeSlotMatrices(const Math::Matrix4& meshWorld, const Joint* paletteJoints, uint32_t jointCount,
+        std::vector<DirectX::XMFLOAT4X4>& out);
+
+    // slotMatrices[meshSlot] for the patch's source meshes, from the instance's current pose
+    // (the pose of its last Update). meshSlot is the index into source.meshes, which is the
+    // meshSlot of every SkinNode (ExtractBonePatch numbers meshes in that order).
+    bool BuildSkinMatrices(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
+        std::vector<std::vector<DirectX::XMFLOAT4X4>>& slotMatrices, std::string* error = nullptr);
+
+    // World matrices of the palette joints at the instance's current pose, in the same space as
+    // BonePatchSource::poseJointWorld (the first source mesh's world * joint node world).
+    bool ComputePoseJointWorld(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
+        std::vector<Math::Matrix4>& out, std::string* error = nullptr);
 
     // Flattens an extraction result into the plain input of Geometry/BuildPatchPiece, so the
     // slicing code never sees Model or Core types. The two inputs must come from the same
