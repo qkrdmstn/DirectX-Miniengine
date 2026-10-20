@@ -178,11 +178,12 @@ void LoadIBLTextures()
 
 void ModelViewer::Startup(void)
 {
-    MotionBlur::Enable = true;
+    // MotionBlur::Enable = true;      // off: motion blur (the engine default is already false)
     TemporalEffects::EnableTAA = true;
     FXAA::Enable = false;
     PostEffects::EnableHDR = true;
-    PostEffects::EnableAdaptation = true;
+    // PostEffects::EnableAdaptation = true;
+    PostEffects::EnableAdaptation = false;  // adaptive exposure made the screen brighten and darken slightly
     SSAO::Enable = true;
 
     Renderer::Initialize();
