@@ -170,31 +170,78 @@ namespace MeshCutting
             outMesh, outSource, error);
     }
 
-    // 추출삼각형의 정점 중 하나라도 선택 관절의 가중치가 minWeight를 넘으면 삼각형을 복사한다.
-    // 자손 관절에만 영향을 받는 삼각형은 원본에 남긴다. 실제 분리 기능이 이 함수에 있는건 아니다.
-    // 인스턴스의 마지막 Update()에서 계산한 행렬로 자세를 적용, 결과 위치는 월드 좌표이므로, 그릴 때 주의해야 한다.
-    bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
-        uint32_t paletteId, const std::vector<uint32_t>& joints, float minWeight,
-        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
+    namespace
     {
-        // 입력 모델, 팔레트, 조인트 목록 검사
-        if (instance.GetModel() != &model)
-            return Fail(error, "Instance does not belong to the model");
-        if (paletteId >= model.m_SkinPalettes.size())
-            return Fail(error, "Skin palette out of range");
-        const SkinPalette& palette = model.m_SkinPalettes[paletteId];
-        if (!IsValidJointSet(joints, palette.numJoints))
-            return Fail(error, "Joint set is empty, unsorted or out of range for the palette");
-        if (model.m_GeometryCPU.empty())
-            return Fail(error, "Model has no CPU geometry copy");
-        const Joint* skeleton = instance.GetSkeleton();
-        const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
-        if (skeleton == nullptr || nodeWorld == nullptr)
-            return Fail(error, "Instance has no pose data");
-
-        // 선택 조인트들에 대한 자식 관계 확인
-        std::vector<uint8_t> inSubtree(palette.numJoints, 0);
+        // 검증을 마친 원본 메시 하나를 읽는 데 필요한 값을 묶은 것.
+        struct SourceMeshView
         {
+            VertexLayout layout;
+            const uint8_t* vb = nullptr;
+            const uint8_t* ib = nullptr;
+            uint32_t indexCount = 0;
+            uint32_t vertexCount = 0;
+            bool index32 = false;
+            uint32_t numJoints = 0;     // 메시가 쓰는 팔레트 joint 수
+        };
+
+        // 삼각형 하나의 가중치 판정 결과.
+        struct TriangleClass
+        {
+            bool selected = false;              // 정점 하나라도 joint 집합에 속한다
+            bool weightedInSubtree = false;     // 선택 joint의 자손(자신 포함)에 가중치가 있다
+            bool weightedOutside = false;       // 그 밖의 joint에 가중치가 있다
+        };
+
+        // 첫 기여 메시가 정한 자세 스냅샷의 기준 world.
+        struct PoseSnapshot
+        {
+            Matrix4 world = Matrix4(kIdentity);     // world of the mesh that defined poseJointWorld
+            bool have = false;
+        };
+
+        // 메시 하나를 복사하는 동안 쓰는 값: 스키닝 행렬, 노멀 변환, 원본 정점 -> 패치 정점 대응표.
+        struct MeshCopyState
+        {
+            MeshCopyState(const SourceMeshView& sourceView, uint32_t slot, const Joint* joints, uint32_t jointCount,
+                const Matrix4& world)
+                : view(sourceView), meshSlot(slot), paletteJoints(joints), worldIT(InverseTranspose(world.Get3x3()))
+            {
+                // 메시에 대한 스키닝 준비
+                MakeSlotMatrices(world, joints, jointCount, slotMatrices);
+            }
+
+            const SourceMeshView& view;
+            uint32_t meshSlot;
+            const Joint* paletteJoints;     // 이 메시 팔레트의 첫 joint
+            Matrix3 worldIT;
+            std::vector<XMFLOAT4X4> slotMatrices;
+            std::unordered_map<uint32_t, uint32_t> remap; // source vertex -> patch vertex
+        };
+
+        // 모델, 인스턴스, 팔레트, 조인트 목록, CPU 지오메트리, 자세 배열을 검사한다.
+        bool ValidateExtractInput(const Model& model, const ModelInstance& instance, uint32_t paletteId,
+            const std::vector<uint32_t>& joints, std::string* error)
+        {
+            if (instance.GetModel() != &model)
+                return Fail(error, "Instance does not belong to the model");
+            if (paletteId >= model.m_SkinPalettes.size())
+                return Fail(error, "Skin palette out of range");
+            const SkinPalette& palette = model.m_SkinPalettes[paletteId];
+            if (!IsValidJointSet(joints, palette.numJoints))
+                return Fail(error, "Joint set is empty, unsorted or out of range for the palette");
+            if (model.m_GeometryCPU.empty())
+                return Fail(error, "Model has no CPU geometry copy");
+            if (instance.GetSkeleton() == nullptr || instance.GetNodeWorldMatrices() == nullptr)
+                return Fail(error, "Instance has no pose data");
+            return true;
+        }
+
+        // 선택 joint 집합과 그 자손에 해당하는 팔레트 joint를 1로 표시한 배열을 만든다.
+        std::vector<uint8_t> MarkJointSubtree(const Model& model, const SkinPalette& palette,
+            const std::vector<uint32_t>& joints)
+        {
+            // 선택 조인트들에 대한 자식 관계 확인
+            std::vector<uint8_t> inSubtree(palette.numJoints, 0);
             std::unordered_map<uint32_t, uint32_t> nodeToJoint;
             for (uint32_t j = 0; j < palette.numJoints; ++j)
                 nodeToJoint.emplace(model.m_JointIndices[palette.startJoint + j], j);
@@ -213,29 +260,14 @@ namespace MeshCutting
                     node = model.m_NodeParents[node];
                 }
             }
+            return inSubtree;
         }
 
-        // 출력 형식
-        const std::vector<uint8_t>& geometry = model.m_GeometryCPU;
-        ProceduralMeshData mesh;
-        BonePatchSource source;
-        source.paletteId = paletteId;
-        source.jointIndex = joints.front();
-        source.joints = joints;
-        source.minWeight = minWeight;
-
-        Matrix4 poseWorld = Matrix4(kIdentity);     // world of the mesh that defined poseJointWorld
-        bool havePoseWorld = false;
-        const uint8_t* meshPtr = model.m_MeshData.get();
-        for (uint32_t meshIndex = 0; meshIndex < model.m_NumMeshes; ++meshIndex)
+        // 원본 메시의 버퍼 범위, 월드 행렬 번호, joint 수, 인덱스 포맷을 검사하고 읽기 위한 값을 채운다.
+        bool PrepareSourceMesh(const Model& model, const SkinPalette& palette, const Mesh& srcMesh,
+            SourceMeshView& out, std::string* error)
         {
-            const Mesh& srcMesh = *(const Mesh*)meshPtr;
-            meshPtr += sizeof(Mesh) + (srcMesh.numDraws - 1) * sizeof(Mesh::Draw);
-
-            if ((srcMesh.psoFlags & PSOFlags::kHasSkin) == 0 || srcMesh.numJoints == 0
-                || srcMesh.startJoint != palette.startJoint)
-                continue;
-
+            const std::vector<uint8_t>& geometry = model.m_GeometryCPU;
             const VertexLayout layout = ComputeLayout(srcMesh.psoFlags);
             if (layout.stride != srcMesh.vbStride)
                 return Fail(error, "Unexpected source vertex layout");
@@ -251,150 +283,216 @@ namespace MeshCutting
             if (!index32 && srcMesh.ibFormat != DXGI_FORMAT_R16_UINT)
                 return Fail(error, "Unsupported index format");
             const uint32_t indexBytes = index32 ? 4u : 2u;
-            const uint32_t indexCount = srcMesh.ibSize / indexBytes;
-            const uint32_t vertexCount = srcMesh.vbSize / layout.stride;
-            const uint8_t* vb = geometry.data() + srcMesh.vbOffset;
-            const uint8_t* ib = geometry.data() + srcMesh.ibOffset;
+            out.layout = layout;
+            out.index32 = index32;
+            out.indexCount = srcMesh.ibSize / indexBytes;
+            out.vertexCount = srcMesh.vbSize / layout.stride;
+            out.vb = geometry.data() + srcMesh.vbOffset;
+            out.ib = geometry.data() + srcMesh.ibOffset;
+            out.numJoints = srcMesh.numJoints;
+            return true;
+        }
 
-            // 메시에 대한 스키닝 준비
-            const Matrix4& world = nodeWorld[srcMesh.meshCBV];
-            const Matrix3 worldIT = InverseTranspose(world.Get3x3());
-            std::vector<XMFLOAT4X4> slotMatrices;
-            MakeSlotMatrices(world, skeleton + srcMesh.startJoint, palette.numJoints, slotMatrices);
-            const uint32_t meshSlot = uint32_t(source.meshes.size());
-            bool meshUsed = false;
-
-            std::unordered_map<uint32_t, uint32_t> remap; // source vertex -> patch vertex
-
-            // 정점 복사 람다 정점 하나를 패치에 추가하고 패치 정점 번호를 반환한다.
-            const auto addVertex = [&](uint32_t vertex) -> uint32_t
+        // Draw 안 i번째 인덱스부터 삼각형 하나의 원본 정점 번호 3개를 읽는다 (16/32비트 인덱스, baseVertex 적용).
+        bool ReadTriangle(const SourceMeshView& view, const Mesh::Draw& draw, uint32_t i, uint32_t tri[3],
+            std::string* error)
+        {
+            for (uint32_t k = 0; k < 3; ++k)
             {
-                const auto found = remap.find(vertex);
-                if (found != remap.end())
-                    return found->second;
-
-                const DecodedVertex v = Decode(vb + size_t(vertex) * layout.stride, layout);
-
-                // Same blend as DefaultVS (weighted joint transforms, mesh world included). The
-                // position uses the shared SkinPoint, so later per-frame skinning agrees with it.
-                XMFLOAT3 posed;
-                XMStoreFloat3(&posed, SkinPoint(slotMatrices.data(), uint32_t(slotMatrices.size()), v.joints, v.weights, 4, v.position));
-                XMVECTOR nrm = XMVectorZero();
-                const Vector3 bindNrm(v.normal.x, v.normal.y, v.normal.z);
-                for (int i = 0; i < 4; ++i)
+                const uint32_t at = draw.startIndex + i + k;
+                uint32_t index;
+                if (view.index32)
+                    std::memcpy(&index, view.ib + size_t(at) * 4, 4);
+                else
                 {
-                    if (v.weights[i] <= 0.0f)
-                        continue;
-                    const Joint& joint = skeleton[srcMesh.startJoint + v.joints[i]];
-                    nrm = XMVectorMultiplyAdd(joint.nrmXform * bindNrm, XMVectorReplicate(v.weights[i]), nrm);
+                    uint16_t index16;
+                    std::memcpy(&index16, view.ib + size_t(at) * 2, 2);
+                    index = index16;
                 }
-                const Vector3 posedNormal = Normalize(worldIT * Vector3(nrm));
+                tri[k] = draw.baseVertex + index;
+                if (tri[k] >= view.vertexCount)
+                    return Fail(error, "Index refers beyond the vertex buffer");
+            }
+            return true;
+        }
 
-                const float influence = JointSetInfluence(v.joints, v.weights, joints);
-                ProceduralVertex out;
-                out.position = posed;
-                out.normal = { float(posedNormal.GetX()), float(posedNormal.GetY()), float(posedNormal.GetZ()) };
-                out.uv = v.uv;
-                // Blue at no influence to red at full influence, like the H weight view.
-                out.color = { 0.15f + 0.85f * influence, 0.25f * (1.0f - influence), 1.0f - influence, 1.0f };
+        // 삼각형의 세 정점을 디코딩해 선택 여부와 선택 joint 자손 안팎의 가중치 존재 여부를 판정한다.
+        bool ClassifyTriangle(const SourceMeshView& view, const uint32_t tri[3], const std::vector<uint8_t>& inSubtree,
+            const std::vector<uint32_t>& joints, float minWeight, TriangleClass& out, std::string* error)
+        {
+            TriangleClass result;
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                const DecodedVertex v = Decode(view.vb + size_t(tri[k]) * view.layout.stride, view.layout);
+                for (int j = 0; j < 4; ++j)
+                {
+                    if (v.weights[j] <= 0.0f)
+                        continue;
+                    if (v.joints[j] >= view.numJoints)
+                        return Fail(error, "Vertex joint index exceeds the mesh palette");
+                    if (inSubtree[v.joints[j]])
+                        result.weightedInSubtree = true;
+                    else
+                        result.weightedOutside = true;
+                }
+                result.selected |= VertexInJointSet(v.joints, v.weights, joints, minWeight);
+            }
+            out = result;
+            return true;
+        }
 
-                BonePatchVertex skin;
-                skin.meshSlot = meshSlot;
-                skin.sourceVertex = vertex;
-                skin.position = v.position;
-                skin.normal = v.normal;
-                std::memcpy(skin.joints, v.joints, sizeof(skin.joints));
-                std::memcpy(skin.weights, v.weights, sizeof(skin.weights));
+        // 첫 기여 메시가 자세 스냅샷을 정한다. joint 행렬은 메시의 스키닝 공간에 있으므로, 메시 월드를 앞에 곱해
+        // 자세가 적용된 패치 정점과 같은 공간으로 옮긴다. 이후 기여 메시의 월드가 다르면 실패한다.
+        bool CapturePoseSnapshot(const Model& model, const SkinPalette& palette, const Matrix4* nodeWorld,
+            const Matrix4& world, PoseSnapshot& snapshot, std::vector<Matrix4>& poseJointWorld, std::string* error)
+        {
+            // The first mesh that really contributes triangles defines the pose
+            // snapshot: joint matrices live in the mesh's skinning space, so the mesh
+            // world is prepended to put them in the space of the posed patch vertices.
+            // A patch that mixes meshes with different world transforms has no single
+            // such space, so it is rejected.
+            if (poseJointWorld.empty())
+            {
+                poseJointWorld.reserve(palette.numJoints);
+                for (uint32_t j = 0; j < palette.numJoints; ++j)
+                {
+                    const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
+                    if (jointNode >= model.m_NumNodes)
+                        return Fail(error, "Joint node index out of range");
+                    poseJointWorld.push_back(world * nodeWorld[jointNode]);
+                }
+                snapshot.world = world;
+                snapshot.have = true;
+            }
+            else if (snapshot.have && std::memcmp(&snapshot.world, &world, sizeof(Matrix4)) != 0)
+                return Fail(error, "Patch spans meshes with different world transforms");
+            return true;
+        }
 
-                const uint32_t patchIndex = uint32_t(mesh.vertices.size());
-                mesh.vertices.push_back(out);
-                source.vertices.push_back(skin);
-                remap.emplace(vertex, patchIndex);
-                return patchIndex;
-            };
+        // 정점 하나를 패치에 추가하고 패치 정점 번호를 반환한다. 이미 복사한 정점이면 기존 번호를 돌려준다.
+        uint32_t CopyVertex(MeshCopyState& copy, uint32_t vertex, const std::vector<uint32_t>& joints,
+            ProceduralMeshData& mesh, BonePatchSource& source)
+        {
+            const auto found = copy.remap.find(vertex);
+            if (found != copy.remap.end())
+                return found->second;
+
+            const DecodedVertex v = Decode(copy.view.vb + size_t(vertex) * copy.view.layout.stride, copy.view.layout);
+
+            // Same blend as DefaultVS (weighted joint transforms, mesh world included). The
+            // position uses the shared SkinPoint, so later per-frame skinning agrees with it.
+            XMFLOAT3 posed;
+            XMStoreFloat3(&posed, SkinPoint(copy.slotMatrices.data(), uint32_t(copy.slotMatrices.size()), v.joints, v.weights, 4, v.position));
+            XMVECTOR nrm = XMVectorZero();
+            const Vector3 bindNrm(v.normal.x, v.normal.y, v.normal.z);
+            for (int i = 0; i < 4; ++i)
+            {
+                if (v.weights[i] <= 0.0f)
+                    continue;
+                const Joint& joint = copy.paletteJoints[v.joints[i]];
+                nrm = XMVectorMultiplyAdd(joint.nrmXform * bindNrm, XMVectorReplicate(v.weights[i]), nrm);
+            }
+            const Vector3 posedNormal = Normalize(copy.worldIT * Vector3(nrm));
+
+            const float influence = JointSetInfluence(v.joints, v.weights, joints);
+            ProceduralVertex out;
+            out.position = posed;
+            out.normal = { float(posedNormal.GetX()), float(posedNormal.GetY()), float(posedNormal.GetZ()) };
+            out.uv = v.uv;
+            // Blue at no influence to red at full influence, like the H weight view.
+            out.color = { 0.15f + 0.85f * influence, 0.25f * (1.0f - influence), 1.0f - influence, 1.0f };
+
+            BonePatchVertex skin;
+            skin.meshSlot = copy.meshSlot;
+            skin.sourceVertex = vertex;
+            skin.position = v.position;
+            skin.normal = v.normal;
+            std::memcpy(skin.joints, v.joints, sizeof(skin.joints));
+            std::memcpy(skin.weights, v.weights, sizeof(skin.weights));
+
+            const uint32_t patchIndex = uint32_t(mesh.vertices.size());
+            mesh.vertices.push_back(out);
+            source.vertices.push_back(skin);
+            copy.remap.emplace(vertex, patchIndex);
+            return patchIndex;
+        }
+    }
+
+    // 추출삼각형의 정점 중 하나라도 선택 관절의 가중치가 minWeight를 넘으면 삼각형을 복사한다.
+    // 자손 관절에만 영향을 받는 삼각형은 원본에 남긴다. 실제 분리 기능이 이 함수에 있는건 아니다.
+    // 인스턴스의 마지막 Update()에서 계산한 행렬로 자세를 적용, 결과 위치는 월드 좌표이므로, 그릴 때 주의해야 한다.
+    bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
+        uint32_t paletteId, const std::vector<uint32_t>& joints, float minWeight,
+        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
+    {
+        // 입력 모델, 팔레트, 조인트 목록 검사
+        if (!ValidateExtractInput(model, instance, paletteId, joints, error))
+            return false;
+        const SkinPalette& palette = model.m_SkinPalettes[paletteId];
+        const Joint* skeleton = instance.GetSkeleton();
+        const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
+
+        const std::vector<uint8_t> inSubtree = MarkJointSubtree(model, palette, joints);
+
+        // 출력 형식
+        ProceduralMeshData mesh;
+        BonePatchSource source;
+        source.paletteId = paletteId;
+        source.jointIndex = joints.front();
+        source.joints = joints;
+        source.minWeight = minWeight;
+
+        PoseSnapshot snapshot;
+        const uint8_t* meshPtr = model.m_MeshData.get();
+        for (uint32_t meshIndex = 0; meshIndex < model.m_NumMeshes; ++meshIndex)
+        {
+            const Mesh& srcMesh = *(const Mesh*)meshPtr;
+            meshPtr += sizeof(Mesh) + (srcMesh.numDraws - 1) * sizeof(Mesh::Draw);
+
+            if ((srcMesh.psoFlags & PSOFlags::kHasSkin) == 0 || srcMesh.numJoints == 0
+                || srcMesh.startJoint != palette.startJoint)
+                continue;
+
+            SourceMeshView view;
+            if (!PrepareSourceMesh(model, palette, srcMesh, view, error))
+                return false;
+
+            const Matrix4& world = nodeWorld[srcMesh.meshCBV];
+            MeshCopyState copy(view, uint32_t(source.meshes.size()), skeleton + srcMesh.startJoint, palette.numJoints, world);
+            bool meshUsed = false;
 
             // 각 삼각형 순회
             for (uint32_t drawIdx = 0; drawIdx < srcMesh.numDraws; ++drawIdx)
             {
                 const Mesh::Draw& draw = srcMesh.draw[drawIdx];
-                if (draw.primCount % 3 != 0 || draw.startIndex > indexCount
-                    || draw.primCount > indexCount - draw.startIndex)
+                if (draw.primCount % 3 != 0 || draw.startIndex > view.indexCount
+                    || draw.primCount > view.indexCount - draw.startIndex)
                     return Fail(error, "Draw range exceeds index data");
 
                 for (uint32_t i = 0; i < draw.primCount; i += 3)
                 {
                     uint32_t tri[3];
-                    for (uint32_t k = 0; k < 3; ++k)
-                    {
-                        const uint32_t at = draw.startIndex + i + k;
-                        uint32_t index;
-                        if (index32)
-                            std::memcpy(&index, ib + size_t(at) * 4, 4);
-                        else
-                        {
-                            uint16_t index16;
-                            std::memcpy(&index16, ib + size_t(at) * 2, 2);
-                            index = index16;
-                        }
-                        tri[k] = draw.baseVertex + index;
-                        if (tri[k] >= vertexCount)
-                            return Fail(error, "Index refers beyond the vertex buffer");
-                    }
+                    if (!ReadTriangle(view, draw, i, tri, error))
+                        return false;
 
-                    bool selected = false;
-                    bool weightedInSubtree = false;
-                    bool weightedOutside = false;
-                    for (uint32_t k = 0; k < 3; ++k)
+                    TriangleClass triangle;
+                    if (!ClassifyTriangle(view, tri, inSubtree, joints, minWeight, triangle, error))
+                        return false;
+                    if (!triangle.selected)
                     {
-                        const DecodedVertex v = Decode(vb + size_t(tri[k]) * layout.stride, layout);
-                        for (int j = 0; j < 4; ++j)
-                        {
-                            if (v.weights[j] <= 0.0f)
-                                continue;
-                            if (v.joints[j] >= srcMesh.numJoints)
-                                return Fail(error, "Vertex joint index exceeds the mesh palette");
-                            if (inSubtree[v.joints[j]])
-                                weightedInSubtree = true;
-                            else
-                                weightedOutside = true;
-                        }
-                        selected |= VertexInJointSet(v.joints, v.weights, joints, minWeight);
-                    }
-                    if (!selected)
-                    {
-                        if (weightedInSubtree && weightedOutside)
+                        if (triangle.weightedInSubtree && triangle.weightedOutside)
                             ++source.mixedOutsideTriangles;
                         continue;
                     }
 
-                    if (!meshUsed)
-                    {
-                        // The first mesh that really contributes triangles defines the pose
-                        // snapshot: joint matrices live in the mesh's skinning space, so the mesh
-                        // world is prepended to put them in the space of the posed patch vertices.
-                        // A patch that mixes meshes with different world transforms has no single
-                        // such space, so it is rejected.
-                        if (source.poseJointWorld.empty())
-                        {
-                            source.poseJointWorld.reserve(palette.numJoints);
-                            for (uint32_t j = 0; j < palette.numJoints; ++j)
-                            {
-                                const uint32_t jointNode = model.m_JointIndices[palette.startJoint + j];
-                                if (jointNode >= model.m_NumNodes)
-                                    return Fail(error, "Joint node index out of range");
-                                source.poseJointWorld.push_back(world * nodeWorld[jointNode]);
-                            }
-                            poseWorld = world;
-                            havePoseWorld = true;
-                        }
-                        else if (havePoseWorld && std::memcmp(&poseWorld, &world, sizeof(Matrix4)) != 0)
-                            return Fail(error, "Patch spans meshes with different world transforms");
-                    }
+                    if (!meshUsed
+                        && !CapturePoseSnapshot(model, palette, nodeWorld, world, snapshot, source.poseJointWorld, error))
+                        return false;
 
                     // 삼각형에 대한 정점 추가
                     for (uint32_t k = 0; k < 3; ++k)
-                        mesh.indices.push_back(addVertex(tri[k]));
-                    source.triangles.push_back({ meshSlot, drawIdx, i / 3 });
+                        mesh.indices.push_back(CopyVertex(copy, tri[k], joints, mesh, source));
+                    source.triangles.push_back({ copy.meshSlot, drawIdx, i / 3 });
                     meshUsed = true;
                 }
             }
