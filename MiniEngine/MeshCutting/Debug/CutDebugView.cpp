@@ -1,7 +1,7 @@
 #include "../pch.h"
 #include "CutDebugView.h"
 #include "../Runtime/CutController.h"
-#include "../Geometry/RenderBake.h"
+#include "../Rendering/RenderBake.h"
 #include "BufferManager.h"
 #include "CommandContext.h"
 #include "TextRenderer.h"
@@ -47,6 +47,47 @@ namespace MeshCutting
             }
         }
 
+        // The cut plane as thin tubes: the rectangle border and a few cross lines in color, plus a white
+        // arrow along the normal. out is cleared.
+        void BakePlaneDebug(const CutPlane::Frame& frame, float tubeRadius, const DirectX::XMFLOAT4& color,
+            ProceduralMeshData& out)
+        {
+            out = ProceduralMeshData();
+            const DirectX::XMFLOAT4 arrowColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+            const float hx = frame.halfExtents.x, hy = frame.halfExtents.y;
+            const auto at = [&](float a, float b, float c)
+            {
+                return DirectX::XMFLOAT3(frame.center.x + a * frame.axisU.x + b * frame.axisV.x + c * frame.normal.x,
+                    frame.center.y + a * frame.axisU.y + b * frame.axisV.y + c * frame.normal.y,
+                    frame.center.z + a * frame.axisU.z + b * frame.axisV.z + c * frame.normal.z);
+            };
+
+            // The rectangle border.
+            AppendDebugSegment(out, at(-hx, -hy, 0.0f), at(hx, -hy, 0.0f), tubeRadius, color);
+            AppendDebugSegment(out, at(hx, -hy, 0.0f), at(hx, hy, 0.0f), tubeRadius, color);
+            AppendDebugSegment(out, at(hx, hy, 0.0f), at(-hx, hy, 0.0f), tubeRadius, color);
+            AppendDebugSegment(out, at(-hx, hy, 0.0f), at(-hx, -hy, 0.0f), tubeRadius, color);
+
+            // Cross lines inside: the two center lines and one at half the way to each side, thinner.
+            const float fractions[3] = { -0.5f, 0.0f, 0.5f };
+            for (float f : fractions)
+            {
+                AppendDebugSegment(out, at(-hx, f * hy, 0.0f), at(hx, f * hy, 0.0f), tubeRadius * 0.5f, color);
+                AppendDebugSegment(out, at(f * hx, -hy, 0.0f), at(f * hx, hy, 0.0f), tubeRadius * 0.5f, color);
+            }
+
+            // The arrow points to the positive side (the side the plane normal points to).
+            const float length = std::min(hx, hy) * 0.7f;
+            const float head = length * 0.15f;
+            AppendDebugSegment(out, at(0.0f, 0.0f, 0.0f), at(0.0f, 0.0f, length), tubeRadius, arrowColor);
+            AppendDebugSegment(out, at(0.0f, 0.0f, length), at(head, 0.0f, length - 2.0f * head), tubeRadius, arrowColor);
+            AppendDebugSegment(out, at(0.0f, 0.0f, length), at(-head, 0.0f, length - 2.0f * head), tubeRadius, arrowColor);
+            AppendDebugSegment(out, at(0.0f, 0.0f, length), at(0.0f, head, length - 2.0f * head), tubeRadius, arrowColor);
+            AppendDebugSegment(out, at(0.0f, 0.0f, length), at(0.0f, -head, length - 2.0f * head), tubeRadius, arrowColor);
+            if (!out.indices.empty())
+                out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
+        }
+
         const wchar_t* ToolName(GizmoTool tool)
         {
             switch (tool)
@@ -72,12 +113,9 @@ namespace MeshCutting
         return L"Debug";
     }
 
-    void CutDebugView::SetGizmo(const GizmoView& view, GizmoTool tool, GizmoHandle hovered, GizmoHandle active)
+    void CutDebugView::SetGizmoView(const GizmoView& view)
     {
         m_GizmoView = view;
-        m_GizmoTool = tool;
-        m_GizmoHovered = hovered;
-        m_GizmoActive = active;
         m_HaveGizmoView = true;
     }
 
@@ -137,7 +175,7 @@ namespace MeshCutting
         if (cut.PlaneEditing() && cut.PlaneValid())
         {
             ProceduralMeshData planeMesh;
-            BakeCutPlaneDebug(cut.PlaneFrame(), cut.ModelRadius() * 0.006f, PlaneColor(cut), planeMesh);
+            BakePlaneDebug(cut.GetPlane().GetFrame(), cut.ModelRadius() * 0.006f, PlaneColor(cut), planeMesh);
             ReplaceOrUpdate(m_PlaneDebug, std::move(planeMesh));
         }
         else if (!m_PlaneDebug.GetData().vertices.empty())
@@ -170,10 +208,10 @@ namespace MeshCutting
             m_SegmentDebug.Clear();
 
         // The gizmo follows the plane; it is rebuilt every frame because its size depends on the camera.
-        if (m_HaveGizmoView && m_GizmoTool != GizmoTool::Hidden && cut.PlaneEditing() && cut.PlaneValid())
+        if (m_HaveGizmoView && cut.GetPlane().GetGizmoTool() != GizmoTool::Hidden && cut.PlaneEditing() && cut.PlaneValid())
         {
             ProceduralMeshData gizmo;
-            BakeGizmo(m_GizmoView, cut.Plane(), m_GizmoTool, m_GizmoHovered, m_GizmoActive, gizmo);
+            cut.GetPlane().BakeGizmo(m_GizmoView, gizmo);
             ReplaceOrUpdate(m_GizmoMesh, std::move(gizmo));
         }
         else if (!m_GizmoMesh.GetData().vertices.empty())
@@ -273,7 +311,7 @@ namespace MeshCutting
     void CutDebugView::DrawUI(TextContext& text, const CutController& cut, const std::function<std::wstring(uint32_t)>& jointName) const
     {
         text.DrawFormattedString(L"Debug mode %ls (T)   Tool: %ls (W/E/R/Q)   Render: %ls (V)\n",
-            cut.PlaneEditing() ? L"ON" : L"off", ToolName(m_GizmoTool), RenderModeName(m_RenderMode));
+            cut.PlaneEditing() ? L"ON" : L"off", ToolName(cut.GetPlane().GetGizmoTool()), RenderModeName(m_RenderMode));
 
         if (cut.PlaneEditing())
         {

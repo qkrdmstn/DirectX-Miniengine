@@ -44,13 +44,12 @@ namespace MeshCutting
         return m_Candidate.cutJoints.front();
     }
 
-    void CutController::SetPlane(const CutPlane& plane)
+    bool CutController::UpdateGizmo(const GizmoView& view, const GizmoInput& input)
     {
-        if (!m_PlaneValid)
-            return;
-        m_Plane = plane;
-        ClampExtents(m_Plane, MinExtent(), MaxExtent());
+        if (!m_PlaneValid || !m_Plane.UpdateGizmo(view, input))
+            return false;
         m_Preview.dirty = true;
+        return true;
     }
 
     // Without a patch there is nothing to cut, so a request is ignored.
@@ -111,8 +110,8 @@ namespace MeshCutting
         }
         m_Candidate.error.clear();
 
-        PickSegments(m_Candidate.skeleton, MakeFrame(m_Plane), m_Candidate.hits);
-        m_Candidate.cutJoints = MeshCutting::CutJoints(m_Candidate.hits);
+        m_Plane.PickSegments(m_Candidate.skeleton, m_Candidate.hits);
+        m_Candidate.cutJoints = CutPlane::CutJoints(m_Candidate.hits);
         if (m_Candidate.haveAttempt && m_Candidate.cutJoints == m_Candidate.attemptJoints)
             return;
         m_Candidate.haveAttempt = true;
@@ -171,7 +170,11 @@ namespace MeshCutting
         const auto skin = [&](PatchPiece& piece, const std::vector<std::vector<DirectX::XMFLOAT4X4>>& matrices)
         {
             const int64_t start = SystemTime::GetCurrentTick();
-            const bool ok = SkinPatchPiece(piece, matrices, nullptr, &error);
+            bool ok = false;
+            if (piece.skin)
+                ok = piece.skin->Apply(piece, matrices, nullptr, &error);
+            else
+                error = "piece has no skin";
             skinTicks += SystemTime::GetCurrentTick() - start;
             return ok;
         };
@@ -252,12 +255,9 @@ namespace MeshCutting
         if (!(m_ModelRadius > 0.0f))
             m_ModelRadius = 1.0f;
 
-        m_Plane = CutPlane();
-        m_Plane.center = { float(center.GetX()), float(center.GetY()), float(center.GetZ()) };
-        // Local +Z becomes world +Y: a quarter turn about X (Z -> -Y), so turn by -90 degrees.
-        DirectX::XMStoreFloat4(&m_Plane.rotation, DirectX::XMQuaternionRotationAxis(DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), -DirectX::XM_PIDIV2));
-        m_Plane.halfExtents = { m_ModelRadius * 0.5f, m_ModelRadius * 0.5f };
-        ClampExtents(m_Plane, MinExtent(), MaxExtent());
+        const GizmoTool tool = m_Plane.GetGizmoTool();      // the tool the user chose stays
+        m_Plane = CutPlane::MakeHorizontal({ float(center.GetX()), float(center.GetY()), float(center.GetZ()) }, m_ModelRadius);
+        m_Plane.SetGizmoTool(tool);
         m_PlaneValid = true;
         m_Preview.dirty = true;
     }
@@ -285,13 +285,12 @@ namespace MeshCutting
     // detail are filled, like SlicePatch.
     SliceStatus CutController::SliceWithPlane(SliceResult& result)
     {
-        const CutPlaneFrame frame = MakeFrame(m_Plane);
-        const SliceStatus status = SlicePatch(m_Patch.piece, ToSlicePlane(frame), 1, MakeSliceOptions(), result);
+        const SliceStatus status = SlicePatch(m_Patch.piece, m_Plane.ToSlicePlane(), 1, MakeSliceOptions(), result);
         if (status != SliceStatus::Ok)
             return status;
 
         std::string detail;
-        if (!LoopsInsidePlane(frame, result.positive, result.loops, m_ModelRadius * 0.01f, &detail))
+        if (!m_Plane.ContainsLoops(result.positive, result.loops, m_ModelRadius * 0.01f, &detail))
         {
             result = SliceResult();
             result.status = SliceStatus::LoopOutsidePlane;
@@ -326,7 +325,7 @@ namespace MeshCutting
             m_Confirmed.info.clear();
             return false;
         }
-        const SlicePlane plane = ToSlicePlane(MakeFrame(m_Plane));
+        const SlicePlane plane = m_Plane.ToSlicePlane();
 
         SliceResult result;
         const int64_t start = SystemTime::GetCurrentTick();
@@ -352,9 +351,9 @@ namespace MeshCutting
         ++m_Confirmed.generation;
         ClearPreview();     // what the preview showed is now the result
 
-        const double original = TotalArea(m_Patch.piece, FaceKind::Surface);
-        const double positive = TotalArea(result.positive, FaceKind::Surface);
-        const double negative = TotalArea(result.negative, FaceKind::Surface);
+        const double original = TotalArea(m_Patch.piece, PatchFaceKind::Surface);
+        const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
+        const double negative = TotalArea(result.negative, PatchFaceKind::Surface);
         wchar_t info[200];
         swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", result.loops.size(), result.positive.faces.size(),
             result.negative.faces.size(), positive + negative - original);

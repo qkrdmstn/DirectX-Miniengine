@@ -1,21 +1,17 @@
-// Standalone tests for the slicing pipeline (Geometry/) and the pure part of the plane gizmo
-// (Debug/PlaneGizmo). No D3D12 device is needed.
+﻿// Standalone tests for the slicing pipeline (Geometry/) and the pure part of the plane gizmo
+// (Geometry/CutPlaneGizmo.cpp). No D3D12 device is needed.
 //
 // Build and run from a Visual Studio developer prompt in MiniEngine/MeshCutting:
 //   cl /nologo /EHsc /std:c++14 /W4 /MDd /Fo<outdir>\ /Fe<outdir>\PlaneSlicerTests.exe
-//      tests\PlaneSlicerTests.cpp Geometry\*.cpp Debug\PlaneGizmo.cpp ProceduralMesh.cpp
+//      tests\PlaneSlicerTests.cpp Geometry\*.cpp Rendering\RenderBake.cpp ProceduralMesh.cpp
 //   <outdir>\PlaneSlicerTests.exe
 // Keep <outdir> outside the repository. The exit code is the number of failed checks.
 
-#include "../Debug/PlaneGizmo.h"
 #include "../Geometry/CutPlane.h"
-#include "../Geometry/JointSet.h"
-#include "../Geometry/PatchGeometry.h"
-#include "../Geometry/PatchWeld.h"
-#include "../Geometry/PieceSkinning.h"
-#include "../Geometry/PlaneSlicer.h"
-#include "../Geometry/SegmentPick.h"
-#include "../Geometry/RenderBake.h"
+#include "../Geometry/Patch.h"
+#include "../Geometry/Skinning.h"
+#include "../Geometry/Slice.h"
+#include "../Rendering/RenderBake.h"
 #include "../ProceduralMesh.h"
 
 #include <algorithm>
@@ -68,33 +64,46 @@ static Tri OutwardTri(const std::vector<XMFLOAT3>& p, Tri t, const XMFLOAT3& cen
     return t;
 }
 
+// piece의 스킨 정점 표를 바꾼다 (Skinning은 읽기 전용이라 새로 만들어 끼운다).
+static void SetSkinVertices(PatchPiece& piece, std::vector<SkinVertex> vertices)
+{
+    piece.skin = std::make_shared<const Skinning>(std::move(vertices));
+}
+
+static std::vector<SkinVertex> GetSkinVertices(const PatchPiece& piece)
+{
+    return piece.skin ? piece.skin->GetVertices() : std::vector<SkinVertex>();
+}
+
 // One node and one render corner per position, identity skin.
 static PatchPiece MakePiece(const std::vector<XMFLOAT3>& positions, const std::vector<Tri>& tris)
 {
     PatchPiece piece;
+    std::vector<SkinVertex> skinVertices;
     for (size_t i = 0; i < positions.size(); ++i)
     {
-        SkinNode skin;
+        SkinVertex skin;
         skin.bindPosition = positions[i];
         skin.jointCount = 1;
         skin.joints[0] = 0;
         skin.weights[0] = 1.0f;
-        piece.originNodes.push_back(skin);
+        skinVertices.push_back(skin);
 
-        GeomNode node;
-        node.origin.node[0] = uint32_t(i);
+        PatchNode node;
+        node.origin.skinVertex[0] = uint32_t(i);
         node.origin.bary[0] = 1.0f;
         node.position = positions[i];
         piece.nodes.push_back(node);
 
-        RenderCorner corner;
+        PatchCorner corner;
         corner.node = uint32_t(i);
         corner.uv = { positions[i].x, positions[i].z };
         piece.corners.push_back(corner);
     }
+    SetSkinVertices(piece, skinVertices);
     for (size_t i = 0; i < tris.size(); ++i)
     {
-        Face face;
+        PatchFace face;
         for (int k = 0; k < 3; ++k)
             face.corner[k] = tris[i][k];
         face.sourceTriangle = uint32_t(i);
@@ -104,9 +113,9 @@ static PatchPiece MakePiece(const std::vector<XMFLOAT3>& positions, const std::v
 }
 
 // Tags every boundary edge of a hand-built piece the way the weld step does for open patches.
-static void TagOpenEdges(PatchPiece& piece, EdgeKind kind)
+static void TagOpenEdges(PatchPiece& piece, PatchEdgeKind kind)
 {
-    EdgeUsageMap usage;
+    PatchEdgeUsageMap usage;
     CollectEdgeUsage(piece, usage);
     for (const auto& entry : usage)
         if (entry.second.count == 1)
@@ -182,12 +191,12 @@ static WeldInput MakeBoxWeldInput()
         v.weights[0] = 1.0f;
         in.vertices.push_back(v);
     }
-    for (const Face& f : box.faces)
+    for (const PatchFace& f : box.faces)
         in.indices.insert(in.indices.end(), { f.corner[0], f.corner[1], f.corner[2] });
     return in;
 }
 
-static uint32_t CountKind(const PatchPiece& piece, EdgeKind kind)
+static uint32_t CountKind(const PatchPiece& piece, PatchEdgeKind kind)
 {
     uint32_t n = 0;
     for (const auto& entry : piece.boundary)
@@ -207,7 +216,7 @@ static void TestWeldBox()
     CHECK_STATUS(status, SliceStatus::Ok, detail);
     CHECK(stats.corners == 8 && stats.nodes == 8 && stats.faces == 12);
     CHECK(stats.boundaryEdges == 0 && piece.boundary.empty());
-    CHECK(piece.originNodes.size() == 8 && piece.nodes[3].origin.node[0] == 3 && piece.nodes[3].origin.bary[0] == 1.0f);
+    CHECK(piece.skin->GetVertices().size() == 8 && piece.nodes[3].origin.skinVertex[0] == 3 && piece.nodes[3].origin.bary[0] == 1.0f);
     CHECK(piece.faces[5].sourceTriangle == 5);
 }
 
@@ -223,7 +232,7 @@ static void TestWeldUvSeamTube()
     CHECK(stats.positionNodes == 16 && stats.skinSplitPositions == 0);
     CHECK(stats.unweldedSeamEdges == 0);
     CHECK(stats.replacementEdges == 16);        // 8 bottom + 8 top rim edges
-    CHECK(CountKind(piece, EdgeKind::Replacement) == 16);
+    CHECK(CountKind(piece, PatchEdgeKind::Replacement) == 16);
     // The two seam corners keep their own UVs but share one node (and so one position).
     CHECK(piece.corners[0].node == piece.corners[8].node);
     CHECK(piece.corners[0].uv.x == 0.0f && piece.corners[8].uv.x == 1.0f);
@@ -240,7 +249,7 @@ static void TestWeldSkinSplitSeam()
     CHECK(stats.corners == 18 && stats.nodes == 18);
     CHECK(stats.positionNodes == 16 && stats.skinSplitPositions == 2);
     CHECK(stats.unweldedSeamEdges == 2);        // the vertical edge on each side of the seam
-    CHECK(CountKind(piece, EdgeKind::UnweldedSeam) == 2);
+    CHECK(CountKind(piece, PatchEdgeKind::UnweldedSeam) == 2);
     CHECK(stats.replacementEdges == 16);
 }
 
@@ -291,13 +300,13 @@ static void TestInputRejects()
     badOrigin.nodes[3].origin.bary[0] = 0.5f;
     CHECK_STATUS(ValidatePatchPiece(badOrigin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
 
-    PatchPiece badOriginNode = good;
-    badOriginNode.nodes[3].origin.node[0] = 99;
-    CHECK_STATUS(ValidatePatchPiece(badOriginNode, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
+    PatchPiece badSkinVertex = good;
+    badSkinVertex.nodes[3].origin.skinVertex[0] = 99;
+    CHECK_STATUS(ValidatePatchPiece(badSkinVertex, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
 
     PatchPiece unsortedOrigin = good;
-    unsortedOrigin.nodes[3].origin.node[0] = 5;
-    unsortedOrigin.nodes[3].origin.node[1] = 3;
+    unsortedOrigin.nodes[3].origin.skinVertex[0] = 5;
+    unsortedOrigin.nodes[3].origin.skinVertex[1] = 3;
     unsortedOrigin.nodes[3].origin.bary[0] = 0.5f;
     unsortedOrigin.nodes[3].origin.bary[1] = 0.5f;
     CHECK_STATUS(ValidatePatchPiece(unsortedOrigin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
@@ -323,12 +332,14 @@ static void TestInputRejects()
     PatchPiece fin = good;
     fin.nodes.push_back(fin.nodes[0]);
     fin.nodes.back().position = { 0.0f, 1.0f, -3.0f };
-    fin.nodes.back().origin.node[0] = 8;
-    fin.originNodes.push_back(fin.originNodes[0]);
-    RenderCorner extra;
+    fin.nodes.back().origin.skinVertex[0] = 8;
+    std::vector<SkinVertex> finSkin = GetSkinVertices(fin);
+    finSkin.push_back(finSkin[0]);
+    SetSkinVertices(fin, finSkin);
+    PatchCorner extra;
     extra.node = 8;
     fin.corners.push_back(extra);
-    Face fan;
+    PatchFace fan;
     fan.corner[0] = 0; fan.corner[1] = 1; fan.corner[2] = 8;   // edge 0-1 already has two faces
     fin.faces.push_back(fan);
     CHECK_STATUS(ValidatePatchPiece(fin, kDefaultEpsilonScale, &detail), SliceStatus::NonManifoldInput, detail);
@@ -348,9 +359,9 @@ static void TestUntaggedBoundaryIsRejected()
     PatchPiece sheet = MakePiece({ { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } }, { { 0, 1, 2 } });
     std::string detail;
     CHECK_STATUS(ValidatePatchPiece(sheet, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
-    TagOpenEdges(sheet, EdgeKind::Replacement);
+    TagOpenEdges(sheet, PatchEdgeKind::Replacement);
     CHECK_STATUS(ValidatePatchPiece(sheet, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    sheet.boundary[MakeEdgeKey(0, 1)] = EdgeKind::CapSeam;
+    sheet.boundary[MakeEdgeKey(0, 1)] = PatchEdgeKind::CapSeam;
     CHECK_STATUS(ValidatePatchPiece(sheet, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
 }
 
@@ -382,10 +393,10 @@ static void TestOpenGridBoundaryKinds()
             t.push_back({ a, a + 5, a + 4 });
         }
     PatchPiece grid = MakePiece(p, t);
-    TagOpenEdges(grid, EdgeKind::Replacement);
+    TagOpenEdges(grid, PatchEdgeKind::Replacement);
     std::string detail;
     CHECK_STATUS(ValidatePatchPiece(grid, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    CHECK(CountKind(grid, EdgeKind::Replacement) == 12);   // perimeter of a 3x3 sheet
+    CHECK(CountKind(grid, PatchEdgeKind::Replacement) == 12);   // perimeter of a 3x3 sheet
 }
 
 static void TestBoundaryDebugBake()
@@ -423,13 +434,13 @@ static SliceOptions NoCapOptions()
 static uint32_t CountCutNodes(const PatchPiece& piece, uint32_t cutId)
 {
     uint32_t n = 0;
-    for (const GeomNode& node : piece.nodes)
+    for (const PatchNode& node : piece.nodes)
         if (node.cutId == cutId)
             ++n;
     return n;
 }
 
-static double TotalSurfaceArea(const PatchPiece& piece) { return TotalArea(piece, FaceKind::Surface); }
+static double TotalSurfaceArea(const PatchPiece& piece) { return TotalArea(piece, PatchFaceKind::Surface); }
 
 // Both output pieces must pass the same validation as an input piece.
 static void CheckPieceValid(const PatchPiece& piece, const char* label)
@@ -467,7 +478,7 @@ static void TestBoxCenterCut()
     CHECK_STATUS(status, SliceStatus::Ok, result.detail);
     CHECK(result.positive.nodes.size() == 12 && result.negative.nodes.size() == 12);   // 4 box nodes + 8 cut nodes
     CHECK(CountCutNodes(result.positive, 1) == 8 && CountCutNodes(result.negative, 1) == 8);
-    CHECK(CountKind(result.positive, EdgeKind::Cut) == 8 && CountKind(result.negative, EdgeKind::Cut) == 8);
+    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 8 && CountKind(result.negative, PatchEdgeKind::Cut) == 8);
     CHECK(result.positive.faces.size() + result.negative.faces.size() > box.faces.size());
     CheckPieceValid(result.positive, "box +");
     CheckPieceValid(result.negative, "box -");
@@ -478,22 +489,22 @@ static void TestBoxCenterCut()
     CHECK(std::fabs(sum - original) < original * 1e-5);
 
     // Cut nodes lie on the plane and are shared by both pieces (same position bits).
-    for (const GeomNode& node : result.positive.nodes)
+    for (const PatchNode& node : result.positive.nodes)
         if (node.cutId == 1)
             CHECK(std::fabs(node.position.y - 1.0f) < 1e-6f);
-    for (const GeomNode& a : result.positive.nodes)
+    for (const PatchNode& a : result.positive.nodes)
     {
         if (a.cutId != 1)
             continue;
         bool matched = false;
-        for (const GeomNode& b : result.negative.nodes)
+        for (const PatchNode& b : result.negative.nodes)
             matched = matched || (b.cutId == 1 && b.position.x == a.position.x && b.position.y == a.position.y
                 && b.position.z == a.position.z);
         CHECK(matched);
     }
     // Positive side keeps the top: its original nodes are the four at y = 2.
     uint32_t top = 0;
-    for (const GeomNode& node : result.positive.nodes)
+    for (const PatchNode& node : result.positive.nodes)
         if (node.cutId == 0)
         {
             ++top;
@@ -520,7 +531,7 @@ static void TestPlaneThroughNodes()
     CHECK(result.positive.nodes.size() == 5 && result.negative.nodes.size() == 5);
     CHECK(CountCutNodes(result.positive, 1) == 0 && CountCutNodes(result.negative, 1) == 0);
     CHECK(result.positive.faces.size() == 4 && result.negative.faces.size() == 4);
-    CHECK(CountKind(result.positive, EdgeKind::Cut) == 4 && CountKind(result.negative, EdgeKind::Cut) == 4);
+    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 4 && CountKind(result.negative, PatchEdgeKind::Cut) == 4);
     CheckPieceValid(result.positive, "octahedron +");
     CheckPieceValid(result.negative, "octahedron -");
     // The loop is the equator diamond: 4 existing nodes, area 2.
@@ -538,7 +549,7 @@ static void TestOneNodeOnPlane()
     CHECK_STATUS(status, SliceStatus::Ok, result.detail);
     CHECK(CountCutNodes(result.positive, 1) == 3);      // edges apex-e1, apex-e2, apex-e3
     CHECK(result.loops.size() == 1 && result.loops[0].size() == 4);     // those 3 + the node on the plane
-    CHECK(CountKind(result.positive, EdgeKind::Cut) == 4 && CountKind(result.negative, EdgeKind::Cut) == 4);
+    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 4 && CountKind(result.negative, PatchEdgeKind::Cut) == 4);
     CheckPieceValid(result.positive, "one node +");
     CheckPieceValid(result.negative, "one node -");
     const double original = TotalSurfaceArea(octa);
@@ -562,7 +573,7 @@ static void TestOpenSheetIsOpenLoop()
             t.push_back({ a, a + 5, a + 4 });
         }
     PatchPiece grid = MakePiece(p, t);
-    TagOpenEdges(grid, EdgeKind::Replacement);
+    TagOpenEdges(grid, PatchEdgeKind::Replacement);
     SliceResult result;
     CHECK_STATUS(SlicePatch(grid, MakePlane(1.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
     CHECK(result.detail.find("Replacement") != std::string::npos);
@@ -570,7 +581,7 @@ static void TestOpenSheetIsOpenLoop()
 
     // A single triangle cut through one corner is open as well.
     PatchPiece tri = MakePiece({ { 0, 0, 0 }, { 1, 1, 0 }, { 1, -1, 0 } }, { { 0, 1, 2 } });
-    TagOpenEdges(tri, EdgeKind::Replacement);
+    TagOpenEdges(tri, PatchEdgeKind::Replacement);
     CHECK_STATUS(SlicePatch(tri, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
 }
 
@@ -640,7 +651,7 @@ static void TestFailureClearsOut()
 static void TestBakeSharesNodePositions()
 {
     PatchPiece strip = MakePiece({ { 0, 0, 0 }, { 0, 2, 0 }, { 1, 1, 0 }, { -1, 1, 0 } }, { { 0, 1, 2 }, { 1, 0, 3 } });
-    RenderCorner a2 = strip.corners[0];
+    PatchCorner a2 = strip.corners[0];
     a2.uv = { 5.0f, 5.0f };
     strip.corners.push_back(a2);
     strip.faces[1].corner[1] = 4;
@@ -652,7 +663,7 @@ static void TestBakeSharesNodePositions()
     CHECK(baked.vertices[4].uv.x == 5.0f);
 
     // A cap face moves to its own section; empty sections are never created.
-    strip.faces[1].kind = FaceKind::Cap;
+    strip.faces[1].kind = PatchFaceKind::Cap;
     BuildRenderMesh(strip, baked);
     CHECK(baked.sections.size() == 2 && baked.sections[0].indexCount == 3 && baked.sections[1].firstIndex == 3
         && baked.sections[1].indexCount == 3 && baked.sections[1].materialSlot == 1);
@@ -667,10 +678,10 @@ static void TestOriginLimit()
     PatchPiece box = MakeBox();
     for (int i = 0; i < 3; ++i)
     {
-        box.nodes[0].origin.node[i] = uint32_t(i);
+        box.nodes[0].origin.skinVertex[i] = uint32_t(i);
         box.nodes[0].origin.bary[i] = 1.0f / 3.0f;
     }
-    box.nodes[4].origin.node[0] = 3;
+    box.nodes[4].origin.skinVertex[0] = 3;
     SliceResult result;
     CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidOrigin, result.detail);
     CHECK(result.positive.Empty());
@@ -680,7 +691,7 @@ static void TestOriginLimit()
 static void TestCapFaceIsNotCrossed()
 {
     PatchPiece box = MakeBox();
-    box.faces[4].kind = FaceKind::Cap;
+    box.faces[4].kind = PatchFaceKind::Cap;
     box.faces[4].cutId = 7;
     SliceResult result;
     CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::CrossesCap, result.detail);
@@ -713,7 +724,7 @@ static void TestSliverOutputIsRejected()
     p.push_back({ 21, thin, 0 });
     t.push_back({ 4, 5, 6 });
     PatchPiece piece = MakePiece(p, t);
-    TagOpenEdges(piece, EdgeKind::Replacement);
+    TagOpenEdges(piece, PatchEdgeKind::Replacement);
     std::string detail;
     CHECK_STATUS(ValidatePatchPiece(piece, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
 
@@ -732,27 +743,29 @@ static void TestSliverOutputIsRejected()
 
 // ---------------------------------------------------------------- 2-3 tests
 
-// Appends src to dst (nodes, corners, faces, origin nodes and edge tags are renumbered).
+// src를 dst 뒤에 붙인다 (정점, corner, 면, 스킨 정점, 에지 태그 번호를 다시 매긴다).
 static void AppendPiece(PatchPiece& dst, const PatchPiece& src)
 {
     const uint32_t nodeBase = uint32_t(dst.nodes.size());
     const uint32_t cornerBase = uint32_t(dst.corners.size());
-    const uint32_t originBase = uint32_t(dst.originNodes.size());
-    for (const SkinNode& skin : src.originNodes)
-        dst.originNodes.push_back(skin);
-    for (GeomNode node : src.nodes)
+    std::vector<SkinVertex> skinVertices = GetSkinVertices(dst);
+    const uint32_t originBase = uint32_t(skinVertices.size());
+    for (const SkinVertex& skin : GetSkinVertices(src))
+        skinVertices.push_back(skin);
+    SetSkinVertices(dst, skinVertices);
+    for (PatchNode node : src.nodes)
     {
         for (int i = 0; i < 3; ++i)
-            if (node.origin.node[i] != kNoNode)
-                node.origin.node[i] += originBase;
+            if (node.origin.skinVertex[i] != kNoNode)
+                node.origin.skinVertex[i] += originBase;
         dst.nodes.push_back(node);
     }
-    for (RenderCorner corner : src.corners)
+    for (PatchCorner corner : src.corners)
     {
         corner.node += nodeBase;
         dst.corners.push_back(corner);
     }
-    for (Face face : src.faces)
+    for (PatchFace face : src.faces)
     {
         for (int k = 0; k < 3; ++k)
             face.corner[k] += cornerBase;
@@ -766,7 +779,7 @@ static void AppendPiece(PatchPiece& dst, const PatchPiece& src)
 static PatchPiece MakeBoxAt(float cx, float cz, float half, float height)
 {
     PatchPiece box = MakeBox();
-    for (GeomNode& node : box.nodes)
+    for (PatchNode& node : box.nodes)
     {
         node.position.x = cx + node.position.x * half;
         node.position.z = cz + node.position.z * half;
@@ -835,7 +848,7 @@ static void TestUvSeamTubeCut()
     CheckPieceValid(result.negative, "tube -");
 
     int seamLow = 0, seamHigh = 0;
-    for (const RenderCorner& corner : result.positive.corners)
+    for (const PatchCorner& corner : result.positive.corners)
     {
         if (result.positive.nodes[corner.node].cutId != 1)
             continue;
@@ -975,7 +988,7 @@ static SliceOptions CapOptions()
 
 static uint32_t CountOpenEdges(const PatchPiece& piece)
 {
-    EdgeUsageMap usage;
+    PatchEdgeUsageMap usage;
     CollectEdgeUsage(piece, usage);
     uint32_t n = 0;
     for (const auto& entry : usage)
@@ -986,17 +999,17 @@ static uint32_t CountOpenEdges(const PatchPiece& piece)
 static uint32_t CountCapFaces(const PatchPiece& piece)
 {
     uint32_t n = 0;
-    for (const Face& face : piece.faces)
-        n += face.kind == FaceKind::Cap;
+    for (const PatchFace& face : piece.faces)
+        n += face.kind == PatchFaceKind::Cap;
     return n;
 }
 
 // Dot of a cap face's geometric normal with a direction.
 static double CapFacing(const PatchPiece& piece, double dx, double dy, double dz)
 {
-    for (const Face& face : piece.faces)
+    for (const PatchFace& face : piece.faces)
     {
-        if (face.kind != FaceKind::Cap)
+        if (face.kind != PatchFaceKind::Cap)
             continue;
         const XMFLOAT3 &a = piece.nodes[piece.corners[face.corner[0]].node].position;
         const XMFLOAT3 &b = piece.nodes[piece.corners[face.corner[1]].node].position;
@@ -1019,10 +1032,10 @@ static void TestCapIsWatertight()
     CheckPieceValid(result.positive, "capped box +");
     CheckPieceValid(result.negative, "capped box -");
     CHECK(CountCapFaces(result.positive) == 6 && CountCapFaces(result.negative) == 6);   // 8-gon rim
-    CHECK(CountKind(result.positive, EdgeKind::Cut) == 0 && CountKind(result.negative, EdgeKind::Cut) == 0);
-    CHECK(CountKind(result.positive, EdgeKind::CapSeam) == 8 && CountKind(result.negative, EdgeKind::CapSeam) == 8);
+    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 0 && CountKind(result.negative, PatchEdgeKind::Cut) == 0);
+    CHECK(CountKind(result.positive, PatchEdgeKind::CapSeam) == 8 && CountKind(result.negative, PatchEdgeKind::CapSeam) == 8);
     CHECK(CountOpenEdges(result.positive) == 0 && CountOpenEdges(result.negative) == 0);   // closed solids
-    CHECK(std::fabs(TotalArea(result.positive, FaceKind::Cap) - 4.0) < 1e-5);
+    CHECK(std::fabs(TotalArea(result.positive, PatchFaceKind::Cap) - 4.0) < 1e-5);
     // The cap faces away from the kept side.
     CHECK(CapFacing(result.positive, 0, -1, 0) > 0.0 && CapFacing(result.negative, 0, 1, 0) > 0.0);
     CHECK(result.positive.caps.size() == 1 && result.positive.caps[0].rimNodes.size() == 8 && result.positive.caps[0].cutId == 1);
@@ -1039,8 +1052,8 @@ static void TestCapIsWatertight()
     std::string error;
     CHECK(mesh.SetMesh(baked, &error));
     // Cap corners carry the planar UV and the outward normal.
-    for (const Face& face : result.positive.faces)
-        if (face.kind == FaceKind::Cap)
+    for (const PatchFace& face : result.positive.faces)
+        if (face.kind == PatchFaceKind::Cap)
             for (int k = 0; k < 3; ++k)
                 CHECK(result.positive.corners[face.corner[k]].normal.y == -1.0f);
 }
@@ -1059,7 +1072,7 @@ static void TestCapWithHole()
     if (result.loopArea.size() == 2)
     {
         const double expected = std::fabs(result.loopArea[0]) - std::fabs(result.loopArea[1]);
-        CHECK(std::fabs(std::fabs(TotalArea(result.positive, FaceKind::Cap)) - std::fabs(expected)) < 1e-4 * std::fabs(expected));
+        CHECK(std::fabs(std::fabs(TotalArea(result.positive, PatchFaceKind::Cap)) - std::fabs(expected)) < 1e-4 * std::fabs(expected));
     }
     CHECK(result.positive.caps.size() == 1 && result.positive.caps[0].loopSizes.size() == 2);
 }
@@ -1093,7 +1106,7 @@ static void TestCapOfConcaveLoop()
     CHECK_STATUS(SlicePatch(prism, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
     CheckPieceValid(result.positive, "L prism +");
     CheckPieceValid(result.negative, "L prism -");
-    CHECK(std::fabs(TotalArea(result.positive, FaceKind::Cap) - 3.0) < 1e-5);        // the L covers 3 unit squares
+    CHECK(std::fabs(TotalArea(result.positive, PatchFaceKind::Cap) - 3.0) < 1e-5);        // the L covers 3 unit squares
     CHECK(CountOpenEdges(result.positive) == 0 && CountOpenEdges(result.negative) == 0);
 }
 
@@ -1115,15 +1128,15 @@ static void TestRecut()
     CHECK(second.positive.caps[0].cutId == 2 && second.negative.caps[0].cutId == 1);
     CHECK(second.loops.size() == 1);
     const size_t newSeam = second.loops.empty() ? 0 : second.loops[0].size();
-    CHECK(CountKind(second.negative, EdgeKind::CapSeam) == 8 + newSeam);    // inherited old seam + new seam
-    CHECK(CountKind(second.positive, EdgeKind::CapSeam) == newSeam);
+    CHECK(CountKind(second.negative, PatchEdgeKind::CapSeam) == 8 + newSeam);    // inherited old seam + new seam
+    CHECK(CountKind(second.positive, PatchEdgeKind::CapSeam) == newSeam);
     CHECK(CountOpenEdges(second.negative) == 0 && CountOpenEdges(second.positive) == 0);
-    for (const GeomNode& node : second.negative.nodes)
+    for (const PatchNode& node : second.negative.nodes)
     {
         int used = 0;
         double sum = 0.0;
         for (int i = 0; i < 3; ++i)
-            if (node.origin.node[i] != kNoNode)
+            if (node.origin.skinVertex[i] != kNoNode)
             {
                 ++used;
                 sum += node.origin.bary[i];
@@ -1138,7 +1151,7 @@ static void TestRecut()
     CHECK_STATUS(SlicePatch(upper, MakePlane(0, 1.5f, 0, 1, 0, 0), 2, CapOptions(), through), SliceStatus::CrossesCap, through.detail);
     CHECK(through.positive.Empty() && through.negative.Empty());
     // The input piece is untouched by all of this.
-    CHECK(upper.caps.size() == 1 && CountKind(upper, EdgeKind::CapSeam) == 8);
+    CHECK(upper.caps.size() == 1 && CountKind(upper, PatchEdgeKind::CapSeam) == 8);
 }
 
 // ---------------------------------------------------------------- debug tests (face origin)
@@ -1150,12 +1163,12 @@ static void CheckDividedFacesHaveCutId(const SliceResult& result, const PatchPie
     // Per source triangle: faces going in, faces coming out (both pieces). More faces out than in
     // means this cut divided one of them; otherwise every face keeps a cutId it already had.
     std::vector<uint32_t> in(input.faces.size() + 64, 0), out(in.size(), 0);
-    for (const Face& face : input.faces)
-        if (face.kind == FaceKind::Surface)
+    for (const PatchFace& face : input.faces)
+        if (face.kind == PatchFaceKind::Surface)
             ++in[face.sourceTriangle];
     for (const PatchPiece* piece : { &result.positive, &result.negative })
-        for (const Face& face : piece->faces)
-            if (face.kind == FaceKind::Surface)
+        for (const PatchFace& face : piece->faces)
+            if (face.kind == PatchFaceKind::Surface)
                 ++out[face.sourceTriangle];
     uint32_t divided = 0;
     for (uint32_t t = 0; t < in.size(); ++t)
@@ -1165,14 +1178,14 @@ static void CheckDividedFacesHaveCutId(const SliceResult& result, const PatchPie
         const bool wasDivided = out[t] > in[t];
         bool marked = false;
         for (const PatchPiece* piece : { &result.positive, &result.negative })
-            for (const Face& face : piece->faces)
+            for (const PatchFace& face : piece->faces)
             {
-                if (face.kind != FaceKind::Surface || face.sourceTriangle != t)
+                if (face.kind != PatchFaceKind::Surface || face.sourceTriangle != t)
                     continue;
                 marked = marked || face.cutId == cutId;
                 bool known = face.cutId == cutId && wasDivided;
-                for (const Face& old : input.faces)
-                    known = known || (old.kind == FaceKind::Surface && old.sourceTriangle == t && old.cutId == face.cutId);
+                for (const PatchFace& old : input.faces)
+                    known = known || (old.kind == PatchFaceKind::Surface && old.sourceTriangle == t && old.cutId == face.cutId);
                 if (!known)
                 {
                     std::printf("  %s: face of triangle %u has cutId %u\n", label, t, face.cutId);
@@ -1200,7 +1213,7 @@ static void TestSplitFacesRecordCutId()
 
     // Nothing was cut before, so every face is either undivided (0) or divided by cut 1.
     for (const PatchPiece* piece : { &oneNode.positive, &oneNode.negative })
-        for (const Face& face : piece->faces)
+        for (const PatchFace& face : piece->faces)
             CHECK(face.cutId == 0 || face.cutId == 1);
 
     // Second cut: cut 2 marks the faces it divides.
@@ -1216,12 +1229,12 @@ static void TestSplitFacesRecordCutId()
     SliceResult keep;
     CHECK_STATUS(SlicePatch(marked, MakePlane(0, 1, 0, 0, 1, 0), 8, NoCapOptions(), keep), SliceStatus::Ok, keep.detail);
     uint32_t sevens = 0;
-    for (const Face& face : keep.positive.faces)
-        sevens += face.kind == FaceKind::Surface && face.sourceTriangle == 2 && face.cutId == 7;
+    for (const PatchFace& face : keep.positive.faces)
+        sevens += face.kind == PatchFaceKind::Surface && face.sourceTriangle == 2 && face.cutId == 7;
     CHECK(sevens == 1);
     // Cap faces keep meaning "the cut that made the cap".
-    for (const Face& face : second.negative.faces)
-        if (face.kind == FaceKind::Cap)
+    for (const PatchFace& face : second.negative.faces)
+        if (face.kind == PatchFaceKind::Cap)
             CHECK(face.cutId == 1 || face.cutId == 2);
 }
 
@@ -1255,8 +1268,8 @@ static void TestSplitByOriginBake()
 
         // Each section holds the faces it names.
         uint32_t divided = 0, whole = 0;
-        for (const Face& face : piece->faces)
-            if (face.kind == FaceKind::Surface)
+        for (const PatchFace& face : piece->faces)
+            if (face.kind == PatchFaceKind::Surface)
                 (face.cutId != 0 ? divided : whole) += 1;
         CHECK(CountSectionFaces(tinted, 0) == whole && CountSectionFaces(tinted, 1) == divided);
 
@@ -1319,7 +1332,8 @@ static XMFLOAT3 Cross3(const XMFLOAT3& a, const XMFLOAT3& b)
 }
 
 // Unit axes, mutually perpendicular, u x v = n.
-static bool FrameIsOrthonormal(const CutPlaneFrame& f, double tolerance)
+// Unit axes, mutually perpendicular, u x v = n.
+static bool FrameIsOrthonormal(const CutPlane::Frame& f, double tolerance)
 {
     const XMFLOAT3 c = Cross3(f.axisU, f.axisV);
     return std::fabs(Dot3(f.axisU, f.axisU) - 1.0) < tolerance && std::fabs(Dot3(f.axisV, f.axisV) - 1.0) < tolerance
@@ -1330,29 +1344,33 @@ static bool FrameIsOrthonormal(const CutPlaneFrame& f, double tolerance)
 
 static double QuaternionLength(const CutPlane& plane)
 {
-    const XMFLOAT4& q = plane.rotation;
+    const XMFLOAT4& q = plane.GetRotation();
     return std::sqrt(double(q.x) * q.x + double(q.y) * q.y + double(q.z) * q.z + double(q.w) * q.w);
+}
+
+// A plane at the origin with the identity rotation and the given half lengths.
+static CutPlane FlatPlane(float halfX, float halfY)
+{
+    return CutPlane({ 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { halfX, halfY });
 }
 
 // The plane the controller starts with: center, local +Z turned to world +Y by a -90 degree turn about X.
 static CutPlane HorizontalPlane(float cx, float cy, float cz, float half)
 {
-    CutPlane plane;
-    plane.center = { cx, cy, cz };
-    XMStoreFloat4(&plane.rotation, XMQuaternionRotationAxis(XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), -XM_PIDIV2));
-    plane.halfExtents = { half, half };
-    return plane;
+    XMFLOAT4 rotation;
+    XMStoreFloat4(&rotation, XMQuaternionRotationAxis(XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), -XM_PIDIV2));
+    return CutPlane({ cx, cy, cz }, rotation, { half, half });
 }
 
 static void TestCutPlaneFrame()
 {
     // Identity: axes are the world axes.
-    const CutPlaneFrame identity = MakeFrame(CutPlane());
+    const CutPlane::Frame identity = CutPlane().GetFrame();
     CHECK(identity.axisU.x == 1.0f && identity.axisV.y == 1.0f && identity.normal.z == 1.0f);
     CHECK(FrameIsOrthonormal(identity, 1e-6));
 
     // The starting plane is horizontal with the normal up.
-    const CutPlaneFrame horizontal = MakeFrame(HorizontalPlane(0, 0, 0, 1));
+    const CutPlane::Frame horizontal = HorizontalPlane(0, 0, 0, 1).GetFrame();
     CHECK(std::fabs(horizontal.normal.x) < 1e-6f && std::fabs(horizontal.normal.y - 1.0f) < 1e-6f && std::fabs(horizontal.normal.z) < 1e-6f);
     CHECK(FrameIsOrthonormal(horizontal, 1e-6));
 
@@ -1360,20 +1378,19 @@ static void TestCutPlaneFrame()
     CutPlane plane;
     for (int axis = 0; axis < 3; ++axis)
     {
-        RotateAroundLocalAxis(plane, axis, 0.7f);
-        CHECK(FrameIsOrthonormal(MakeFrame(plane), 1e-5));
+        plane.RotateAroundLocalAxis(axis, 0.7f);
+        CHECK(FrameIsOrthonormal(plane.GetFrame(), 1e-5));
     }
     CutPlane quarter;
-    RotateAroundLocalAxis(quarter, 0, XM_PIDIV2);
-    const CutPlaneFrame turned = MakeFrame(quarter);
+    quarter.RotateAroundLocalAxis(0, XM_PIDIV2);
+    const CutPlane::Frame turned = quarter.GetFrame();
     CHECK(std::fabs(turned.axisU.x - 1.0f) < 1e-6f);                     // the turn axis is unchanged
     CHECK(std::fabs(turned.normal.y + 1.0f) < 1e-5f);                    // +Z goes to -Y
     CHECK(std::fabs(turned.axisV.z - 1.0f) < 1e-5f);                     // +Y goes to +Z
 
     // A bad rotation counts as the identity.
-    CutPlane broken;
-    broken.rotation = { 0.0f, 0.0f, 0.0f, 0.0f };
-    CHECK(FrameIsOrthonormal(MakeFrame(broken), 1e-6));
+    const CutPlane broken({ 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f });
+    CHECK(FrameIsOrthonormal(broken.GetFrame(), 1e-6));
 }
 
 static void TestCutPlaneAccumulatedRotation()
@@ -1381,80 +1398,111 @@ static void TestCutPlaneAccumulatedRotation()
     // Many small turns about all three local axes: the quaternion stays unit length and the frame orthonormal.
     CutPlane plane = HorizontalPlane(1, 2, 3, 0.5f);
     for (int i = 0; i < 20000; ++i)
-        RotateAroundLocalAxis(plane, i % 3, (i % 2 == 0 ? 0.013f : -0.007f) * float(1 + i % 5));
+        plane.RotateAroundLocalAxis(i % 3, (i % 2 == 0 ? 0.013f : -0.007f) * float(1 + i % 5));
     CHECK(std::fabs(QuaternionLength(plane) - 1.0) < 1e-5);
-    CHECK(FrameIsOrthonormal(MakeFrame(plane), 1e-4));
+    CHECK(FrameIsOrthonormal(plane.GetFrame(), 1e-4));
 
     // Turns are about the plane's own axis: after tilting the plane, the next turn about U leaves U where it was.
     CutPlane tilted;
-    RotateAroundLocalAxis(tilted, 1, 0.9f);
-    const CutPlaneFrame before = MakeFrame(tilted);
-    RotateAroundLocalAxis(tilted, 0, 0.4f);
-    const CutPlaneFrame after = MakeFrame(tilted);
+    tilted.RotateAroundLocalAxis(1, 0.9f);
+    const CutPlane::Frame before = tilted.GetFrame();
+    tilted.RotateAroundLocalAxis(0, 0.4f);
+    const CutPlane::Frame after = tilted.GetFrame();
     CHECK(std::fabs(Dot3(before.axisU, after.axisU) - 1.0) < 1e-5);
     CHECK(std::fabs(Dot3(before.normal, after.normal) - std::cos(0.4)) < 1e-5);
 }
 
 static void TestCutPlaneContains()
 {
-    CutPlane plane;
-    plane.halfExtents = { 2.0f, 1.0f };
-    const CutPlaneFrame frame = MakeFrame(plane);
-    CHECK(ContainsInPlane(frame, { 0, 0, 0 }, 0.0f));
-    CHECK(ContainsInPlane(frame, { 2.0f, 1.0f, 0 }, 0.0f));          // on the border
-    CHECK(!ContainsInPlane(frame, { 2.1f, 0, 0 }, 0.0f));
-    CHECK(!ContainsInPlane(frame, { 0, 1.1f, 0 }, 0.0f));
-    CHECK(ContainsInPlane(frame, { 2.1f, 0, 0 }, 0.2f));              // margin
-    CHECK(!ContainsInPlane(frame, { 2.1f, 0, 0 }, 0.05f));
-    CHECK(ContainsInPlane(frame, { 1.0f, 0.5f, 7.0f }, 0.0f));        // the distance along the normal is ignored
+    CutPlane plane = FlatPlane(2.0f, 1.0f);
+    CHECK(plane.Contains({ 0, 0, 0 }, 0.0f));
+    CHECK(plane.Contains({ 2.0f, 1.0f, 0 }, 0.0f));          // on the border
+    CHECK(!plane.Contains({ 2.1f, 0, 0 }, 0.0f));
+    CHECK(!plane.Contains({ 0, 1.1f, 0 }, 0.0f));
+    CHECK(plane.Contains({ 2.1f, 0, 0 }, 0.2f));              // margin
+    CHECK(!plane.Contains({ 2.1f, 0, 0 }, 0.05f));
+    CHECK(plane.Contains({ 1.0f, 0.5f, 7.0f }, 0.0f));        // the distance along the normal is ignored
 
     // Turned about the normal by 90 degrees the long side points along world Y.
-    RotateAroundLocalAxis(plane, 2, XM_PIDIV2);
-    const CutPlaneFrame turned = MakeFrame(plane);
-    CHECK(ContainsInPlane(turned, { 0, 1.9f, 0 }, 0.0f));
-    CHECK(!ContainsInPlane(turned, { 1.9f, 0, 0 }, 0.0f));
+    plane.RotateAroundLocalAxis(2, XM_PIDIV2);
+    CHECK(plane.Contains({ 0, 1.9f, 0 }, 0.0f));
+    CHECK(!plane.Contains({ 1.9f, 0, 0 }, 0.0f));
 
     // Moved: the rectangle follows the center.
-    Translate(plane, { 5.0f, 0.0f, 0.0f });
-    const CutPlaneFrame moved = MakeFrame(plane);
-    CHECK(ContainsInPlane(moved, { 5.0f, 1.9f, 0 }, 0.0f) && !ContainsInPlane(moved, { 0.0f, 0.0f, 0 }, 0.0f));
+    plane.Translate({ 5.0f, 0.0f, 0.0f });
+    CHECK(plane.Contains({ 5.0f, 1.9f, 0 }, 0.0f) && !plane.Contains({ 0.0f, 0.0f, 0 }, 0.0f));
 }
 
 static void TestCutPlaneScale()
 {
-    CutPlane plane;
-    plane.halfExtents = { 1.0f, 0.5f };
-    ScaleUniform(plane, 2.0f, 0.1f, 3.0f);
-    CHECK(plane.halfExtents.x == 2.0f && plane.halfExtents.y == 1.0f);
+    CutPlane plane = FlatPlane(1.0f, 0.5f);
+    plane.SetExtentLimits(0.1f, 3.0f);
+    plane.ScaleUniform(2.0f);
+    CHECK(plane.GetHalfExtents().x == 2.0f && plane.GetHalfExtents().y == 1.0f);
     // The ratio is kept when one side reaches the limit: x would be 6, so the factor drops to 1.5.
-    ScaleUniform(plane, 3.0f, 0.1f, 3.0f);
-    CHECK(std::fabs(plane.halfExtents.x - 3.0f) < 1e-6f && std::fabs(plane.halfExtents.y - 1.5f) < 1e-6f);
-    ScaleUniform(plane, 100.0f, 0.1f, 3.0f);
-    CHECK(std::fabs(plane.halfExtents.x - 3.0f) < 1e-6f && std::fabs(plane.halfExtents.y - 1.5f) < 1e-6f);
+    plane.ScaleUniform(3.0f);
+    CHECK(std::fabs(plane.GetHalfExtents().x - 3.0f) < 1e-6f && std::fabs(plane.GetHalfExtents().y - 1.5f) < 1e-6f);
+    plane.ScaleUniform(100.0f);
+    CHECK(std::fabs(plane.GetHalfExtents().x - 3.0f) < 1e-6f && std::fabs(plane.GetHalfExtents().y - 1.5f) < 1e-6f);
     // Shrinking stops at the minimum of the smaller side.
-    ScaleUniform(plane, 0.0001f, 0.1f, 3.0f);
-    CHECK(std::fabs(plane.halfExtents.y - 0.1f) < 1e-6f && std::fabs(plane.halfExtents.x - 0.2f) < 1e-6f);
+    plane.ScaleUniform(0.0001f);
+    CHECK(std::fabs(plane.GetHalfExtents().y - 0.1f) < 1e-6f && std::fabs(plane.GetHalfExtents().x - 0.2f) < 1e-6f);
 
     // U only: y is untouched and x stays in range.
-    CutPlane blade;
-    blade.halfExtents = { 1.0f, 1.0f };
-    ScaleU(blade, 0.5f, 0.1f, 3.0f);
-    CHECK(blade.halfExtents.x == 0.5f && blade.halfExtents.y == 1.0f);
-    ScaleU(blade, 1000.0f, 0.1f, 3.0f);
-    CHECK(blade.halfExtents.x == 3.0f && blade.halfExtents.y == 1.0f);
-    ScaleU(blade, 1e-6f, 0.1f, 3.0f);
-    CHECK(blade.halfExtents.x == 0.1f);
+    CutPlane blade = FlatPlane(1.0f, 1.0f);
+    blade.SetExtentLimits(0.1f, 3.0f);
+    blade.ScaleU(0.5f);
+    CHECK(blade.GetHalfExtents().x == 0.5f && blade.GetHalfExtents().y == 1.0f);
+    blade.ScaleU(1000.0f);
+    CHECK(blade.GetHalfExtents().x == 3.0f && blade.GetHalfExtents().y == 1.0f);
+    blade.ScaleU(1e-6f);
+    CHECK(blade.GetHalfExtents().x == 0.1f);
 
     // Bad factors change nothing.
-    ScaleUniform(blade, -1.0f, 0.1f, 3.0f);
-    ScaleU(blade, 0.0f, 0.1f, 3.0f);
-    CHECK(blade.halfExtents.x == 0.1f && blade.halfExtents.y == 1.0f);
+    blade.ScaleUniform(-1.0f);
+    blade.ScaleU(0.0f);
+    CHECK(blade.GetHalfExtents().x == 0.1f && blade.GetHalfExtents().y == 1.0f);
 
     // A plane created outside the range is clamped.
-    CutPlane wild;
-    wild.halfExtents = { 50.0f, 0.0f };
-    ClampExtents(wild, 0.1f, 3.0f);
-    CHECK(wild.halfExtents.x == 3.0f && wild.halfExtents.y == 0.1f);
+    CutPlane wild = FlatPlane(50.0f, 0.0f);
+    wild.SetExtentLimits(0.1f, 3.0f);
+    wild.ClampExtents();
+    CHECK(wild.GetHalfExtents().x == 3.0f && wild.GetHalfExtents().y == 0.1f);
+}
+
+static void TestCutPlaneFactories()
+{
+    // The starting plane: horizontal at the given center, half size radius / 2, limits 0.01 and 3 times the radius.
+    CutPlane start = CutPlane::MakeHorizontal({ 1.0f, 2.0f, 3.0f }, 4.0f);
+    CHECK(start.GetCenter().x == 1.0f && start.GetCenter().y == 2.0f && start.GetCenter().z == 3.0f);
+    CHECK(start.GetHalfExtents().x == 2.0f && start.GetHalfExtents().y == 2.0f);
+    CHECK(std::fabs(start.GetFrame().normal.y - 1.0f) < 1e-6f);
+    start.ScaleUniform(1000.0f);
+    CHECK(std::fabs(start.GetHalfExtents().x - 12.0f) < 1e-4f);          // 3 x radius
+    start.ScaleUniform(1e-9f);
+    CHECK(std::fabs(start.GetHalfExtents().x - 0.04f) < 1e-6f);          // 0.01 x radius
+    // A zero radius gives a zero-size plane (the limits are 0 too).
+    CHECK(CutPlane::MakeHorizontal({ 0, 0, 0 }, 0.0f).GetHalfExtents().x == 0.0f);
+
+    // MakeInfinite: the normal is the given direction, the point is the center, and the rectangle is huge.
+    const XMFLOAT3 normals[] = { { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 }, { 1, 0, 0 }, { -1, 0, 0 }, { 1, 2, -3 }, { 0, 0, 5 } };
+    for (const XMFLOAT3& n : normals)
+    {
+        const CutPlane plane = CutPlane::MakeInfinite({ 2.0f, -1.0f, 0.5f }, n);
+        const double length = std::sqrt(Dot3(n, n));
+        const CutPlane::Frame frame = plane.GetFrame();
+        CHECK(FrameIsOrthonormal(frame, 1e-5));
+        CHECK(std::fabs(frame.normal.x - n.x / length) < 1e-5 && std::fabs(frame.normal.y - n.y / length) < 1e-5
+            && std::fabs(frame.normal.z - n.z / length) < 1e-5);
+        CHECK(plane.GetCenter().x == 2.0f && plane.GetCenter().y == -1.0f && plane.GetCenter().z == 0.5f);
+        CHECK(plane.GetHalfExtents().x == 1.0e6f && plane.GetHalfExtents().y == 1.0e6f);
+        CHECK(plane.Contains({ 1.0e5f, -1.0e5f, 3.0f }, 0.0f));
+    }
+    // A bad normal counts as the identity rotation (the normal is +Z).
+    CHECK(std::fabs(CutPlane::MakeInfinite({ 0, 0, 0 }, { 0, 0, 0 }).GetFrame().normal.z - 1.0f) < 1e-6f);
+    // The infinite plane gives the same cut as the hand-made slice plane.
+    const SlicePlane slice = CutPlane::MakeInfinite({ 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }).ToSlicePlane();
+    CHECK(std::fabs(slice.normal.y - 1.0f) < 1e-6f && std::fabs(slice.point.y - 1.0f) < 1e-6f);
 }
 
 static void TestCutPlaneToSlicePlane()
@@ -1463,7 +1511,7 @@ static void TestCutPlaneToSlicePlane()
     const PatchPiece box = MakeBox();
     SliceResult expected, actual;
     CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), expected), SliceStatus::Ok, expected.detail);
-    const SlicePlane converted = ToSlicePlane(MakeFrame(HorizontalPlane(0, 1, 0, 5.0f)));
+    const SlicePlane converted = HorizontalPlane(0, 1, 0, 5.0f).ToSlicePlane();
     CHECK(std::fabs(converted.normal.y - 1.0f) < 1e-6f && std::fabs(converted.point.y - 1.0f) < 1e-6f);
     CHECK_STATUS(SlicePatch(box, converted, 1, CapOptions(), actual), SliceStatus::Ok, actual.detail);
     CHECK(actual.positive.faces.size() == expected.positive.faces.size() && actual.negative.faces.size() == expected.negative.faces.size());
@@ -1471,8 +1519,8 @@ static void TestCutPlaneToSlicePlane()
 
     // Turned over, the normal points down and the + and - pieces swap.
     CutPlane over = HorizontalPlane(0, 1, 0, 5.0f);
-    RotateAroundLocalAxis(over, 0, XM_PI);
-    const SlicePlane flipped = ToSlicePlane(MakeFrame(over));
+    over.RotateAroundLocalAxis(0, XM_PI);
+    const SlicePlane flipped = over.ToSlicePlane();
     CHECK(flipped.normal.y < -0.99f);
     SliceResult flippedResult;
     CHECK_STATUS(SlicePatch(box, flipped, 1, CapOptions(), flippedResult), SliceStatus::Ok, flippedResult.detail);
@@ -1489,30 +1537,29 @@ static void TestLoopsInsidePlane()
     CHECK(result.loops.size() == 1);
 
     std::string detail;
-    CHECK(LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 1.01f)), result.positive, result.loops, 0.0f, &detail));
-    CHECK(!LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 0.9f)), result.positive, result.loops, 0.0f, &detail));
+    CHECK(HorizontalPlane(0, 1, 0, 1.01f).ContainsLoops(result.positive, result.loops, 0.0f, &detail));
+    CHECK(!HorizontalPlane(0, 1, 0, 0.9f).ContainsLoops(result.positive, result.loops, 0.0f, &detail));
     CHECK(detail.find("outside") != std::string::npos);
-    CHECK(LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 0.9f)), result.positive, result.loops, 0.2f, nullptr));   // margin
+    CHECK(HorizontalPlane(0, 1, 0, 0.9f).ContainsLoops(result.positive, result.loops, 0.2f, nullptr));   // margin
 
     // One side too short: a long thin plane misses part of the loop, a plane off to the side too.
-    CutPlane blade = HorizontalPlane(0, 1, 0, 1.01f);
-    blade.halfExtents.x = 0.5f;
-    CHECK(!LoopsInsidePlane(MakeFrame(blade), result.positive, result.loops, 0.0f, nullptr));
+    const CutPlane blade = CutPlane({ 0.0f, 1.0f, 0.0f }, HorizontalPlane(0, 1, 0, 1.01f).GetRotation(), { 0.5f, 1.01f });
+    CHECK(!blade.ContainsLoops(result.positive, result.loops, 0.0f, nullptr));
     const CutPlane shifted = HorizontalPlane(0.6f, 1, 0, 1.01f);
-    CHECK(!LoopsInsidePlane(MakeFrame(shifted), result.positive, result.loops, 0.0f, nullptr));
+    CHECK(!shifted.ContainsLoops(result.positive, result.loops, 0.0f, nullptr));
 
     // Turned about the normal by 45 degrees the square loop's corners reach 1.41 along the plane axes.
     CutPlane turned = HorizontalPlane(0, 1, 0, 1.2f);
-    RotateAroundLocalAxis(turned, 2, XM_PIDIV4);
-    CHECK(!LoopsInsidePlane(MakeFrame(turned), result.positive, result.loops, 0.0f, nullptr));
-    turned.halfExtents = { 1.5f, 1.5f };
-    CHECK(LoopsInsidePlane(MakeFrame(turned), result.positive, result.loops, 0.0f, nullptr));
+    turned.RotateAroundLocalAxis(2, XM_PIDIV4);
+    CHECK(!turned.ContainsLoops(result.positive, result.loops, 0.0f, nullptr));
+    const CutPlane bigger(turned.GetCenter(), turned.GetRotation(), { 1.5f, 1.5f });
+    CHECK(bigger.ContainsLoops(result.positive, result.loops, 0.0f, nullptr));
 
     // No loops (nothing to check) passes; a loop that names a missing node fails.
     const std::vector<std::vector<uint32_t>> none;
-    CHECK(LoopsInsidePlane(MakeFrame(CutPlane()), result.positive, none, 0.0f, nullptr));
+    CHECK(CutPlane().ContainsLoops(result.positive, none, 0.0f, nullptr));
     const std::vector<std::vector<uint32_t>> missing = { { 0, 9999 } };
-    CHECK(!LoopsInsidePlane(MakeFrame(HorizontalPlane(0, 1, 0, 5.0f)), result.positive, missing, 0.0f, nullptr));
+    CHECK(!HorizontalPlane(0, 1, 0, 5.0f).ContainsLoops(result.positive, missing, 0.0f, nullptr));
 }
 
 // ---------------------------------------------------------------- segment pick and joint set tests
@@ -1544,25 +1591,25 @@ static void TestPickChain()
     std::vector<SegmentHit> hits;
 
     // Between joints 1 and 2: the parent end (joint 1) is the cut joint.
-    PickSegments(chain, MakeFrame(HorizontalPlane(0, 1.5f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 1.5f, 0, 1.0f).PickSegments(chain, hits);
     CHECK(hits.size() == 1 && hits[0].parentJoint == 1 && hits[0].childJoint == 2);
     CHECK(!hits.empty() && std::fabs(hits[0].t - 0.5f) < 1e-6f && std::fabs(hits[0].point.y - 1.5f) < 1e-6f);
-    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1 }));
+    CHECK(CutPlane::CutJoints(hits) == std::vector<uint32_t>({ 1 }));
 
     // A quarter of the way down the bone: t is measured from the parent.
-    PickSegments(chain, MakeFrame(HorizontalPlane(0, 2.25f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 2.25f, 0, 1.0f).PickSegments(chain, hits);
     CHECK(hits.size() == 1 && hits[0].parentJoint == 2 && std::fabs(hits[0].t - 0.25f) < 1e-6f);
 
     // The flipped plane (normal down) crosses the same segment.
     CutPlane flipped = HorizontalPlane(0, 1.5f, 0, 1.0f);
-    RotateAroundLocalAxis(flipped, 0, XM_PI);
-    PickSegments(chain, MakeFrame(flipped), hits);
+    flipped.RotateAroundLocalAxis(0, XM_PI);
+    flipped.PickSegments(chain, hits);
     CHECK(hits.size() == 1 && hits[0].parentJoint == 1 && hits[0].childJoint == 2);
 
     // Beyond both ends of the chain: nothing to cut (no virtual segment past the last joint).
-    PickSegments(chain, MakeFrame(HorizontalPlane(0, 10.0f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 10.0f, 0, 1.0f).PickSegments(chain, hits);
     CHECK(hits.empty());
-    PickSegments(chain, MakeFrame(HorizontalPlane(0, -5.0f, 0, 1.0f)), hits);
+    HorizontalPlane(0, -5.0f, 0, 1.0f).PickSegments(chain, hits);
     CHECK(hits.empty());
 }
 
@@ -1571,22 +1618,22 @@ static void TestPickThroughJoint()
     // A plane exactly through a joint belongs to one segment only: the joint counts as the + side.
     const SkeletonPose chain = MakeChainPose(5);
     std::vector<SegmentHit> hits;
-    PickSegments(chain, MakeFrame(HorizontalPlane(0, 2.0f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 2.0f, 0, 1.0f).PickSegments(chain, hits);
     CHECK(hits.size() == 1 && hits[0].parentJoint == 1 && hits[0].childJoint == 2 && hits[0].t == 1.0f);
 
     // Through the last joint: the segment above it, at its end.
-    PickSegments(chain, MakeFrame(HorizontalPlane(0, 4.0f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 4.0f, 0, 1.0f).PickSegments(chain, hits);
     CHECK(hits.size() == 1 && hits[0].parentJoint == 3 && hits[0].childJoint == 4 && hits[0].t == 1.0f);
 
     // Through the root: the root is on the + side with everything above it, so no segment is crossed.
-    PickSegments(chain, MakeFrame(HorizontalPlane(0, 0.0f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 0.0f, 0, 1.0f).PickSegments(chain, hits);
     CHECK(hits.empty());
 
     // With the normal pointing down the same plane through joint 2 goes to the next segment instead,
     // but it is still exactly one segment.
     CutPlane flipped = HorizontalPlane(0, 2.0f, 0, 1.0f);
-    RotateAroundLocalAxis(flipped, 0, XM_PI);
-    PickSegments(chain, MakeFrame(flipped), hits);
+    flipped.RotateAroundLocalAxis(0, XM_PI);
+    flipped.PickSegments(chain, hits);
     CHECK(hits.size() == 1 && hits[0].parentJoint == 2 && hits[0].childJoint == 3 && hits[0].t == 0.0f);
 }
 
@@ -1596,30 +1643,29 @@ static void TestPickSeveralSegments()
     std::vector<SegmentHit> hits;
 
     // A wide plane across both thighs: two hits in child order, two cut joints.
-    PickSegments(legs, MakeFrame(HorizontalPlane(0, 1.4f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 1.4f, 0, 1.0f).PickSegments(legs, hits);
     CHECK(hits.size() == 2 && hits[0].childJoint == 2 && hits[1].childJoint == 4);
     CHECK(hits.size() == 2 && hits[0].parentJoint == 1 && hits[1].parentJoint == 3);
-    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1, 3 }));
+    CHECK(CutPlane::CutJoints(hits) == std::vector<uint32_t>({ 1, 3 }));
     CHECK(hits.size() == 2 && hits[0].point.x == -0.5f && hits[1].point.x == 0.5f);
 
     // Too small to reach the right leg: only the left one is crossed.
     CutPlane left = HorizontalPlane(-0.5f, 1.4f, 0, 0.3f);
-    PickSegments(legs, MakeFrame(left), hits);
+    left.PickSegments(legs, hits);
     CHECK(hits.size() == 1 && hits[0].childJoint == 2);
 
     // A thin plane (U only) turned to run along X catches both; turned to run along Z it misses both.
-    CutPlane blade = HorizontalPlane(0, 1.4f, 0, 1.0f);
-    blade.halfExtents = { 1.0f, 0.1f };
-    PickSegments(legs, MakeFrame(blade), hits);
+    CutPlane blade = CutPlane({ 0.0f, 1.4f, 0.0f }, HorizontalPlane(0, 1.4f, 0, 1.0f).GetRotation(), { 1.0f, 0.1f });
+    blade.PickSegments(legs, hits);
     CHECK(hits.size() == 2);
-    RotateAroundLocalAxis(blade, 2, XM_PIDIV2);
-    PickSegments(legs, MakeFrame(blade), hits);
+    blade.RotateAroundLocalAxis(2, XM_PIDIV2);
+    blade.PickSegments(legs, hits);
     CHECK(hits.empty());
 
     // A plane that crosses nothing, and one far away.
-    PickSegments(legs, MakeFrame(HorizontalPlane(0, 0.2f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 0.2f, 0, 1.0f).PickSegments(legs, hits);
     CHECK(hits.empty());
-    PickSegments(legs, MakeFrame(HorizontalPlane(5.0f, 1.4f, 0, 1.0f)), hits);
+    HorizontalPlane(5.0f, 1.4f, 0, 1.0f).PickSegments(legs, hits);
     CHECK(hits.empty());
 }
 
@@ -1630,14 +1676,14 @@ static void TestPickSharedParent()
     pose.jointPositions = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { -1.0f, 2.0f, 0.0f }, { 1.0f, 2.0f, 0.0f } };
     pose.parents = { kNoNode, 0, 1, 1 };
     std::vector<SegmentHit> hits;
-    PickSegments(pose, MakeFrame(HorizontalPlane(0, 1.5f, 0, 2.0f)), hits);
+    HorizontalPlane(0, 1.5f, 0, 2.0f).PickSegments(pose, hits);
     CHECK(hits.size() == 2 && hits[0].parentJoint == 1 && hits[1].parentJoint == 1);
-    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1 }));
+    CHECK(CutPlane::CutJoints(hits) == std::vector<uint32_t>({ 1 }));
 
     // Only one of the two bones is crossed when the plane is small: still joint 1.
-    PickSegments(pose, MakeFrame(HorizontalPlane(-0.5f, 1.5f, 0, 0.2f)), hits);
+    HorizontalPlane(-0.5f, 1.5f, 0, 0.2f).PickSegments(pose, hits);
     CHECK(hits.size() == 1 && hits[0].childJoint == 2);
-    CHECK(CutJoints(hits) == std::vector<uint32_t>({ 1 }));
+    CHECK(CutPlane::CutJoints(hits) == std::vector<uint32_t>({ 1 }));
 }
 
 static void TestPickRejectsBadInput()
@@ -1646,20 +1692,20 @@ static void TestPickRejectsBadInput()
     SkeletonPose bad = MakeChainPose(3);
     bad.parents.pop_back();
     hits.push_back(SegmentHit());
-    PickSegments(bad, MakeFrame(HorizontalPlane(0, 0.5f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 0.5f, 0, 1.0f).PickSegments(bad, hits);
     CHECK(hits.empty());                       // sizes differ; hits is cleared first
 
     SkeletonPose selfParent = MakeChainPose(3);
     selfParent.parents[1] = 1;
     selfParent.parents[2] = 99;
-    PickSegments(selfParent, MakeFrame(HorizontalPlane(0, 1.5f, 0, 1.0f)), hits);
+    HorizontalPlane(0, 1.5f, 0, 1.0f).PickSegments(selfParent, hits);
     CHECK(hits.empty());                       // a joint that is its own parent or has a missing parent is skipped
 
-    CHECK(CutJoints({}).empty());
+    CHECK(CutPlane::CutJoints({}).empty());
     SegmentHit a, b;
     a.parentJoint = 4;
     b.parentJoint = 2;
-    CHECK(CutJoints({ a, b, a }) == std::vector<uint32_t>({ 2, 4 }));    // sorted, no duplicates
+    CHECK(CutPlane::CutJoints({ a, b, a }) == std::vector<uint32_t>({ 2, 4 }));    // sorted, no duplicates
 }
 
 static void MakeVertex(uint32_t seed, uint16_t joints[4], float weights[4])
@@ -1683,9 +1729,9 @@ static void TestJointSet()
     // Slots holding the same joint add up.
     const uint16_t joints[4] = { 3, 5, 3, 0 };
     const float weights[4] = { 0.25f, 0.5f, 0.125f, 0.125f };
-    CHECK(JointInfluence(joints, weights, 3) == 0.375f && JointInfluence(joints, weights, 5) == 0.5f);
-    CHECK(JointInfluence(joints, weights, 7) == 0.0f);
-    CHECK(JointSetInfluence(joints, weights, { 3, 5 }) == 0.875f && JointSetInfluence(joints, weights, {}) == 0.0f);
+    CHECK(Skinning::Influence(joints, weights, 3) == 0.375f && Skinning::Influence(joints, weights, 5) == 0.5f);
+    CHECK(Skinning::Influence(joints, weights, 7) == 0.0f);
+    CHECK(Skinning::SetInfluence(joints, weights, { 3, 5 }) == 0.875f && Skinning::SetInfluence(joints, weights, {}) == 0.0f);
 
     // A set with one joint is that joint, for every minWeight.
     const float minWeights[3] = { 0.0f, 0.1f, 0.5f };
@@ -1696,7 +1742,7 @@ static void TestJointSet()
         MakeVertex(v, j, w);
         for (uint32_t joint = 0; joint < 6; ++joint)
             for (float minWeight : minWeights)
-                CHECK(VertexInJointSet(j, w, { joint }, minWeight) == (JointInfluence(j, w, joint) > minWeight));
+                CHECK(Skinning::InJointSet(j, w, { joint }, minWeight) == (Skinning::Influence(j, w, joint) > minWeight));
     }
 
     // A set of two is the union of the two single joint results, for vertices and for whole triangles
@@ -1712,9 +1758,9 @@ static void TestJointSet()
             bool inA = false, inB = false, inBoth = false;
             for (int k = 0; k < 3; ++k)
             {
-                inA = inA || VertexInJointSet(j[k], w[k], { 1 }, minWeight);
-                inB = inB || VertexInJointSet(j[k], w[k], { 4 }, minWeight);
-                inBoth = inBoth || VertexInJointSet(j[k], w[k], { 1, 4 }, minWeight);
+                inA = inA || Skinning::InJointSet(j[k], w[k], { 1 }, minWeight);
+                inB = inB || Skinning::InJointSet(j[k], w[k], { 4 }, minWeight);
+                inBoth = inBoth || Skinning::InJointSet(j[k], w[k], { 1, 4 }, minWeight);
             }
             CHECK(inBoth == (inA || inB));
         }
@@ -1724,14 +1770,14 @@ static void TestJointSet()
     uint16_t j[4];
     float w[4];
     MakeVertex(7, j, w);
-    CHECK(!VertexInJointSet(j, w, { 9 }, 0.0f) && !VertexInJointSet(j, w, {}, 0.0f));
+    CHECK(!Skinning::InJointSet(j, w, { 9 }, 0.0f) && !Skinning::InJointSet(j, w, {}, 0.0f));
 
     // Valid sets: ascending, no duplicates, inside the palette, not empty.
-    CHECK(IsValidJointSet({ 0 }, 1) && IsValidJointSet({ 1, 3, 4 }, 5));
-    CHECK(!IsValidJointSet({}, 5) && !IsValidJointSet({ 3, 1 }, 5) && !IsValidJointSet({ 1, 1 }, 5) && !IsValidJointSet({ 5 }, 5));
+    CHECK(Skinning::IsValidJointSet({ 0 }, 1) && Skinning::IsValidJointSet({ 1, 3, 4 }, 5));
+    CHECK(!Skinning::IsValidJointSet({}, 5) && !Skinning::IsValidJointSet({ 3, 1 }, 5) && !Skinning::IsValidJointSet({ 1, 1 }, 5) && !Skinning::IsValidJointSet({ 5 }, 5));
 }
 
-// ---------------------------------------------------------------- plane gizmo tests (Debug/PlaneGizmo)
+// ---------------------------------------------------------------- plane gizmo tests (Geometry/CutPlaneGizmo.cpp)
 
 // eye (0, 0, -5) looking at the origin, 60 degree vertical fov, near 0.1, far 100. The reversed variant swaps
 // near and far like MiniEngine does (depth 1 at the near plane, 0 at the far plane).
@@ -1745,7 +1791,7 @@ static GizmoView MakeTestView(bool reversedZ, float width = 1600.0f, float heigh
         : XMMatrixPerspectiveFovLH(fovY, aspect, 0.1f, 100.0f);
     XMFLOAT4X4 viewProj;
     XMStoreFloat4x4(&viewProj, view * projection);
-    return MakeGizmoView(viewProj, eye, width, height, reversedZ);
+    return GizmoView::Make(viewProj, eye, width, height, reversedZ);
 }
 
 static GizmoRay MakeTestRay(float ox, float oy, float oz, float dx, float dy, float dz)
@@ -1766,6 +1812,13 @@ static GizmoPointer MakeTestPointer(float x, float y, const GizmoRay& ray)
     return pointer;
 }
 
+// One drag update on `target` with the size limits [lo, hi]. The plane is changed only when it returns true.
+static bool DragTo(CutPlane& target, GizmoDrag& drag, const GizmoPointer& pointer, float lo, float hi)
+{
+    target.SetExtentLimits(lo, hi);
+    return target.UpdateDrag(drag, pointer);
+}
+
 static void TestGizmoRay()
 {
     for (int variant = 0; variant < 2; ++variant)
@@ -1774,16 +1827,16 @@ static void TestGizmoRay()
         const GizmoView view = MakeTestView(reversed);
 
         // The middle of the window looks straight ahead (+Z), from a point on the near plane.
-        const GizmoRay center = MakeRay(view, 800.0f, 450.0f);
+        const GizmoRay center = CutPlane::MakeRay(view, 800.0f, 450.0f);
         CHECK(std::fabs(center.direction.x) < 1e-4f && std::fabs(center.direction.y) < 1e-4f && std::fabs(center.direction.z - 1.0f) < 1e-4f);
         CHECK(std::fabs(center.origin.z - (-4.9f)) < 1e-3f);
 
         // The corners match the field of view: tan(30 degrees) vertically, times the aspect ratio horizontally.
         const float tanHalf = std::tan(XM_PI / 6.0f), aspect = 1600.0f / 900.0f;
-        const GizmoRay topLeft = MakeRay(view, 0.0f, 0.0f);
+        const GizmoRay topLeft = CutPlane::MakeRay(view, 0.0f, 0.0f);
         CHECK(std::fabs(topLeft.direction.x / topLeft.direction.z + tanHalf * aspect) < 1e-3f);
         CHECK(std::fabs(topLeft.direction.y / topLeft.direction.z - tanHalf) < 1e-3f);
-        const GizmoRay bottomRight = MakeRay(view, 1600.0f, 900.0f);
+        const GizmoRay bottomRight = CutPlane::MakeRay(view, 1600.0f, 900.0f);
         CHECK(std::fabs(bottomRight.direction.x / bottomRight.direction.z - tanHalf * aspect) < 1e-3f);
         CHECK(std::fabs(bottomRight.direction.y / bottomRight.direction.z + tanHalf) < 1e-3f);
 
@@ -1793,13 +1846,13 @@ static void TestGizmoRay()
         CHECK(XMVectorGetX(XMVector3Length(XMVector3Cross(dir, toEye))) < 1e-3f);
 
         // A point on a ray projects back to the pixel the ray came from.
-        const GizmoRay ray = MakeRay(view, 400.0f, 300.0f);
+        const GizmoRay ray = CutPlane::MakeRay(view, 400.0f, 300.0f);
         const XMFLOAT3 onRay = { ray.origin.x + ray.direction.x * 3.0f, ray.origin.y + ray.direction.y * 3.0f, ray.origin.z + ray.direction.z * 3.0f };
         float px = 0.0f, py = 0.0f;
-        CHECK(ProjectToScreen(onRay, view, px, py) && std::fabs(px - 400.0f) < 0.5f && std::fabs(py - 300.0f) < 0.5f);
+        CHECK(CutPlane::ProjectToScreen(onRay, view, px, py) && std::fabs(px - 400.0f) < 0.5f && std::fabs(py - 300.0f) < 0.5f);
 
         // Behind the camera there is no screen position.
-        CHECK(!ProjectToScreen({ 0.0f, 0.0f, -9.0f }, view, px, py));
+        CHECK(!CutPlane::ProjectToScreen({ 0.0f, 0.0f, -9.0f }, view, px, py));
     }
 }
 
@@ -1807,43 +1860,42 @@ static void TestGizmoAxisDrag()
 {
     float param = 0.0f;
     // A ray along -Y through (2, 3, 4) passes the X axis at x = 2.
-    CHECK(ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(2, 3, 4, 0, -1, 0), param) && std::fabs(param - 2.0f) < 1e-5f);
+    CHECK(CutPlane::ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(2, 3, 4, 0, -1, 0), param) && std::fabs(param - 2.0f) < 1e-5f);
     // The axis does not have to start at the origin, nor point along +X.
-    CHECK(ClosestParamOnAxis({ 5, 0, 0 }, { 0, 0, 1 }, MakeTestRay(4, 3, 7, 0, -1, 0), param) && std::fabs(param - 7.0f) < 1e-5f);
-    CHECK(ClosestParamOnAxis({ 0, 0, 0 }, { 0, 0, -1 }, MakeTestRay(0, 1, 6, 1, 0, 0), param) && std::fabs(param + 6.0f) < 1e-5f);
+    CHECK(CutPlane::ClosestParamOnAxis({ 5, 0, 0 }, { 0, 0, 1 }, MakeTestRay(4, 3, 7, 0, -1, 0), param) && std::fabs(param - 7.0f) < 1e-5f);
+    CHECK(CutPlane::ClosestParamOnAxis({ 0, 0, 0 }, { 0, 0, -1 }, MakeTestRay(0, 1, 6, 1, 0, 0), param) && std::fabs(param + 6.0f) < 1e-5f);
     // Parallel and almost parallel rays give no answer instead of a huge number.
-    CHECK(!ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 0, 0), param));
-    CHECK(!ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 1e-4f, 0), param));
-    CHECK(ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 0.05f, 0.05f), param) && std::isfinite(param));
+    CHECK(!CutPlane::ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 0, 0), param));
+    CHECK(!CutPlane::ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 1e-4f, 0), param));
+    CHECK(CutPlane::ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 0.05f, 0.05f), param) && std::isfinite(param));
 
     // Ray and plane.
     XMFLOAT3 hit;
-    CHECK(RayPlaneHit(MakeTestRay(1, 2, -5, 0, 0, 1), { 0, 0, 0 }, { 0, 0, 1 }, hit) && std::fabs(hit.x - 1.0f) < 1e-5f && std::fabs(hit.y - 2.0f) < 1e-5f && std::fabs(hit.z) < 1e-5f);
-    CHECK(!RayPlaneHit(MakeTestRay(1, 2, -5, 1, 0, 0), { 0, 0, 0 }, { 0, 0, 1 }, hit));     // parallel
-    CHECK(!RayPlaneHit(MakeTestRay(1, 2, -5, 0, 0, -1), { 0, 0, 0 }, { 0, 0, 1 }, hit));    // the plane is behind the ray
+    CHECK(CutPlane::RayPlaneHit(MakeTestRay(1, 2, -5, 0, 0, 1), { 0, 0, 0 }, { 0, 0, 1 }, hit) && std::fabs(hit.x - 1.0f) < 1e-5f && std::fabs(hit.y - 2.0f) < 1e-5f && std::fabs(hit.z) < 1e-5f);
+    CHECK(!CutPlane::RayPlaneHit(MakeTestRay(1, 2, -5, 1, 0, 0), { 0, 0, 0 }, { 0, 0, 1 }, hit));     // parallel
+    CHECK(!CutPlane::RayPlaneHit(MakeTestRay(1, 2, -5, 0, 0, -1), { 0, 0, 0 }, { 0, 0, 1 }, hit));    // the plane is behind the ray
 
     // Dragging the X arrow: the center follows the closest point on the axis and nothing else moves.
     CutPlane plane;
     GizmoDrag drag;
-    CHECK(BeginDrag(GizmoHandle::MoveX, plane, MakeTestPointer(0, 0, MakeTestRay(1, 0, -5, 0, 0, 1)), drag));
+    CHECK(plane.BeginDrag(GizmoHandle::MoveX, MakeTestPointer(0, 0, MakeTestRay(1, 0, -5, 0, 0, 1)), drag));
     CutPlane moved;
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(3, 1.5f, -5, 0, 0, 1)), 0.1f, 3.0f, moved));
-    CHECK(std::fabs(moved.center.x - 2.0f) < 1e-5f && moved.center.y == 0.0f && moved.center.z == 0.0f);
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(-2, 0, -5, 0, 0, 1)), 0.1f, 3.0f, moved));
-    CHECK(std::fabs(moved.center.x + 3.0f) < 1e-5f);
+    CHECK(DragTo(moved, drag, MakeTestPointer(0, 0, MakeTestRay(3, 1.5f, -5, 0, 0, 1)), 0.1f, 3.0f));
+    CHECK(std::fabs(moved.GetCenter().x - 2.0f) < 1e-5f && moved.GetCenter().y == 0.0f && moved.GetCenter().z == 0.0f);
+    CHECK(DragTo(moved, drag, MakeTestPointer(0, 0, MakeTestRay(-2, 0, -5, 0, 0, 1)), 0.1f, 3.0f));
+    CHECK(std::fabs(moved.GetCenter().x + 3.0f) < 1e-5f);
     // The result always starts from the plane the drag began with, so nothing adds up between updates.
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(1, 0, -5, 0, 0, 1)), 0.1f, 3.0f, moved) && std::fabs(moved.center.x) < 1e-5f);
+    CHECK(DragTo(moved, drag, MakeTestPointer(0, 0, MakeTestRay(1, 0, -5, 0, 0, 1)), 0.1f, 3.0f) && std::fabs(moved.GetCenter().x) < 1e-5f);
     // A ray parallel to the axis cannot be used: the plane is left as it was.
-    CutPlane untouched = moved;
-    untouched.center.x = 42.0f;
-    CHECK(!UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(0, 1, 0, 1, 0, 0)), 0.1f, 3.0f, untouched) && untouched.center.x == 42.0f);
+    CutPlane untouched({ 42.0f, 0.0f, 0.0f }, moved.GetRotation(), moved.GetHalfExtents());
+    CHECK(!DragTo(untouched, drag, MakeTestPointer(0, 0, MakeTestRay(0, 1, 0, 1, 0, 0)), 0.1f, 3.0f) && untouched.GetCenter().x == 42.0f);
 
     // Dragging the XY square moves both axes by what the hit point on the plane moved.
-    CHECK(BeginDrag(GizmoHandle::MoveXY, plane, MakeTestPointer(0, 0, MakeTestRay(1, 1, -5, 0, 0, 1)), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(4, -2, -5, 0, 0, 1)), 0.1f, 3.0f, moved));
-    CHECK(std::fabs(moved.center.x - 3.0f) < 1e-5f && std::fabs(moved.center.y + 3.0f) < 1e-5f && std::fabs(moved.center.z) < 1e-5f);
+    CHECK(plane.BeginDrag(GizmoHandle::MoveXY, MakeTestPointer(0, 0, MakeTestRay(1, 1, -5, 0, 0, 1)), drag));
+    CHECK(DragTo(moved, drag, MakeTestPointer(0, 0, MakeTestRay(4, -2, -5, 0, 0, 1)), 0.1f, 3.0f));
+    CHECK(std::fabs(moved.GetCenter().x - 3.0f) < 1e-5f && std::fabs(moved.GetCenter().y + 3.0f) < 1e-5f && std::fabs(moved.GetCenter().z) < 1e-5f);
     // A ray lying in the plane cannot start the drag.
-    CHECK(!BeginDrag(GizmoHandle::MoveXY, plane, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
+    CHECK(!plane.BeginDrag(GizmoHandle::MoveXY, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
 }
 
 static void TestGizmoRotateDrag()
@@ -1854,86 +1906,85 @@ static void TestGizmoRotateDrag()
     const auto ray = [](float x, float y) { return MakeTestRay(x, y, -5, 0, 0, 1); };
 
     // The normal ring: from (1, 0) to (0, 1) is +90 degrees about +Z, which turns U onto +Y.
-    CHECK(BeginDrag(GizmoHandle::RotateN, plane, MakeTestPointer(0, 0, ray(1, 0)), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(0, 2)), 0.1f, 3.0f, turned));
-    CutPlaneFrame frame = MakeFrame(turned);
+    CHECK(plane.BeginDrag(GizmoHandle::RotateN, MakeTestPointer(0, 0, ray(1, 0)), drag));
+    CHECK(DragTo(turned, drag, MakeTestPointer(0, 0, ray(0, 2)), 0.1f, 3.0f));
+    CutPlane::Frame frame = turned.GetFrame();
     CHECK(std::fabs(frame.axisU.x) < 1e-5f && std::fabs(frame.axisU.y - 1.0f) < 1e-5f && FrameIsOrthonormal(frame, 1e-5));
     CHECK(std::fabs(QuaternionLength(turned) - 1.0) < 1e-6);
 
     // The other way round is -90 degrees.
-    CHECK(BeginDrag(GizmoHandle::RotateN, plane, MakeTestPointer(0, 0, ray(1, 0)), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(0, -1)), 0.1f, 3.0f, turned));
-    frame = MakeFrame(turned);
+    CHECK(plane.BeginDrag(GizmoHandle::RotateN, MakeTestPointer(0, 0, ray(1, 0)), drag));
+    CHECK(DragTo(turned, drag, MakeTestPointer(0, 0, ray(0, -1)), 0.1f, 3.0f));
+    frame = turned.GetFrame();
     CHECK(std::fabs(frame.axisU.y + 1.0f) < 1e-5f);
 
     // Going around more than half a turn keeps adding up: 100, 200 and 300 degrees.
-    CHECK(BeginDrag(GizmoHandle::RotateN, plane, MakeTestPointer(0, 0, ray(1, 0)), drag));
+    CHECK(plane.BeginDrag(GizmoHandle::RotateN, MakeTestPointer(0, 0, ray(1, 0)), drag));
     const float degrees[3] = { 100.0f, 200.0f, 300.0f };
     for (float d : degrees)
     {
         const float radians = d * XM_PI / 180.0f;
-        CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(std::cos(radians), std::sin(radians))), 0.1f, 3.0f, turned));
-        frame = MakeFrame(turned);
+        CHECK(DragTo(turned, drag, MakeTestPointer(0, 0, ray(std::cos(radians), std::sin(radians))), 0.1f, 3.0f));
+        frame = turned.GetFrame();
         CHECK(std::fabs(frame.axisU.x - std::cos(radians)) < 1e-4f && std::fabs(frame.axisU.y - std::sin(radians)) < 1e-4f);
     }
     CHECK(std::fabs(drag.totalAngle - 300.0f * XM_PI / 180.0f) < 1e-4f);
 
     // The U ring turns about the plane's own U axis (here +X): Y goes to Z, so the normal ends up at -Y.
-    CHECK(BeginDrag(GizmoHandle::RotateU, plane, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(-5, 0, 1, 1, 0, 0)), 0.1f, 3.0f, turned));
-    frame = MakeFrame(turned);
+    CHECK(plane.BeginDrag(GizmoHandle::RotateU, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
+    CHECK(DragTo(turned, drag, MakeTestPointer(0, 0, MakeTestRay(-5, 0, 1, 1, 0, 0)), 0.1f, 3.0f));
+    frame = turned.GetFrame();
     CHECK(std::fabs(frame.normal.y + 1.0f) < 1e-5f && std::fabs(frame.axisU.x - 1.0f) < 1e-5f);
 
     // The turn follows the plane's own axis once the plane is already rotated.
     CutPlane tilted;
-    RotateAroundLocalAxis(tilted, 1, 0.7f);
-    const CutPlaneFrame tiltedFrame = MakeFrame(tilted);
-    const XMFLOAT3 center = tilted.center;
+    tilted.RotateAroundLocalAxis(1, 0.7f);
+    const CutPlane::Frame tiltedFrame = tilted.GetFrame();
+    const XMFLOAT3 center = tilted.GetCenter();
     // A ray along the U axis hits the ring's plane at the center; use one slightly off it, perpendicular to U.
     const GizmoRay a = MakeTestRay(center.x - tiltedFrame.axisU.x * 5.0f + tiltedFrame.axisV.x, center.y - tiltedFrame.axisU.y * 5.0f + tiltedFrame.axisV.y,
         center.z - tiltedFrame.axisU.z * 5.0f + tiltedFrame.axisV.z, tiltedFrame.axisU.x, tiltedFrame.axisU.y, tiltedFrame.axisU.z);
     const GizmoRay b = MakeTestRay(center.x - tiltedFrame.axisU.x * 5.0f + tiltedFrame.normal.x, center.y - tiltedFrame.axisU.y * 5.0f + tiltedFrame.normal.y,
         center.z - tiltedFrame.axisU.z * 5.0f + tiltedFrame.normal.z, tiltedFrame.axisU.x, tiltedFrame.axisU.y, tiltedFrame.axisU.z);
-    CHECK(BeginDrag(GizmoHandle::RotateU, tilted, MakeTestPointer(0, 0, a), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, b), 0.1f, 3.0f, turned));
-    const CutPlaneFrame after = MakeFrame(turned);
+    CHECK(tilted.BeginDrag(GizmoHandle::RotateU, MakeTestPointer(0, 0, a), drag));
+    CHECK(DragTo(turned, drag, MakeTestPointer(0, 0, b), 0.1f, 3.0f));
+    const CutPlane::Frame after = turned.GetFrame();
     CHECK(std::fabs(Dot3(after.axisU, tiltedFrame.axisU) - 1.0) < 1e-4);         // the axis it turned about stays
     CHECK(std::fabs(Dot3(after.axisV, tiltedFrame.normal) - 1.0) < 1e-4);        // V went to the old normal (+90 degrees)
 }
 
 static void TestGizmoScaleDrag()
 {
-    CutPlane plane;
-    plane.halfExtents = { 2.0f, 1.0f };
+    CutPlane plane = FlatPlane(2.0f, 1.0f);
     GizmoDrag drag;
     CutPlane scaled;
     const auto ray = [](float x, float y) { return MakeTestRay(x, y, -5, 0, 0, 1); };
 
     // The U handle sits at the edge; dragging it by 1.5 widens the plane by 1.5. Only the U half length changes.
-    CHECK(BeginDrag(GizmoHandle::ScaleU, plane, MakeTestPointer(0, 0, ray(2, 0)), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(3.5f, 0.7f)), 0.1f, 4.0f, scaled));
-    CHECK(std::fabs(scaled.halfExtents.x - 3.5f) < 1e-5f && scaled.halfExtents.y == 1.0f);
+    CHECK(plane.BeginDrag(GizmoHandle::ScaleU, MakeTestPointer(0, 0, ray(2, 0)), drag));
+    CHECK(DragTo(scaled, drag, MakeTestPointer(0, 0, ray(3.5f, 0.7f)), 0.1f, 4.0f));
+    CHECK(std::fabs(scaled.GetHalfExtents().x - 3.5f) < 1e-5f && scaled.GetHalfExtents().y == 1.0f);
     // The range is kept at both ends.
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(100, 0)), 0.1f, 3.0f, scaled) && scaled.halfExtents.x == 3.0f);
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(-100, 0)), 0.1f, 3.0f, scaled) && scaled.halfExtents.x == 0.1f);
+    CHECK(DragTo(scaled, drag, MakeTestPointer(0, 0, ray(100, 0)), 0.1f, 3.0f) && scaled.GetHalfExtents().x == 3.0f);
+    CHECK(DragTo(scaled, drag, MakeTestPointer(0, 0, ray(-100, 0)), 0.1f, 3.0f) && scaled.GetHalfExtents().x == 0.1f);
 
     // The V handle works on the other half length.
-    CHECK(BeginDrag(GizmoHandle::ScaleV, plane, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(-5, 2.5f, 0, 1, 0, 0)), 0.1f, 4.0f, scaled));
-    CHECK(scaled.halfExtents.x == 2.0f && std::fabs(scaled.halfExtents.y - 2.5f) < 1e-5f);
+    CHECK(plane.BeginDrag(GizmoHandle::ScaleV, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
+    CHECK(DragTo(scaled, drag, MakeTestPointer(0, 0, MakeTestRay(-5, 2.5f, 0, 1, 0, 0)), 0.1f, 4.0f));
+    CHECK(scaled.GetHalfExtents().x == 2.0f && std::fabs(scaled.GetHalfExtents().y - 2.5f) < 1e-5f);
 
     // The center handle scales both sides with the cursor: up and right grows, down and left shrinks, e per 150 pixels.
-    CHECK(BeginDrag(GizmoHandle::ScaleUniform, plane, MakeTestPointer(800, 450, ray(0, 0)), drag));
-    CHECK(UpdateDrag(drag, MakeTestPointer(800, 300, ray(0, 0)), 0.1f, 10.0f, scaled));
-    CHECK(std::fabs(scaled.halfExtents.x - 2.0f * std::exp(1.0f)) < 1e-4f && std::fabs(scaled.halfExtents.y - std::exp(1.0f)) < 1e-4f);
-    CHECK(UpdateDrag(drag, MakeTestPointer(650, 450, ray(0, 0)), 0.1f, 10.0f, scaled));
-    CHECK(std::fabs(scaled.halfExtents.x - 2.0f * std::exp(-1.0f)) < 1e-4f);
+    CHECK(plane.BeginDrag(GizmoHandle::ScaleUniform, MakeTestPointer(800, 450, ray(0, 0)), drag));
+    CHECK(DragTo(scaled, drag, MakeTestPointer(800, 300, ray(0, 0)), 0.1f, 10.0f));
+    CHECK(std::fabs(scaled.GetHalfExtents().x - 2.0f * std::exp(1.0f)) < 1e-4f && std::fabs(scaled.GetHalfExtents().y - std::exp(1.0f)) < 1e-4f);
+    CHECK(DragTo(scaled, drag, MakeTestPointer(650, 450, ray(0, 0)), 0.1f, 10.0f));
+    CHECK(std::fabs(scaled.GetHalfExtents().x - 2.0f * std::exp(-1.0f)) < 1e-4f);
     // At the limit the ratio of the two sides is kept: 2 x 1 can grow to 3 x 1.5 at most.
-    CHECK(UpdateDrag(drag, MakeTestPointer(1500, 0, ray(0, 0)), 0.1f, 3.0f, scaled));
-    CHECK(std::fabs(scaled.halfExtents.x - 3.0f) < 1e-5f && std::fabs(scaled.halfExtents.y - 1.5f) < 1e-5f);
+    CHECK(DragTo(scaled, drag, MakeTestPointer(1500, 0, ray(0, 0)), 0.1f, 3.0f));
+    CHECK(std::fabs(scaled.GetHalfExtents().x - 3.0f) < 1e-5f && std::fabs(scaled.GetHalfExtents().y - 1.5f) < 1e-5f);
 
     // There is no handle for the normal.
-    CHECK(!BeginDrag(GizmoHandle::None, plane, MakeTestPointer(0, 0, ray(0, 0)), drag));
+    CHECK(!plane.BeginDrag(GizmoHandle::None, MakeTestPointer(0, 0, ray(0, 0)), drag));
 }
 
 static void TestGizmoPicking()
@@ -1945,14 +1996,14 @@ static void TestGizmoPicking()
     for (float eyeZ : { -5.0f, -12.0f })
     {
         const GizmoView v = MakeTestView(true, 1600.0f, 900.0f, eyeZ);
-        const float unit = GizmoUnit(v, plane.center);
+        const float unit = CutPlane::GetGizmoUnit(v, plane.GetCenter());
         float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
-        CHECK(ProjectToScreen({ 0, 0, 0 }, v, x0, y0) && ProjectToScreen({ unit, 0, 0 }, v, x1, y1));
+        CHECK(CutPlane::ProjectToScreen({ 0, 0, 0 }, v, x0, y0) && CutPlane::ProjectToScreen({ unit, 0, 0 }, v, x1, y1));
         CHECK(std::fabs(std::hypot(x1 - x0, y1 - y0) - 100.0f) < 3.0f);
     }
 
     // The X arrow: its middle is on the handle, a few pixels off is still on it, far away is not.
-    const std::vector<GizmoPrimitive> move = BuildGizmoPrimitives(view, plane, GizmoTool::Move);
+    const std::vector<GizmoPrimitive> move = plane.BuildGizmoPrimitives(view, GizmoTool::Move);
     CHECK(move.size() == 6);
     const GizmoPrimitive* xArrow = nullptr;
     const GizmoPrimitive* xySquare = nullptr;
@@ -1967,37 +2018,36 @@ static void TestGizmoPicking()
     if (xArrow != nullptr && xySquare != nullptr)
     {
         float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
-        CHECK(ProjectToScreen(xArrow->points[0], view, ax, ay) && ProjectToScreen(xArrow->points[1], view, bx, by));
+        CHECK(CutPlane::ProjectToScreen(xArrow->points[0], view, ax, ay) && CutPlane::ProjectToScreen(xArrow->points[1], view, bx, by));
         const float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f;
-        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my) == GizmoHandle::MoveX);
-        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my + 7.0f) == GizmoHandle::MoveX);
-        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my + 9.0f) == GizmoHandle::None);
-        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my + 30.0f) == GizmoHandle::None);
+        CHECK(plane.PickHandle(view, GizmoTool::Move, mx, my) == GizmoHandle::MoveX);
+        CHECK(plane.PickHandle(view, GizmoTool::Move, mx, my + 7.0f) == GizmoHandle::MoveX);
+        CHECK(plane.PickHandle(view, GizmoTool::Move, mx, my + 9.0f) == GizmoHandle::None);
+        CHECK(plane.PickHandle(view, GizmoTool::Move, mx, my + 30.0f) == GizmoHandle::None);
         // The middle of the XY square is on the square (a filled cell, not just its border).
         float cx = 0.0f, cy = 0.0f;
         float sx = 0.0f, sy = 0.0f;
-        CHECK(ProjectToScreen(xySquare->points[0], view, cx, cy) && ProjectToScreen(xySquare->points[2], view, sx, sy));
-        CHECK(PickHandle(view, plane, GizmoTool::Move, (cx + sx) * 0.5f, (cy + sy) * 0.5f) == GizmoHandle::MoveXY);
+        CHECK(CutPlane::ProjectToScreen(xySquare->points[0], view, cx, cy) && CutPlane::ProjectToScreen(xySquare->points[2], view, sx, sy));
+        CHECK(plane.PickHandle(view, GizmoTool::Move, (cx + sx) * 0.5f, (cy + sy) * 0.5f) == GizmoHandle::MoveXY);
     }
 
     // The rings are picked on the ring line, not inside.
-    const std::vector<GizmoPrimitive> rings = BuildGizmoPrimitives(view, plane, GizmoTool::Rotate);
+    const std::vector<GizmoPrimitive> rings = plane.BuildGizmoPrimitives(view, GizmoTool::Rotate);
     CHECK(rings.size() == 3);
     float rx = 0.0f, ry = 0.0f;
-    CHECK(!rings.empty() && ProjectToScreen(rings[2].points[0], view, rx, ry));
-    CHECK(rings.size() == 3 && PickHandle(view, plane, GizmoTool::Rotate, rx, ry) != GizmoHandle::None);
+    CHECK(!rings.empty() && CutPlane::ProjectToScreen(rings[2].points[0], view, rx, ry));
+    CHECK(rings.size() == 3 && plane.PickHandle(view, GizmoTool::Rotate, rx, ry) != GizmoHandle::None);
     // The U and V rings are seen edge-on from here and cross the center as lines, so test a point inside the N ring
     // but away from those lines.
-    CHECK(PickHandle(view, plane, GizmoTool::Rotate, 840.0f, 410.0f) == GizmoHandle::None);
+    CHECK(plane.PickHandle(view, GizmoTool::Rotate, 840.0f, 410.0f) == GizmoHandle::None);
 
     // The scale tool: the center handle, and the two edge handles at the half lengths.
-    CutPlane wide;
-    wide.halfExtents = { 2.0f, 1.0f };
+    const CutPlane wide = FlatPlane(2.0f, 1.0f);
     float ux = 0.0f, uy = 0.0f, cx = 0.0f, cy = 0.0f;
-    CHECK(ProjectToScreen({ 2.0f, 0.0f, 0.0f }, view, ux, uy) && ProjectToScreen({ 0.0f, 0.0f, 0.0f }, view, cx, cy));
-    CHECK(PickHandle(view, wide, GizmoTool::Scale, ux, uy) == GizmoHandle::ScaleU);
-    CHECK(PickHandle(view, wide, GizmoTool::Scale, cx, cy) == GizmoHandle::ScaleUniform);
-    CHECK(PickHandle(view, wide, GizmoTool::Hidden, cx, cy) == GizmoHandle::None);
+    CHECK(CutPlane::ProjectToScreen({ 2.0f, 0.0f, 0.0f }, view, ux, uy) && CutPlane::ProjectToScreen({ 0.0f, 0.0f, 0.0f }, view, cx, cy));
+    CHECK(wide.PickHandle(view, GizmoTool::Scale, ux, uy) == GizmoHandle::ScaleU);
+    CHECK(wide.PickHandle(view, GizmoTool::Scale, cx, cy) == GizmoHandle::ScaleUniform);
+    CHECK(wide.PickHandle(view, GizmoTool::Hidden, cx, cy) == GizmoHandle::None);
 
     // Handles that overlap on the screen: the one closer to the camera wins, whatever the order.
     GizmoPrimitive nearHandle, farHandle;
@@ -2007,8 +2057,8 @@ static void TestGizmoPicking()
     farHandle.handle = GizmoHandle::MoveY;
     farHandle.shape = GizmoShape::Point;
     farHandle.points = { { 0.0f, 0.0f, 2.0f } };       // 7 from the eye, same pixel
-    CHECK(PickFromPrimitives(view, { nearHandle, farHandle }, 800.0f, 450.0f) == GizmoHandle::MoveX);
-    CHECK(PickFromPrimitives(view, { farHandle, nearHandle }, 800.0f, 450.0f) == GizmoHandle::MoveX);
+    CHECK(CutPlane::PickFromPrimitives(view, { nearHandle, farHandle }, 800.0f, 450.0f) == GizmoHandle::MoveX);
+    CHECK(CutPlane::PickFromPrimitives(view, { farHandle, nearHandle }, 800.0f, 450.0f) == GizmoHandle::MoveX);
     // Same distance to the eye: the one under the cursor wins.
     GizmoPrimitive left, right;
     left.handle = GizmoHandle::RotateU;
@@ -2018,79 +2068,109 @@ static void TestGizmoPicking()
     right.shape = GizmoShape::Point;
     right.points = { { 0.05f, 0.0f, 0.0f } };
     float lx = 0.0f, ly = 0.0f;
-    CHECK(ProjectToScreen({ 0.05f, 0.0f, 0.0f }, view, lx, ly));
-    CHECK(PickFromPrimitives(view, { left, right }, lx, ly, 100.0f) == GizmoHandle::RotateV);
+    CHECK(CutPlane::ProjectToScreen({ 0.05f, 0.0f, 0.0f }, view, lx, ly));
+    CHECK(CutPlane::PickFromPrimitives(view, { left, right }, lx, ly, 100.0f) == GizmoHandle::RotateV);
     // A handle behind the camera is never picked.
     GizmoPrimitive behind;
     behind.handle = GizmoHandle::MoveZ;
     behind.shape = GizmoShape::Point;
     behind.points = { { 0.0f, 0.0f, -9.0f } };
-    CHECK(PickFromPrimitives(view, { behind }, 800.0f, 450.0f, 1000.0f) == GizmoHandle::None);
+    CHECK(CutPlane::PickFromPrimitives(view, { behind }, 800.0f, 450.0f, 1000.0f) == GizmoHandle::None);
 }
 
 static void TestGizmoStateMachine()
 {
     const GizmoView view = MakeTestView(true);
     CutPlane plane;
-    PlaneGizmo gizmo;
-    gizmo.SetTool(GizmoTool::Move);
-    CutPlane next;
+    plane.SetExtentLimits(0.1f, 3.0f);
+    plane.SetGizmoTool(GizmoTool::Move);
+    CHECK(plane.GetGizmoTool() == GizmoTool::Move);
 
     float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
-    const std::vector<GizmoPrimitive> prims = BuildGizmoPrimitives(view, plane, GizmoTool::Move);
-    CHECK(ProjectToScreen(prims[0].points[0], view, ax, ay) && ProjectToScreen(prims[0].points[1], view, bx, by));
+    const std::vector<GizmoPrimitive> prims = plane.BuildGizmoPrimitives(view, GizmoTool::Move);
+    CHECK(CutPlane::ProjectToScreen(prims[0].points[0], view, ax, ay) && CutPlane::ProjectToScreen(prims[0].points[1], view, bx, by));
     GizmoInput input;
     input.cursorValid = true;
     input.x = (ax + bx) * 0.5f;
     input.y = (ay + by) * 0.5f;
+    const GizmoInput onArrow = input;
 
     // Hover only.
-    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next));
-    CHECK(gizmo.Hovered() == GizmoHandle::MoveX && !gizmo.Dragging());
+    CHECK(!plane.UpdateGizmo(view, input));
+    CHECK(plane.GetHoveredHandle() == GizmoHandle::MoveX && !plane.IsDragging());
 
     // While the camera is being used nothing is hovered or started.
     input.blocked = true;
     input.leftPressed = input.leftDown = true;
-    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && gizmo.Hovered() == GizmoHandle::None && !gizmo.Dragging());
+    CHECK(!plane.UpdateGizmo(view, input) && plane.GetHoveredHandle() == GizmoHandle::None && !plane.IsDragging());
     input.blocked = false;
 
     // Press on the handle, then move the cursor along the arrow: the plane follows.
-    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next));
-    CHECK(gizmo.Dragging() && gizmo.Active() == GizmoHandle::MoveX);
+    CHECK(!plane.UpdateGizmo(view, input));
+    CHECK(plane.IsDragging() && plane.GetActiveHandle() == GizmoHandle::MoveX);
     input.leftPressed = false;
     input.x += 80.0f;
-    CHECK(gizmo.Update(view, plane, input, 0.1f, 3.0f, next));
-    CHECK(next.center.x > 0.2f && next.center.y == 0.0f && next.center.z == 0.0f);
+    CHECK(plane.UpdateGizmo(view, input));
+    CHECK(plane.GetCenter().x > 0.2f && plane.GetCenter().y == 0.0f && plane.GetCenter().z == 0.0f);
 
     // Outside the window the plane stays where it is; releasing ends the drag.
+    const float movedX = plane.GetCenter().x;
     input.cursorValid = false;
-    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && gizmo.Dragging());
+    CHECK(!plane.UpdateGizmo(view, input) && plane.IsDragging() && plane.GetCenter().x == movedX);
     input.cursorValid = true;
     input.leftDown = false;
-    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && !gizmo.Dragging());
+    CHECK(!plane.UpdateGizmo(view, input) && !plane.IsDragging() && plane.GetCenter().x == movedX);
 
     // Changing the tool during a drag cancels it; the hidden tool shows and picks nothing.
+    CutPlane fresh;
+    fresh.SetGizmoTool(GizmoTool::Move);
+    input = onArrow;
     input.leftDown = input.leftPressed = true;
-    input.x -= 80.0f;
-    gizmo.Update(view, plane, input, 0.1f, 3.0f, next);
-    CHECK(gizmo.Dragging());
-    gizmo.SetTool(GizmoTool::Hidden);
-    CHECK(!gizmo.Dragging() && gizmo.Hovered() == GizmoHandle::None);
-    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && !gizmo.Dragging());
+    fresh.UpdateGizmo(view, input);
+    CHECK(fresh.IsDragging());
+    fresh.SetGizmoTool(GizmoTool::Hidden);
+    CHECK(!fresh.IsDragging() && fresh.GetHoveredHandle() == GizmoHandle::None);
+    CHECK(!fresh.UpdateGizmo(view, input) && !fresh.IsDragging());
+
+    // CancelGizmo ends a drag and keeps the tool.
+    fresh.SetGizmoTool(GizmoTool::Move);
+    fresh.UpdateGizmo(view, input);
+    CHECK(fresh.IsDragging());
+    fresh.CancelGizmo();
+    CHECK(!fresh.IsDragging() && fresh.GetHoveredHandle() == GizmoHandle::None && fresh.GetGizmoTool() == GizmoTool::Move);
+
+    // A drag that ends past the size limits is clamped by UpdateGizmo (the Scale tool).
+    CutPlane scaler = FlatPlane(2.0f, 1.0f);
+    scaler.SetExtentLimits(0.1f, 3.0f);
+    scaler.SetGizmoTool(GizmoTool::Scale);
+    float ux = 0.0f, uy = 0.0f;
+    CHECK(CutPlane::ProjectToScreen({ 2.0f, 0.0f, 0.0f }, view, ux, uy));
+    GizmoInput scaleInput;
+    scaleInput.cursorValid = true;
+    scaleInput.x = ux;
+    scaleInput.y = uy;
+    scaleInput.leftDown = scaleInput.leftPressed = true;
+    scaler.UpdateGizmo(view, scaleInput);
+    CHECK(scaler.GetActiveHandle() == GizmoHandle::ScaleU);
+    scaleInput.leftPressed = false;
+    scaleInput.x = ux + 500.0f;
+    CHECK(scaler.UpdateGizmo(view, scaleInput) && scaler.GetHalfExtents().x == 3.0f);
 }
 
 static void TestGizmoBake()
 {
     const GizmoView view = MakeTestView(true);
     CutPlane plane;
+    plane.SetGizmoTool(GizmoTool::Hidden);
     ProceduralMeshData hidden;
-    BakeGizmo(view, plane, GizmoTool::Hidden, GizmoHandle::None, GizmoHandle::None, hidden);
+    plane.BakeGizmo(view, hidden);
     CHECK(hidden.vertices.empty() && hidden.indices.empty() && hidden.sections.empty());
 
     for (GizmoTool tool : { GizmoTool::Move, GizmoTool::Rotate, GizmoTool::Scale })
     {
+        plane.SetGizmoTool(tool);
         ProceduralMeshData data;
-        BakeGizmo(view, plane, tool, GizmoHandle::None, GizmoHandle::None, data);
+        plane.BakeGizmo(view, data);
         CHECK(!data.vertices.empty() && !data.indices.empty() && data.sections.size() == 1);
         ProceduralMesh mesh;
         std::string error;
@@ -2102,10 +2182,26 @@ static void TestGizmoBake()
         CHECK(!yellow);
     }
 
-    ProceduralMeshData hovered, dragged, plain;
-    BakeGizmo(view, plane, GizmoTool::Move, GizmoHandle::MoveX, GizmoHandle::None, hovered);
-    BakeGizmo(view, plane, GizmoTool::Move, GizmoHandle::None, GizmoHandle::MoveY, dragged);
-    BakeGizmo(view, plane, GizmoTool::Move, GizmoHandle::None, GizmoHandle::None, plain);
+    // Hover and drag come from the plane's own gizmo state: the cursor on the X arrow, then the button pressed.
+    plane.SetGizmoTool(GizmoTool::Move);
+    ProceduralMeshData plain;
+    plane.BakeGizmo(view, plain);
+    float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
+    const std::vector<GizmoPrimitive> prims = plane.BuildGizmoPrimitives(view, GizmoTool::Move);
+    CHECK(CutPlane::ProjectToScreen(prims[0].points[0], view, ax, ay) && CutPlane::ProjectToScreen(prims[0].points[1], view, bx, by));
+    GizmoInput input;
+    input.cursorValid = true;
+    input.x = (ax + bx) * 0.5f;
+    input.y = (ay + by) * 0.5f;
+    plane.UpdateGizmo(view, input);
+    CHECK(plane.GetHoveredHandle() == GizmoHandle::MoveX && !plane.IsDragging());
+    ProceduralMeshData hovered;
+    plane.BakeGizmo(view, hovered);
+    input.leftDown = input.leftPressed = true;
+    plane.UpdateGizmo(view, input);
+    CHECK(plane.GetActiveHandle() == GizmoHandle::MoveX);
+    ProceduralMeshData dragged;
+    plane.BakeGizmo(view, dragged);
     const auto yellowCount = [](const ProceduralMeshData& d)
     {
         size_t count = 0;
@@ -2157,9 +2253,10 @@ static SlotMatrices PoseB()
 static PatchPiece MakeSkinnedBox(const SlotMatrices& slots)
 {
     PatchPiece box = MakeBox();
+    std::vector<SkinVertex> skinVertices = GetSkinVertices(box);
     for (size_t i = 0; i < box.nodes.size(); ++i)
     {
-        SkinNode& skin = box.originNodes[i];
+        SkinVertex& skin = skinVertices[i];
         skin.bindPosition = box.nodes[i].position;
         skin.jointCount = 2;
         skin.joints[0] = 0;
@@ -2168,9 +2265,10 @@ static PatchPiece MakeSkinnedBox(const SlotMatrices& slots)
         skin.weights[0] = 1.0f - w1;
         skin.weights[1] = w1;
     }
+    SetSkinVertices(box, skinVertices);
     SkinStats stats;
     std::string detail;
-    const bool ok = SkinPatchPiece(box, slots, &stats, &detail);
+    const bool ok = box.skin->Apply(box, slots, &stats, &detail);
     ++g_checks;
     if (!ok)
     {
@@ -2205,25 +2303,27 @@ static void TestSkinIdentity()
 {
     PatchPiece box = MakeBox();
     const PatchPiece reference = box;
-    for (GeomNode& node : box.nodes)
+    for (PatchNode& node : box.nodes)
         node.position = { node.position.x + 100.0f, -7.0f, 3.0f };
     SkinStats stats;
     std::string detail;
-    CHECK(SkinPatchPiece(box, IdentitySlots(1), &stats, &detail));
+    CHECK(box.skin->Apply(box, IdentitySlots(1), &stats, &detail));
     CHECK(MaxNodeDelta(box, reference) == 0.0);
-    CHECK(stats.originNodesEvaluated == 8 && stats.surfaceNodesWritten == 8 && stats.capNodesSkipped == 0);
+    CHECK(stats.skinVerticesEvaluated == 8 && stats.surfaceVerticesWritten == 8 && stats.capVerticesSkipped == 0);
 }
 
 // 2. One joint with a rotation and a translation: bind * R * T, row-vector convention.
 static void TestSkinSingleJoint()
 {
     PatchPiece tri = MakePiece({ { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, { { 0, 1, 2 } });
-    for (SkinNode& skin : tri.originNodes)
+    std::vector<SkinVertex> triSkin = GetSkinVertices(tri);
+    for (SkinVertex& skin : triSkin)
         skin.joints[0] = 1;
+    SetSkinVertices(tri, triSkin);
     SlotMatrices slots = IdentitySlots(2);
     slots[0][1] = ToFloat4x4(DirectX::XMMatrixRotationZ(1.5707963267948966f) * DirectX::XMMatrixTranslation(5.0f, 0.0f, 0.0f));
     std::string detail;
-    CHECK(SkinPatchPiece(tri, slots, nullptr, &detail));
+    CHECK(tri.skin->Apply(tri, slots, nullptr, &detail));
     const XMFLOAT3 expected[3] = { { 5, 1, 0 }, { 4, 0, 0 }, { 5, 0, 1 } };    // (1,0,0)->(0,1,0)+5x, ...
     for (int i = 0; i < 3; ++i)
         CHECK(std::fabs(tri.nodes[i].position.x - expected[i].x) < 1e-5f && std::fabs(tri.nodes[i].position.y - expected[i].y) < 1e-5f
@@ -2235,26 +2335,28 @@ static void TestSkinSingleJoint()
 static void TestSkinTwoJointBlend()
 {
     PatchPiece tri = MakePiece({ { 1, 1, 1 }, { 2, 2, 2 }, { 3, 3, 3 } }, { { 0, 1, 2 } });
-    SkinNode& skin = tri.originNodes[0];
+    std::vector<SkinVertex> triSkin = GetSkinVertices(tri);
+    SkinVertex& skin = triSkin[0];
     skin.jointCount = 2;
     skin.joints[0] = 0;
     skin.joints[1] = 1;
     skin.weights[0] = 0.25f;
     skin.weights[1] = 0.75f;
+    SetSkinVertices(tri, triSkin);
     SlotMatrices slots(1);
     slots[0].push_back(ToFloat4x4(DirectX::XMMatrixTranslation(4.0f, 0.0f, 0.0f)));
     slots[0].push_back(ToFloat4x4(DirectX::XMMatrixTranslation(0.0f, 8.0f, 0.0f)));
-    CHECK(SkinPatchPiece(tri, slots));
+    CHECK(tri.skin->Apply(tri, slots));
     CHECK(std::fabs(tri.nodes[0].position.x - 2.0f) < 1e-6f && std::fabs(tri.nodes[0].position.y - 7.0f) < 1e-6f
         && std::fabs(tri.nodes[0].position.z - 1.0f) < 1e-6f);
     // The same blend straight from SkinPoint.
     XMFLOAT3 point;
-    DirectX::XMStoreFloat3(&point, SkinPoint(slots[0].data(), 2, skin.joints, skin.weights, 2, skin.bindPosition));
+    DirectX::XMStoreFloat3(&point, Skinning::SkinPoint(slots[0].data(), 2, skin.joints, skin.weights, 2, skin.bindPosition));
     CHECK(point.x == tri.nodes[0].position.x && point.y == tri.nodes[0].position.y && point.z == tri.nodes[0].position.z);
 }
 
 // 4. A piece cut in a pose and skinned with the same matrices again lands on the cut positions:
-//    cut nodes are driven by their SurfaceOrigin, with no joint or weight of their own.
+//    cut nodes are driven by their PatchOrigin, with no joint or weight of their own.
 static void TestSkinMatchesSliceNodes()
 {
     const SlotMatrices pose = PoseA();
@@ -2264,15 +2366,15 @@ static void TestSkinMatchesSliceNodes()
     for (PatchPiece* piece : { &result.positive, &result.negative })
     {
         PatchPiece skinned = *piece;
-        for (GeomNode& node : skinned.nodes)
+        for (PatchNode& node : skinned.nodes)
             node.position = { 0.0f, 0.0f, 0.0f };
         SkinStats stats;
         std::string detail;
-        CHECK(SkinPatchPiece(skinned, pose, &stats, &detail));
+        CHECK(skinned.skin->Apply(skinned, pose, &stats, &detail));
         const double tolerance = 1e-5 * ComputePieceRadius(*piece);
         CHECK(MaxNodeDelta(skinned, *piece) <= tolerance);
-        CHECK(stats.capNodesSkipped == 0);
-        CHECK(stats.originNodesEvaluated <= box.originNodes.size());
+        CHECK(stats.capVerticesSkipped == 0);
+        CHECK(stats.skinVerticesEvaluated <= box.skin->GetVertices().size());
     }
 }
 
@@ -2289,14 +2391,14 @@ static void TestSkinKeepsSeamsAndCapsTogether()
 
     for (PatchPiece* piece : { &result.positive, &result.negative })
     {
-        for (const GeomNode& node : piece->nodes)
-            CHECK(node.kind == NodeKind::Surface);          // no cap-only nodes exist
+        for (const PatchNode& node : piece->nodes)
+            CHECK(node.kind == PatchNodeKind::Surface);          // no cap-only nodes exist
         ProceduralMeshData baked;
         BuildRenderMesh(*piece, baked);
         const SlotMatrices pose = PoseA();
         SkinStats skinStats;
-        CHECK(SkinPatchPiece(*piece, pose, &skinStats, &detail));
-        CHECK(skinStats.capNodesSkipped == 0);
+        CHECK(piece->skin->Apply(*piece, pose, &skinStats, &detail));
+        CHECK(skinStats.capVerticesSkipped == 0);
         CHECK(UpdateRenderPositions(*piece, baked.vertices));
 
         std::vector<int> firstCorner(piece->nodes.size(), -1);
@@ -2313,8 +2415,8 @@ static void TestSkinKeepsSeamsAndCapsTogether()
             CHECK(SamePosition(baked.vertices[c].position, baked.vertices[firstCorner[node]].position));
             CHECK(SamePosition(baked.vertices[c].position, piece->nodes[node].position));
         }
-        for (const Face& face : piece->faces)
-            capSeen = capSeen || face.kind == FaceKind::Cap;
+        for (const PatchFace& face : piece->faces)
+            capSeen = capSeen || face.kind == PatchFaceKind::Cap;
         CHECK(seamSeen && capSeen);
     }
 }
@@ -2326,7 +2428,7 @@ static void TestSkinRefusesSkinState()
     box.skinStateId = 3;
     const PatchPiece before = box;
     std::string detail;
-    CHECK(!SkinPatchPiece(box, IdentitySlots(1), nullptr, &detail));
+    CHECK(!box.skin->Apply(box, IdentitySlots(1), nullptr, &detail));
     CHECK(detail.find("skin state") != std::string::npos);
     CHECK(MaxNodeDelta(box, before) == 0.0);
 }
@@ -2337,7 +2439,7 @@ static void TestSkinAfterTwoCuts()
     const SlotMatrices pose = PoseA();
     const PatchPiece box = MakeSkinnedBox(pose);
     double yLow = 1e30, yHigh = -1e30;
-    for (const GeomNode& node : box.nodes)
+    for (const PatchNode& node : box.nodes)
     {
         yLow = std::min<double>(yLow, node.position.y);
         yHigh = std::max<double>(yHigh, node.position.y);
@@ -2347,7 +2449,7 @@ static void TestSkinAfterTwoCuts()
     CHECK_STATUS(SlicePatch(box, MakePlane(0, yMid, 0, 0, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
     // Cut the upper half again, a quarter of the way up. Only the surface is crossed.
     double upLow = 1e30, upHigh = -1e30;
-    for (const GeomNode& node : first.positive.nodes)
+    for (const PatchNode& node : first.positive.nodes)
     {
         upLow = std::min<double>(upLow, node.position.y);
         upHigh = std::max<double>(upHigh, node.position.y);
@@ -2357,37 +2459,58 @@ static void TestSkinAfterTwoCuts()
     for (PatchPiece* piece : { &second.positive, &second.negative })
     {
         PatchPiece skinned = *piece;
-        for (GeomNode& node : skinned.nodes)
+        for (PatchNode& node : skinned.nodes)
             node.position = { 9.0f, 9.0f, 9.0f };
         std::string detail;
-        CHECK(SkinPatchPiece(skinned, pose, nullptr, &detail));
+        CHECK(skinned.skin->Apply(skinned, pose, nullptr, &detail));
         CHECK(MaxNodeDelta(skinned, *piece) <= 1e-5 * ComputePieceRadius(*piece));
     }
-    // A cut node of the second generation depends on at most three origin nodes.
-    for (const GeomNode& node : second.positive.nodes)
-        CHECK(node.origin.node[0] != kNoNode);
+    // 두 번째 세대의 절단 정점은 스킨 정점 최대 3개에 의존한다.
+    for (const PatchNode& node : second.positive.nodes)
+        CHECK(node.origin.skinVertex[0] != kNoNode);
     // New pose: the second-generation piece moves with the same matrices.
     PatchPiece moved = second.positive;
-    CHECK(SkinPatchPiece(moved, PoseB()));
+    CHECK(moved.skin->Apply(moved, PoseB()));
     CHECK(MaxNodeDelta(moved, second.positive) > 0.1);
 }
 
 // Bad input is refused without touching the piece.
+// 용접이 만든 skin은 자른 두 piece가 같은 객체로 공유하고, skin이 없는 piece는 스킨 정점이 없는 표로 검증한다.
+static void TestSkinningShared()
+{
+    PatchPiece box;
+    WeldStats stats;
+    std::string detail;
+    CHECK_STATUS(BuildPatchPiece(MakeBoxWeldInput(), kDefaultEpsilonScale, box, stats, &detail), SliceStatus::Ok, detail);
+    CHECK(box.skin != nullptr && box.skin->GetVertices().size() == 8);
+
+    SliceResult result;
+    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.positive.skin == box.skin && result.negative.skin == box.skin);
+    CHECK(box.skin.use_count() >= 3);
+
+    // skin이 없으면 Surface 정점의 origin이 범위 밖이라 InvalidOrigin이다.
+    PatchPiece noSkin = box;
+    noSkin.skin.reset();
+    CHECK_STATUS(ValidatePatchPiece(noSkin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
+    CHECK(box.skin != nullptr);
+}
+
 static void TestSkinRefusesBadInput()
 {
     PatchPiece box = MakeSkinnedBox(PoseA());
     const PatchPiece before = box;
     std::string detail;
-    CHECK(!SkinPatchPiece(box, IdentitySlots(1), nullptr, &detail));           // joint 1 has no matrix
+    CHECK(!box.skin->Apply(box, IdentitySlots(1), nullptr, &detail));           // joint 1 has no matrix
     CHECK(detail.find("joint") != std::string::npos && MaxNodeDelta(box, before) == 0.0);
 
-    CHECK(!SkinPatchPiece(box, SlotMatrices(), nullptr, &detail));             // no slots at all
+    CHECK(!box.skin->Apply(box, SlotMatrices(), nullptr, &detail));             // no slots at all
     CHECK(detail.find("slot") != std::string::npos && MaxNodeDelta(box, before) == 0.0);
 
     PatchPiece badOrigin = before;
-    badOrigin.nodes[2].origin.node[0] = 99;
-    CHECK(!SkinPatchPiece(badOrigin, PoseA(), nullptr, &detail));
-    CHECK(detail.find("origin") != std::string::npos && MaxNodeDelta(badOrigin, before) == 0.0);
+    badOrigin.nodes[2].origin.skinVertex[0] = 99;
+    CHECK(!badOrigin.skin->Apply(badOrigin, PoseA(), nullptr, &detail));
+    CHECK(detail.find("skin vertex") != std::string::npos && MaxNodeDelta(badOrigin, before) == 0.0);
 }
 
 // ---------------------------------------------------------------- main
@@ -2436,6 +2559,7 @@ int main()
     TestCutPlaneAccumulatedRotation();
     TestCutPlaneContains();
     TestCutPlaneScale();
+    TestCutPlaneFactories();
     TestCutPlaneToSlicePlane();
     TestLoopsInsidePlane();
     TestPickChain();
@@ -2459,6 +2583,7 @@ int main()
     TestSkinKeepsSeamsAndCapsTogether();
     TestSkinRefusesSkinState();
     TestSkinAfterTwoCuts();
+    TestSkinningShared();
     TestSkinRefusesBadInput();
 
     std::printf("%d checks, %d failed\n", g_checks, g_failures);

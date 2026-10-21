@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "PlaneGizmo.h"
+#include "../Geometry/CutPlane.h"
 #include "../ProceduralMesh.h"
 #include "../Rendering/ProceduralMeshRenderer.h"
 #include "VectorMath.h"
@@ -34,8 +34,9 @@ namespace MeshCutting
         RenderMode GetRenderMode() const { return m_RenderMode; }
         static const wchar_t* RenderModeName(RenderMode mode);
 
-        // 기즈모를 그릴 때 필요한 것. 프레임마다 Draw 전에 부른다. view의 크기는 창 클라이언트 영역이다.
-        void SetGizmo(const GizmoView& view, GizmoTool tool, GizmoHandle hovered, GizmoHandle active);
+        // 기즈모를 그릴 때 필요한 카메라 정보. 프레임마다 Draw 전에 부른다. view의 크기는 창 클라이언트 영역이다.
+        // 도구, 호버, 드래그 상태는 컨트롤러의 평면이 가지고 있다.
+        void SetGizmoView(const GizmoView& view);
 
         // Brings the meshes up to date with the controller (rebakes after a new cut, otherwise only
         // refreshes positions) and draws them. modelRadius is the display offset of the cut pieces
@@ -65,9 +66,6 @@ namespace MeshCutting
 
         RenderMode m_RenderMode = RenderMode::Solid;
         GizmoView m_GizmoView;
-        GizmoTool m_GizmoTool = GizmoTool::Move;
-        GizmoHandle m_GizmoHovered = GizmoHandle::None;
-        GizmoHandle m_GizmoActive = GizmoHandle::None;
         bool m_HaveGizmoView = false;
 
         uint64_t m_PieceGeneration = 0;

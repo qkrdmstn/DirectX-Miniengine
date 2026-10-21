@@ -34,32 +34,29 @@ NDC 흐름은 반대다. 절단 위치(평면)가 먼저 정해지고, 그 위�
 
 ### 2.1 정의
 ```cpp
-// World 공간에 정의된 유한 사각 평면. 어떤 joint에도 묶이지 않는다.
-struct CutPlane
+// World 공간에 정의된 유한 사각 평면. 어떤 joint에도 묶이지 않는다. (K-1에서 클래스로 캡슐화했다.)
+class CutPlane
 {
-    DirectX::XMFLOAT3 center = { 0.0f, 0.0f, 0.0f };
-    DirectX::XMFLOAT4 rotation = { 0.0f, 0.0f, 0.0f, 1.0f };   // 쿼터니언. 로컬 +Z = 법선, +X/+Y = 평면 축
-    DirectX::XMFLOAT2 halfExtents = { 1.0f, 1.0f };             // 로컬 X/Y 방향 반 길이
-};
+public:
+    struct Frame { /* center, axisU, axisV, normal, halfExtents: 정규 직교, u × v = n */ };
 
-struct CutPlaneFrame                  // CutPlane에서 매번 계산
-{
-    DirectX::XMFLOAT3 center, axisU, axisV, normal;   // 정규 직교, u × v = n
-    DirectX::XMFLOAT2 halfExtents;
+    Frame GetFrame() const;                  // 이전 MakeFrame
+    SlicePlane ToSlicePlane() const;         // 슬라이서에는 무한 평면으로 넘긴다
+    bool Contains(const DirectX::XMFLOAT3& p, float margin) const;       // 이전 ContainsInPlane
+    bool ContainsLoops(const PatchPiece& positive, const std::vector<std::vector<uint32_t>>& loops, float margin,
+        std::string* error = nullptr) const;                              // 이전 LoopsInsidePlane
+    void Translate(...); void RotateAroundLocalAxis(...); void ScaleUniform(...); void ScaleU(...); void ClampExtents();
+    // private: m_Shape(center, rotation 쿼터니언 로컬 +Z = 법선, halfExtents), m_MinExtent/m_MaxExtent, 기즈모 상태
 };
-
-CutPlaneFrame MakeFrame(const CutPlane& plane);
-SlicePlane ToSlicePlane(const CutPlaneFrame& frame);                 // 슬라이서에는 무한 평면으로 넘긴다
-bool ContainsInPlane(const CutPlaneFrame& frame, const DirectX::XMFLOAT3& p, float margin);
 ```
-- `Geometry/CutPlane.*`에 둔다(Model 의존 없음).
+- `Geometry/CutPlane.h`, `CutPlane.cpp`, `CutPlaneGizmo.cpp`에 둔다(Model 의존 없음). 기즈모는 `SceneViewControlsDesign.md` 3절.
 - 패치 위치가 world 스냅샷이므로 같은 공간이다. 캐릭터 locator가 움직여도 평면은 world에 그대로 있다.
 - 애니메이션 재생 중에는 팔다리가 평면을 지나가며 교차 선분이 바뀐다. 이는 의도된 동작이다(칼이 놓인 자리를 캐릭터가 지나가는 상황).
 
 ### 2.2 크기의 의미
 크기는 **어떤 선분을 자를지**와 **루프 검증**에만 쓴다. 삼각형 분할 자체는 지금처럼 무한 평면으로 한다.
 
-- SegmentPick은 교차점이 사각형 안(`ContainsInPlane`)인 선분만 고른다.
+- SegmentPick은 교차점이 사각형 안(`CutPlane::Contains`)인 선분만 고른다.
 - 슬라이스 후 **모든 루프 점이 사각형 안(여유 margin 포함)**이어야 한다. 밖으로 나간 루프가 있으면 `LoopOutsidePlane`으로 거절한다. 패치가 넓은 joint(몸통 등)에서 무한 평면이 사각형 밖의 엉뚱한 부위까지 자르는 경우를 막는다.
 - 평면 가장자리가 팔다리 안에서 끝나는 경우(부분 절개)는 지원하지 않는다. 그런 선분은 교차점이 사각형 안이면 통째로 자르는 것으로 보고, 루프가 사각형을 벗어나면 위 규칙으로 거절된다.
 
@@ -67,12 +64,12 @@ bool ContainsInPlane(const CutPlaneFrame& frame, const DirectX::XMFLOAT3& p, flo
 > **S-4에서 바뀌었다.** 평면은 키보드가 아니라 마우스 기즈모(이동·회전·크기 도구)로 조작한다. 도구, 핸들, 드래그 방식은 `SceneViewControlsDesign.md` 3절. 크기 범위(모델 반지름의 0.01~3배)와 초기값(모델 bounds 중심, 법선 world +Y, 반 크기 = 반지름 × 0.5)은 그대로다. 아래 2.4절의 표시는 사각형 테두리, 십자선, 법선 화살표이고 기즈모가 그 위에 겹쳐진다.
 
 ### 2.4 표시
-- 사각형 테두리 + 십자 격자 몇 줄 + 법선 화살표를 튜브로 그린다(`BakeCutPlaneDebug`, 기존 `BakePlaneDebug`의 링 대신).
+- 사각형 테두리 + 십자 격자 몇 줄 + 법선 화살표를 튜브로 그린다(`CutDebugView`의 `BakePlaneDebug`, 기존 링 대신).
 - 반투명 면은 이번에 넣지 않는다(렌더러에 블렌딩 PSO가 없다).
 - 색 = dry-run 상태(Ok 초록, NoCut/NoSegment 회색, 실패 빨강).
 - UI: center, 회전(오일러 근사 표시), halfExtents, 교차 선분 수.
 
-## 3. SegmentPick (Geometry/SegmentPick.h, Model 의존 없음)
+## 3. SegmentPick (Geometry/CutPlane.h, Model 의존 없음)
 
 ```cpp
 struct SkeletonPose                 // 한 팔레트, world(패치 공간)
@@ -91,10 +88,10 @@ struct SegmentHit
 
 // 부모 → 자식 선분마다 평면 양쪽에 있는지 검사한다(d >= 0을 + 쪽으로 판정).
 // 교차점이 사각형 안인 것을 모두 돌려준다. 순서: parentJoint, childJoint 오름차순.
-void PickSegments(const SkeletonPose& pose, const CutPlaneFrame& plane, std::vector<SegmentHit>& hits);
+void CutPlane::PickSegments(const SkeletonPose& pose, std::vector<SegmentHit>& hits) const;
 
 // 절단 joint 집합: hits의 parentJoint를 중복 없이, 오름차순으로.
-std::vector<uint32_t> CutJoints(const std::vector<SegmentHit>& hits);
+static std::vector<uint32_t> CutPlane::CutJoints(const std::vector<SegmentHit>& hits);
 ```
 - **여러 선분 동시 절단:** 맞은 선분을 모두 쓴다. 두 다리를 지나는 큰 평면이면 두 허벅지 선분이 모두 맞고, 절단 joint는 두 개다.
 - **팔레트 로컬 부모:** `m_NodeParents`를 따라 위로 올라가다 처음 만나는 같은 팔레트 joint가 부모다(Model 의존 변환은 `BonePatch.*`).

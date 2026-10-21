@@ -3,9 +3,9 @@
 // 원본 스켈레톤 메시 중 특정 본 주변의 메시를 가져오는 기능을 담은 파일입니다.
 
 #include "ProceduralMesh.h"
-#include "Geometry/PatchWeld.h"
-#include "Geometry/PieceSkinning.h"
-#include "Geometry/SegmentPick.h"
+#include "Geometry/Patch.h"
+#include "Geometry/Skinning.h"
+#include "Geometry/CutPlane.h"
 #include "VectorMath.h"
 #include <cstdint>
 #include <string>

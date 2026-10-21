@@ -1,5 +1,6 @@
+﻿// 이 파일은 잘린 조각의 절단 경계에서 루프를 뽑아 검증하는 CutLoops와, 그 루프를 캡 면으로 채우는 CapBuilder를 구현한다.
 #include "../pch.h"
-#include "CapBuilder.h"
+#include "Slice.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,30 +15,9 @@ namespace MeshCutting
             double x, y;
         };
 
-        // One vertex of a ring being triangulated. Bridge edges repeat a node, so a node id can
-        // appear twice in the combined ring.
-        struct RingVertex
-        {
-            uint32_t node;
-            Point2 p;
-        };
-
-        std::string Num(uint64_t value) { return std::to_string(value); }
-
         double Cross(const Point2& o, const Point2& a, const Point2& b)
         {
             return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-        }
-
-        double SignedArea(const std::vector<RingVertex>& ring)
-        {
-            double area = 0.0;
-            for (size_t i = 0; i < ring.size(); ++i)
-            {
-                const Point2 &a = ring[i].p, &b = ring[(i + 1) % ring.size()].p;
-                area += a.x * b.y - b.x * a.y;
-            }
-            return 0.5 * area;
         }
 
         double PointSegmentDistance(const Point2& p, const Point2& a, const Point2& b)
@@ -51,6 +31,7 @@ namespace MeshCutting
             return std::sqrt(ex * ex + ey * ey);
         }
 
+        // 0 when the segments cross, otherwise the smallest end point distance.
         double SegmentDistance(const Point2& a, const Point2& b, const Point2& c, const Point2& d)
         {
             const double o1 = Cross(a, b, c), o2 = Cross(a, b, d), o3 = Cross(c, d, a), o4 = Cross(c, d, b);
@@ -58,6 +39,225 @@ namespace MeshCutting
                 return 0.0;
             return std::min(std::min(PointSegmentDistance(a, c, d), PointSegmentDistance(b, c, d)),
                 std::min(PointSegmentDistance(c, a, b), PointSegmentDistance(d, a, b)));
+        }
+
+        bool PointInPolygon(const Point2& p, const std::vector<Point2>& polygon)
+        {
+            bool inside = false;
+            for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++)
+            {
+                if ((polygon[i].y > p.y) != (polygon[j].y > p.y)
+                    && p.x < (polygon[j].x - polygon[i].x) * (p.y - polygon[i].y) / (polygon[j].y - polygon[i].y) + polygon[i].x)
+                    inside = !inside;
+            }
+            return inside;
+        }
+    }
+
+    SliceStatus ExtractCutLoops(const PatchPiece& piece, const std::vector<uint8_t>& onPlane,
+        const SlicePlane& plane, bool positiveSide, float epsilonScale,
+        std::vector<SliceLoop>& loops, std::string* detail)
+    {
+        loops.clear();
+        if (detail)
+            detail->clear();
+        SlicePlaneBasis basis;
+        if (!MakePlaneBasis(plane, basis))
+            return Fail(detail, SliceStatus::InvalidInput, "plane is invalid");
+        if (onPlane.size() != piece.nodes.size())
+            return Fail(detail, SliceStatus::InvalidInput, "onPlane does not match the node count");
+        const double epsilon = ComputePieceRadius(piece) * double(epsilonScale);
+
+        // Directed cut edges from the faces: each boundary edge belongs to exactly one face.
+        const size_t nodeCount = piece.nodes.size();
+        std::vector<uint32_t> outCount(nodeCount, 0), inCount(nodeCount, 0), next(nodeCount, kNoNode);
+        for (const PatchFace& face : piece.faces)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                const uint32_t from = piece.corners[face.corner[k]].node;
+                const uint32_t to = piece.corners[face.corner[(k + 1) % 3]].node;
+                const auto tag = piece.boundary.find(MakeEdgeKey(from, to));
+                if (tag == piece.boundary.end() || tag->second != PatchEdgeKind::Cut || !onPlane[from] || !onPlane[to])
+                    continue;
+                ++outCount[from];
+                ++inCount[to];
+                next[from] = to;
+            }
+        }
+
+        // What else the boundary touches at a node, in key order so the message is stable.
+        std::vector<int> blocker(nodeCount, -1);
+        std::vector<uint64_t> keys;
+        keys.reserve(piece.boundary.size());
+        for (const auto& entry : piece.boundary)
+            keys.push_back(entry.first);
+        std::sort(keys.begin(), keys.end());
+        for (uint64_t key : keys)
+        {
+            const PatchEdgeKind kind = piece.boundary.at(key);
+            if (kind == PatchEdgeKind::CapSeam)
+                continue;
+            const uint32_t a = EdgeKeyLow(key), b = EdgeKeyHigh(key);
+            if (a >= nodeCount || b >= nodeCount)
+                continue;
+            if (kind == PatchEdgeKind::Cut && onPlane[a] && onPlane[b])
+                continue;       // a cut edge of this plane, not a blocker
+            if (blocker[a] < 0)
+                blocker[a] = int(kind);
+            if (blocker[b] < 0)
+                blocker[b] = int(kind);
+        }
+
+        // Degree check: open ends caused by another boundary are OpenLoop, the rest NonManifoldLoop.
+        uint32_t openNode = kNoNode, badNode = kNoNode;
+        for (uint32_t n = 0; n < nodeCount; ++n)
+        {
+            const uint32_t out = outCount[n], in = inCount[n];
+            if (out == 0 && in == 0)
+                continue;
+            if (out == 1 && in == 1)
+                continue;
+            if (out + in == 1 && blocker[n] >= 0)
+            {
+                if (openNode == kNoNode)
+                    openNode = n;
+            }
+            else if (badNode == kNoNode)
+                badNode = n;
+        }
+        if (badNode != kNoNode)
+            return Fail(detail, SliceStatus::NonManifoldLoop, "cut node " + Num(badNode) + " has " + Num(outCount[badNode])
+                + " outgoing and " + Num(inCount[badNode]) + " incoming cut edges");
+        if (openNode != kNoNode)
+            return Fail(detail, SliceStatus::OpenLoop, "cut loop ends at node " + Num(openNode) + " on a "
+                + EdgeKindName(PatchEdgeKind(blocker[openNode])) + " boundary");
+
+        // Every remaining cut node has one way in and one way out, so the cut edges are cycles.
+        std::vector<uint8_t> visited(nodeCount, 0);
+        for (uint32_t start = 0; start < nodeCount; ++start)
+        {
+            if (outCount[start] != 1 || visited[start])
+                continue;
+            SliceLoop loop;
+            uint32_t node = start;
+            do
+            {
+                visited[node] = 1;
+                loop.nodes.push_back(node);
+                node = next[node];
+            } while (node != start);
+            if (loop.nodes.size() < 3)
+                return Fail(detail, SliceStatus::InvalidLoop, "loop through node " + Num(start) + " has only "
+                    + Num(loop.nodes.size()) + " nodes");
+            loops.push_back(std::move(loop));
+        }
+        if (loops.empty())
+            return SliceStatus::Ok;
+
+        // Project into the plane.
+        std::vector<std::vector<Point2>> points(loops.size());
+        for (size_t l = 0; l < loops.size(); ++l)
+        {
+            for (uint32_t n : loops[l].nodes)
+            {
+                const DirectX::XMFLOAT3& p = piece.nodes[n].position;
+                const double d[3] = { double(p.x) - basis.origin[0], double(p.y) - basis.origin[1], double(p.z) - basis.origin[2] };
+                points[l].push_back({ d[0] * basis.u[0] + d[1] * basis.u[1] + d[2] * basis.u[2],
+                    d[0] * basis.v[0] + d[1] * basis.v[1] + d[2] * basis.v[2] });
+            }
+        }
+
+        // Segments of one loop may only meet at their shared node; loops may not meet at all.
+        for (size_t a = 0; a < loops.size(); ++a)
+        {
+            const size_t na = points[a].size();
+            for (size_t i = 0; i < na; ++i)
+            {
+                const Point2 &a0 = points[a][i], &a1 = points[a][(i + 1) % na];
+                for (size_t j = i + 2; j < na; ++j)
+                {
+                    if (i == 0 && j == na - 1)
+                        continue;       // adjacent through the closing segment
+                    if (SegmentDistance(a0, a1, points[a][j], points[a][(j + 1) % na]) <= epsilon)
+                        return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(a) + " crosses or touches itself between nodes "
+                            + Num(loops[a].nodes[i]) + " and " + Num(loops[a].nodes[j]));
+                }
+                for (size_t b = a + 1; b < loops.size(); ++b)
+                {
+                    const size_t nb = points[b].size();
+                    for (size_t j = 0; j < nb; ++j)
+                        if (SegmentDistance(a0, a1, points[b][j], points[b][(j + 1) % nb]) <= epsilon)
+                            return Fail(detail, SliceStatus::InvalidLoop, "loops " + Num(a) + " and " + Num(b) + " cross or touch near nodes "
+                                + Num(loops[a].nodes[i]) + " and " + Num(loops[b].nodes[j]));
+                }
+            }
+        }
+
+        // Signed areas, containment and winding.
+        for (size_t l = 0; l < loops.size(); ++l)
+        {
+            double area = 0.0;
+            const size_t n = points[l].size();
+            for (size_t i = 0; i < n; ++i)
+            {
+                const Point2 &p = points[l][i], &q = points[l][(i + 1) % n];
+                area += p.x * q.y - q.x * p.y;
+            }
+            loops[l].signedArea = 0.5 * area;
+            if (std::fabs(loops[l].signedArea) <= epsilon * epsilon)
+                return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(l) + " has no area");
+        }
+        for (size_t l = 0; l < loops.size(); ++l)
+        {
+            uint32_t depth = 0;
+            uint32_t parent = kNoNode;
+            for (size_t m = 0; m < loops.size(); ++m)
+            {
+                if (m == l || std::fabs(loops[m].signedArea) <= std::fabs(loops[l].signedArea))
+                    continue;
+                if (!PointInPolygon(points[l][0], points[m]))
+                    continue;
+                ++depth;
+                if (parent == kNoNode || std::fabs(loops[m].signedArea) < std::fabs(loops[parent].signedArea))
+                    parent = uint32_t(m);
+            }
+            if (depth > 1)
+                return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(l) + " is nested " + Num(depth)
+                    + " deep; islands inside holes are not supported");
+            loops[l].depth = depth;
+            loops[l].parent = parent;
+        }
+        const double outerSign = positiveSide ? 1.0 : -1.0;
+        for (size_t l = 0; l < loops.size(); ++l)
+        {
+            const double expected = loops[l].depth == 0 ? outerSign : -outerSign;
+            if (loops[l].signedArea * expected <= 0.0)
+                return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(l) + " winds the wrong way for "
+                    + (loops[l].depth == 0 ? "an outer boundary" : "a hole"));
+        }
+        return SliceStatus::Ok;
+    }
+
+    namespace
+    {
+        // One vertex of a ring being triangulated. Bridge edges repeat a node, so a node id can
+        // appear twice in the combined ring.
+        struct RingVertex
+        {
+            uint32_t node;
+            Point2 p;
+        };
+
+        double SignedArea(const std::vector<RingVertex>& ring)
+        {
+            double area = 0.0;
+            for (size_t i = 0; i < ring.size(); ++i)
+            {
+                const Point2 &a = ring[i].p, &b = ring[(i + 1) % ring.size()].p;
+                area += a.x * b.y - b.x * a.y;
+            }
+            return 0.5 * area;
         }
 
         bool PointInPolygon(const Point2& p, const std::vector<RingVertex>& ring)
@@ -206,13 +406,13 @@ namespace MeshCutting
     }
 
     SliceStatus BuildCap(PatchPiece& piece, const SlicePlane& plane, bool positiveSide, uint32_t cutId,
-        const std::vector<CutLoop>& loops, float epsilonScale, float uvScale, std::string* detail)
+        const std::vector<SliceLoop>& loops, float epsilonScale, float uvScale, std::string* detail)
     {
         if (detail)
             detail->clear();
         if (loops.empty())
             return SliceStatus::Ok;
-        PlaneBasis basis;
+        SlicePlaneBasis basis;
         if (!MakePlaneBasis(plane, basis))
             return Fail(detail, "plane is invalid");
         const double epsilon = ComputePieceRadius(piece) * double(epsilonScale);
@@ -286,7 +486,7 @@ namespace MeshCutting
                 return found->second;
             const DirectX::XMFLOAT3& pos = capped.nodes[node].position;
             const double d[3] = { double(pos.x) - basis.origin[0], double(pos.y) - basis.origin[1], double(pos.z) - basis.origin[2] };
-            RenderCorner corner;
+            PatchCorner corner;
             corner.node = node;
             corner.normal = normal;
             corner.uv = { float((d[0] * basis.u[0] + d[1] * basis.u[1] + d[2] * basis.u[2]) * double(uvScale)),
@@ -299,8 +499,8 @@ namespace MeshCutting
         };
         for (size_t t = 0; t < triangles.size(); t += 3)
         {
-            Face face;
-            face.kind = FaceKind::Cap;
+            PatchFace face;
+            face.kind = PatchFaceKind::Cap;
             face.sourceTriangle = kNoNode;
             face.cutId = cutId;
             // Counter-clockwise in (u, v); the positive piece needs the opposite winding.
@@ -313,9 +513,9 @@ namespace MeshCutting
 
         // Every cut edge must now be shared by the surface and exactly one cap face, used in
         // opposite directions. Then it is a seam instead of a boundary.
-        EdgeUsageMap usage;
+        PatchEdgeUsageMap usage;
         CollectEdgeUsage(capped, usage);
-        for (const CutLoop& loop : loops)
+        for (const SliceLoop& loop : loops)
             for (size_t i = 0; i < loop.nodes.size(); ++i)
             {
                 const uint32_t a = loop.nodes[i], b = loop.nodes[(i + 1) % loop.nodes.size()];
@@ -323,22 +523,22 @@ namespace MeshCutting
                 const auto use = usage.find(key);
                 if (use == usage.end() || use->second.count != 2 || use->second.forward != 1 || use->second.backward != 1)
                     return Fail(detail, "cut edge (" + Num(a) + ", " + Num(b) + ") is not matched by exactly one cap face");
-                capped.boundary[key] = EdgeKind::CapSeam;
+                capped.boundary[key] = PatchEdgeKind::CapSeam;
             }
 
         double capArea = 0.0;
-        for (const Face& face : capped.faces)
-            if (face.kind == FaceKind::Cap && face.cutId == cutId)
+        for (const PatchFace& face : capped.faces)
+            if (face.kind == PatchFaceKind::Cap && face.cutId == cutId)
                 capArea += FaceArea(capped, face);
         if (std::fabs(capArea - expectedArea) > 1e-4 * std::max(expectedArea, 1e-12))
             return Fail(detail, "cap area " + std::to_string(capArea) + " differs from the loop area " + std::to_string(expectedArea));
 
-        CapRecord record;
+        PatchCap record;
         record.cutId = cutId;
         record.planePoint = plane.point;
         record.planeNormal = normal;
         for (int pass = 0; pass < 2; ++pass)
-            for (const CutLoop& loop : loops)
+            for (const SliceLoop& loop : loops)
                 if ((loop.depth == 0) == (pass == 0))
                 {
                     record.rimNodes.insert(record.rimNodes.end(), loop.nodes.begin(), loop.nodes.end());

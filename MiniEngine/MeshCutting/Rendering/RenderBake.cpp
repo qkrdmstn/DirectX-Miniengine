@@ -1,3 +1,4 @@
+﻿// 이 파일은 패치 조각을 ProceduralMesh로 만드는 렌더 데이터와 디버그용 튜브 모양을 구현한다.
 #include "../pch.h"
 #include "RenderBake.h"
 
@@ -14,7 +15,7 @@ namespace MeshCutting
         if (piece.faces.empty())
             return;
         out.vertices.reserve(piece.corners.size());
-        for (const RenderCorner& corner : piece.corners)
+        for (const PatchCorner& corner : piece.corners)
         {
             ProceduralVertex vertex;
             vertex.position = piece.nodes[corner.node].position;
@@ -28,13 +29,13 @@ namespace MeshCutting
         {
             if (pass == 1 && !options.splitByOrigin)
                 continue;
-            const FaceKind kind = pass == 2 ? FaceKind::Cap : FaceKind::Surface;
+            const PatchFaceKind kind = pass == 2 ? PatchFaceKind::Cap : PatchFaceKind::Surface;
             const uint32_t first = uint32_t(out.indices.size());
-            for (const Face& face : piece.faces)
+            for (const PatchFace& face : piece.faces)
             {
                 if (face.kind != kind)
                     continue;
-                if (options.splitByOrigin && kind == FaceKind::Surface && (face.cutId != 0) != (pass == 1))
+                if (options.splitByOrigin && kind == PatchFaceKind::Surface && (face.cutId != 0) != (pass == 1))
                     continue;
                 out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
             }
@@ -60,15 +61,15 @@ namespace MeshCutting
 
     // ---- Debug shapes: thin tubes for boundaries, loops and the cut plane (CutDebugView bakes them) ----
 
-    DirectX::XMFLOAT4 EdgeKindColor(EdgeKind kind)
+    DirectX::XMFLOAT4 EdgeKindColor(PatchEdgeKind kind)
     {
         switch (kind)
         {
-        case EdgeKind::Replacement: return { 1.0f, 0.95f, 0.0f, 1.0f };     // yellow
-        case EdgeKind::UnweldedSeam: return { 0.1f, 1.0f, 0.1f, 1.0f };    // green
-        case EdgeKind::Cut: return { 1.0f, 0.45f, 0.0f, 1.0f };            // orange
-        case EdgeKind::CapSeam: return { 1.0f, 1.0f, 1.0f, 1.0f };         // white
-        case EdgeKind::Interior: break;
+        case PatchEdgeKind::Replacement: return { 1.0f, 0.95f, 0.0f, 1.0f };     // yellow
+        case PatchEdgeKind::UnweldedSeam: return { 0.1f, 1.0f, 0.1f, 1.0f };    // green
+        case PatchEdgeKind::Cut: return { 1.0f, 0.45f, 0.0f, 1.0f };            // orange
+        case PatchEdgeKind::CapSeam: return { 1.0f, 1.0f, 1.0f, 1.0f };         // white
+        case PatchEdgeKind::Interior: break;
         }
         return { 0.5f, 0.5f, 0.5f, 1.0f };
     }
@@ -127,7 +128,7 @@ namespace MeshCutting
         for (const auto& entry : piece.boundary)
         {
             // CapSeam edges are interior; they are tagged but not drawn as open boundary.
-            if (entry.second != EdgeKind::CapSeam)
+            if (entry.second != PatchEdgeKind::CapSeam)
                 keys.push_back(entry.first);
         }
         std::sort(keys.begin(), keys.end());
@@ -156,45 +157,6 @@ namespace MeshCutting
                     AppendDebugSegment(out, piece.nodes[a].position, piece.nodes[b].position, radius, color);
             }
         }
-        if (!out.indices.empty())
-            out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
-    }
-
-    void BakeCutPlaneDebug(const CutPlaneFrame& frame, float tubeRadius, const DirectX::XMFLOAT4& color,
-        ProceduralMeshData& out)
-    {
-        out = ProceduralMeshData();
-        const DirectX::XMFLOAT4 arrowColor = { 1.0f, 1.0f, 1.0f, 1.0f };
-        const float hx = frame.halfExtents.x, hy = frame.halfExtents.y;
-        const auto at = [&](float a, float b, float c)
-        {
-            return DirectX::XMFLOAT3(frame.center.x + a * frame.axisU.x + b * frame.axisV.x + c * frame.normal.x,
-                frame.center.y + a * frame.axisU.y + b * frame.axisV.y + c * frame.normal.y,
-                frame.center.z + a * frame.axisU.z + b * frame.axisV.z + c * frame.normal.z);
-        };
-
-        // The rectangle border.
-        AppendDebugSegment(out, at(-hx, -hy, 0.0f), at(hx, -hy, 0.0f), tubeRadius, color);
-        AppendDebugSegment(out, at(hx, -hy, 0.0f), at(hx, hy, 0.0f), tubeRadius, color);
-        AppendDebugSegment(out, at(hx, hy, 0.0f), at(-hx, hy, 0.0f), tubeRadius, color);
-        AppendDebugSegment(out, at(-hx, hy, 0.0f), at(-hx, -hy, 0.0f), tubeRadius, color);
-
-        // Cross lines inside: the two center lines and one at half the way to each side, thinner.
-        const float fractions[3] = { -0.5f, 0.0f, 0.5f };
-        for (float f : fractions)
-        {
-            AppendDebugSegment(out, at(-hx, f * hy, 0.0f), at(hx, f * hy, 0.0f), tubeRadius * 0.5f, color);
-            AppendDebugSegment(out, at(f * hx, -hy, 0.0f), at(f * hx, hy, 0.0f), tubeRadius * 0.5f, color);
-        }
-
-        // The arrow points to the positive side (the side the plane normal points to).
-        const float length = std::min(hx, hy) * 0.7f;
-        const float head = length * 0.15f;
-        AppendDebugSegment(out, at(0.0f, 0.0f, 0.0f), at(0.0f, 0.0f, length), tubeRadius, arrowColor);
-        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(head, 0.0f, length - 2.0f * head), tubeRadius, arrowColor);
-        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(-head, 0.0f, length - 2.0f * head), tubeRadius, arrowColor);
-        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(0.0f, head, length - 2.0f * head), tubeRadius, arrowColor);
-        AppendDebugSegment(out, at(0.0f, 0.0f, length), at(0.0f, -head, length - 2.0f * head), tubeRadius, arrowColor);
         if (!out.indices.empty())
             out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
     }

@@ -10,7 +10,7 @@
 | --- | --- |
 | `Core/Input.cpp`, `Core/GameInput.h` | 마우스 cooperative level 선택, 창 클라이언트 기준 커서 좌표, 클라이언트 크기 |
 | `MeshCutting/Debug/SceneViewCamera.*` | Scene 뷰 카메라 (`CameraController` 상속). Core 입력을 읽는다 |
-| `MeshCutting/Debug/PlaneGizmo.*` | 기즈모의 광선, 피킹, 드래그 계산, 메시 굽기. **Model과 Core를 모르는 순수 계산**이라 `tests/PlaneSlicerTests.cpp`가 GPU 없이 테스트한다 |
+| `MeshCutting/Geometry/CutPlane.h`, `CutPlaneGizmo.cpp` | 기즈모 상태(도구, 호버, 드래그)는 `CutPlane`이 가진다. 광선, 피킹, 드래그 계산, 메시 굽기는 **Model과 Core를 모르는 순수 계산**이라 `tests/PlaneSlicerTests.cpp`가 GPU 없이 테스트한다 |
 | `MeshCutting/Debug/CutDebugView.*` | 렌더링 모드, 기즈모 그리기, 화면 텍스트 |
 | `MeshCutting/Rendering/ProceduralMeshRenderer.*` | `DrawOptions::depthTest` (기즈모는 깊이 버퍼 없이 그린다) |
 | `ModelViewer/ModelViewer.cpp` | 입력을 읽어 카메라, 기즈모, 컨트롤러에 전달 |
@@ -71,7 +71,7 @@
 
 - 드래그 중에는 카메라 조작을 막는다 (`SceneViewCamera::SetInputEnabled(false)`). 카메라가 움직이는 중이거나 Alt, 가운데·오른쪽 버튼이 눌려 있으면 기즈모는 호버도 드래그 시작도 하지 않는다.
 - 커서가 창 밖으로 나가면 평면은 마지막 위치를 유지하고, 버튼을 놓으면 드래그가 끝난다. 도구를 바꾸면 드래그가 취소된다.
-- 평면이 바뀔 때마다 `CutController::SetPlane`이 미리보기를 다시 계산하게(`m_Preview.dirty`) 표시한다. 확정 piece는 드래그와 무관하다.
+- 평면이 바뀔 때마다 `CutController::UpdateGizmo`가 미리보기를 다시 계산하게(`m_Preview.dirty`) 표시한다. 확정 piece는 드래그와 무관하다.
 
 ### 4.4 깊이 없는 PSO 주의
 MiniEngine의 `GraphicsPSO::Finalize`는 `DepthEnable`이 DSV 포맷 유무와 반대이면 `ASSERT`로 멈춘다(Debug). 그래서 `DepthStateDisabled`를 쓰는 기즈모 PSO는 **깊이 포맷을 UNKNOWN**으로 만들고, 그릴 때 **깊이 버퍼를 묶지 않는다** (`DrawOptions::depthTest = false`).
@@ -113,4 +113,4 @@ Enter는 Core의 튜닝 메뉴(열려 있을 때 Bang)와 프로파일러(항목
 - `ModelViewer`: `BoneSelection`, `m_BoneDebugEnabled`, `m_WeightDebugEnabled`, `m_WireframeEnabled`, `m_CameraController`.
 - `CutController`: `SetPatch`, `ClearPatch`, `CycleWeightJoint`, `ToggleCap`, `ResetPlane`, `TranslatePlane`, `MovePlaneAlongNormal`, `RotatePlane`, `ScalePlane`, `ExtractedMesh()`, `Weld()`, `PatchVersion()`, `CapEnabled()`, `CurrentPlane()`, 그리고 `m_CapEnabled`, `PatchState::version`, `CandidateState::weightCycle`.
 - `CutDebugView`: 패치 메시와 패치 경계 튜브, `ToggleBoundary`, `ToggleBackCull`, `ToggleSectionTint`, `ToggleOverlay`, `CycleWireMode`, `WireMode`, 패치/weld 관련 UI.
-- `RenderBake::BakePlaneDebug`는 P-1에서 이미 `BakeCutPlaneDebug`로 바뀌었다.
+- `RenderBake::BakePlaneDebug`는 P-1에서 `BakeCutPlaneDebug`로 바뀌었고, K-1에서 `CutDebugView`의 `BakePlaneDebug`로 옮겼다.

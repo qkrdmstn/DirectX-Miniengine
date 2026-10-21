@@ -1,5 +1,9 @@
-﻿#include "../pch.h"
-#include "PlaneGizmo.h"
+﻿// 이 파일은 절단 평면을 마우스로 옮기는 기즈모의 계산과 상호작용(CutPlane의 기즈모 멤버)을 구현한다.
+// 광선, 피킹, 드래그, 굽기는 Model과 Core를 모르는 순수 계산이라 GPU 없이 테스트한다 (tests/PlaneSlicerTests.cpp).
+// 화면에 그리는 일은 CutDebugView가 한다. 설계: Docs/SceneViewControlsDesign.md 3절.
+#include "../pch.h"
+#include "CutPlane.h"
+#include "../Rendering/RenderBake.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,27 +22,6 @@ namespace MeshCutting
         const XMFLOAT4 kBlue = { 0.3f, 0.5f, 1.0f, 1.0f };
         const XMFLOAT4 kGray = { 0.85f, 0.85f, 0.85f, 1.0f };
         const XMFLOAT4 kYellow = { 1.0f, 0.9f, 0.1f, 1.0f };
-
-        struct V3
-        {
-            double x = 0.0, y = 0.0, z = 0.0;
-        };
-
-        V3 ToV3(const XMFLOAT3& v) { return { v.x, v.y, v.z }; }
-        XMFLOAT3 ToFloat3(const V3& v) { return { float(v.x), float(v.y), float(v.z) }; }
-        V3 operator+(const V3& a, const V3& b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
-        V3 operator-(const V3& a, const V3& b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
-        V3 operator*(const V3& a, double s) { return { a.x * s, a.y * s, a.z * s }; }
-        double Dot(const V3& a, const V3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-        V3 Cross(const V3& a, const V3& b) { return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; }
-        double Length(const V3& a) { return std::sqrt(Dot(a, a)); }
-        V3 Normalize(const V3& a)
-        {
-            const double length = Length(a);
-            return length > 0.0 ? a * (1.0 / length) : a;
-        }
-
-        double Clamp(double v, double lo, double hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
         // 반지름 radius의 조각을 이루는 점 수
         constexpr int kRingSegments = 48;
@@ -62,7 +45,7 @@ namespace MeshCutting
         ScreenPoint Project(const XMFLOAT3& world, const GizmoView& view)
         {
             ScreenPoint p;
-            p.valid = ProjectToScreen(world, view, p.x, p.y);
+            p.valid = CutPlane::ProjectToScreen(world, view, p.x, p.y);
             return p;
         }
 
@@ -225,7 +208,7 @@ namespace MeshCutting
         }
     }
 
-    GizmoView MakeGizmoView(const XMFLOAT4X4& viewProj, const XMFLOAT3& eye, float clientWidth, float clientHeight, bool reversedZ)
+    GizmoView GizmoView::Make(const XMFLOAT4X4& viewProj, const XMFLOAT3& eye, float clientWidth, float clientHeight, bool reversedZ)
     {
         GizmoView view;
         view.viewProj = viewProj;
@@ -237,7 +220,9 @@ namespace MeshCutting
         return view;
     }
 
-    GizmoRay MakeRay(const GizmoView& view, float clientX, float clientY)
+    // 클라이언트 픽셀 좌표(왼쪽 위가 원점) -> NDC -> viewProj 역행렬로 만든 광선. 깊이 한 점은 near, 다른 한 점은
+    // 그 사이의 값을 써서 far가 무한대인 투영에서도 유한한 값만 쓴다.
+    GizmoRay CutPlane::MakeRay(const GizmoView& view, float clientX, float clientY)
     {
         const float ndcX = clientX / view.width * 2.0f - 1.0f;
         const float ndcY = 1.0f - clientY / view.height * 2.0f;
@@ -252,7 +237,8 @@ namespace MeshCutting
         return ray;
     }
 
-    bool ProjectToScreen(const XMFLOAT3& world, const GizmoView& view, float& pixelX, float& pixelY)
+    // world 점의 클라이언트 픽셀 좌표. 카메라 뒤(w <= 0)이면 false.
+    bool CutPlane::ProjectToScreen(const XMFLOAT3& world, const GizmoView& view, float& pixelX, float& pixelY)
     {
         const XMVECTOR clip = XMVector4Transform(XMVectorSet(world.x, world.y, world.z, 1.0f), XMLoadFloat4x4(&view.viewProj));
         const float w = XMVectorGetW(clip);
@@ -263,7 +249,9 @@ namespace MeshCutting
         return true;
     }
 
-    float GizmoUnit(const GizmoView& view, const XMFLOAT3& center)
+    // 기즈모 한 단위의 world 길이. 화면 중앙에서 한 픽셀이 차지하는 각도로 구해서, 카메라 거리가 달라도
+    // 화면에서는 같은 크기(약 100픽셀)로 보인다.
+    float CutPlane::GetGizmoUnit(const GizmoView& view, const XMFLOAT3& center)
     {
         const double distance = Length(ToV3(center) - ToV3(view.eye));
         const GizmoRay a = MakeRay(view, view.width * 0.5f, view.height * 0.5f);
@@ -276,13 +264,14 @@ namespace MeshCutting
         return float(unit);
     }
 
-    std::vector<GizmoPrimitive> BuildGizmoPrimitives(const GizmoView& view, const CutPlane& plane, GizmoTool tool)
+    // 도구에 해당하는 핸들의 도형. 크기는 GetGizmoUnit에서 정한다.
+    std::vector<GizmoPrimitive> CutPlane::BuildGizmoPrimitives(const GizmoView& view, GizmoTool tool) const
     {
         std::vector<GizmoPrimitive> primitives;
         if (tool == GizmoTool::Hidden)
             return primitives;
-        const CutPlaneFrame frame = MakeFrame(plane);
-        const double unit = GizmoUnit(view, frame.center);
+        const Frame frame = GetFrame();
+        const double unit = GetGizmoUnit(view, frame.center);
         const XMFLOAT3& c = frame.center;
         const V3 x = { 1.0, 0.0, 0.0 }, y = { 0.0, 1.0, 0.0 }, z = { 0.0, 0.0, 1.0 };
         const V3 u = ToV3(frame.axisU), v = ToV3(frame.axisV), n = ToV3(frame.normal);
@@ -311,7 +300,9 @@ namespace MeshCutting
         return primitives;
     }
 
-    GizmoHandle PickFromPrimitives(const GizmoView& view, const std::vector<GizmoPrimitive>& primitives,
+    // 핸들을 화면에 투영해서 커서와의 픽셀 거리가 threshold 이하인 것 중, 카메라에 가장 가까운 핸들을 고른다
+    // (깊이가 같으면 픽셀 거리가 작은 쪽). 카메라 뒤에 걸친 선분은 건너뛴다.
+    GizmoHandle CutPlane::PickFromPrimitives(const GizmoView& view, const std::vector<GizmoPrimitive>& primitives,
         float cursorX, float cursorY, float thresholdPixels)
     {
         GizmoHandle best = GizmoHandle::None;
@@ -334,13 +325,14 @@ namespace MeshCutting
         return best;
     }
 
-    GizmoHandle PickHandle(const GizmoView& view, const CutPlane& plane, GizmoTool tool,
-        float cursorX, float cursorY, float thresholdPixels)
+    GizmoHandle CutPlane::PickHandle(const GizmoView& view, GizmoTool tool, float cursorX, float cursorY,
+        float thresholdPixels) const
     {
-        return PickFromPrimitives(view, BuildGizmoPrimitives(view, plane, tool), cursorX, cursorY, thresholdPixels);
+        return PickFromPrimitives(view, BuildGizmoPrimitives(view, tool), cursorX, cursorY, thresholdPixels);
     }
 
-    bool ClosestParamOnAxis(const XMFLOAT3& axisOrigin, const XMFLOAT3& axisDir, const GizmoRay& ray, float& param)
+    // 광선과 직선(origin + s * dir, dir는 단위 벡터)의 최근접점 매개변수 s. 두 직선이 거의 평행하면 false.
+    bool CutPlane::ClosestParamOnAxis(const XMFLOAT3& axisOrigin, const XMFLOAT3& axisDir, const GizmoRay& ray, float& param)
     {
         const V3 d = Normalize(ToV3(axisDir)), r = Normalize(ToV3(ray.direction));
         const V3 w0 = ToV3(axisOrigin) - ToV3(ray.origin);
@@ -355,7 +347,8 @@ namespace MeshCutting
         return true;
     }
 
-    bool RayPlaneHit(const GizmoRay& ray, const XMFLOAT3& point, const XMFLOAT3& normal, XMFLOAT3& hit)
+    // 광선과 평면의 교점. 평행하거나 교점이 광선 뒤쪽이면 false.
+    bool CutPlane::RayPlaneHit(const GizmoRay& ray, const XMFLOAT3& point, const XMFLOAT3& normal, XMFLOAT3& hit)
     {
         const V3 n = Normalize(ToV3(normal)), r = ToV3(ray.direction);
         const double denominator = Dot(n, r);
@@ -368,12 +361,13 @@ namespace MeshCutting
         return true;
     }
 
-    bool BeginDrag(GizmoHandle handle, const CutPlane& plane, const GizmoPointer& pointer, GizmoDrag& drag)
+    // 핸들을 잡은 순간의 기준을 만든다. 광선이 기준을 만들 수 없는 각도이면 false.
+    bool CutPlane::BeginDrag(GizmoHandle handle, const GizmoPointer& pointer, GizmoDrag& drag) const
     {
-        const CutPlaneFrame frame = MakeFrame(plane);
+        const Frame frame = GetFrame();
         GizmoDrag next;
         next.handle = handle;
-        next.startPlane = plane;
+        next.start = m_Shape;
         next.startX = pointer.x;
         next.startY = pointer.y;
 
@@ -384,7 +378,7 @@ namespace MeshCutting
         case GizmoHandle::MoveZ:
             next.axisDir = handle == GizmoHandle::MoveX ? XMFLOAT3(1.0f, 0.0f, 0.0f)
                 : (handle == GizmoHandle::MoveY ? XMFLOAT3(0.0f, 1.0f, 0.0f) : XMFLOAT3(0.0f, 0.0f, 1.0f));
-            if (!ClosestParamOnAxis(plane.center, next.axisDir, pointer.ray, next.startParam))
+            if (!ClosestParamOnAxis(m_Shape.center, next.axisDir, pointer.ray, next.startParam))
                 return false;
             break;
 
@@ -394,7 +388,7 @@ namespace MeshCutting
             // 이름의 두 축이 놓인 평면의 법선은 나머지 한 축이다.
             next.axisDir = handle == GizmoHandle::MoveYZ ? XMFLOAT3(1.0f, 0.0f, 0.0f)
                 : (handle == GizmoHandle::MoveZX ? XMFLOAT3(0.0f, 1.0f, 0.0f) : XMFLOAT3(0.0f, 0.0f, 1.0f));
-            if (!RayPlaneHit(pointer.ray, plane.center, next.axisDir, next.startHit))
+            if (!RayPlaneHit(pointer.ray, m_Shape.center, next.axisDir, next.startHit))
                 return false;
             break;
 
@@ -404,9 +398,9 @@ namespace MeshCutting
         {
             next.localAxis = handle == GizmoHandle::RotateU ? 0 : (handle == GizmoHandle::RotateV ? 1 : 2);
             next.axisDir = next.localAxis == 0 ? frame.axisU : (next.localAxis == 1 ? frame.axisV : frame.normal);
-            if (!RayPlaneHit(pointer.ray, plane.center, next.axisDir, next.startHit))
+            if (!RayPlaneHit(pointer.ray, m_Shape.center, next.axisDir, next.startHit))
                 return false;
-            const V3 from = ToV3(next.startHit) - ToV3(plane.center);
+            const V3 from = ToV3(next.startHit) - ToV3(m_Shape.center);
             if (Length(from) < 1e-6)
                 return false;
             next.startVector = ToFloat3(Normalize(from));
@@ -416,8 +410,8 @@ namespace MeshCutting
         case GizmoHandle::ScaleU:
         case GizmoHandle::ScaleV:
             next.axisDir = handle == GizmoHandle::ScaleU ? frame.axisU : frame.axisV;
-            next.startExtent = handle == GizmoHandle::ScaleU ? plane.halfExtents.x : plane.halfExtents.y;
-            if (!ClosestParamOnAxis(plane.center, next.axisDir, pointer.ray, next.startParam))
+            next.startExtent = handle == GizmoHandle::ScaleU ? m_Shape.halfExtents.x : m_Shape.halfExtents.y;
+            if (!ClosestParamOnAxis(m_Shape.center, next.axisDir, pointer.ray, next.startParam))
                 return false;
             break;
 
@@ -431,9 +425,12 @@ namespace MeshCutting
         return true;
     }
 
-    bool UpdateDrag(GizmoDrag& drag, const GizmoPointer& pointer, float minExtent, float maxExtent, CutPlane& outPlane)
+    // 지금 커서가 가리키는 곳에 맞게 이 평면을 바꾼다. 크기는 [m_MinExtent, m_MaxExtent]로 제한한다.
+    // 이번 프레임의 광선으로 값을 정할 수 없으면 false이고 평면은 그대로다.
+    bool CutPlane::UpdateDrag(GizmoDrag& drag, const GizmoPointer& pointer)
     {
-        CutPlane result = drag.startPlane;
+        CutPlane result = *this;
+        result.m_Shape = drag.start;
         switch (drag.handle)
         {
         case GizmoHandle::MoveX:
@@ -441,10 +438,10 @@ namespace MeshCutting
         case GizmoHandle::MoveZ:
         {
             float param = 0.0f;
-            if (!ClosestParamOnAxis(drag.startPlane.center, drag.axisDir, pointer.ray, param))
+            if (!ClosestParamOnAxis(drag.start.center, drag.axisDir, pointer.ray, param))
                 return false;
             const float delta = param - drag.startParam;
-            Translate(result, { drag.axisDir.x * delta, drag.axisDir.y * delta, drag.axisDir.z * delta });
+            result.Translate({ drag.axisDir.x * delta, drag.axisDir.y * delta, drag.axisDir.z * delta });
             break;
         }
 
@@ -453,9 +450,9 @@ namespace MeshCutting
         case GizmoHandle::MoveXY:
         {
             XMFLOAT3 hit;
-            if (!RayPlaneHit(pointer.ray, drag.startPlane.center, drag.axisDir, hit))
+            if (!RayPlaneHit(pointer.ray, drag.start.center, drag.axisDir, hit))
                 return false;
-            Translate(result, { hit.x - drag.startHit.x, hit.y - drag.startHit.y, hit.z - drag.startHit.z });
+            result.Translate({ hit.x - drag.startHit.x, hit.y - drag.startHit.y, hit.z - drag.startHit.z });
             break;
         }
 
@@ -464,16 +461,16 @@ namespace MeshCutting
         case GizmoHandle::RotateN:
         {
             XMFLOAT3 hit;
-            if (!RayPlaneHit(pointer.ray, drag.startPlane.center, drag.axisDir, hit))
+            if (!RayPlaneHit(pointer.ray, drag.start.center, drag.axisDir, hit))
                 return false;
-            const V3 to = ToV3(hit) - ToV3(drag.startPlane.center);
+            const V3 to = ToV3(hit) - ToV3(drag.start.center);
             if (Length(to) < 1e-6)
                 return false;
             // 시작 벡터에서 현재 벡터까지의 각도. 한 바퀴를 넘어도 이어지도록 직전 값과의 차이만 더한다.
             const double raw = SignedAngle(ToV3(drag.startVector), Normalize(to), ToV3(drag.axisDir));
             drag.totalAngle += float(WrapAngle(raw - drag.previousAngle));
             drag.previousAngle = float(raw);
-            RotateAroundLocalAxis(result, drag.localAxis, drag.totalAngle);
+            result.RotateAroundLocalAxis(drag.localAxis, drag.totalAngle);
             break;
         }
 
@@ -481,13 +478,13 @@ namespace MeshCutting
         case GizmoHandle::ScaleV:
         {
             float param = 0.0f;
-            if (!ClosestParamOnAxis(drag.startPlane.center, drag.axisDir, pointer.ray, param))
+            if (!ClosestParamOnAxis(drag.start.center, drag.axisDir, pointer.ray, param))
                 return false;
-            const float extent = std::max(minExtent, std::min(maxExtent, drag.startExtent + (param - drag.startParam)));
+            const float extent = std::max(m_MinExtent, std::min(m_MaxExtent, drag.startExtent + (param - drag.startParam)));
             if (drag.handle == GizmoHandle::ScaleU)
-                result.halfExtents.x = extent;
+                result.m_Shape.halfExtents.x = extent;
             else
-                result.halfExtents.y = extent;
+                result.m_Shape.halfExtents.y = extent;
             break;
         }
 
@@ -495,34 +492,34 @@ namespace MeshCutting
         {
             // 오른쪽 위로 끌면 커지고 왼쪽 아래로 끌면 작아진다. 150픽셀에 e배.
             const float movement = (pointer.x - drag.startX) - (pointer.y - drag.startY);
-            ScaleUniform(result, std::exp(movement / 150.0f), minExtent, maxExtent);
+            result.ScaleUniform(std::exp(movement / 150.0f));
             break;
         }
 
         case GizmoHandle::None:
             return false;
         }
-        outPlane = result;
+        m_Shape = result.m_Shape;
         return true;
     }
 
-    void PlaneGizmo::SetTool(GizmoTool tool)
+    void CutPlane::SetGizmoTool(GizmoTool tool)
     {
         if (tool != m_Tool)
-            Cancel();
+            CancelGizmo();
         m_Tool = tool;
     }
 
-    void PlaneGizmo::Cancel()
+    void CutPlane::CancelGizmo()
     {
         m_Drag = GizmoDrag();
         m_Hovered = GizmoHandle::None;
     }
 
-    bool PlaneGizmo::Update(const GizmoView& view, const CutPlane& plane, const GizmoInput& input,
-        float minExtent, float maxExtent, CutPlane& newPlane)
+    // 호버를 갱신하고 드래그를 진행한다. 드래그로 평면이 바뀌었으면 true.
+    bool CutPlane::UpdateGizmo(const GizmoView& view, const GizmoInput& input)
     {
-        if (Dragging())
+        if (IsDragging())
         {
             if (!input.leftDown)
             {
@@ -535,34 +532,38 @@ namespace MeshCutting
             pointer.x = input.x;
             pointer.y = input.y;
             pointer.ray = MakeRay(view, input.x, input.y);
-            return UpdateDrag(m_Drag, pointer, minExtent, maxExtent, newPlane);
+            if (!UpdateDrag(m_Drag, pointer))
+                return false;
+            ClampExtents();
+            return true;
         }
 
         m_Hovered = GizmoHandle::None;
         if (m_Tool == GizmoTool::Hidden || input.blocked || !input.cursorValid)
             return false;
-        m_Hovered = PickHandle(view, plane, m_Tool, input.x, input.y);
+        m_Hovered = PickHandle(view, m_Tool, input.x, input.y);
         if (m_Hovered != GizmoHandle::None && input.leftPressed)
         {
             GizmoPointer pointer;
             pointer.x = input.x;
             pointer.y = input.y;
             pointer.ray = MakeRay(view, input.x, input.y);
-            if (!BeginDrag(m_Hovered, plane, pointer, m_Drag))
+            if (!BeginDrag(m_Hovered, pointer, m_Drag))
                 m_Drag = GizmoDrag();
         }
         return false;
     }
 
-    void BakeGizmo(const GizmoView& view, const CutPlane& plane, GizmoTool tool,
-        GizmoHandle hovered, GizmoHandle active, ProceduralMeshData& out)
+    // 핸들을 가는 튜브로 만든다. 호버나 드래그 중인 핸들은 노랗고 조금 굵다. 굽기 전에 out을 비운다.
+    void CutPlane::BakeGizmo(const GizmoView& view, ProceduralMeshData& out) const
     {
         out = ProceduralMeshData();
-        if (tool == GizmoTool::Hidden)
+        if (m_Tool == GizmoTool::Hidden)
             return;
-        const CutPlaneFrame frame = MakeFrame(plane);
-        const float unit = GizmoUnit(view, frame.center);
-        for (const GizmoPrimitive& primitive : BuildGizmoPrimitives(view, plane, tool))
+        const Frame frame = GetFrame();
+        const float unit = GetGizmoUnit(view, frame.center);
+        const GizmoHandle hovered = m_Hovered, active = m_Drag.handle;
+        for (const GizmoPrimitive& primitive : BuildGizmoPrimitives(view, m_Tool))
         {
             const bool hot = primitive.handle == hovered || primitive.handle == active;
             const XMFLOAT4 color = hot ? kYellow : primitive.color;

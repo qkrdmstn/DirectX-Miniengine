@@ -1,5 +1,7 @@
 # MeshCutting 프로젝트 흐름 보고서
 
+> 2026-10-21 갱신: Geometry 파일을 합쳤고(PatchGeometry+PatchWeld -> Patch, PlaneSlicer -> Slice, CutLoops+CapBuilder -> SliceCap, PieceSkinning+JointSet -> Skinning, SegmentPick -> CutPlane, RenderBake -> Rendering/) 구조체 이름도 바꿨다(GeomNode -> PatchNode, SkinNode -> PatchSkin, SurfaceOrigin -> PatchOrigin, RenderCorner -> PatchCorner, CapRecord -> PatchCap, Face -> PatchFace, NodeKind/FaceKind/EdgeKind -> PatchNodeKind/PatchFaceKind/PatchEdgeKind, EdgeUsage -> PatchEdgeUsage, PlaneBasis -> SlicePlaneBasis, CutLoop -> SliceLoop). 파일 경로는 새 이름으로 고쳤지만 `파일:줄` 인용의 줄 번호는 합치기 전 기준이라 새 파일에서는 어긋난다. 함수 이름으로 찾는다.
+
 기준: 2026-10-20에 읽은 현재 작업 트리. 실행 결과가 아니라 정적 코드 추적 보고서다.
 이 보고서 작성 중 빌드·테스트·앱 실행은 하지 않았다. 실제 GPU·드라이버·성능 수치는 확인 못 함.
 `[미커밋]`은 현재 HEAD에 없는 구현 또는 수정된 연결 지점을 뜻한다.
@@ -15,8 +17,8 @@
 ## 1. 한 장 요약
 
 1. 스킨 모델의 CPU VB/IB 사본에서 선택 본의 영향이 있는 삼각형을 현재 포즈의 world 패치로 복사한다. (`MiniEngine/Model/ModelLoader.cpp:230`, `BonePatch.cpp:336`, `BonePatch.cpp:257`)
-2. 렌더 정점은 유지하면서 동일한 bind 위치·스킨·meshSlot을 기하 노드로 용접한다. (`Geometry/PatchWeld.cpp:169`, `Geometry/PatchWeld.cpp:202`)
-3. world 평면으로 노드를 분류하고 표면을 나눈 뒤, 절단 경계의 루프를 검증하고 선택적으로 cap을 만든다. (`Geometry/PlaneSlicer.cpp:453`, `Geometry/PlaneSlicer.cpp:517`, `Geometry/PlaneSlicer.cpp:541`)
+2. 렌더 정점은 유지하면서 동일한 bind 위치·스킨·meshSlot을 기하 노드로 용접한다. (`Geometry/Patch.cpp:169`, `Geometry/Patch.cpp:202`)
+3. world 평면으로 노드를 분류하고 표면을 나눈 뒤, 절단 경계의 루프를 검증하고 선택적으로 cap을 만든다. (`Geometry/Slice.cpp:453`, `Geometry/Slice.cpp:517`, `Geometry/Slice.cpp:541`)
 4. [미커밋] 패치와 성공한 두 조각은 매 프레임 CPU 스키닝을 따르며, 조각 교체는 평면 조작으로 dirty가 된 때만 시도한다. (`Runtime/CutController.cpp:130`, `Runtime/CutController.cpp:141`, `Runtime/CutController.cpp:148`)
 5. [미커밋] 표시용 메시를 베이크·갱신하고 버전이 바뀐 GPU 버퍼를 교체해 그리며, 이전 버퍼는 제출 펜스 완료 뒤 재사용한다. (`Debug/CutDebugView.cpp:71`, `Rendering/ProceduralMeshRenderer.cpp:186`, `Rendering/ProceduralMeshRenderer.cpp:119`)
 
@@ -24,7 +26,7 @@
 
 아래의 `owns`는 C++ 멤버 소유, `->`는 호출 또는 입력 의존, `copy`는 값 복사다.
 지도 근거: `MiniEngine/ModelViewer/ModelViewer.cpp:78`, `Runtime/CutController.h:80`,
-`Debug/CutDebugView.h:45`, `Rendering/ProceduralMeshRenderer.h:84`, `Geometry/PlaneSlicer.cpp:3`.
+`Debug/CutDebugView.h:45`, `Rendering/ProceduralMeshRenderer.h:84`, `Geometry/Slice.cpp:3`.
 
 ```text
 ModelViewer
@@ -47,8 +49,8 @@ tests -> Geometry + ProceduralMesh (별도 main, D3D12 렌더 경로 밖)
 ```
 
 ModelInstance의 Model 공유 소유와 포즈 배열은 `MiniEngine/Model/Model.h:184`, `MiniEngine/Model/Model.h:188`, `MiniEngine/Model/Model.h:193`에서 확인한다.
-Geometry 작업 자료는 Model/Core 타입을 받지 않고, BonePatch가 `WeldInput`으로 변환한다. (`Geometry/PatchGeometry.h:3`, `BonePatch.cpp:391`)
-단, `RenderBake`는 출력용 `ProceduralMeshData`를 만든다. Geometry의 계산 자료와 렌더 자료의 연결점이다. (`Geometry/RenderBake.cpp:92`)
+Geometry 작업 자료는 Model/Core 타입을 받지 않고, BonePatch가 `WeldInput`으로 변환한다. (`Geometry/Patch.h:3`, `BonePatch.cpp:391`)
+단, `RenderBake`는 출력용 `ProceduralMeshData`를 만든다. Geometry의 계산 자료와 렌더 자료의 연결점이다. (`Rendering/RenderBake.cpp:92`)
 
 ### 1.2 먼저 구별할 세 가지 복사본
 
@@ -75,7 +77,7 @@ ModelViewer는 MeshCutting 프로젝트를 참조한다. (`MiniEngine/ModelViewe
 ### 2.1 모델과 추출 자료
 
 `BonePatch`라는 단일 구조체는 여기서 찾지 못했다. 실제 API는 `ExtractBonePatch`이고 출력 묶음은 `ProceduralMeshData`와 `BonePatchSource`다. (`BonePatch.h:46`, `BonePatch.h:69`)
-`PatchGeometry`도 구조체 이름이 아니라 자료·검증 함수가 모인 파일 이름이다. 실제 작업 단위는 `PatchPiece`다. (`Geometry/PatchGeometry.h:94`, `Geometry/PatchGeometry.h:186`)
+`PatchGeometry`도 구조체 이름이 아니라 자료·검증 함수가 모인 파일 이름이다. 실제 작업 단위는 `PatchPiece`다. (`Geometry/Patch.h:94`, `Geometry/Patch.h:186`)
 
 | 타입/필드 | 무엇을 담는가 | 생성자와 소유자 | 좌표계/인덱스 의미 | 근거 |
 | --- | --- | --- | --- | --- |
@@ -97,53 +99,53 @@ ModelViewer는 MeshCutting 프로젝트를 참조한다. (`MiniEngine/ModelViewe
 
 | 타입 | 무엇을 담는가 | 누가 만들고 누가 소유하는가 | 공간 또는 참조 대상 | 근거 |
 | --- | --- | --- | --- | --- |
-| `WeldInputVertex` | posed/bind 위치, 스킨, 렌더 속성 | MakeWeldInput 생성, 임시 WeldInput 소유 | bind는 mesh, position은 world | `Geometry/PatchWeld.h:8`, `BonePatch.cpp:406` |
-| `WeldInput` | 정점 vector와 triangle-list indices | MakeWeldInput 출력; BuildPatchPiece 입력 | 추출 정점 번호 | `Geometry/PatchWeld.h:20`, `BonePatch.cpp:418` |
-| `WeldStats` | 용접 전후 개수, seam/경계/비다양체 수 | BuildPatchPiece 작성; [미커밋] Controller 보관 | 좌표 없음 | `Geometry/PatchWeld.h:26`, `Runtime/CutController.h:85` |
-| `SkinNode` | bindPosition, meshSlot, 정렬된 스킨 쌍 | BuildPatchPiece 생성, piece.originNodes 소유 | pre-skin mesh 위치, palette-local joints | `Geometry/PatchGeometry.h:21`, `Geometry/PatchWeld.cpp:164` |
-| `SurfaceOrigin` | 원본 노드 최대 3개와 bary | 최초 용접 또는 MergeOrigin 생성, GeomNode 값 멤버 | `originNodes` 번호; 현 piece.nodes 번호가 아님 | `Geometry/PatchGeometry.h:30`, `Geometry/PlaneSlicer.cpp:80` |
-| `GeomNode` | 현재 위치, origin, kind, 생성 cutId | 용접/슬라이서 생성, piece.nodes 소유 | 데모에서는 world; Geometry는 입력 공간 그대로 사용 | `Geometry/PatchGeometry.h:41`, `Geometry/PlaneSlicer.cpp:191` |
-| `RenderCorner` | node 번호 + normal/uv/color | 용접·분할·cap 생성, piece.corners 소유 | node는 piece-local; normal은 추출/절단 당시 속성 | `Geometry/PatchGeometry.h:50`, `Geometry/CapBuilder.cpp:289` |
-| `Face` | corner 세 개, FaceKind, sourceTriangle, cutId | 용접·분할·cap 생성, piece.faces 소유 | corner는 piece-local, sourceTriangle은 Source.triangles | `Geometry/PatchGeometry.h:60`, `Geometry/PatchWeld.cpp:214` |
-| `PatchPiece` | originNodes/nodes/corners/faces/boundary/caps/skinStateId | 용접기·슬라이서 생성; [미커밋] Controller 보관 | 위치는 world, 인덱스는 배열별 범위 | `Geometry/PatchGeometry.h:94`, `Runtime/CutController.h:109` |
+| `WeldInputVertex` | posed/bind 위치, 스킨, 렌더 속성 | MakeWeldInput 생성, 임시 WeldInput 소유 | bind는 mesh, position은 world | `Geometry/Patch.h:8`, `BonePatch.cpp:406` |
+| `WeldInput` | 정점 vector와 triangle-list indices | MakeWeldInput 출력; BuildPatchPiece 입력 | 추출 정점 번호 | `Geometry/Patch.h:20`, `BonePatch.cpp:418` |
+| `WeldStats` | 용접 전후 개수, seam/경계/비다양체 수 | BuildPatchPiece 작성; [미커밋] Controller 보관 | 좌표 없음 | `Geometry/Patch.h:26`, `Runtime/CutController.h:85` |
+| `PatchSkin` | bindPosition, meshSlot, 정렬된 스킨 쌍 | BuildPatchPiece 생성, piece.originNodes 소유 | pre-skin mesh 위치, palette-local joints | `Geometry/Patch.h:21`, `Geometry/Patch.cpp:164` |
+| `PatchOrigin` | 원본 노드 최대 3개와 bary | 최초 용접 또는 MergeOrigin 생성, PatchNode 값 멤버 | `originNodes` 번호; 현 piece.nodes 번호가 아님 | `Geometry/Patch.h:30`, `Geometry/Slice.cpp:80` |
+| `PatchNode` | 현재 위치, origin, kind, 생성 cutId | 용접/슬라이서 생성, piece.nodes 소유 | 데모에서는 world; Geometry는 입력 공간 그대로 사용 | `Geometry/Patch.h:41`, `Geometry/Slice.cpp:191` |
+| `PatchCorner` | node 번호 + normal/uv/color | 용접·분할·cap 생성, piece.corners 소유 | node는 piece-local; normal은 추출/절단 당시 속성 | `Geometry/Patch.h:50`, `Geometry/SliceCap.cpp:289` |
+| `PatchFace` | corner 세 개, PatchFaceKind, sourceTriangle, cutId | 용접·분할·cap 생성, piece.faces 소유 | corner는 piece-local, sourceTriangle은 Source.triangles | `Geometry/Patch.h:60`, `Geometry/Patch.cpp:214` |
+| `PatchPiece` | originNodes/nodes/corners/faces/boundary/caps/skinStateId | 용접기·슬라이서 생성; [미커밋] Controller 보관 | 위치는 world, 인덱스는 배열별 범위 | `Geometry/Patch.h:94`, `Runtime/CutController.h:109` |
 
-`originNodes`의 주석에는 shared라고 쓰여 있지만 실제 필드는 `std::vector<SkinNode>`다. (`Geometry/PatchGeometry.h:96`)
-출력 piece를 만들 때 원본 vector를 값 복사한다. 공유 포인터 소유 관계로 읽으면 안 된다. (`Geometry/PlaneSlicer.cpp:374`)
-노드 하나에 corner 여러 개가 달릴 수 있으므로 노드 수와 정점 수를 동일시하지 않는다. (`Geometry/PatchWeld.cpp:181`, `Geometry/PatchWeld.cpp:202`)
+`originNodes`의 주석에는 shared라고 쓰여 있지만 실제 필드는 `std::vector<PatchSkin>`다. (`Geometry/Patch.h:96`)
+출력 piece를 만들 때 원본 vector를 값 복사한다. 공유 포인터 소유 관계로 읽으면 안 된다. (`Geometry/Slice.cpp:374`)
+노드 하나에 corner 여러 개가 달릴 수 있으므로 노드 수와 정점 수를 동일시하지 않는다. (`Geometry/Patch.cpp:181`, `Geometry/Patch.cpp:202`)
 UV seam의 서로 다른 corner가 한 node를 가리키는 사례는 테스트에 있다. (`tests/PlaneSlicerTests.cpp:222`)
 
 ### 2.3 절단, cap, 렌더 자료
 
 | 타입 | 무엇을 담는가 | 생성·소유 | 좌표계/의미 | 근거 |
 | --- | --- | --- | --- | --- |
-| `SlicePlane` | point, normal | [미커밋] CurrentPlane 생성, SlicePatch가 읽음 | 현재 posed patch와 같은 world | `Geometry/PatchGeometry.h:129`, `Runtime/CutController.cpp:239` |
-| `PlaneBasis` | origin, 단위 n, u, v | MakePlaneBasis 생성, 계산 함수의 지역 값 | world 평면에 대한 2D 투영 기준, u×v=n | `Geometry/PatchGeometry.h:138`, `Geometry/PatchGeometry.cpp:143` |
-| `SliceOptions` | cap 모드, epsilonScale, capUvScale | 호출자 지역 값 | epsilon은 piece radius 비율 | `Geometry/PlaneSlicer.h:13`, `Geometry/PlaneSlicer.cpp:466` |
-| `SliceResult` | status, 두 piece, loops/depth/area, detail | SlicePatch 출력; [미커밋] UpdateSlice 지역 값 | loops는 positive piece의 node 번호 | `Geometry/PlaneSlicer.h:20`, `Runtime/CutController.cpp:271` |
-| `CutLoop` | node 순서, signedArea, depth, parent | ExtractCutLoops 생성, Run의 지역 배열 | node는 각 piece-local, area는 plane 2D | `Geometry/CutLoops.h:7`, `Geometry/PlaneSlicer.cpp:513` |
-| `CapRecord` | cutId, plane, rimNodes/loopSizes | BuildCap 생성, piece.caps 소유 | plane은 절단 당시 world, rim은 해당 piece-local | `Geometry/PatchGeometry.h:79`, `Geometry/CapBuilder.cpp:336` |
+| `SlicePlane` | point, normal | [미커밋] CurrentPlane 생성, SlicePatch가 읽음 | 현재 posed patch와 같은 world | `Geometry/Patch.h:129`, `Runtime/CutController.cpp:239` |
+| `SlicePlaneBasis` | origin, 단위 n, u, v | MakePlaneBasis 생성, 계산 함수의 지역 값 | world 평면에 대한 2D 투영 기준, u×v=n | `Geometry/Patch.h:138`, `Geometry/Patch.cpp:143` |
+| `SliceOptions` | cap 모드, epsilonScale, capUvScale | 호출자 지역 값 | epsilon은 piece radius 비율 | `Geometry/Slice.h:13`, `Geometry/Slice.cpp:466` |
+| `SliceResult` | status, 두 piece, loops/depth/area, detail | SlicePatch 출력; [미커밋] UpdateSlice 지역 값 | loops는 positive piece의 node 번호 | `Geometry/Slice.h:20`, `Runtime/CutController.cpp:271` |
+| `SliceLoop` | node 순서, signedArea, depth, parent | ExtractCutLoops 생성, Run의 지역 배열 | node는 각 piece-local, area는 plane 2D | `Geometry/Slice.h:7`, `Geometry/Slice.cpp:513` |
+| `PatchCap` | cutId, plane, rimNodes/loopSizes | BuildCap 생성, piece.caps 소유 | plane은 절단 당시 world, rim은 해당 piece-local | `Geometry/Patch.h:79`, `Geometry/SliceCap.cpp:336` |
 | `ProceduralVertex` | position/normal/uv/color | 추출기 또는 RenderBake 생성 | 데모 position은 world; shader World는 표시 offset | `ProceduralMesh.h:10`, `Debug/CutDebugView.cpp:135` [미커밋] |
-| `MeshSection` | firstIndex/indexCount/materialSlot | 추출기/베이크 생성, mesh data 소유 | index 배열의 범위 | `ProceduralMesh.h:18`, `Geometry/RenderBake.cpp:116` |
+| `MeshSection` | firstIndex/indexCount/materialSlot | 추출기/베이크 생성, mesh data 소유 | index 배열의 범위 | `ProceduralMesh.h:18`, `Rendering/RenderBake.cpp:116` |
 | `ProceduralMeshData` | 렌더 정점·uint32 indices·sections | CPU 생성자들 출력, ProceduralMesh가 소유 | GPU 스킨 속성은 들어 있지 않음 | `ProceduralMesh.h:25`, `ProceduralMesh.h:10` |
 | `ProceduralMesh` | CPU data/bounds와 두 version | [미커밋] Controller 또는 View의 멤버 | GPU 리소스 소유 객체와 분리 | `ProceduralMesh.h:41`, `ProceduralMesh.h:55`, `Rendering/ProceduralMeshRenderer.h:63` |
-| `SkinStats` | 원본 LBS 평가 수·Surface 기록 수·Cap skip 수 | SkinPatchPiece의 선택 출력 | 시간 값이 아닌 개수 | `Geometry/PieceSkinning.h:16`, `Geometry/PieceSkinning.cpp:112` |
+| `SkinStats` | 원본 LBS 평가 수·Surface 기록 수·Cap skip 수 | SkinPatchPiece의 선택 출력 | 시간 값이 아닌 개수 | `Geometry/Skinning.h:16`, `Geometry/Skinning.cpp:112` |
 
 ### 2.4 에지와 상태를 읽는 표
 
 | 값 | 현재 의미 | 근거 |
 | --- | --- | --- |
-| `Interior` | 일반 내부 에지는 boundary map 항목을 만들지 않는 규약 | `Geometry/PatchGeometry.h:68` |
-| `Replacement` | 추출 패치의 열린 경계 | `Geometry/PatchGeometry.h:72`, `Geometry/PatchWeld.cpp:270` |
-| `UnweldedSeam` | 동일 위치라도 용접되지 않은 seam 경계 | `Geometry/PatchGeometry.h:73`, `Geometry/PatchWeld.cpp:268` |
-| `Cut` | cap 전 이번 절단으로 생긴 열린 경계 | `Geometry/PlaneSlicer.cpp:422` |
-| `CapSeam` | 표면과 cap이 공유하는 내부 에지 태그 | `Geometry/CapBuilder.cpp:324`, `Geometry/CapBuilder.cpp:326` |
-| `skinStateId == 0` | 현재 SkinPatchPiece가 허용하는 원본 스키닝 상태 | `Geometry/PieceSkinning.cpp:44` |
-| `SliceStatus::Ok` | 두 piece가 있고 뒤 단계까지 성공; loops가 꼭 있어야 하는 것은 아님 | `Geometry/PlaneSlicer.h:35`, `Geometry/PlaneSlicer.cpp:557` |
-| `SliceStatus::NoCut` | 처리 후 어느 한쪽 face 배열이 비어 있음 | `Geometry/PlaneSlicer.cpp:483` |
+| `Interior` | 일반 내부 에지는 boundary map 항목을 만들지 않는 규약 | `Geometry/Patch.h:68` |
+| `Replacement` | 추출 패치의 열린 경계 | `Geometry/Patch.h:72`, `Geometry/Patch.cpp:270` |
+| `UnweldedSeam` | 동일 위치라도 용접되지 않은 seam 경계 | `Geometry/Patch.h:73`, `Geometry/Patch.cpp:268` |
+| `Cut` | cap 전 이번 절단으로 생긴 열린 경계 | `Geometry/Slice.cpp:422` |
+| `CapSeam` | 표면과 cap이 공유하는 내부 에지 태그 | `Geometry/SliceCap.cpp:324`, `Geometry/SliceCap.cpp:326` |
+| `skinStateId == 0` | 현재 SkinPatchPiece가 허용하는 원본 스키닝 상태 | `Geometry/Skinning.cpp:44` |
+| `SliceStatus::Ok` | 두 piece가 있고 뒤 단계까지 성공; loops가 꼭 있어야 하는 것은 아님 | `Geometry/Slice.h:35`, `Geometry/Slice.cpp:557` |
+| `SliceStatus::NoCut` | 처리 후 어느 한쪽 face 배열이 비어 있음 | `Geometry/Slice.cpp:483` |
 
-boundary 키는 node 번호의 작은 값을 상위 32비트, 큰 값을 하위 32비트에 넣는다. (`Geometry/PatchGeometry.h:152`)
-따라서 map 키 자체에는 방향이 없고, 방향은 face 순회에서 따로 센다. (`Geometry/PatchGeometry.cpp:165`, `Geometry/PatchGeometry.cpp:176`)
-`Empty()`는 faces.empty()만 검사한다. 디버거에서 nodes가 남았는지만 보고 유효 piece로 판단하지 않는다. (`Geometry/PatchGeometry.h:106`)
+boundary 키는 node 번호의 작은 값을 상위 32비트, 큰 값을 하위 32비트에 넣는다. (`Geometry/Patch.h:152`)
+따라서 map 키 자체에는 방향이 없고, 방향은 face 순회에서 따로 센다. (`Geometry/Patch.cpp:165`, `Geometry/Patch.cpp:176`)
+`Empty()`는 faces.empty()만 검사한다. 디버거에서 nodes가 남았는지만 보고 유효 piece로 판단하지 않는다. (`Geometry/Patch.h:106`)
 
 ## 3. 흐름 따라가기
 
@@ -202,11 +204,11 @@ boundary 키는 node 번호의 작은 값을 상위 32비트, 큰 값을 하위 
 13. [미커밋] `SetPatch` → `RebuildPatchPiece` → `MakeWeldInput`.
     posed 렌더 속성과 pre-skin 스킨 원본을 plain 입력 구조체로 합친다. (`Runtime/CutController.cpp:25`, `Runtime/CutController.cpp:92`, `BonePatch.cpp:403`)
 14. `RebuildPatchPiece` → `BuildPatchPiece` → `CanonicalSkin`.
-    양수 weight만 남기고 같은 joint를 합친 뒤 정렬하여 비트 기반 용접 키를 만든다. (`Runtime/CutController.cpp:97` [미커밋], `Geometry/PatchWeld.cpp:91`, `Geometry/PatchWeld.cpp:169`)
+    양수 weight만 남기고 같은 joint를 합친 뒤 정렬하여 비트 기반 용접 키를 만든다. (`Runtime/CutController.cpp:97` [미커밋], `Geometry/Patch.cpp:91`, `Geometry/Patch.cpp:169`)
 15. `BuildPatchPiece` → node/corner/face 생성 → `CollectEdgeUsage`.
-    원본 렌더 정점당 corner 하나를 보존하고 열린 에지를 Replacement 또는 UnweldedSeam으로 분류한다. (`Geometry/PatchWeld.cpp:193`, `Geometry/PatchWeld.cpp:202`, `Geometry/PatchWeld.cpp:233`, `Geometry/PatchWeld.cpp:270`)
+    원본 렌더 정점당 corner 하나를 보존하고 열린 에지를 Replacement 또는 UnweldedSeam으로 분류한다. (`Geometry/Patch.cpp:193`, `Geometry/Patch.cpp:202`, `Geometry/Patch.cpp:233`, `Geometry/Patch.cpp:270`)
 16. `BuildPatchPiece` → `ValidatePatchPiece` → [미커밋] radius 저장.
-    성공한 용접 piece만 출력하고 Controller는 최초 복사 때의 반지름을 표시 기준으로 보관한다. (`Geometry/PatchWeld.cpp:280`, `Geometry/PatchWeld.cpp:284`, `Runtime/CutController.cpp:100`)
+    성공한 용접 piece만 출력하고 Controller는 최초 복사 때의 반지름을 표시 기준으로 보관한다. (`Geometry/Patch.cpp:280`, `Geometry/Patch.cpp:284`, `Runtime/CutController.cpp:100`)
 17. [미커밋] `SetPatch` → `ClearSlice` → `ComputeBasePlane` → `UpdateBasePlane`.
     이전 조각을 지우고 offset/tilt를 0으로 한 뒤 선택 본 local 평면을 만들며 patchVersion을 증가시킨다. (`Runtime/CutController.cpp:26`, `Runtime/CutController.cpp:28`, `Runtime/CutController.cpp:29`, `Runtime/CutController.cpp:31`)
 18. [미커밋] 이후 `ModelInstance::Update` → `CutController::Update` → `CutDebugView::Sync`.
@@ -229,61 +231,61 @@ C 추출 실패는 이전 패치를 남기고 오류 문구만 바꾼다. (`Runt
 4. [미커밋] `UpdateSlice` → `CurrentPlane` → `SlicePatch(m_PatchPiece, plane, 1, options, result)`.
    cap 옵션을 Create/None으로 선택하고 cutId는 매번 1을 넘긴다. (`Runtime/CutController.cpp:267`, `Runtime/CutController.cpp:270`, `Runtime/CutController.cpp:272`)
 5. `SlicePatch` → `Slicer::Run` → `ValidatePlane` → `ValidatePatchPiece`.
-   out을 초기화하고 평면·위상·origin·퇴화·에지 사용을 검사한다. (`Geometry/PlaneSlicer.cpp:574`, `Geometry/PlaneSlicer.cpp:456`, `Geometry/PatchGeometry.cpp:233`)
+   out을 초기화하고 평면·위상·origin·퇴화·에지 사용을 검사한다. (`Geometry/Slice.cpp:574`, `Geometry/Slice.cpp:456`, `Geometry/Patch.cpp:233`)
 6. `Slicer::Run` → `MakePlaneBasis` → `ComputePieceRadius` → `ClassifyNodes`.
-   단위 평면 법선과 epsilon을 만든 뒤 각 node의 signed distance를 +1/0/-1로 저장한다. (`Geometry/PlaneSlicer.cpp:465`, `Geometry/PlaneSlicer.cpp:153`, `Geometry/PlaneSlicer.cpp:157`)
+   단위 평면 법선과 epsilon을 만든 뒤 각 node의 signed distance를 +1/0/-1로 저장한다. (`Geometry/Slice.cpp:465`, `Geometry/Slice.cpp:153`, `Geometry/Slice.cpp:157`)
 7. `Slicer::Run` → 각 `ProcessFace`.
-   세 node의 부호를 세고 모두 0이면 CoplanarFace, 한쪽뿐이면 그쪽에 원래 face를 옮긴다. (`Geometry/PlaneSlicer.cpp:469`, `Geometry/PlaneSlicer.cpp:279`, `Geometry/PlaneSlicer.cpp:289`, `Geometry/PlaneSlicer.cpp:296`)
+   세 node의 부호를 세고 모두 0이면 CoplanarFace, 한쪽뿐이면 그쪽에 원래 face를 옮긴다. (`Geometry/Slice.cpp:469`, `Geometry/Slice.cpp:279`, `Geometry/Slice.cpp:289`, `Geometry/Slice.cpp:296`)
 8. `ProcessFace` → 필요 시 `CutNodeOf` → `MergeOrigin`.
-   엄격한 반대 부호 에지에 `t=dl/(dl-dh)` 교차 노드를 하나 만들고 origin을 섞으며, 기하 에지 캐시에 재사용한다. (`Geometry/PlaneSlicer.cpp:164`, `Geometry/PlaneSlicer.cpp:178`, `Geometry/PlaneSlicer.cpp:183`, `Geometry/PlaneSlicer.cpp:198`)
+   엄격한 반대 부호 에지에 `t=dl/(dl-dh)` 교차 노드를 하나 만들고 origin을 섞으며, 기하 에지 캐시에 재사용한다. (`Geometry/Slice.cpp:164`, `Geometry/Slice.cpp:178`, `Geometry/Slice.cpp:183`, `Geometry/Slice.cpp:198`)
 9. `ProcessFace` → `CutCorner` → `AddFace`.
-   node와 별도로 corner 쌍 캐시를 사용해 UV·색·법선을 보간하고, 0/+/-는 양쪽 삼각형 하나씩 만든다. (`Geometry/PlaneSlicer.cpp:216`, `Geometry/PlaneSlicer.cpp:231`, `Geometry/PlaneSlicer.cpp:309`, `Geometry/PlaneSlicer.cpp:321`)
+   node와 별도로 corner 쌍 캐시를 사용해 UV·색·법선을 보간하고, 0/+/-는 양쪽 삼각형 하나씩 만든다. (`Geometry/Slice.cpp:216`, `Geometry/Slice.cpp:231`, `Geometry/Slice.cpp:309`, `Geometry/Slice.cpp:321`)
 10. `ProcessFace` → lone vertex 분기 → `AddFace` 세 번.
-    한쪽 1정점은 삼각형 하나, 다른 쪽 2정점은 잘린 사각형의 삼각형 둘이 된다. (`Geometry/PlaneSlicer.cpp:328`, `Geometry/PlaneSlicer.cpp:339`)
+    한쪽 1정점은 삼각형 하나, 다른 쪽 2정점은 잘린 사각형의 삼각형 둘이 된다. (`Geometry/Slice.cpp:328`, `Geometry/Slice.cpp:339`)
 11. `Slicer::Run` → cap sides 검사 → NoCut 검사.
-    기존 cap이 양쪽으로 갈라지면 CrossesCap, 어느 side에도 face가 없으면 NoCut이다. (`Geometry/PlaneSlicer.cpp:476`, `Geometry/PlaneSlicer.cpp:483`)
+    기존 cap이 양쪽으로 갈라지면 CrossesCap, 어느 side에도 face가 없으면 NoCut이다. (`Geometry/Slice.cpp:476`, `Geometry/Slice.cpp:483`)
 12. `Slicer::Run` → 양쪽 `BuildPiece` → `InheritedKind` → `CollectEdgeUsage`.
-    사용하는 global node만 compact하고 corner.node를 remap하며, 현재 adjacency에서 경계를 다시 태깅한다. (`Geometry/PlaneSlicer.cpp:370`, `Geometry/PlaneSlicer.cpp:383`, `Geometry/PlaneSlicer.cpp:399`, `Geometry/PlaneSlicer.cpp:411`)
+    사용하는 global node만 compact하고 corner.node를 remap하며, 현재 adjacency에서 경계를 다시 태깅한다. (`Geometry/Slice.cpp:370`, `Geometry/Slice.cpp:383`, `Geometry/Slice.cpp:399`, `Geometry/Slice.cpp:411`)
 13. `BuildPiece` → cap record remap → `ValidatePatchPiece`.
-    보존된 cap의 rim 번호를 바꾸고 양쪽 출력이 다음 절단의 입력으로도 유효한지 검사한다. (`Geometry/PlaneSlicer.cpp:429`, `Geometry/PlaneSlicer.cpp:442`, `Geometry/PlaneSlicer.cpp:503`)
+    보존된 cap의 rim 번호를 바꾸고 양쪽 출력이 다음 절단의 입력으로도 유효한지 검사한다. (`Geometry/Slice.cpp:429`, `Geometry/Slice.cpp:442`, `Geometry/Slice.cpp:503`)
 14. `Slicer::Run` → 각 side의 `ExtractCutLoops`.
-    Cut 태그이며 두 끝이 onPlane인 에지에서 face 방향의 next/in/out 그래프를 만든다. (`Geometry/PlaneSlicer.cpp:517`, `Geometry/CutLoops.cpp:78`, `Geometry/CutLoops.cpp:88`)
+    Cut 태그이며 두 끝이 onPlane인 에지에서 face 방향의 next/in/out 그래프를 만든다. (`Geometry/Slice.cpp:517`, `Geometry/SliceCap.cpp:78`, `Geometry/SliceCap.cpp:88`)
 15. `ExtractCutLoops` → 차수 검사 → cycle 추출.
-    외부 경계에서 끝나는 chain은 OpenLoop, 나머지 잘못된 차수는 NonManifoldLoop로 실패한다. (`Geometry/CutLoops.cpp:119`, `Geometry/CutLoops.cpp:136`, `Geometry/CutLoops.cpp:145`)
+    외부 경계에서 끝나는 chain은 OpenLoop, 나머지 잘못된 차수는 NonManifoldLoop로 실패한다. (`Geometry/SliceCap.cpp:119`, `Geometry/SliceCap.cpp:136`, `Geometry/SliceCap.cpp:145`)
 16. `ExtractCutLoops` → 2D 투영 → 교차/포함/방향 검사.
-    자기·상호 접촉, 깊이 2 이상, side에 맞지 않는 winding을 InvalidLoop로 거절한다. (`Geometry/CutLoops.cpp:165`, `Geometry/CutLoops.cpp:189`, `Geometry/CutLoops.cpp:232`, `Geometry/CutLoops.cpp:241`)
+    자기·상호 접촉, 깊이 2 이상, side에 맞지 않는 winding을 InvalidLoop로 거절한다. (`Geometry/SliceCap.cpp:165`, `Geometry/SliceCap.cpp:189`, `Geometry/SliceCap.cpp:232`, `Geometry/SliceCap.cpp:241`)
 17. `Slicer::Run` → 양쪽 loop 길이 목록 비교.
-    정렬한 각 loop의 node 수 목록이 다르면 내부 불일치로 InvalidLoop를 반환한다. (`Geometry/PlaneSlicer.cpp:526`, `Geometry/PlaneSlicer.cpp:533`)
+    정렬한 각 loop의 node 수 목록이 다르면 내부 불일치로 InvalidLoop를 반환한다. (`Geometry/Slice.cpp:526`, `Geometry/Slice.cpp:533`)
 18. cap Create일 때 `Slicer::Run` → 각 side의 `BuildCap`.
-    None이어도 루프 검사는 이미 했고, 여기의 cap 생성만 생략한다. (`Geometry/PlaneSlicer.cpp:512`, `Geometry/PlaneSlicer.cpp:541`)
+    None이어도 루프 검사는 이미 했고, 여기의 cap 생성만 생략한다. (`Geometry/Slice.cpp:512`, `Geometry/Slice.cpp:541`)
 19. `BuildCap` → 2D rings 생성 → 방향 정리 → `BridgeHole`.
-    외곽은 CCW, 구멍은 CW로 맞추고 같은 외곽의 구멍을 오른쪽부터 bridge로 연결한다. (`Geometry/CapBuilder.cpp:220`, `Geometry/CapBuilder.cpp:233`, `Geometry/CapBuilder.cpp:254`, `Geometry/CapBuilder.cpp:269`)
+    외곽은 CCW, 구멍은 CW로 맞추고 같은 외곽의 구멍을 오른쪽부터 bridge로 연결한다. (`Geometry/SliceCap.cpp:220`, `Geometry/SliceCap.cpp:233`, `Geometry/SliceCap.cpp:254`, `Geometry/SliceCap.cpp:269`)
 20. `BridgeHole` → 가시 후보 선택 → `EarClip`.
-    bridge가 벽을 넘거나 중점이 재료 밖이면 후보를 버리고, 연결 ring에서 충분한 면적의 convex ear를 잘라낸다. (`Geometry/CapBuilder.cpp:102`, `Geometry/CapBuilder.cpp:120`, `Geometry/CapBuilder.cpp:144`, `Geometry/CapBuilder.cpp:163`)
+    bridge가 벽을 넘거나 중점이 재료 밖이면 후보를 버리고, 연결 ring에서 충분한 면적의 convex ear를 잘라낸다. (`Geometry/SliceCap.cpp:102`, `Geometry/SliceCap.cpp:120`, `Geometry/SliceCap.cpp:144`, `Geometry/SliceCap.cpp:163`)
 21. `BuildCap` → piece 사본 → cap corner/face 추가.
-    새로운 위치 노드를 추가하지 않고 rim node를 참조하는 cap corner와 바깥 방향 face를 만든다. (`Geometry/CapBuilder.cpp:278`, `Geometry/CapBuilder.cpp:289`, `Geometry/CapBuilder.cpp:300`)
-22. `BuildCap` → 에지 짝 검사 → 면적 검사 → CapRecord → 최종 검증.
-    각 rim 에지가 반대 방향의 두 face에 쓰이면 CapSeam으로 바꾸고, 성공한 사본만 piece로 옮긴다. (`Geometry/CapBuilder.cpp:324`, `Geometry/CapBuilder.cpp:333`, `Geometry/CapBuilder.cpp:336`, `Geometry/CapBuilder.cpp:350`, `Geometry/CapBuilder.cpp:354`)
+    새로운 위치 노드를 추가하지 않고 rim node를 참조하는 cap corner와 바깥 방향 face를 만든다. (`Geometry/SliceCap.cpp:278`, `Geometry/SliceCap.cpp:289`, `Geometry/SliceCap.cpp:300`)
+22. `BuildCap` → 에지 짝 검사 → 면적 검사 → PatchCap → 최종 검증.
+    각 rim 에지가 반대 방향의 두 face에 쓰이면 CapSeam으로 바꾸고, 성공한 사본만 piece로 옮긴다. (`Geometry/SliceCap.cpp:324`, `Geometry/SliceCap.cpp:333`, `Geometry/SliceCap.cpp:336`, `Geometry/SliceCap.cpp:350`, `Geometry/SliceCap.cpp:354`)
 23. `Slicer::Run` → `SliceResult` 게시 → [미커밋] `UpdateSlice` 성공 분기.
-    양쪽 piece와 positive loops를 반환하며 Controller는 성공한 결과만 기존 두 piece 대신 저장한다. (`Geometry/PlaneSlicer.cpp:557`, `Geometry/PlaneSlicer.cpp:559`, `Runtime/CutController.cpp:274`, `Runtime/CutController.cpp:282`)
+    양쪽 piece와 positive loops를 반환하며 Controller는 성공한 결과만 기존 두 piece 대신 저장한다. (`Geometry/Slice.cpp:557`, `Geometry/Slice.cpp:559`, `Runtime/CutController.cpp:274`, `Runtime/CutController.cpp:282`)
 24. [미커밋] `UpdateSlice` → pieceGeneration 증가 → `CutDebugView::Draw` → `Sync`.
     generation이 달라졌으면 두 piece를 `BuildRenderMesh`와 `BakeBoundaryDebug`로 다시 굽는다. (`Runtime/CutController.cpp:284`, `Debug/CutDebugView.cpp:133`, `Debug/CutDebugView.cpp:56`, `Debug/CutDebugView.cpp:74`)
 25. `BuildRenderMesh` → [미커밋] View 메시의 `SetMesh` → renderer `Draw`.
-    corner별 정점과 Surface/Cap section을 만들고 CPU 버전을 바꿔 다음 GPU 업로드를 유도한다. (`Geometry/RenderBake.cpp:98`, `Geometry/RenderBake.cpp:107`, `Debug/CutDebugView.cpp:75`, `ProceduralMesh.cpp:155`, `Rendering/ProceduralMeshRenderer.cpp:186`)
+    corner별 정점과 Surface/Cap section을 만들고 CPU 버전을 바꿔 다음 GPU 업로드를 유도한다. (`Rendering/RenderBake.cpp:98`, `Rendering/RenderBake.cpp:107`, `Debug/CutDebugView.cpp:75`, `ProceduralMesh.cpp:155`, `Rendering/ProceduralMeshRenderer.cpp:186`)
 
 ### 3c 보조: 실패를 따라가는 갈림길
 
 | 최초 멈춤 지점 | 상태와 확인할 값 | 근거 |
 | --- | --- | --- |
-| plane/input 검증 | InvalidInput/InvalidOrigin/퇴화/비다양체; detail의 node/face/edge 번호 | `Geometry/PlaneSlicer.cpp:456`, `Geometry/PatchGeometry.cpp:248`, `Geometry/PatchGeometry.cpp:277` |
-| face가 plane 위 | CoplanarFace; 세 sign이 모두 0인지 | `Geometry/PlaneSlicer.cpp:289` |
-| 기존 cap 교차 | CrossesCap; cap face 또는 cap 집합이 양쪽으로 갔는지 | `Geometry/PlaneSlicer.cpp:306`, `Geometry/PlaneSlicer.cpp:476` |
-| 한쪽 결과 없음 | NoCut; 양쪽 SideBuild.faces 크기 | `Geometry/PlaneSlicer.cpp:483` |
-| 루프 구성 실패 | OpenLoop/NonManifoldLoop; blocker와 in/out degree | `Geometry/CutLoops.cpp:119` |
-| 2D 루프 실패 | InvalidLoop; 교차/깊이/winding detail | `Geometry/CutLoops.cpp:189`, `Geometry/CutLoops.cpp:232` |
-| cap 실패 | CapTriangulationFailed; bridge/ear/edge/area detail | `Geometry/CapBuilder.cpp:200`, `Geometry/CapBuilder.cpp:269`, `Geometry/CapBuilder.cpp:324` |
+| plane/input 검증 | InvalidInput/InvalidOrigin/퇴화/비다양체; detail의 node/face/edge 번호 | `Geometry/Slice.cpp:456`, `Geometry/Patch.cpp:248`, `Geometry/Patch.cpp:277` |
+| face가 plane 위 | CoplanarFace; 세 sign이 모두 0인지 | `Geometry/Slice.cpp:289` |
+| 기존 cap 교차 | CrossesCap; cap face 또는 cap 집합이 양쪽으로 갔는지 | `Geometry/Slice.cpp:306`, `Geometry/Slice.cpp:476` |
+| 한쪽 결과 없음 | NoCut; 양쪽 SideBuild.faces 크기 | `Geometry/Slice.cpp:483` |
+| 루프 구성 실패 | OpenLoop/NonManifoldLoop; blocker와 in/out degree | `Geometry/SliceCap.cpp:119` |
+| 2D 루프 실패 | InvalidLoop; 교차/깊이/winding detail | `Geometry/SliceCap.cpp:189`, `Geometry/SliceCap.cpp:232` |
+| cap 실패 | CapTriangulationFailed; bridge/ear/edge/area detail | `Geometry/SliceCap.cpp:200`, `Geometry/SliceCap.cpp:269`, `Geometry/SliceCap.cpp:324` |
 
-`SlicePatch` 실패 출력에는 status/detail만 남기고 두 piece와 loops를 비운다. (`Geometry/PlaneSlicer.cpp:577`)
+`SlicePatch` 실패 출력에는 status/detail만 남기고 두 piece와 loops를 비운다. (`Geometry/Slice.cpp:577`)
 [미커밋] Controller는 이 임시 실패 결과를 화면 piece에 덮어쓰지 않는다. (`Runtime/CutController.cpp:274`)
 [미커밋] 실패해도 dirty는 false로 소비되므로 같은 입력 없이 다음 프레임 자동 재시도하지 않는다. (`Runtime/CutController.cpp:145`)
 
@@ -302,7 +304,7 @@ C 추출 실패는 이전 패치를 남기고 오류 문구만 바꾼다. (`Runt
 6. [미커밋] `CutController::Update` → `ComputePoseJointWorld`.
    평면용 현재 행렬은 첫 source mesh world × palette joint node world로 따로 만든다. (`Runtime/CutController.cpp:115`, `BonePatch.cpp:145`, `BonePatch.cpp:152`)
 7. [미커밋] Update의 skin lambda → `SkinPatchPiece(m_PatchPiece)` → `SkinPoint`.
-   필요한 origin만 LBS하고 각 GeomNode를 SurfaceOrigin의 bary 합으로 현재 포즈에 놓는다. (`Runtime/CutController.cpp:125`, `Runtime/CutController.cpp:130`, `Geometry/PieceSkinning.cpp:67`, `Geometry/PieceSkinning.cpp:103`)
+   필요한 origin만 LBS하고 각 PatchNode를 PatchOrigin의 bary 합으로 현재 포즈에 놓는다. (`Runtime/CutController.cpp:125`, `Runtime/CutController.cpp:130`, `Geometry/Skinning.cpp:67`, `Geometry/Skinning.cpp:103`)
 8. [미커밋] `UpdateBasePlane` → 필요 시 `UpdateSlice`; 그 외 기존 piece 스키닝.
    새 절단 성공 직후에는 결과가 이미 현재 포즈이므로 두 조각의 중복 스키닝을 건너뛴다. (`Runtime/CutController.cpp:138`, `Runtime/CutController.cpp:145`, `Runtime/CutController.cpp:148`)
 9. [미커밋] `CutController::Update` 종료 → `m_FramePoseValid=true`.
@@ -310,7 +312,7 @@ C 추출 실패는 이전 패치를 남기고 오류 문구만 바꾼다. (`Runt
 10. `ModelViewer::RenderScene` → 원본 모델 opaque pass → `RenderProceduralMeshes`.
     procedural 그림은 원본 opaque 뒤, transparent 앞에 삽입된다. (`MiniEngine/ModelViewer/ModelViewer.cpp:517`, `MiniEngine/ModelViewer/ModelViewer.cpp:523`, `MiniEngine/ModelViewer/ModelViewer.cpp:525`)
 11. [미커밋] `RenderProceduralMeshes` → `CutDebugView::Draw` → `Sync`.
-    새 generation은 full bake하고, 보통 프레임은 `UpdateRenderPositions` → `UpdateVertices`로 위치를 복사한다. (`MiniEngine/ModelViewer/ModelViewer.cpp:550`, `Debug/CutDebugView.cpp:133`, `Debug/CutDebugView.cpp:97`, `Geometry/RenderBake.cpp:129`)
+    새 generation은 full bake하고, 보통 프레임은 `UpdateRenderPositions` → `UpdateVertices`로 위치를 복사한다. (`MiniEngine/ModelViewer/ModelViewer.cpp:550`, `Debug/CutDebugView.cpp:133`, `Debug/CutDebugView.cpp:97`, `Rendering/RenderBake.cpp:129`)
 12. [미커밋] `Sync` → 필요 시 `BakeBoundaryDebug/BakePlaneDebug` → `ReplaceOrUpdate`.
     튜브는 다시 계산하되 indices와 정점 수가 같으면 vertex update를 사용한다. (`Debug/CutDebugView.cpp:91`, `Debug/CutDebugView.cpp:125`, `Debug/CutDebugView.cpp:26`)
 13. [미커밋] `CutDebugView::Draw` → display world 계산 → renderer `Draw`.
@@ -322,9 +324,9 @@ C 추출 실패는 이전 패치를 남기고 오류 문구만 바꾼다. (`Runt
 16. `RenderScene` → `NotifySubmitted(gfxContext.Finish())`.
     이번 draw에 사용된 버퍼들에 실제 제출 펜스를 기록하고 완료된 retired 버퍼를 free로 회수한다. (`MiniEngine/ModelViewer/ModelViewer.cpp:544`, `Rendering/ProceduralMeshRenderer.cpp:270`)
 
-`SkinPatchPiece`는 필요한 origin·joint·slot을 검증하고 임시 positions를 완성한 뒤 해당 piece의 node.position을 한꺼번에 쓴다. (`Geometry/PieceSkinning.cpp:47`, `Geometry/PieceSkinning.cpp:90`, `Geometry/PieceSkinning.cpp:110`)
+`SkinPatchPiece`는 필요한 origin·joint·slot을 검증하고 임시 positions를 완성한 뒤 해당 piece의 node.position을 한꺼번에 쓴다. (`Geometry/Skinning.cpp:47`, `Geometry/Skinning.cpp:90`, `Geometry/Skinning.cpp:110`)
 이 보장은 piece 한 번의 호출 범위이며 Controller의 패치+두 piece 전체를 묶은 transaction은 아니다. (`Runtime/CutController.cpp:130`, `Runtime/CutController.cpp:152` [미커밋])
-위치 갱신은 corner normal/UV/color를 재계산하지 않는다. (`Geometry/RenderBake.cpp:129`)
+위치 갱신은 corner normal/UV/color를 재계산하지 않는다. (`Rendering/RenderBake.cpp:129`)
 현재 procedural VS/PS 출력은 위치와 색을 쓰므로 보고서에서 조명 갱신 결과를 주장하지 않는다. (`Rendering/ProceduralMeshVS.hlsl:24`, `Rendering/ProceduralMeshPS.hlsl:23`)
 
 ### 3e. X·새 C·재절단·종료의 상태 정리
@@ -404,12 +406,12 @@ worldMatrixIndex는 mesh.meshCBV를 저장한 값으로 instance node world 배�
 아래 수식은 코드의 `Math::Matrix4` 표기 순서를 그대로 쓴다.
 `S_j = nodeWorld[jointNode] * IBM_j`는 skeleton.posXform이다. (`MiniEngine/Model/Model.cpp:243`)
 `M_slot,j = meshWorld_slot * S_j`는 SkinPoint에 전달되는 행렬이다. (`BonePatch.cpp:108`)
-`p_origin = Σ weight_j · Transform(bindPosition, M_slot,j)`가 LBS 결과다. (`Geometry/PieceSkinning.cpp:25`, `Geometry/PieceSkinning.cpp:32`)
-`p_node = Σ bary_i · p_origin[i]`가 절단 후 노드의 현재 위치다. (`Geometry/PieceSkinning.cpp:101`)
+`p_origin = Σ weight_j · Transform(bindPosition, M_slot,j)`가 LBS 결과다. (`Geometry/Skinning.cpp:25`, `Geometry/Skinning.cpp:32`)
+`p_node = Σ bary_i · p_origin[i]`가 절단 후 노드의 현재 위치다. (`Geometry/Skinning.cpp:101`)
 
 | 데이터 | 출발 공간 | 도착/사용 공간 | 주의할 차이 | 근거 |
 | --- | --- | --- | --- | --- |
-| BonePatchVertex.position / SkinNode.bindPosition | 원본 mesh pre-skin | LBS 입력 | 이미 world인 GeomNode.position과 다름 | `BonePatch.cpp:280`, `Geometry/PieceSkinning.cpp:83` |
+| BonePatchVertex.position / PatchSkin.bindPosition | 원본 mesh pre-skin | LBS 입력 | 이미 world인 PatchNode.position과 다름 | `BonePatch.cpp:280`, `Geometry/Skinning.cpp:83` |
 | skeleton.posXform | mesh bind 위치 | joint pose가 반영된 스키닝 좌표 | IBM 포함 | `MiniEngine/Model/Model.cpp:243` |
 | slotMatrices | bind 위치 | posed patch/world | meshWorld를 추가 포함 | `BonePatch.cpp:108`, `BonePatch.h:66` |
 | poseJointWorld | joint-local 프레임 | posed patch/world | IBM을 곱하지 않음; 평면 부착용 | `BonePatch.cpp:360`, `Runtime/CutController.cpp:213` [미커밋] |
@@ -418,7 +420,7 @@ worldMatrixIndex는 mesh.meshCBV를 저장한 값으로 instance node world 배�
 
 `GetNodeWorldMatrices`라는 이름만 보고 모든 node에 locator가 동일하게 적용된다고 단정하지 않는다.
 Update는 `skeletonRoot`일 때 parent 합성을 생략한다. 실제 최종 관계는 위의 두 곱을 기준으로 읽는다. (`MiniEngine/Model/Model.cpp:197`, `BonePatch.cpp:108`, `BonePatch.cpp:152`)
-DirectXMath의 `SkinPoint`는 `XMVector4Transform`의 row-vector API를 쓴다. (`Geometry/PieceSkinning.h:7`, `Geometry/PieceSkinning.cpp:32`)
+DirectXMath의 `SkinPoint`는 `XMVector4Transform`의 row-vector API를 쓴다. (`Geometry/Skinning.h:7`, `Geometry/Skinning.cpp:32`)
 shader는 `mul(ViewProj, mul(World, position))`로 쓴다. 함수 표기 차이를 보고 행렬을 임의로 뒤집지 말고 실제 저장·호출 경로를 확인한다. (`Rendering/ProceduralMeshVS.hlsl:24`, `BonePatch.cpp:108`)
 
 ### 5.3 평면 프레임의 왕복 [미커밋]
@@ -444,12 +446,12 @@ world에서 만든 프레임을 joint-local로 저장하고 다시 현재 joint 
 
 ### 5.4 평면 2D와 cap의 공간
 
-`MakePlaneBasis`는 입력 normal을 정규화하고 가장 덜 정렬된 좌표축으로 u를 만든 뒤 v=n×u를 만든다. (`Geometry/PatchGeometry.cpp:130`, `Geometry/PatchGeometry.cpp:135`, `Geometry/PatchGeometry.cpp:147`)
-투영은 `dot(p-origin,u)`, `dot(p-origin,v)`이며 loop와 cap이 같은 basis 생성 함수를 사용한다. (`Geometry/CutLoops.cpp:172`, `Geometry/CapBuilder.cpp:228`)
-positive piece의 바깥 cap normal은 -n, negative는 +n이다. (`Geometry/CapBuilder.cpp:279`)
-cap UV는 이 2D 투영에 capUvScale을 곱한 값이다. (`Geometry/CapBuilder.cpp:292`)
-cap의 부착 예약 필드(attachJoint, attachJointWorldAtCut)는 생산자와 소비자가 없어 `CapRecord`에서 삭제했다. 강체 부착 실행 경로는 없다.
-cap 위치는 Surface node를 공유하므로 스키닝 후 위치가 변해도 record의 planePoint/planeNormal을 매 프레임 재작성하지 않는다. (`Geometry/CapBuilder.cpp:290`, `Geometry/PieceSkinning.cpp:110`)
+`MakePlaneBasis`는 입력 normal을 정규화하고 가장 덜 정렬된 좌표축으로 u를 만든 뒤 v=n×u를 만든다. (`Geometry/Patch.cpp:130`, `Geometry/Patch.cpp:135`, `Geometry/Patch.cpp:147`)
+투영은 `dot(p-origin,u)`, `dot(p-origin,v)`이며 loop와 cap이 같은 basis 생성 함수를 사용한다. (`Geometry/SliceCap.cpp:172`, `Geometry/SliceCap.cpp:228`)
+positive piece의 바깥 cap normal은 -n, negative는 +n이다. (`Geometry/SliceCap.cpp:279`)
+cap UV는 이 2D 투영에 capUvScale을 곱한 값이다. (`Geometry/SliceCap.cpp:292`)
+cap의 부착 예약 필드(attachJoint, attachJointWorldAtCut)는 생산자와 소비자가 없어 `PatchCap`에서 삭제했다. 강체 부착 실행 경로는 없다.
+cap 위치는 Surface node를 공유하므로 스키닝 후 위치가 변해도 record의 planePoint/planeNormal을 매 프레임 재작성하지 않는다. (`Geometry/SliceCap.cpp:290`, `Geometry/Skinning.cpp:110`)
 
 ## 6. GPU 경계와 버퍼 수명
 
@@ -514,8 +516,8 @@ wire는 WIREFRAME와 DepthStateReadOnly, DepthBias 200, slope bias 1.5를 설정
 이 값이 모든 카메라에서 어떤 시각 결과를 내는지는 이 보고서에서 확인 못 함.
 U의 solid+wire는 solid 먼저, 같은 world의 wire 다음으로 제출한다. (`Debug/CutDebugView.cpp:153`)
 패치 단독 표시 분기는 기본 DrawOptions를 넘기고, 두 조각 분기에만 pieceOptions를 넘긴다. (`Debug/CutDebugView.cpp:174`, `Debug/CutDebugView.cpp:184`)
-경계 디버그는 CapSeam을 제외하며 Replacement는 노랑, UnweldedSeam은 초록, Cut은 주황이다. (`Geometry/RenderBake.cpp:13`, `Geometry/RenderBake.cpp:75`)
-평면은 48분할 원과 교차선, positive 방향 화살표로 굽는다. (`Geometry/RenderBake.cpp:148`, `Geometry/RenderBake.cpp:156`)
+경계 디버그는 CapSeam을 제외하며 Replacement는 노랑, UnweldedSeam은 초록, Cut은 주황이다. (`Rendering/RenderBake.cpp:13`, `Rendering/RenderBake.cpp:75`)
+평면은 48분할 원과 교차선, positive 방향 화살표로 굽는다. (`Rendering/RenderBake.cpp:148`, `Rendering/RenderBake.cpp:156`)
 procedural draw 후 필요할 때 linear depth를 다시 계산하고 이후 velocity/TAA 경로로 넘어간다. (`MiniEngine/ModelViewer/ModelViewer.cpp:554`, `MiniEngine/ModelViewer/ModelViewer.cpp:532`)
 
 ## 7. 테스트가 검증하는 것과 경계
@@ -575,7 +577,7 @@ TestRecut은 API에 이전 piece를 넘기는 검증이며, 데모가 이전 pie
 TestSkinMatchesSliceNodes는 tolerance 검증이고 비트 동일성 검사가 아니다. (`tests/PlaneSlicerTests.cpp:1290`)
 TestSkinKeepsSeamsAndCapsTogether의 SamePosition은 float `==` 비교다. signed zero까지 포함한 memcmp 비트 검사는 아니다. (`tests/PlaneSlicerTests.cpp:1216`, `tests/PlaneSlicerTests.cpp:1331`)
 실제 CesiumMan의 seam 개수·잘리는 본·프레임 시간·모든 포즈의 cap 모양은 이 보고서에서 확인 못 함.
-물리적 분리 결과는 테스트가 다루지 않고, nonzero skinState도 현재는 거절한다. (`tests/PlaneSlicerTests.cpp:1347`, `Geometry/PieceSkinning.cpp:44`)
+물리적 분리 결과는 테스트가 다루지 않고, nonzero skinState도 현재는 거절한다. (`tests/PlaneSlicerTests.cpp:1347`, `Geometry/Skinning.cpp:44`)
 
 ### 7.4 별도 smoke 파일
 
@@ -588,10 +590,10 @@ Clear 후 비어 있는 상태와 재설정을 검사한다. GPU smoke test로 �
 
 ### 8.1 읽기 순서
 
-먼저 `PatchGeometry.h`의 node/corner/face와 `BonePatch.h`의 Source 대응을 읽는다. (`Geometry/PatchGeometry.h:19`, `BonePatch.h:25`)
+먼저 `PatchGeometry.h`의 node/corner/face와 `BonePatch.h`의 Source 대응을 읽는다. (`Geometry/Patch.h:19`, `BonePatch.h:25`)
 다음 ModelViewer 입력·Update 순서를 읽고 [미커밋] Controller의 SetPatch/Update/UpdateSlice로 이동한다. (`MiniEngine/ModelViewer/ModelViewer.cpp:271`, `Runtime/CutController.cpp:12`, `Runtime/CutController.cpp:106`)
-그 뒤 BonePatch → PatchWeld → PlaneSlicer → CutLoops → CapBuilder 순서로 계산을 따라간다. (`BonePatch.cpp:157`, `Geometry/PatchWeld.cpp:124`, `Geometry/PlaneSlicer.cpp:453`, `Geometry/CutLoops.cpp:64`, `Geometry/CapBuilder.cpp:208`)
-마지막으로 PieceSkinning → RenderBake → [미커밋] View Sync → renderer Draw/NotifySubmitted를 읽는다. (`Geometry/PieceSkinning.cpp:37`, `Geometry/RenderBake.cpp:92`, `Debug/CutDebugView.cpp:33`, `Rendering/ProceduralMeshRenderer.cpp:153`, `Rendering/ProceduralMeshRenderer.cpp:270`)
+그 뒤 BonePatch → PatchWeld → PlaneSlicer → CutLoops → CapBuilder 순서로 계산을 따라간다. (`BonePatch.cpp:157`, `Geometry/Patch.cpp:124`, `Geometry/Slice.cpp:453`, `Geometry/SliceCap.cpp:64`, `Geometry/SliceCap.cpp:208`)
+마지막으로 PieceSkinning → RenderBake → [미커밋] View Sync → renderer Draw/NotifySubmitted를 읽는다. (`Geometry/Skinning.cpp:37`, `Rendering/RenderBake.cpp:92`, `Debug/CutDebugView.cpp:33`, `Rendering/ProceduralMeshRenderer.cpp:153`, `Rendering/ProceduralMeshRenderer.cpp:270`)
 
 ### 8.2 브레이크포인트 10곳
 
@@ -600,18 +602,18 @@ Clear 후 비어 있는 상태와 재설정을 검사한다. GPU smoke test로 �
 | 1 | `MiniEngine/Model/ModelLoader.cpp:232` | geometrySize, CPU vector, mesh의 kHasSkin 보존 조건 | 같은 함수의 253행까지 step |
 | 2 | `MiniEngine/ModelViewer/ModelViewer.cpp:307` [미커밋] | 현재 paletteId/jointIndex, 직전 Update가 끝난 pose | SetPatch → ExtractBonePatch |
 | 3 | `BonePatch.cpp:336` | 선택 본 영향값, selected, subtree 진단과 선택의 차이 | addVertex → SkinPoint → outputs |
-| 4 | `Geometry/PatchWeld.cpp:181` | key의 slot/bind bits/joints/weights, 기존 node 재사용 여부 | corner/face 생성 → validation |
+| 4 | `Geometry/Patch.cpp:181` | key의 slot/bind bits/joints/weights, 기존 node 재사용 여부 | corner/face 생성 → validation |
 | 5 | `Runtime/CutController.cpp:141` [미커밋] | enabled/dirty/baseValid, m_PatchPiece.position이 이번 포즈인지 | UpdateSlice → SlicePatch |
-| 6 | `Geometry/PlaneSlicer.cpp:273` | face corner→node, m_Sign, 0/+/- 또는 lone 분기 | CutNodeOf/CutCorner/AddFace |
-| 7 | `Geometry/CutLoops.cpp:119` | Cut 에지의 in/out degree, blocker, loops/depth | 투영 검증 → Run → BuildCap |
-| 8 | `Geometry/CapBuilder.cpp:300` | triangles가 rim node만 쓰는지, 양쪽 winding, CapSeam 검사 | 최종 Validate → result 게시 |
-| 9 | `Geometry/PieceSkinning.cpp:103` | node.origin이 가리키는 blend와 bary, 다음 프레임 위치 | UpdateRenderPositions → UpdateVertices |
+| 6 | `Geometry/Slice.cpp:273` | face corner→node, m_Sign, 0/+/- 또는 lone 분기 | CutNodeOf/CutCorner/AddFace |
+| 7 | `Geometry/SliceCap.cpp:119` | Cut 에지의 in/out degree, blocker, loops/depth | 투영 검증 → Run → BuildCap |
+| 8 | `Geometry/SliceCap.cpp:300` | triangles가 rim node만 쓰는지, 양쪽 winding, CapSeam 검사 | 최종 Validate → result 게시 |
+| 9 | `Geometry/Skinning.cpp:103` | node.origin이 가리키는 blend와 bary, 다음 프레임 위치 | UpdateRenderPositions → UpdateVertices |
 | 10 | `Rendering/ProceduralMeshRenderer.cpp:186` | vertex/topology version, VB만/IB도 교체 여부, pending/fence | DrawIndexed → NotifySubmitted → Collect |
 
 실제 한 번의 절단을 추적할 때 1~4로 C를 끝내고, 평면 조작 후 5~8로 계산을 끝내며, 다음 프레임 9~10으로 추종과 제출을 확인한다.
 이 동선의 코드상 연결은 `Runtime/CutController.cpp:18`, `Runtime/CutController.cpp:97`, `Runtime/CutController.cpp:145`, `Debug/CutDebugView.cpp:74`, `Debug/CutDebugView.cpp:100` [미커밋]에 있다.
 이 실행에서 어떤 본과 평면이 Ok인지 보장하는 실측 재현값은 확인 못 함.
-실패하면 억지로 다음 단계로 넘기지 말고 result.status/detail과 3c의 실패 갈림길을 대조한다. (`Geometry/PlaneSlicer.cpp:472`, `Geometry/PlaneSlicer.cpp:521`, `Geometry/PlaneSlicer.cpp:550`)
+실패하면 억지로 다음 단계로 넘기지 말고 result.status/detail과 3c의 실패 갈림길을 대조한다. (`Geometry/Slice.cpp:472`, `Geometry/Slice.cpp:521`, `Geometry/Slice.cpp:550`)
 
 ## 9. 스스로 확인하는 질문
 
@@ -641,7 +643,7 @@ subtree는 미선택 삼각형의 mixedOutsideTriangles 진단에 쓰인다. (`B
 <summary>답과 근거</summary>
 
 meshSlot, bind 위치 비트, canonical joint/weight 쌍이 같아야 한다. UV/normal/color는 용접 키에 없다.
-corner는 둘로 남고 node만 공유할 수 있다. (`Geometry/PatchWeld.cpp:169`, `Geometry/PatchWeld.cpp:202`, `tests/PlaneSlicerTests.cpp:222`)
+corner는 둘로 남고 node만 공유할 수 있다. (`Geometry/Patch.cpp:169`, `Geometry/Patch.cpp:202`, `tests/PlaneSlicerTests.cpp:222`)
 
 </details>
 
@@ -650,8 +652,8 @@ corner는 둘로 남고 node만 공유할 수 있다. (`Geometry/PatchWeld.cpp:1
 <details>
 <summary>답과 근거</summary>
 
-교차 node는 양 끝의 SurfaceOrigin을 합쳐 원본 node 최대 3개에 대한 bary를 저장한다.
-다음 프레임에는 origin의 LBS 결과를 bary로 합친다. (`Geometry/PlaneSlicer.cpp:80`, `Geometry/PlaneSlicer.cpp:183`, `Geometry/PieceSkinning.cpp:103`)
+교차 node는 양 끝의 PatchOrigin을 합쳐 원본 node 최대 3개에 대한 bary를 저장한다.
+다음 프레임에는 origin의 LBS 결과를 bary로 합친다. (`Geometry/Slice.cpp:80`, `Geometry/Slice.cpp:183`, `Geometry/Skinning.cpp:103`)
 
 </details>
 
@@ -660,8 +662,8 @@ corner는 둘로 남고 node만 공유할 수 있다. (`Geometry/PatchWeld.cpp:1
 <details>
 <summary>답과 근거</summary>
 
-현재 BuildCap은 새 cap corner가 기존 rim node를 가리키게 한다. cap 전용 GeomNode를 추가하지 않는다.
-따라서 그 위치는 공유 Surface node의 스키닝 결과를 따른다. (`Geometry/CapBuilder.cpp:289`, `Geometry/CapBuilder.cpp:308`, `tests/PlaneSlicerTests.cpp:1310`)
+현재 BuildCap은 새 cap corner가 기존 rim node를 가리키게 한다. cap 전용 PatchNode를 추가하지 않는다.
+따라서 그 위치는 공유 Surface node의 스키닝 결과를 따른다. (`Geometry/SliceCap.cpp:289`, `Geometry/SliceCap.cpp:308`, `tests/PlaneSlicerTests.cpp:1310`)
 
 </details>
 
@@ -681,7 +683,7 @@ UpdateSlice에는 enabled·dirty·baseValid가 모두 필요하다. 애니메이
 <summary>답과 근거</summary>
 
 SlicePatch의 임시 출력은 비워지고, Controller는 이전 성공 piece를 유지한다.
-dirty는 소비되며 이전 piece는 계속 스키닝된다. (`Geometry/PlaneSlicer.cpp:577`, `Runtime/CutController.cpp:274`, `Runtime/CutController.cpp:146`, `Runtime/CutController.cpp:148`)
+dirty는 소비되며 이전 piece는 계속 스키닝된다. (`Geometry/Slice.cpp:577`, `Runtime/CutController.cpp:274`, `Runtime/CutController.cpp:146`, `Runtime/CutController.cpp:148`)
 
 </details>
 
@@ -704,24 +706,24 @@ pending 제출과 fence 완료 조건을 통과한 예전 버퍼만 free 목록�
 
 | 문서 서술 | 현재 코드 기준 | 판정과 근거 |
 | --- | --- | --- |
-| PlaneSlicingDesign 첫머리의 “아래 코드는 아직 없음” | Geometry 파이프라인과 SkinPatchPiece 구현이 존재 | 문서 상태 문구와 구현 노트가 병존: `Docs/PlaneSlicingDesign.md:7`, `Docs/PlaneSlicingDesign.md:338`, `Geometry/PlaneSlicer.cpp:453` |
+| PlaneSlicingDesign 첫머리의 “아래 코드는 아직 없음” | Geometry 파이프라인과 SkinPatchPiece 구현이 존재 | 문서 상태 문구와 구현 노트가 병존: `Docs/PlaneSlicingDesign.md:7`, `Docs/PlaneSlicingDesign.md:338`, `Geometry/Slice.cpp:453` |
 | 초기 표의 양면 PSO 하나 | solid 양면/후면 + [미커밋] wire 양면/후면 | 오래된 출발점 서술: `Docs/PlaneSlicingDesign.md:14`, `Rendering/ProceduralMeshRenderer.h:75` |
-| mapbox earcut + T-junction 사후 보정 | 자체 BridgeHole/EarClip, rim 에지 짝 검사 | 후반 구현 노트가 정정: `Docs/PlaneSlicingDesign.md:95`, `Docs/PlaneSlicingDesign.md:327`, `Geometry/CapBuilder.cpp:144`, `Geometry/CapBuilder.cpp:324` |
-| CapDrive 선택·부착 데이터 미리 저장 | CapDrive 선택 타입 확인 못 함; 부착 데이터는 CapRecord에서 삭제함 | FollowRim 공유 노드만 확인: `Docs/PlaneSlicingDesign.md:91`, `Docs/PlaneSlicingDesign.md:93`, `Geometry/PatchGeometry.h:84`, `Geometry/CapBuilder.cpp:336` |
-| 구조체 예시의 PatchPiece에 originNodes 없음 | 실제로 SkinNode vector 보관·복사 | 후반 구현 노트에 반영: `Docs/PlaneSlicingDesign.md:149`, `Docs/PlaneSlicingDesign.md:329`, `Geometry/PatchGeometry.h:96`, `Geometry/PlaneSlicer.cpp:374` |
-| 초기 CapRecord 예시의 Math::Matrix4와 단일 rimNodes | 실제 XMFLOAT4X4, loopSizes도 보관 | 구현 노트/코드 확장: `Docs/PlaneSlicingDesign.md:145`, `Docs/PlaneSlicingDesign.md:328`, `Geometry/PatchGeometry.h:85`, `Geometry/PatchGeometry.h:91` |
+| mapbox earcut + T-junction 사후 보정 | 자체 BridgeHole/EarClip, rim 에지 짝 검사 | 후반 구현 노트가 정정: `Docs/PlaneSlicingDesign.md:95`, `Docs/PlaneSlicingDesign.md:327`, `Geometry/SliceCap.cpp:144`, `Geometry/SliceCap.cpp:324` |
+| CapDrive 선택·부착 데이터 미리 저장 | CapDrive 선택 타입 확인 못 함; 부착 데이터는 PatchCap에서 삭제함 | FollowRim 공유 노드만 확인: `Docs/PlaneSlicingDesign.md:91`, `Docs/PlaneSlicingDesign.md:93`, `Geometry/Patch.h:84`, `Geometry/SliceCap.cpp:336` |
+| 구조체 예시의 PatchPiece에 originNodes 없음 | 실제로 PatchSkin vector 보관·복사 | 후반 구현 노트에 반영: `Docs/PlaneSlicingDesign.md:149`, `Docs/PlaneSlicingDesign.md:329`, `Geometry/Patch.h:96`, `Geometry/Slice.cpp:374` |
+| 초기 PatchCap 예시의 Math::Matrix4와 단일 rimNodes | 실제 XMFLOAT4X4, loopSizes도 보관 | 구현 노트/코드 확장: `Docs/PlaneSlicingDesign.md:145`, `Docs/PlaneSlicingDesign.md:328`, `Geometry/Patch.h:85`, `Geometry/Patch.h:91` |
 | UpdatePatchPose가 스키닝과 메시 갱신을 함께 수행 | [미커밋] Controller::Update와 렌더 시 View::Sync로 분리 | 함수명/실행 위치 변경: `Docs/PlaneSlicingDesign.md:344`, `MiniEngine/ModelViewer/ModelViewer.cpp:395`, `Debug/CutDebugView.cpp:133` |
 | CutDebugDesign의 “아래 코드는 아직 없다” | [미커밋] Controller/View 분리와 U 와이어 구현 | D-0/D-1 해당 코드 존재: `Docs/CutDebugDesign.md:5`, `Docs/CutDebugDesign.md:152`, `Runtime/CutController.cpp:12`, `Debug/CutDebugView.cpp:153` |
-| 분할 표면 Face.cutId 기록 | AddFace가 source를 복사하고 cutId를 다시 지정하지 않음 | D-2 미반영: `Docs/CutDebugDesign.md:68`, `Geometry/PlaneSlicer.cpp:262` |
-| splitByOrigin 옵션과 세 종류 section | BuildRenderMesh는 Surface/Cap 두 pass | D-2 미반영: `Docs/CutDebugDesign.md:69`, `Geometry/RenderBake.cpp:92`, `Geometry/RenderBake.cpp:107` |
+| 분할 표면 Face.cutId 기록 | AddFace가 source를 복사하고 cutId를 다시 지정하지 않음 | D-2 미반영: `Docs/CutDebugDesign.md:68`, `Geometry/Slice.cpp:262` |
+| splitByOrigin 옵션과 세 종류 section | BuildRenderMesh는 Surface/Cap 두 pass | D-2 미반영: `Docs/CutDebugDesign.md:69`, `Rendering/RenderBake.cpp:92`, `Rendering/RenderBake.cpp:107` |
 | T 편집 mode, Enter RequestCut, Backspace DiscardCut | [미커밋] ToggleSlice와 dirty 자동 절단 | D-3 미반영: `Docs/CutDebugDesign.md:81`, `Docs/CutDebugDesign.md:89`, `Runtime/CutController.h:32`, `Runtime/CutController.cpp:141` |
 | PreviewDirty/CutRequested, dry-run preview | [미커밋] SliceDirty 하나로 실제 piece 교체 시도 | D-3 미반영: `Docs/CutDebugDesign.md:105`, `Runtime/CutController.h:94`, `Runtime/CutController.cpp:145` |
-| preview 상태색과 BakeLoopDebug | 현재 BakePlaneDebug는 청록 링/흰 화살표; View는 plane/boundary를 그림 | preview 경로 확인 못 함: `Docs/CutDebugDesign.md:123`, `Geometry/RenderBake.cpp:140`, `Debug/CutDebugView.cpp:122` |
+| preview 상태색과 BakeLoopDebug | 현재 BakePlaneDebug는 청록 링/흰 화살표; View는 plane/boundary를 그림 | preview 경로 확인 못 함: `Docs/CutDebugDesign.md:123`, `Rendering/RenderBake.cpp:140`, `Debug/CutDebugView.cpp:122` |
 | C는 자동 절단 제거, M은 다음 확정에만 반영 | [미커밋] C는 enabled면 dirty, M도 dirty 설정 | D-3 의미 변경 미반영: `Docs/CutDebugDesign.md:131`, `Docs/CutDebugDesign.md:132`, `Runtime/CutController.cpp:30`, `Runtime/CutController.cpp:56` |
-| 와이어 팔레트 세 이름: 원본/분할/cap | 현재 bake에서는 section 0 표면·1 cap이므로 cap은 팔레트 index 1 사용 | D-2 이전 조합: `Docs/CutDebugDesign.md:53`, `Geometry/RenderBake.cpp:116`, `Rendering/ProceduralMeshRenderer.cpp:253`, `Rendering/ProceduralMeshPS.hlsl:28` [미커밋] |
+| 와이어 팔레트 세 이름: 원본/분할/cap | 현재 bake에서는 section 0 표면·1 cap이므로 cap은 팔레트 index 1 사용 | D-2 이전 조합: `Docs/CutDebugDesign.md:53`, `Rendering/RenderBake.cpp:116`, `Rendering/ProceduralMeshRenderer.cpp:253`, `Rendering/ProceduralMeshPS.hlsl:28` [미커밋] |
 
 ### 10.2 버그 의심 목록
 
 - [미커밋][의심] L/Z가 패치에도 적용되는 것으로 기대하면 단독 패치 표시에서 효과가 없다. pieceOptions를 계산하지만 단독 패치에는 기본 DrawOptions를 넘긴다. 기대 동작과의 차이는 실행 확인 못 함. (`Debug/CutDebugView.cpp:140`, `Debug/CutDebugView.cpp:184`, `Docs/CutDebugDesign.md:63`)
-- [미커밋][의심] Controller에서 패치 스키닝 뒤 두 번째 piece 스키닝 등이 실패하면 먼저 갱신된 계산 piece와 이전 렌더 위치가 섞여 남을 여지가 있다. 각 SkinPatchPiece는 개별 호출만 원자적으로 기록하고 View는 FramePoseValid=false면 위치 refresh를 건너뛴다. 실제 재현은 확인 못 함. (`Runtime/CutController.cpp:130`, `Runtime/CutController.cpp:154`, `Geometry/PieceSkinning.cpp:110`, `Debug/CutDebugView.cpp:88`)
+- [미커밋][의심] Controller에서 패치 스키닝 뒤 두 번째 piece 스키닝 등이 실패하면 먼저 갱신된 계산 piece와 이전 렌더 위치가 섞여 남을 여지가 있다. 각 SkinPatchPiece는 개별 호출만 원자적으로 기록하고 View는 FramePoseValid=false면 위치 refresh를 건너뛴다. 실제 재현은 확인 못 함. (`Runtime/CutController.cpp:130`, `Runtime/CutController.cpp:154`, `Geometry/Skinning.cpp:110`, `Debug/CutDebugView.cpp:88`)
 - [의심] C가 첫 완료된 ModelInstance::Update보다 먼저 처리될 경우, 배열 할당만 된 pose를 읽을 여지가 있다. 생성/대입은 배열을 할당하고 첫 값 작성은 Update에서 하며 입력은 Update 앞이다. 실제 앱에서 이 순서가 발생하는지는 확인 못 함. (`MiniEngine/Model/Model.cpp:142`, `MiniEngine/Model/Model.cpp:208`, `MiniEngine/ModelViewer/ModelViewer.cpp:306`, `MiniEngine/ModelViewer/ModelViewer.cpp:389`)

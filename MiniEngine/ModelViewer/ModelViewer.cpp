@@ -76,7 +76,6 @@ private:
     MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
     MeshCutting::CutController m_Cut;           // candidate patch, plane, cut pieces and their per-frame skinning
     MeshCutting::CutDebugView m_CutView;        // debug meshes, render mode and status lines
-    MeshCutting::PlaneGizmo m_Gizmo;            // mouse gizmo of the cut plane
     ShadowCamera m_SunShadowCamera;
 
     void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
@@ -295,13 +294,13 @@ void ModelViewer::Update(float deltaT)
         if (!GameInput::IsPressed(GameInput::kMouse1))
         {
             if (GameInput::IsFirstPressed(GameInput::kKey_q))
-                m_Gizmo.SetTool(MeshCutting::GizmoTool::Hidden);
+                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Hidden);
             if (GameInput::IsFirstPressed(GameInput::kKey_w))
-                m_Gizmo.SetTool(MeshCutting::GizmoTool::Move);
+                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Move);
             if (GameInput::IsFirstPressed(GameInput::kKey_e))
-                m_Gizmo.SetTool(MeshCutting::GizmoTool::Rotate);
+                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Rotate);
             if (GameInput::IsFirstPressed(GameInput::kKey_r))
-                m_Gizmo.SetTool(MeshCutting::GizmoTool::Scale);
+                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Scale);
         }
     }
 
@@ -340,13 +339,13 @@ void ModelViewer::Update(float deltaT)
         DebugZoom.Increment();
 
     // F: frame the cut plane in debug mode, the model otherwise (not while flying or dragging the gizmo).
-    if (GameInput::IsFirstPressed(GameInput::kKey_f) && !GameInput::IsPressed(GameInput::kMouse1) && !m_Gizmo.Dragging())
+    if (GameInput::IsFirstPressed(GameInput::kKey_f) && !GameInput::IsPressed(GameInput::kMouse1) && !m_Cut.GetPlane().IsDragging())
     {
         if (m_Cut.PlaneEditing() && m_Cut.PlaneValid())
         {
-            const MeshCutting::CutPlane& plane = m_Cut.Plane();
-            m_SceneCamera->Frame(Vector3(plane.center.x, plane.center.y, plane.center.z),
-                std::sqrt(plane.halfExtents.x * plane.halfExtents.x + plane.halfExtents.y * plane.halfExtents.y));
+            const MeshCutting::CutPlane& plane = m_Cut.GetPlane();
+            m_SceneCamera->Frame(Vector3(plane.GetCenter().x, plane.GetCenter().y, plane.GetCenter().z),
+                std::sqrt(plane.GetHalfExtents().x * plane.GetHalfExtents().x + plane.GetHalfExtents().y * plane.GetHalfExtents().y));
         }
         else if (!m_ModelInst.IsNull())
         {
@@ -356,7 +355,7 @@ void ModelViewer::Update(float deltaT)
     }
 
     // The camera does not start new moves while a gizmo handle is being dragged.
-    m_SceneCamera->SetInputEnabled(!m_Gizmo.Dragging());
+    m_SceneCamera->SetInputEnabled(!m_Cut.GetPlane().IsDragging());
     m_SceneCamera->Update(deltaT);
 
     // The gizmo works on this frame's camera (updated just above) and the window's client area. TAA jitter is a
@@ -367,7 +366,7 @@ void ModelViewer::Update(float deltaT)
         DirectX::XMFLOAT4X4 viewProj;
         XMStoreFloat4x4(&viewProj, XMMATRIX(m_Camera.GetViewProjMatrix()));
         const Vector3 eye = m_Camera.GetPosition();
-        const MeshCutting::GizmoView gizmoView = MeshCutting::MakeGizmoView(viewProj,
+        const MeshCutting::GizmoView gizmoView = MeshCutting::GizmoView::Make(viewProj,
             DirectX::XMFLOAT3(float(eye.GetX()), float(eye.GetY()), float(eye.GetZ())), clientWidth, clientHeight, true);
 
         MeshCutting::GizmoInput input;
@@ -379,13 +378,11 @@ void ModelViewer::Update(float deltaT)
         input.blocked = m_SceneCamera->IsNavigating() || GameInput::IsPressed(GameInput::kKey_lalt)
             || GameInput::IsPressed(GameInput::kMouse1) || GameInput::IsPressed(GameInput::kMouse2);
 
-        MeshCutting::CutPlane changed;
-        if (m_Gizmo.Update(gizmoView, m_Cut.Plane(), input, m_Cut.PlaneMinExtent(), m_Cut.PlaneMaxExtent(), changed))
-            m_Cut.SetPlane(changed);
-        m_CutView.SetGizmo(gizmoView, m_Gizmo.Tool(), m_Gizmo.Hovered(), m_Gizmo.Active());
+        m_Cut.UpdateGizmo(gizmoView, input);
+        m_CutView.SetGizmoView(gizmoView);
     }
     else
-        m_Gizmo.Cancel();
+        m_Cut.CancelGizmo();
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 

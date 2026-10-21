@@ -1,12 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "../BonePatch.h"
 #include "../ProceduralMesh.h"
 #include "../Geometry/CutPlane.h"
-#include "../Geometry/PatchGeometry.h"
-#include "../Geometry/PatchWeld.h"
-#include "../Geometry/PieceSkinning.h"
-#include "../Geometry/PlaneSlicer.h"
+#include "../Geometry/Patch.h"
+#include "../Geometry/Skinning.h"
+#include "../Geometry/Slice.h"
 #include "VectorMath.h"
 #include <cstdint>
 #include <string>
@@ -31,7 +30,10 @@ namespace MeshCutting
         // In debug mode the patch comes from the plane (the bones it crosses). Leaving debug mode drops the
         // candidate patch; the confirmed pieces and the plane stay.
         void ToggleEditPlane(const ModelInstance& instance, uint32_t paletteId);   // T
-        void SetPlane(const CutPlane& plane);   // the gizmo moved, rotated or scaled it (extents are clamped)
+        // The plane owns the gizmo (tool, hover, drag). A drag that moves, rotates or scales the plane marks the preview out of date.
+        void SetGizmoTool(GizmoTool tool) { m_Plane.SetGizmoTool(tool); }
+        bool UpdateGizmo(const GizmoView& view, const GizmoInput& input);   // true when the drag changed the plane
+        void CancelGizmo() { m_Plane.CancelGizmo(); }
         void RequestCut();                      // Enter: one cut in the next Update (debug mode only)
         void DiscardCut();                      // Ctrl+Z: drop the confirmed pieces
 
@@ -48,11 +50,8 @@ namespace MeshCutting
 
         bool PlaneValid() const { return m_PlaneValid; }            // the plane has been placed (first T)
         bool PlaneEditing() const { return m_PlaneEditing; }
-        const CutPlane& Plane() const { return m_Plane; }
-        CutPlaneFrame PlaneFrame() const { return MakeFrame(m_Plane); }
+        const CutPlane& GetPlane() const { return m_Plane; }
         float ModelRadius() const { return m_ModelRadius; }         // scale of the plane controls and debug tubes
-        float PlaneMinExtent() const { return MinExtent(); }        // limits of the plane half lengths
-        float PlaneMaxExtent() const { return MaxExtent(); }
 
         // The candidate: what the plane crosses and the patch built from it (cut mode only).
         uint32_t EditPalette() const { return m_Candidate.palette; }      // the palette the cut mode works on (chosen when T was pressed)
@@ -93,8 +92,6 @@ namespace MeshCutting
         void DropPatch();               // the patch only (not the confirmed pieces)
         void UpdateCandidate(const Model& model, const ModelInstance& instance);
         void PlacePlane(const ModelInstance& instance);
-        float MinExtent() const { return m_ModelRadius * 0.01f; }
-        float MaxExtent() const { return m_ModelRadius * 3.0f; }
         // SlicePatch with the current plane, then the finite-rectangle check on the cut loops.
         SliceStatus SliceWithPlane(SliceResult& result);
         bool ConfirmCut();             // true when new pieces replaced the old ones
@@ -212,7 +209,7 @@ namespace MeshCutting
 
         // animation follow-up
         uint32_t m_SkinnedNodes = 0;    // nodes skinned in the last frame (patch + pieces)
-        float m_SkinMs = 0.0f;          // smoothed CPU time of the SkinPatchPiece calls
+        float m_SkinMs = 0.0f;          // Skinning::Apply 호출의 CPU 시간 (지수 평균)
         std::string m_SkinError;
         bool m_FramePoseValid = false;
     };

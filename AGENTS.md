@@ -6,6 +6,7 @@
 - `Samples/Desktop/` contains individual DirectX 12 samples; `TechniqueDemos/` contains larger demonstrations.
 - `Libraries/` holds supporting libraries and fallback-layer tests. `Tools/` holds standalone utilities.
 - `Assets/` contains repository imagery; runtime textures, models, and HLSL shaders also live beside their consuming projects.
+- For any `MiniEngine/MeshCutting/` work (design, implementation, review), consult `MiniEngine/MeshCutting/Docs/NDC25Reference.md`: the NDC25 skeletal-mesh cutting technique this module follows, with each claim marked by its evidence level.
 
 ## Build, Test, and Development Commands
 Use Visual Studio Developer PowerShell with C++ tools and the Windows SDK. MiniEngine uses v143; use Visual Studio/MSBuild supporting `.slnx`. Legacy projects may require older toolsets.

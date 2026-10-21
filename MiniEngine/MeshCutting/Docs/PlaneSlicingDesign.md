@@ -38,7 +38,7 @@
 
 ### 1.4 출처는 "기하 노드에 대한 무게중심 좌표"로 기록한다
 ```cpp
-struct SurfaceOrigin
+struct PatchOrigin
 {
     uint32_t node[3];   // 원본 패치의 기하 노드 (스킨 대표 정점)
     float    bary[3];   // 합 1. node는 오름차순, 쓰지 않는 칸은 weight 0
@@ -74,7 +74,7 @@ struct SurfaceOrigin
 리뷰 5를 반영했다. 최초 패치의 경계 집합을 고정해서 쓰지 않는다. piece마다 현재 adjacency에서 다시 계산하고, 에지 종류를 함께 들고 다닌다.
 
 ```cpp
-enum class EdgeKind : uint8_t
+enum class PatchEdgeKind : uint8_t
 {
     Interior,
     Replacement,   // 패치 추출 때의 열린 교체 경계
@@ -90,7 +90,7 @@ enum class EdgeKind : uint8_t
 
 - 기본(`CapDrive::FollowRim`): 경계 노드가 표면 스키닝을 따르므로 cap과 표면이 위상적으로 수밀하다. 경계에 틈이 생기지 않는다. 대신 크게 굽히면 cap이 평면성을 잃을 수 있다.
 - NDC 방식(`CapDrive::RigidToJoint`, 3~4주차): 절단 시점의 부착 본 world 행렬과 노드의 본 로컬 위치를 저장해 두고 강체로 움직인다. 경계 틈이 생길 수 있으며, 두 방식을 비교하는 것 자체가 실험 항목이다.
-- 두 방식에 필요한 데이터(경계 노드 ↔ 표면 노드 대응, cutId)는 2-4에서 저장한다. 부착 본과 절단 시점 행렬은 쓰는 곳이 없어 `CapRecord`에서 뺐다(필요해지면 그때 다시 넣는다).
+- 두 방식에 필요한 데이터(경계 노드 ↔ 표면 노드 대응, cutId)는 2-4에서 저장한다. 부착 본과 절단 시점 행렬은 쓰는 곳이 없어 `PatchCap`에서 뺐다(필요해지면 그때 다시 넣는다).
 
 earcut은 공선점을 걸러낼 수 있다. 그래서 cap 생성 뒤 **모든 절단 에지가 cap 삼각형의 에지로 쓰였는지** 검사한다. 빠진 노드 b가 있으면 에지 (a, c)를 가진 cap 삼각형을 (a, b, x)와 (b, c, x)로 나눈다. 이렇게 해서 T-junction을 막는다.
 
@@ -110,17 +110,17 @@ namespace MeshCutting
     //   std::vector<BonePatchTriangle> triangles;    // 패치 삼각형과 1:1
     //   std::vector<Math::Matrix4> poseJointWorld;   // 추출 시점 팔레트 본 world (평면·cap 부착 기준)
 
-    // ---- 슬라이스 작업 자료 (Geometry/PatchGeometry.h) ----
-    enum class NodeKind : uint8_t { Surface, Cap };
-    struct GeomNode
+    // ---- 슬라이스 작업 자료 (Geometry/Patch.h) ----
+    enum class PatchNodeKind : uint8_t { Surface, Cap };
+    struct PatchNode
     {
-        NodeKind kind;
-        SurfaceOrigin origin;           // Surface일 때
+        PatchNodeKind kind;
+        PatchOrigin origin;           // Surface일 때
         uint32_t cutId = 0;             // 이 노드를 만든 절단 (원본은 0)
         DirectX::XMFLOAT3 position;     // 현재 포즈 위치. 모든 렌더 정점이 복사해 간다
     };
 
-    struct RenderCorner                 // 렌더 정점 = 노드 + 속성
+    struct PatchCorner                 // 렌더 정점 = 노드 + 속성
     {
         uint32_t node;
         DirectX::XMFLOAT3 normal;
@@ -128,16 +128,16 @@ namespace MeshCutting
         DirectX::XMFLOAT4 color;
     };
 
-    enum class FaceKind : uint8_t { Surface, Cap };
+    enum class PatchFaceKind : uint8_t { Surface, Cap };
     struct Face
     {
         uint32_t corner[3];
-        FaceKind kind;
+        PatchFaceKind kind;
         uint32_t sourceTriangle;        // BonePatchSource::triangles 인덱스 (Cap이면 UINT32_MAX)
         uint32_t cutId;                 // Cap이면 만든 절단. Surface이면 그 면을 분할한 절단 (분할된 적 없으면 0)
     };
 
-    struct CapRecord                    // 절단 하나 = cap 하나 (양쪽 piece에 각각)
+    struct PatchCap                    // 절단 하나 = cap 하나 (양쪽 piece에 각각)
     {
         uint32_t cutId;
         DirectX::XMFLOAT3 planePoint, planeNormal;   // piece 바깥 방향 법선
@@ -146,11 +146,11 @@ namespace MeshCutting
 
     struct PatchPiece
     {
-        std::vector<GeomNode> nodes;
-        std::vector<RenderCorner> corners;
+        std::vector<PatchNode> nodes;
+        std::vector<PatchCorner> corners;
         std::vector<Face> faces;
-        std::unordered_map<uint64_t, EdgeKind> boundary;   // 정렬된 (nodeA, nodeB) → 종류
-        std::vector<CapRecord> caps;
+        std::unordered_map<uint64_t, PatchEdgeKind> boundary;   // 정렬된 (nodeA, nodeB) → 종류
+        std::vector<PatchCap> caps;
         uint32_t skinStateId = 0;       // piece별 분리 스키닝 상태 (4주차). 0 = 원본과 동일
     };
 
@@ -233,7 +233,7 @@ SliceStatus SlicePatch(const PatchPiece& in, const SlicePlane& plane,
   - 모든 `Cut` 에지가 cap 에지와 정확히 한 번씩 짝지어지는지 → 짝지어지면 `CapSeam`으로 바꾼다
 - 실패하면 `CapTriangulationFailed`다.
 - +쪽 cap은 법선 −n, −쪽 cap은 +n이다. winding은 각 piece의 바깥을 향하게 한다(CCW front).
-- cap UV는 `(dot(p−q, u), dot(p−q, v)) · capUvScale`이다. `CapRecord`를 piece마다 추가한다.
+- cap UV는 `(dot(p−q, u), dot(p−q, v)) · capUvScale`이다. `PatchCap`를 piece마다 추가한다.
 
 ### 3.6 출력 수밀성
 cap 후 각 piece의 경계 = `Replacement` + `UnweldedSeam`만 남아야 한다. `Cut`이 남으면 버그다. `CapMode::None`이면 `Cut`이 남는 것이 정상이다.
@@ -253,12 +253,13 @@ cap 후 각 piece의 경계 = `Replacement` + `UnweldedSeam`만 남아야 한다
 MeshCutting/
   BonePatch.h/.cpp           # + triangles, poseJointWorld
   Geometry/                  # Model/Core에 의존하지 않는다
-    PatchGeometry.h/.cpp     # GeomNode, RenderCorner, Face, PatchPiece, 검증, 경계 재계산
-    PatchWeld.h/.cpp         # BonePatch → PatchPiece (용접 키 1.3)
-    PlaneSlicer.h/.cpp       # 분류·분할·계승
-    CutLoops.h/.cpp          # 루프 추출·2D 검증·포함 트리
-    CapBuilder.h/.cpp        # earcut, T-junction 보정, CapRecord
-    RenderBake.h/.cpp        # PatchPiece → ProceduralMeshData
+    Patch.h/.cpp             # PatchNode, PatchCorner, PatchFace, PatchPiece, 검증, 경계 재계산 + BonePatch → PatchPiece (용접 키 1.3)
+    Slice.h/.cpp             # 분류·분할·계승
+    SliceCap.cpp             # 루프 추출·2D 검증·포함 트리 + ear clipping, PatchCap (선언은 Slice.h의 내부용 구역)
+    Skinning.h/.cpp          # SkinPatchPiece, joint 집합 규칙
+    CutPlane.h/.cpp          # 절단 평면, 뼈 선분 찾기
+  Rendering/
+    RenderBake.h/.cpp        # PatchPiece → ProceduralMeshData (Core에 의존하지 않는다)
   ThirdParty/earcut.hpp      # mapbox/earcut.hpp (ISC). 추가 전 승인, 라이선스 동봉
   tests/PlaneSlicerTests.cpp
 ```
@@ -303,7 +304,7 @@ MeshCutting/
 | 1 | tie-to-positive의 퇴화 교차, coplanar | 1.5 3상태 분류, 0 노드 직접 사용, `CoplanarFace` 거절, 1.6 경계 기반 루프 |
 | 2 | 위치만으로 용접 | 1.3 스킨 동등성 포함, epsilon 용접 금지, `UnweldedSeam` |
 | 3 | 교차 위치 비트 동일성 | 1.2 노드가 위치 소유, 3.2 에지 캐시에 최종 위치, 1.4 합산 순서 고정 |
-| 4 | cap의 출처 3개 초과 | 1.4 표면 전용 명시, `NodeKind::Cap`, `CrossesCap` 거절, `InvalidOrigin` |
+| 4 | cap의 출처 3개 초과 | 1.4 표면 전용 명시, `PatchNodeKind::Cap`, `CrossesCap` 거절, `InvalidOrigin` |
 | 5 | 최초 경계 고정 | 1.7 piece별 재계산 + 종류 계승 |
 | 6 | cap 강체 부착 시 rim 균열 | 1.8 cap이 rim 노드 공유(`FollowRim` 기본), NDC 방식용 데이터 선저장 |
 | 7 | 원본 삼각형 ID, piece별 분리 상태, 자손 본 | 2절 `BonePatchTriangle`, `skinStateId`, 2-0 추출 본 집합 결정 |
@@ -322,9 +323,9 @@ MeshCutting/
 
 설계와 달라졌거나 설계에 없던 결정이다.
 
-- **earcut 대신 직접 구현한 ear clipping** (`Geometry/CapBuilder.cpp`): 외부 코드를 내려받지 않기로 했다. 구멍은 외곽에 브리지로 합치고, 직선 위 노드는 귀 꼭짓점이 될 수 없으므로 버려지지 않는다. 그래서 T-junction 보정 단계 대신 "모든 절단 에지가 cap 에지와 정확히 한 번씩, 반대 방향으로 짝지어지는지" 검증한다. 귀 판정은 `cross > 4 ε²`(면적 > 2 ε²)로, 입력 검증의 퇴화 기준을 넘는다.
-- **Geometry/ 독립성**: `PatchWeld`는 BonePatch 대신 평면 입력 구조체(`WeldInput`)를 받고, 변환은 `BonePatch.cpp`의 `MakeWeldInput`이 맡는다. `CapRecord`의 행렬은 `XMFLOAT4X4`다.
-- **원본 노드 스킨 보관**: `PatchPiece::originNodes`가 `SurfaceOrigin`이 가리키는 원본 노드의 바인드 위치·스킨 쌍을 가진다(2-5 스키닝용).
+- **earcut 대신 직접 구현한 ear clipping** (`Geometry/SliceCap.cpp`): 외부 코드를 내려받지 않기로 했다. 구멍은 외곽에 브리지로 합치고, 직선 위 노드는 귀 꼭짓점이 될 수 없으므로 버려지지 않는다. 그래서 T-junction 보정 단계 대신 "모든 절단 에지가 cap 에지와 정확히 한 번씩, 반대 방향으로 짝지어지는지" 검증한다. 귀 판정은 `cross > 4 ε²`(면적 > 2 ε²)로, 입력 검증의 퇴화 기준을 넘는다.
+- **Geometry/ 독립성**: `PatchWeld`는 BonePatch 대신 평면 입력 구조체(`WeldInput`)를 받고, 변환은 `BonePatch.cpp`의 `MakeWeldInput`이 맡는다. `PatchCap`의 행렬은 `XMFLOAT4X4`다.
+- **원본 노드 스킨 보관**: `PatchPiece::originNodes`가 `PatchOrigin`이 가리키는 원본 노드의 바인드 위치·스킨 쌍을 가진다(2-5 스키닝용).
 - **`PatchPiece::boundary`는 태그가 붙은 모든 에지**를 가진다. Replacement/UnweldedSeam/Cut은 열린 경계, CapSeam은 내부 에지다. 열린 에지에 태그가 없으면 입력 검증이 거절한다.
 - **출력 piece도 `ValidatePatchPiece`를 통과해야 성공**이다(퇴화 직전 면이 잘려 문턱 아래로 내려가는 경우 `DegenerateInput`).
 - **루프 추출은 `CapMode::None`에서도 실행**한다. None은 cap 면만 만들지 않는다. 루프에 쓰는 "평면 위 노드"는 슬라이서가 분류한 값을 그대로 넘긴다.
@@ -335,9 +336,9 @@ MeshCutting/
 
 ## 12. 구현 노트 (2-5: piece별 매 프레임 스키닝, 상태 0)
 
-- **스키닝 (`Geometry/PieceSkinning.*`)**: `SkinPatchPiece`는 `PatchPiece`와 meshSlot별 행렬 배열(`XMFLOAT4X4`, `mesh world * joint.posXform`)만 받는다. 원본 노드는 `Σ weight · M_joint · bindPosition`(joint 오름차순), 잘린 노드는 `Σ bary · LBS(origin node)`(사용 칸만, node 오름차순)로 위치를 갱신한다. 본 ID와 웨이트는 보간하지 않는다. 원본 노드의 LBS는 호출마다 한 번만 계산해 재사용한다. `skinStateId != 0`, 범위 밖 joint·slot·origin은 실패하고 piece는 바뀌지 않는다.
+- **스키닝 (`Geometry/Skinning.*`)**: `SkinPatchPiece`는 `PatchPiece`와 meshSlot별 행렬 배열(`XMFLOAT4X4`, `mesh world * joint.posXform`)만 받는다. 원본 노드는 `Σ weight · M_joint · bindPosition`(joint 오름차순), 잘린 노드는 `Σ bary · LBS(origin node)`(사용 칸만, node 오름차순)로 위치를 갱신한다. 본 ID와 웨이트는 보간하지 않는다. 원본 노드의 LBS는 호출마다 한 번만 계산해 재사용한다. `skinStateId != 0`, 범위 밖 joint·slot·origin은 실패하고 piece는 바뀌지 않는다.
 - **cap 노드**: 현재 cap은 rim 노드를 공유하므로 cap 전용 노드는 없다(`SkinStats::capNodesSkipped == 0`을 테스트로 확인). Cap 종류 노드가 생기면 위치를 계산하지 않고 건너뛴다.
-- **추출과 같은 공식**: `ExtractBonePatch`의 위치 계산도 `SkinPoint`와 `MakeSlotMatrices`를 쓴다. 그래서 추출 시점 포즈의 패치와 나중에 스키닝한 패치는 같은 식에서 나온다. `SkinNode::meshSlot`은 `BonePatchSource::meshes`의 인덱스와 같은 값이다(`ExtractBonePatch`가 그 순서로 번호를 매김).
+- **추출과 같은 공식**: `ExtractBonePatch`의 위치 계산도 `SkinPoint`와 `MakeSlotMatrices`를 쓴다. 그래서 추출 시점 포즈의 패치와 나중에 스키닝한 패치는 같은 식에서 나온다. `PatchSkin::meshSlot`은 `BonePatchSource::meshes`의 인덱스와 같은 값이다(`ExtractBonePatch`가 그 순서로 번호를 매김).
 - **렌더 갱신**: 위상은 그대로 두고 `UpdateRenderPositions`가 corner → node 위치만 복사해 `ProceduralMesh::UpdateVertices`로 올린다. **법선은 갱신하지 않는다**(현재 PS는 법선을 쓰지 않음). 조명을 쓰게 되면 piece별 법선 재계산이 필요하다.
 - **프레임 순서**: 입력 처리 → `ModelInstance::Update` → `UpdatePatchPose`(패치 스키닝, 필요하면 재슬라이스, piece 스키닝, 메시 갱신) → 렌더. 슬라이스는 이번 프레임 포즈로 스키닝된 패치에서 한다.
 - **평면은 world 공간에 고정**: 절단 평면은 어떤 joint에도 묶이지 않는 world의 유한 사각형이다(정의, 조작, 루프 검사는 `PlaneFirstCutDesign.md` 2절). 이전에는 선택 본의 로컬 프레임에 고정하고 매 프레임 joint 행렬로 옮겼다.

@@ -1,6 +1,6 @@
 ﻿#include "pch.h"
 #include "BonePatch.h"
-#include "Geometry/JointSet.h"
+#include "Geometry/Skinning.h"
 #include "../Model/Model.h"
 
 #include <DirectXPackedVector.h>
@@ -227,7 +227,7 @@ namespace MeshCutting
             if (paletteId >= model.m_SkinPalettes.size())
                 return Fail(error, "Skin palette out of range");
             const SkinPalette& palette = model.m_SkinPalettes[paletteId];
-            if (!IsValidJointSet(joints, palette.numJoints))
+            if (!Skinning::IsValidJointSet(joints, palette.numJoints))
                 return Fail(error, "Joint set is empty, unsorted or out of range for the palette");
             if (model.m_GeometryCPU.empty())
                 return Fail(error, "Model has no CPU geometry copy");
@@ -335,7 +335,7 @@ namespace MeshCutting
                     else
                         result.weightedOutside = true;
                 }
-                result.selected |= VertexInJointSet(v.joints, v.weights, joints, minWeight);
+                result.selected |= Skinning::InJointSet(v.joints, v.weights, joints, minWeight);
             }
             out = result;
             return true;
@@ -382,7 +382,7 @@ namespace MeshCutting
             // Same blend as DefaultVS (weighted joint transforms, mesh world included). The
             // position uses the shared SkinPoint, so later per-frame skinning agrees with it.
             XMFLOAT3 posed;
-            XMStoreFloat3(&posed, SkinPoint(copy.slotMatrices.data(), uint32_t(copy.slotMatrices.size()), v.joints, v.weights, 4, v.position));
+            XMStoreFloat3(&posed, Skinning::SkinPoint(copy.slotMatrices.data(), uint32_t(copy.slotMatrices.size()), v.joints, v.weights, 4, v.position));
             XMVECTOR nrm = XMVectorZero();
             const Vector3 bindNrm(v.normal.x, v.normal.y, v.normal.z);
             for (int i = 0; i < 4; ++i)
@@ -394,7 +394,7 @@ namespace MeshCutting
             }
             const Vector3 posedNormal = Normalize(copy.worldIT * Vector3(nrm));
 
-            const float influence = JointSetInfluence(v.joints, v.weights, joints);
+            const float influence = Skinning::SetInfluence(v.joints, v.weights, joints);
             ProceduralVertex out;
             out.position = posed;
             out.normal = { float(posedNormal.GetX()), float(posedNormal.GetY()), float(posedNormal.GetZ()) };

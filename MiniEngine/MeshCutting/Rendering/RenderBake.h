@@ -1,7 +1,8 @@
-#pragma once
+﻿#pragma once
 
-#include "CutPlane.h"
-#include "PatchGeometry.h"
+// 이 파일은 패치 조각을 ProceduralMesh로 만드는 렌더 데이터와 디버그용 튜브 모양을 만든다. Core에는 의존하지 않는다.
+
+#include "../Geometry/Patch.h"
 #include "../ProceduralMesh.h"
 
 namespace MeshCutting
@@ -30,7 +31,7 @@ namespace MeshCutting
     // standalone tests (tests/PlaneSlicerTests.cpp) build only Geometry/.
 
     // Debug colors of tagged edges (Interior has none).
-    DirectX::XMFLOAT4 EdgeKindColor(EdgeKind kind);
+    DirectX::XMFLOAT4 EdgeKindColor(PatchEdgeKind kind);
 
     // Appends a thin three-sided tube from a to b. Two-sided shading makes winding irrelevant.
     void AppendDebugSegment(ProceduralMeshData& out, const DirectX::XMFLOAT3& a,
@@ -39,11 +40,6 @@ namespace MeshCutting
     // One tube per tagged boundary edge, colored by kind. Edges are visited in key order so the
     // output does not depend on hash order. out is cleared first.
     void BakeBoundaryDebug(const PatchPiece& piece, float radius, ProceduralMeshData& out);
-
-    // The cut plane as thin tubes: the rectangle border and a few cross lines in color, plus a white
-    // arrow along the normal. out is cleared.
-    void BakeCutPlaneDebug(const CutPlaneFrame& frame, float tubeRadius, const DirectX::XMFLOAT4& color,
-        ProceduralMeshData& out);
 
     // The cut loops of a slice result (positive piece numbering) as closed rings of thin tubes, so the
     // cut can be seen before it is confirmed. out is cleared.

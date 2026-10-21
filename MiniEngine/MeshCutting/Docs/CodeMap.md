@@ -35,14 +35,14 @@ ModelViewer.cpp        입력을 읽어 컨트롤러에 전달하고, 프레임 
 
 ```
 절단 모드(T)이면 UpdateCandidate
-    ComputePaletteSkeleton → PickSegments(평면이 지나는 뼈 선분) → CutJoints(부모 joint 집합)
+    ComputePaletteSkeleton → CutPlane::PickSegments(평면이 지나는 뼈 선분) → CutPlane::CutJoints(부모 joint 집합)
     집합이 직전 시도와 다르면 ExtractBonePatch(집합) → RebuildPatchPiece(BuildPatchPiece)
 패치가 있으면
-    BuildSkinMatrices → SkinPatchPiece(패치를 이번 포즈로)
+    BuildSkinMatrices → Skinning::Apply(패치를 이번 포즈로)
     Enter 요청이 있으면 ConfirmCut, 아니면 포즈/평면이 바뀌었을 때 RunPreview
-        둘 다 SliceWithPlane = SlicePatch(무한 평면) + LoopsInsidePlane(사각형 검사)
+        둘 다 SliceWithPlane = SlicePatch(무한 평면) + CutPlane::ContainsLoops(사각형 검사)
 확정 piece가 있고 이번 프레임에 새로 자르지 않았으면
-    확정 piece의 스킨 슬롯(자른 시점 패치의 메시)으로 SkinPatchPiece
+    확정 piece의 스킨 슬롯(자른 시점 패치의 메시)으로 Skinning::Apply
 ```
 
 실패한 절단은 이전 확정 piece를 바꾸지 않는다. 후보 패치가 바뀌거나 사라져도 확정 piece는 남는다.
@@ -63,15 +63,16 @@ ModelViewer.cpp        입력을 읽어 컨트롤러에 전달하고, 프레임 
 ## 5. Geometry 파이프라인 (순수 계산)
 
 ```
-PatchWeld    정점 -> 노드/코너로 용접, PatchPiece 생성 (BuildPatchPiece)
-PlaneSlicer  평면으로 자르기 (SlicePatch) → CutLoops(루프 추출·검증) → CapBuilder(cap)
-PieceSkinning  패치와 piece를 포즈에 따라 스키닝 (SkinPatchPiece)
-CutPlane     world 유한 사각 평면, 조작, 루프 사각형 검사
-SegmentPick  평면이 지나는 뼈 선분 / JointSet  joint 집합 선택 규칙
-RenderBake   piece -> ProceduralMesh 변환(BuildRenderMesh, UpdateRenderPositions)과 디버그 튜브
+Geometry/Patch      패치 조각 자료구조(PatchPiece 등)와 검증, 정점 -> 노드/코너 용접 (BuildPatchPiece)
+Geometry/Slice      평면으로 자르기 (SlicePatch). 내부에서 SliceCap.cpp의 루프 추출·검증과 cap 생성을 부른다
+Geometry/Skinning   스킨 정점 표(Skinning)와 piece 스키닝(Apply), joint 집합 선택 규칙. piece들이 shared_ptr<const Skinning>으로 공유한다
+Geometry/CutPlane   world 유한 사각 평면, 조작, 루프 사각형 검사, 평면이 지나는 뼈 선분 찾기
+Rendering/RenderBake  piece -> ProceduralMesh 변환(BuildRenderMesh, UpdateRenderPositions)과 디버그 튜브
 ```
 
-`GeomNode`(위치의 주인)와 `RenderCorner`(노드 + UV/법선/색)를 나눈 것은 UV 이음매를 용접하면서도 렌더 정점은 따로 두기 위해서다. 절단선의 노드는 두 조각이 공유한다.
+파일은 기능 단위로 합쳐져 있다 (Patch = PatchGeometry + PatchWeld, Slice/SliceCap = PlaneSlicer + CutLoops + CapBuilder, Skinning = PieceSkinning + JointSet, CutPlane = CutPlane + SegmentPick). RenderBake는 Rendering/으로 옮겼지만 Core에 의존하지 않는다.
+
+`PatchNode`(위치의 주인)와 `PatchCorner`(노드 + UV/법선/색)를 나눈 것은 UV 이음매를 용접하면서도 렌더 정점은 따로 두기 위해서다. 절단선의 노드는 두 조각이 공유한다.
 
 ## 6. 진입점 찾기
 
@@ -81,5 +82,5 @@ RenderBake   piece -> ProceduralMesh 변환(BuildRenderMesh, UpdateRenderPositio
 | 절단 모드에서 패치가 어떻게 정해지는가 | `CutController::UpdateCandidate` |
 | 미리보기와 확정이 어떻게 다른가 | `CutController::RunPreview`, `ConfirmCut` (둘 다 `SliceWithPlane`) |
 | 화면에 무엇이 그려지는가 | `CutDebugView::Sync`, `Draw` |
-| 절단 알고리즘 | `SlicePatch` (`Geometry/PlaneSlicer.cpp`) |
-| 프레임마다 piece가 움직이는 방식 | `CutController::Update`, `SkinPatchPiece` |
+| 절단 알고리즘 | `SlicePatch` (`Geometry/Slice.cpp`) |
+| 프레임마다 piece가 움직이는 방식 | `CutController::Update`, `Skinning::Apply` |

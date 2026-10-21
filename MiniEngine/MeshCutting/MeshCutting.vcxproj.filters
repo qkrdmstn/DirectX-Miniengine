@@ -45,44 +45,29 @@
     <ClInclude Include="Debug\CutDebugView.h">
       <Filter>Debug</Filter>
     </ClInclude>
-    <ClInclude Include="Debug\PlaneGizmo.h">
-      <Filter>Debug</Filter>
-    </ClInclude>
     <ClInclude Include="Debug\SceneViewCamera.h">
       <Filter>Debug</Filter>
     </ClInclude>
     <ClInclude Include="Runtime\CutController.h">
       <Filter>Runtime</Filter>
     </ClInclude>
-    <ClInclude Include="Geometry\CapBuilder.h">
+    <ClInclude Include="Geometry\SliceTypes.h">
       <Filter>Geometry</Filter>
     </ClInclude>
-    <ClInclude Include="Geometry\CutLoops.h">
+    <ClInclude Include="Geometry\Patch.h">
       <Filter>Geometry</Filter>
     </ClInclude>
-    <ClInclude Include="Geometry\PatchGeometry.h">
+    <ClInclude Include="Geometry\Slice.h">
       <Filter>Geometry</Filter>
     </ClInclude>
-    <ClInclude Include="Geometry\PatchWeld.h">
-      <Filter>Geometry</Filter>
-    </ClInclude>
-    <ClInclude Include="Geometry\PieceSkinning.h">
-      <Filter>Geometry</Filter>
-    </ClInclude>
-    <ClInclude Include="Geometry\PlaneSlicer.h">
+    <ClInclude Include="Geometry\Skinning.h">
       <Filter>Geometry</Filter>
     </ClInclude>
     <ClInclude Include="Geometry\CutPlane.h">
       <Filter>Geometry</Filter>
     </ClInclude>
-    <ClInclude Include="Geometry\JointSet.h">
-      <Filter>Geometry</Filter>
-    </ClInclude>
-    <ClInclude Include="Geometry\SegmentPick.h">
-      <Filter>Geometry</Filter>
-    </ClInclude>
-    <ClInclude Include="Geometry\RenderBake.h">
-      <Filter>Geometry</Filter>
+    <ClInclude Include="Rendering\RenderBake.h">
+      <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="Rendering\ProceduralMeshRenderer.h">
       <Filter>헤더 파일</Filter>
@@ -98,44 +83,32 @@
     <ClCompile Include="Debug\CutDebugView.cpp">
       <Filter>Debug</Filter>
     </ClCompile>
-    <ClCompile Include="Debug\PlaneGizmo.cpp">
-      <Filter>Debug</Filter>
-    </ClCompile>
     <ClCompile Include="Debug\SceneViewCamera.cpp">
       <Filter>Debug</Filter>
     </ClCompile>
     <ClCompile Include="Runtime\CutController.cpp">
       <Filter>Runtime</Filter>
     </ClCompile>
-    <ClCompile Include="Geometry\CapBuilder.cpp">
+    <ClCompile Include="Geometry\Patch.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
-    <ClCompile Include="Geometry\CutLoops.cpp">
+    <ClCompile Include="Geometry\Slice.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
-    <ClCompile Include="Geometry\PatchGeometry.cpp">
+    <ClCompile Include="Geometry\SliceCap.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
-    <ClCompile Include="Geometry\PatchWeld.cpp">
-      <Filter>Geometry</Filter>
-    </ClCompile>
-    <ClCompile Include="Geometry\PieceSkinning.cpp">
-      <Filter>Geometry</Filter>
-    </ClCompile>
-    <ClCompile Include="Geometry\PlaneSlicer.cpp">
+    <ClCompile Include="Geometry\Skinning.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
     <ClCompile Include="Geometry\CutPlane.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
-    <ClCompile Include="Geometry\JointSet.cpp">
+    <ClCompile Include="Geometry\CutPlaneGizmo.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
-    <ClCompile Include="Geometry\SegmentPick.cpp">
-      <Filter>Geometry</Filter>
-    </ClCompile>
-    <ClCompile Include="Geometry\RenderBake.cpp">
-      <Filter>Geometry</Filter>
+    <ClCompile Include="Rendering\RenderBake.cpp">
+      <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="Rendering\ProceduralMeshRenderer.cpp">
       <Filter>소스 파일</Filter>
