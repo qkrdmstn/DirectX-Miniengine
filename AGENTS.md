@@ -35,5 +35,13 @@ Build affected projects in Debug and Release. Run changed samples with DirectX v
 
 `Libraries/D3D12RaytracingFallback/src/FallbackLayerUnitTests/` uses Microsoft's C++ Unit Test Framework. Build its project with the required toolset and run through Visual Studio Test Explorer; follow existing `TEST_CLASS`/`TEST_METHOD` patterns. No repository-wide coverage threshold is defined.
 
+## MeshCutting Workflow
+- Docs: start from `MiniEngine/MeshCutting/Docs/README.md` (index with status) and open only the documents the task needs; use `CodeMap.md` for structure.
+- Every design doc begins with a `상태:` line (설계안 / 진행 중 / 완료, with the commit). Update it, and the README row, when a step lands. Long-lived docs cite function names, not line numbers.
+- Keep each implementation step to one concept and about 300 changed lines, then stop so the user can read and commit it before the next step. The user must be able to follow every line.
+- After changing `Geometry/`, run the CPU tests in `MiniEngine/MeshCutting/tests/PlaneSlicerTests.cpp` (build command in the file header); keep build output outside the repository.
+- When several sessions work at once, design sessions edit only `Docs/`, and only one session writes code at a time.
+- At the start of multi-step work, list the steps with a rough time for each, based on measured costs (Codex review about 2-5 minutes, Debug/Release builds, CPU tests), not guesses.
+
 ## Commit & Pull Request Guidelines
 History uses short, action-oriented subjects such as `Fix reflection hint`; no strict prefix convention is established. Keep commits focused. PRs should explain the change, link relevant issues, list build/runtime checks, and include screenshots for rendering changes. Exclude generated binaries, compiled shaders, package caches, and local IDE settings.
