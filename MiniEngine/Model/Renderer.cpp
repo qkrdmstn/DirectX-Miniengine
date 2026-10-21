@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -21,6 +21,8 @@
 #include "../Core/GraphicsCommon.h"
 #include "../Core/BufferManager.h"
 #include "../Core/ShadowCamera.h"
+#include <algorithm>
+#include <cstring>
 
 #include "CompiledShaders/DefaultVS.h"
 #include "CompiledShaders/DefaultSkinVS.h"
@@ -544,6 +546,36 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     m_SortObjects.push_back(object);
 }
 
+void MeshSorter::SetJointColors(uint32_t startJoint, const DirectX::XMFLOAT4* colors, uint32_t count)
+{
+    for (JointColorTable& table : m_JointColorTables)
+    {
+        if (table.startJoint == startJoint)
+        {
+            table.colors.assign(colors, colors + count);
+            return;
+        }
+    }
+    m_JointColorTables.push_back({ startJoint, std::vector<DirectX::XMFLOAT4>(colors, colors + count) });
+}
+
+// 메시의 팔레트(startJoint)에 맞는 색 표를 상수 버퍼에 채운다. 표가 없거나 모자란 joint는 회색이다.
+void MeshSorter::FillJointColors(GlobalConstants& globals, uint32_t startJoint) const
+{
+    const float gray[4] = { 0.12f, 0.12f, 0.12f, 1.0f };
+    for (uint32_t i = 0; i < kMaxJointColors; ++i)
+        std::memcpy(globals.JointColors[i], gray, sizeof(gray));
+    for (const JointColorTable& table : m_JointColorTables)
+    {
+        if (table.startJoint != startJoint)
+            continue;
+        const uint32_t count = std::min<uint32_t>(uint32_t(table.colors.size()), kMaxJointColors);
+        for (uint32_t i = 0; i < count; ++i)
+            std::memcpy(globals.JointColors[i], &table.colors[i], sizeof(float) * 4);
+        return;
+    }
+}
+
 void MeshSorter::Sort()
 {
     struct { bool operator()(uint64_t a, uint64_t b) const { return a < b; } } Cmp;
@@ -671,8 +703,8 @@ void MeshSorter::RenderMeshes(
             if (m_BatchType == kDefault && m_CurrentPass != kZPass)
             {
                 globals.WeightDebugEnabled = m_WeightDebug ? 1 : 0;
-                globals.DebugJointIndex = m_WeightDebug && mesh.numJoints > m_SelectedJointIndex
-                    && mesh.startJoint == m_SelectedStartJoint ? m_SelectedJointIndex : UINT32_MAX;
+                if (m_WeightDebug)
+                    FillJointColors(globals, mesh.startJoint);
                 context.SetDynamicConstantBufferView(kCommonCBV, sizeof(GlobalConstants), &globals);
             }
 

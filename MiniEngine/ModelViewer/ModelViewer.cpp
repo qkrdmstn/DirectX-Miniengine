@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -70,7 +70,7 @@ private:
     D3D12_RECT m_MainScissor;
 
     ModelInstance m_ModelInst;
-    uint32_t m_DebugPalette = 0;                // the skin palette the debug mode cuts (the first one with joints)
+    MeshCutting::CutTargetId m_CutTarget = 0;   // m_ModelInst를 CutController에 등록한 번호 (0 = 등록 안 함)
     bool m_AnimationsPaused = false;
     vector<AnimationState::eMode> m_ResumeModes;
     MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
@@ -80,6 +80,7 @@ private:
 
     void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
         const D3D12_RECT& scissor, uint32_t frameIndex);
+    bool SetWeightView(MeshSorter& sorter, bool alwaysOn);      // 웨이트 뷰의 joint 색 표를 정렬기에 넘긴다 (켰으면 true)
 };
 
 CREATE_APPLICATION(ModelViewer)
@@ -221,15 +222,9 @@ void ModelViewer::Startup(void)
         const Model* model = m_ModelInst.GetModel();
         if (model != nullptr)
         {
-            bool havePalette = false;
             for (uint32_t paletteId = 0; paletteId < model->m_SkinPalettes.size(); ++paletteId)
             {
                 const SkinPalette& palette = model->m_SkinPalettes[paletteId];
-                if (palette.numJoints > 0 && !havePalette)
-                {
-                    m_DebugPalette = paletteId;     // the debug mode cuts the first palette that has joints
-                    havePalette = true;
-                }
                 for (uint32_t jointIndex = 0; jointIndex < palette.numJoints; ++jointIndex)
                 {
                     const uint32_t nodeIndex = model->m_JointIndices[palette.startJoint + jointIndex];
@@ -241,6 +236,7 @@ void ModelViewer::Startup(void)
                         paletteId, jointIndex, nodeIndex, name.c_str(), parent, parentName.c_str());
                 }
             }
+            m_CutTarget = m_Cut.RegisterInstance(m_ModelInst, gltfFileName);     // 해제는 Cleanup에서 (인스턴스보다 먼저)
         }
 
         MotionBlur::Enable = false;
@@ -255,6 +251,7 @@ void ModelViewer::Startup(void)
 
 void ModelViewer::Cleanup(void)
 {
+    m_Cut.UnregisterInstance(m_CutTarget);
     m_CutView.Release(m_ProceduralRenderer);
     m_ProceduralRenderer.Shutdown();
     m_ModelInst = nullptr;
@@ -281,7 +278,7 @@ void ModelViewer::Update(float deltaT)
     const Model* model = m_ModelInst.GetModel();
     // T: debug mode (plane, gizmo, candidate patch, weight view). V: render mode. Ctrl+Z: undo the cut.
     if (model != nullptr && GameInput::IsFirstPressed(GameInput::kKey_t))
-        m_Cut.ToggleEditPlane(m_ModelInst, m_DebugPalette);
+        m_Cut.ToggleEditPlane();
     if (GameInput::IsFirstPressed(GameInput::kKey_v))
         m_CutView.CycleRenderMode();
     if (GameInput::IsPressed(GameInput::kKey_lcontrol) && GameInput::IsFirstPressed(GameInput::kKey_z))
@@ -390,9 +387,8 @@ void ModelViewer::Update(float deltaT)
 
     gfxContext.Finish();
 
-    // The CPU pose of this frame is final now; bring the patch and the cut pieces to it.
-    if (const Model* poseModel = m_ModelInst.GetModel())
-        m_Cut.Update(*poseModel, m_ModelInst);
+    // 이번 프레임의 CPU 자세가 확정됐다. 모든 인스턴스의 Update 뒤에 한 번, 패치와 조각을 이 자세로 옮긴다.
+    m_Cut.Update();
 
 
     // We use viewport offsets to jitter sample positions from frame to frame (for TAA.)
@@ -419,7 +415,6 @@ void ModelViewer::Update(float deltaT)
 void ModelViewer::RenderScene(void)
 {
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
-    const Model* model = m_ModelInst.GetModel();
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
     const D3D12_VIEWPORT& viewport = m_MainViewport;
@@ -455,7 +450,6 @@ void ModelViewer::RenderScene(void)
         globals.CameraPos = m_Camera.GetPosition();
         globals.SunDirection = SunDirection;
         globals.SunIntensity = Vector3(Scalar(g_SunLightIntensity));
-        globals.DebugJointIndex = UINT32_MAX;
 
         // Begin rendering depth
         gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
@@ -465,13 +459,10 @@ void ModelViewer::RenderScene(void)
         sorter.SetCamera(m_Camera);
         sorter.SetViewport(viewport);
         sorter.SetScissor(scissor);
-        // The original model follows the render mode: wire in Wire and Debug, solid otherwise (Solid + Wire adds
-        // a second wire pass below). In debug mode the weight view shows the first cut joint.
+        // 원본 모델은 렌더링 모드를 따른다: Wire와 Debug는 선, 그 밖에는 면 (Solid + Wire는 아래에서 선을 한 번 더 그린다).
         const MeshCutting::RenderMode renderMode = m_CutView.GetRenderMode();
         sorter.SetWireframe(renderMode == MeshCutting::RenderMode::Wire || renderMode == MeshCutting::RenderMode::Debug);
-        const uint32_t weightJoint = m_Cut.WeightJoint();
-        if (weightJoint != MeshCutting::kNoNode && model != nullptr && m_Cut.EditPalette() < model->m_SkinPalettes.size())
-            sorter.SetBoneDebug(true, model->m_SkinPalettes[m_Cut.EditPalette()].startJoint, weightJoint);
+        SetWeightView(sorter, false);       // 평면 아래 후보 작업이 있으면 부모 joint를 작업 색으로 칠한다
         sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
         sorter.AddRenderTarget(g_SceneColorBuffer);
 
@@ -516,24 +507,16 @@ void ModelViewer::RenderScene(void)
 
                 sorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
 
-                // Solid + Wire: the lines of the original model go over the solid pass. They are drawn with the
-                // weight-view shader on the last joint of the palette, which colors every vertex without weight
-                // to that joint dark gray (an unselected joint would leave the color undefined); the depth the
-                // solid pass wrote keeps hidden lines out.
+                // Solid + Wire: 원본 모델의 선을 면 위에 한 번 더 그린다. 웨이트 뷰 셰이더로 그려서 작업 색 표를 쓰고
+                // (후보 작업이 없으면 회색 선), 면 패스가 쓴 깊이가 가려진 선을 막는다.
                 if (renderMode == MeshCutting::RenderMode::SolidAndWire)
                 {
-                    const bool havePalette = model != nullptr && m_DebugPalette < model->m_SkinPalettes.size();
                     MeshSorter wireSorter(MeshSorter::kDefault);
                     wireSorter.SetCamera(m_Camera);
                     wireSorter.SetViewport(viewport);
                     wireSorter.SetScissor(scissor);
                     wireSorter.SetWireframe(true);
-                    // A model without skins has no joint to pick: its lines keep the normal shading.
-                    if (havePalette)
-                    {
-                        const SkinPalette& wirePalette = model->m_SkinPalettes[m_DebugPalette];
-                        wireSorter.SetBoneDebug(true, wirePalette.startJoint, wirePalette.numJoints > 0 ? wirePalette.numJoints - 1 : 0);
-                    }
+                    SetWeightView(wireSorter, true);
                     wireSorter.SetDepthStencilTarget(g_SceneDepthBuffer);
                     wireSorter.AddRenderTarget(g_SceneColorBuffer);
                     m_ModelInst.Render(wireSorter);
@@ -572,28 +555,49 @@ void ModelViewer::RenderScene(void)
 void ModelViewer::RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
     const D3D12_RECT& scissor, uint32_t frameIndex)
 {
-    m_CutView.Draw(gfxContext, m_ProceduralRenderer, m_Cut, m_Camera.GetViewProjMatrix(),
-        m_ModelInst.IsNull() ? 0.0f : float(m_ModelInst.GetRadius()), viewport, scissor);
+    m_CutView.Draw(gfxContext, m_ProceduralRenderer, m_Cut, m_Camera.GetViewProjMatrix(), viewport, scissor);
 
     // SSAO linearized depth before these draws; refresh it so velocity, TAA and DoF see the new depth.
     if (SSAO::Enable || SSAO::ComputeLinearZ)
         SSAO::LinearizeZ(gfxContext.GetComputeContext(), m_Camera, frameIndex);
 }
 
+// 후보 작업이 있는 팔레트마다 joint -> 작업 색 표를 넘긴다. alwaysOn이면 후보가 없어도 (스킨이 있는 모델은) 회색으로 칠한다.
+bool ModelViewer::SetWeightView(MeshSorter& sorter, bool alwaysOn)
+{
+    const Model* model = m_ModelInst.GetModel();
+    if (model == nullptr || m_CutTarget == 0)
+        return false;
+    bool anyJob = false, anySkin = false;
+    for (uint32_t paletteId = 0; paletteId < model->m_SkinPalettes.size(); ++paletteId)
+    {
+        const SkinPalette& palette = model->m_SkinPalettes[paletteId];
+        anySkin = anySkin || palette.numJoints > 0;
+        std::vector<DirectX::XMFLOAT4> colors;
+        if (m_Cut.GetJointColors(m_CutTarget, paletteId, colors))
+        {
+            sorter.SetJointColors(palette.startJoint, colors.data(), uint32_t(colors.size()));
+            anyJob = true;
+        }
+    }
+    const bool enable = anyJob || (alwaysOn && anySkin);
+    sorter.SetWeightDebug(enable);
+    return enable;
+}
+
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
     const Model* model = m_ModelInst.GetModel();
-    const uint32_t cutPalette = m_Cut.EditPalette();
 
     TextContext text(context);
     text.Begin();
     text.ResetCursor(20.0f, 70.0f);
-    m_CutView.DrawUI(text, m_Cut, [model, cutPalette](uint32_t joint) -> std::wstring
+    m_CutView.DrawUI(text, m_Cut, [this, model](MeshCutting::CutTargetId target, uint32_t palette, uint32_t joint) -> std::wstring
         {
-            if (model == nullptr || cutPalette >= model->m_SkinPalettes.size() || joint >= model->m_SkinPalettes[cutPalette].numJoints)
+            if (target != m_CutTarget || model == nullptr || palette >= model->m_SkinPalettes.size() || joint >= model->m_SkinPalettes[palette].numJoints)
                 return L"?";
-            const SkinPalette& cutSkin = model->m_SkinPalettes[cutPalette];
-            return BoneName(*model, model->m_JointIndices[cutSkin.startJoint + joint], joint);
+            const SkinPalette& skin = model->m_SkinPalettes[palette];
+            return BoneName(*model, model->m_JointIndices[skin.startJoint + joint], joint);
         });
     text.End();
 }

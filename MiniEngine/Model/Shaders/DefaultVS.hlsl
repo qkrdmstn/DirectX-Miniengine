@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -33,8 +33,9 @@ cbuffer GlobalConstants : register(b1)
     float _pad;
     float IBLRange;
     float IBLBias;
-    uint DebugJointIndex;
+    uint Reserved;
     uint WeightDebugEnabled;
+    float4 JointColors[256];    // 웨이트 뷰: joint 번호별 색
 }
 
 #ifdef ENABLE_SKINNING
@@ -77,14 +78,14 @@ struct VSOutput
 #endif
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
-    float influence : TEXCOORD4;
+    float3 weightColor : TEXCOORD4;     // 웨이트 뷰의 정점 색
 };
 
 [RootSignature(Renderer_RootSig)]
 VSOutput main(VSInput vsInput)
 {
     VSOutput vsOutput;
-    vsOutput.influence = 0.0;
+    vsOutput.weightColor = float3(0.12, 0.12, 0.12);     // 색 표에 없는 joint와 스킨 없는 메시는 회색
 
     float4 position = float4(vsInput.position, 1.0);
     float3 normal = vsInput.normal * 2 - 1;
@@ -96,13 +97,14 @@ VSOutput main(VSInput vsInput)
     // I don't like this hack.  The weights should be normalized already, but something is fishy.
     float4 weights = vsInput.jointWeights / dot(vsInput.jointWeights, 1);
 
-    if (DebugJointIndex != 0xffffffff)
+    // 웨이트 뷰: 정점 색 = Σ 가중치 × joint 색 (색 표 범위를 넘는 번호는 마지막 칸을 쓴다)
+    if (WeightDebugEnabled != 0)
     {
-        vsOutput.influence =
-            (vsInput.jointIndices.x == DebugJointIndex ? weights.x : 0.0) +
-            (vsInput.jointIndices.y == DebugJointIndex ? weights.y : 0.0) +
-            (vsInput.jointIndices.z == DebugJointIndex ? weights.z : 0.0) +
-            (vsInput.jointIndices.w == DebugJointIndex ? weights.w : 0.0);
+        vsOutput.weightColor =
+            JointColors[min(vsInput.jointIndices.x, 255)].rgb * weights.x +
+            JointColors[min(vsInput.jointIndices.y, 255)].rgb * weights.y +
+            JointColors[min(vsInput.jointIndices.z, 255)].rgb * weights.z +
+            JointColors[min(vsInput.jointIndices.w, 255)].rgb * weights.w;
     }
 
     float4x4 skinPosMat =

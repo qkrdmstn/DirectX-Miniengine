@@ -1,296 +1,446 @@
-#include "../pch.h"
+﻿#include "../pch.h"
 #include "CutController.h"
+#include "../BonePatch.h"
 #include "../../Model/Model.h"
 #include "EngineProfiling.h"
 #include "SystemTime.h"
 #include "Utility.h"
 
+#include <cstring>
+
 using namespace Math;
 
 namespace MeshCutting
 {
-    // The patch only. The confirmed pieces and the plane stay.
-    void CutController::DropPatch()
+    namespace
     {
-        m_Patch.extracted.Clear();
-        m_Patch.source = {};
-        m_Patch.statusText.clear();
-        RebuildPatchPiece();
-        ClearPreview();
-        m_Preview.previousPose.clear();
-    }
-
-    void CutController::ToggleEditPlane(const ModelInstance& instance, uint32_t paletteId)
-    {
-        m_PlaneEditing = !m_PlaneEditing;
-        m_CutRequested = false;
-        DropPatch();    // the candidate patch is rebuilt from the plane while debug mode is on
-        m_Candidate.ResetSelection();
-        m_Candidate.error.clear();
-        if (m_PlaneEditing)
+        // 지수 평균. 값이 0이면 첫 표본으로 시작한다.
+        void Smooth(float& value, float sample)
         {
-            m_Candidate.palette = paletteId;
-            if (!m_PlaneValid)
-                PlacePlane(instance);
-            m_Preview.dirty = true;
+            value = value == 0.0f ? sample : value + (sample - value) * 0.1f;
+        }
+
+        float ElapsedMs(int64_t start)
+        {
+            return float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
+        }
+
+        bool SameMatrices(const std::vector<std::vector<DirectX::XMFLOAT4X4>>& a, const std::vector<std::vector<DirectX::XMFLOAT4X4>>& b)
+        {
+            if (a.size() != b.size())
+                return false;
+            for (size_t i = 0; i < a.size(); ++i)
+                if (a[i].size() != b[i].size() || memcmp(a[i].data(), b[i].data(), a[i].size() * sizeof(DirectX::XMFLOAT4X4)) != 0)
+                    return false;
+            return true;
+        }
+
+        void ClearPreview(CutJob& job, uint64_t generation)
+        {
+            job.preview = SliceResult();
+            job.havePreview = false;
+            job.previewStatus = SliceStatus::InvalidInput;
+            job.previewGeneration = generation;
         }
     }
 
-    // The weight view shows the first cut joint: the shader takes one joint.
-    uint32_t CutController::WeightJoint() const
+    CutTargetId CutController::RegisterInstance(const ModelInstance& instance, std::wstring name)
     {
-        if (!m_PlaneEditing || m_Candidate.cutJoints.empty())
-            return kNoNode;
-        return m_Candidate.cutJoints.front();
+        CutTarget target;
+        target.id = m_NextTargetId++;
+        target.instance = &instance;
+        target.model = instance.GetModel();
+        target.name = std::move(name);
+        ReloadPalettes(target);
+        m_Targets.push_back(std::move(target));
+        return m_Targets.back().id;
+    }
+
+    void CutController::UnregisterInstance(CutTargetId id)
+    {
+        RemoveJobsOf(id);
+        for (size_t i = 0; i < m_Targets.size(); ++i)
+            if (m_Targets[i].id == id)
+            {
+                m_Targets.erase(m_Targets.begin() + i);
+                break;
+            }
+    }
+
+    void CutController::ReloadPalettes(CutTarget& target)
+    {
+        target.palettes.clear();
+        target.skeletons.clear();
+        target.error.clear();
+        target.radius = float(target.instance->GetRadius());
+        if (!(target.radius > 0.0f))
+            target.radius = 1.0f;
+        if (target.model == nullptr)
+            return;
+        for (uint32_t paletteId = 0; paletteId < target.model->m_SkinPalettes.size(); ++paletteId)
+            if (target.model->m_SkinPalettes[paletteId].numJoints > 0)
+                target.palettes.push_back(paletteId);
+        target.skeletons.resize(target.palettes.size());
+    }
+
+    void CutController::RemoveJobsOf(CutTargetId id)
+    {
+        for (auto it = m_Jobs.begin(); it != m_Jobs.end();)
+        {
+            if (it->first.target == id)
+            {
+                it = m_Jobs.erase(it);
+                ++m_JobListGeneration;
+            }
+            else
+                ++it;
+        }
+    }
+
+    const CutTarget* CutController::FindTarget(CutTargetId id) const
+    {
+        for (const CutTarget& target : m_Targets)
+            if (target.id == id)
+                return &target;
+        return nullptr;
+    }
+
+    const SkeletonPose* CutController::FindSkeleton(const CutJobKey& key) const
+    {
+        const CutTarget* target = FindTarget(key.target);
+        if (target == nullptr || key.kind != CutJobKind::SkeletalSegment)
+            return nullptr;
+        for (size_t i = 0; i < target->palettes.size(); ++i)
+            if (target->palettes[i] == key.a)
+                return &target->skeletons[i];
+        return nullptr;
+    }
+
+    CutFrameStats CutController::GetFrameStats() const
+    {
+        CutFrameStats stats;
+        stats.jobs = uint32_t(m_Jobs.size());
+        stats.extractCount = m_ExtractCount;
+        for (const auto& entry : m_Jobs)
+        {
+            const CutJob& job = entry.second;
+            stats.candidates += job.candidate ? 1 : 0;
+            stats.confirmed += job.haveConfirmed ? 1 : 0;
+            stats.extractMs += job.extractMs;
+            stats.skinMs += job.skinMs;
+            stats.previewMs += job.previewMs;
+            stats.cutMs += job.cutMs;
+        }
+        return stats;
+    }
+
+    bool CutController::GetJointColors(CutTargetId target, uint32_t palette, std::vector<DirectX::XMFLOAT4>& colors) const
+    {
+        const CutTarget* found = FindTarget(target);
+        if (found == nullptr || found->model == nullptr || palette >= found->model->m_SkinPalettes.size())
+            return false;
+        const uint32_t jointCount = found->model->m_SkinPalettes[palette].numJoints;
+        colors.assign(jointCount, GetNoJobColor());
+        std::vector<uint32_t> owner(jointCount, UINT32_MAX);        // 그 joint의 색을 정한 작업의 색 번호
+        bool any = false;
+        for (const auto& entry : m_Jobs)
+        {
+            const CutJob& job = entry.second;
+            if (!job.candidate || job.key.target != target || job.key.kind != CutJobKind::SkeletalSegment || job.key.a != palette)
+                continue;
+            any = true;
+            const uint32_t joint = job.key.b;
+            if (joint < jointCount && (owner[joint] == UINT32_MAX || job.colorIndex < owner[joint]))
+            {
+                owner[joint] = job.colorIndex;
+                colors[joint] = GetJobColor(job.colorIndex);
+            }
+        }
+        return any;
+    }
+
+    void CutController::ToggleEditPlane()
+    {
+        if (!m_PlaneEditing && m_Targets.empty())
+            return;
+        m_PlaneEditing = !m_PlaneEditing;
+        m_CutRequested = false;
+        if (m_PlaneEditing)
+        {
+            if (!m_PlaneValid && m_Targets.front().instance != nullptr)
+                PlacePlane(*m_Targets.front().instance);
+            for (auto& entry : m_Jobs)
+                entry.second.previewDirty = true;
+        }
     }
 
     bool CutController::UpdateGizmo(const GizmoView& view, const GizmoInput& input)
     {
         if (!m_PlaneValid || !m_Plane.UpdateGizmo(view, input))
             return false;
-        m_Preview.dirty = true;
+        for (auto& entry : m_Jobs)
+            entry.second.previewDirty = true;
         return true;
     }
 
-    // Without a patch there is nothing to cut, so a request is ignored.
+    // 후보 작업이 하나도 없으면 요청은 버려진다.
     void CutController::RequestCut()
     {
-        if (m_PlaneEditing && m_PlaneValid && !m_Patch.piece.Empty())
-            m_CutRequested = true;
+        if (!m_PlaneEditing || !m_PlaneValid)
+            return;
+        for (const auto& entry : m_Jobs)
+            if (entry.second.candidate && !entry.second.patch.Empty())
+            {
+                m_CutRequested = true;
+                return;
+            }
     }
 
-    // Only the confirmed pieces go. The candidate patch stays and the preview resumes.
+    // 모든 확정 결과를 지운다. 확정 결과만 남아 있던(후보가 아닌) 작업은 삭제한다.
     void CutController::DiscardCut()
     {
-        ClearSlice();
-        m_Preview.dirty = true;
+        m_CutRequested = false;
+        for (auto it = m_Jobs.begin(); it != m_Jobs.end();)
+        {
+            CutJob& job = it->second;
+            job.haveConfirmed = false;
+            job.cutAttempted = false;
+            job.lastCutStatus = SliceStatus::InvalidInput;
+            job.lastCutError.clear();
+            job.cutInfo.clear();
+            job.positive.Clear();
+            job.negative.Clear();
+            job.confirmedGeneration = ++m_Generation;
+            if (!job.candidate)
+            {
+                it = m_Jobs.erase(it);
+                ++m_JobListGeneration;
+                continue;
+            }
+            job.previewDirty = true;
+            ++it;
+        }
     }
 
-    // Welds the current patch into the slicer input. An empty source just clears everything.
-    void CutController::RebuildPatchPiece()
+    // 모델이 바뀐 대상의 작업을 지우고, 평면을 편집 중이면 자세를 읽는다.
+    void CutController::UpdateTargets()
     {
-        m_Patch.piece.Clear();
-        m_Patch.weld = WeldStats();
-        m_Patch.detail.clear();
-        m_Patch.status = SliceStatus::InvalidInput;
-
-        if (m_Patch.extracted.GetData().indices.empty())
+        for (CutTarget& target : m_Targets)
         {
-            m_Patch.detail = "no patch";
-            return;
-        }
+            const Model* model = target.instance->GetModel();
+            if (model != target.model)
+            {
+                RemoveJobsOf(target.id);
+                target.model = model;
+                ReloadPalettes(target);
+            }
+            if (model == nullptr || !m_PlaneEditing || !m_PlaneValid)
+                continue;
 
-        WeldInput weldInput;
-        std::string error;
-        if (!MakeWeldInput(m_Patch.extracted.GetData(), m_Patch.source, weldInput, &error))
-        {
-            m_Patch.detail = error;
-            return;
+            target.error.clear();
+            for (size_t i = 0; i < target.palettes.size(); ++i)
+            {
+                std::string error;
+                if (!ComputePaletteSkeleton(*model, *target.instance, target.palettes[i], target.skeletons[i], &error))
+                {
+                    target.skeletons[i] = SkeletonPose();
+                    target.error = Utility::UTF8ToWideString(error);
+                }
+            }
         }
-        m_Patch.status = BuildPatchPiece(weldInput, kDefaultEpsilonScale, m_Patch.piece, m_Patch.weld, &m_Patch.detail);
-        if (m_Patch.status != SliceStatus::Ok)
-            return;
-        m_Patch.radius = float(ComputePieceRadius(m_Patch.piece));
     }
 
-    // In debug mode: finds the bone segments the plane crosses and, when their parent joints (the cut joints)
-    // are not the ones the current patch was extracted for, extracts and welds a new patch for them. The same
-    // joint set is never extracted twice in a row, even after a failure; the patch is only skinned then.
-    void CutController::UpdateCandidate(const Model& model, const ModelInstance& instance)
+    // 평면이 지나는 선분을 찾아 작업 목록을 갱신한다. 새 key만 추출하고, 사라진 key는 후보와 패치를 해제한다.
+    void CutController::UpdateCandidates()
     {
-        std::string error;
-        if (!ComputePaletteSkeleton(model, instance, m_Candidate.palette, m_Candidate.skeleton, &error))
+        std::vector<CutJobKey> current;
+        std::map<CutJobKey, SegmentHit> hits;
+        for (const CutTarget& target : m_Targets)
         {
-            m_Candidate.skeleton = SkeletonPose();
-            m_Candidate.error = Utility::UTF8ToWideString(error);
-            // Without a valid selection the old candidate must not stay cuttable; the next good frame rebuilds it.
-            DropPatch();
-            m_Candidate.ResetSelection();
+            for (size_t i = 0; i < target.palettes.size(); ++i)
+            {
+                std::vector<SegmentHit> found;
+                m_Plane.PickSegments(target.skeletons[i], found);
+                for (const SegmentHit& hit : found)
+                {
+                    const CutJobKey key = MakeSegmentKey(target.id, target.palettes[i], hit.parentJoint, hit.childJoint);
+                    current.push_back(key);
+                    hits[key] = hit;
+                }
+            }
+        }
+        ApplyDiff(DiffJobs(m_Jobs, current), hits);
+    }
+
+    void CutController::ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, SegmentHit>& hits)
+    {
+        for (const CutJobKey& key : diff.added)
+        {
+            const bool isNew = m_Jobs.find(key) == m_Jobs.end();
+            CutJob& job = m_Jobs[key];
+            if (isNew)
+            {
+                job.key = key;
+                job.colorIndex = m_NextColorIndex++;
+                ++m_JobListGeneration;
+            }
+            job.candidate = true;
+            job.hit = hits.at(key);
+            ExtractJob(job);
+        }
+        for (const CutJobKey& key : diff.kept)
+            m_Jobs.at(key).hit = hits.at(key);
+        for (const CutJobKey& key : diff.lost)
+        {
+            CutJob& job = m_Jobs.at(key);
+            DropCandidate(job);
+            if (!job.haveConfirmed)
+            {
+                m_Jobs.erase(key);
+                ++m_JobListGeneration;
+            }
+        }
+    }
+
+    // 부모 joint 하나로 추출해 용접한다. 같은 대상·팔레트·부모 joint의 형제 작업이 이미 추출했으면 그 결과를 쓴다.
+    void CutController::ExtractJob(CutJob& job)
+    {
+        job.extracted = true;
+        job.previewDirty = true;
+        ClearPreview(job, ++m_Generation);
+        job.extractMs = 0.0f;
+
+        for (const auto& entry : m_Jobs)
+        {
+            const CutJob& sibling = entry.second;
+            if (&sibling == &job || !sibling.candidate || !sibling.extracted || sibling.key.target != job.key.target
+                || sibling.key.kind != job.key.kind || sibling.key.a != job.key.a || sibling.key.b != job.key.b)
+                continue;
+            job.patch = sibling.patch;
+            job.patchTriangles = sibling.patchTriangles;
+            job.weld = sibling.weld;
+            job.patchStatus = sibling.patchStatus;
+            job.patchError = sibling.patchError;
+            job.patchRadius = sibling.patchRadius;
+            job.source.bone = sibling.source.bone;
+            job.source.extractJoint = sibling.source.extractJoint;
             return;
         }
-        m_Candidate.error.clear();
 
-        m_Plane.PickSegments(m_Candidate.skeleton, m_Candidate.hits);
-        m_Candidate.cutJoints = CutPlane::CutJoints(m_Candidate.hits);
-        if (m_Candidate.haveAttempt && m_Candidate.cutJoints == m_Candidate.attemptJoints)
-            return;
-        m_Candidate.haveAttempt = true;
-        m_Candidate.attemptJoints = m_Candidate.cutJoints;
-
-        if (m_Candidate.cutJoints.empty())
+        const CutTarget* target = FindTarget(job.key.target);
+        job.patch.Clear();
+        job.weld = WeldStats();
+        job.patchStatus = SliceStatus::InvalidInput;
+        job.patchError.clear();
+        job.patchTriangles = 0;
+        if (target == nullptr || target->model == nullptr)
         {
-            DropPatch();
-            m_Patch.statusText = L"No bone segment crosses the plane";
+            job.patchError = "no model";
             return;
         }
 
         const int64_t start = SystemTime::GetCurrentTick();
         ProceduralMeshData patch;
-        BonePatchSource source;
-        if (ExtractBonePatch(model, instance, m_Candidate.palette, m_Candidate.cutJoints, 0.0f, patch, source, &error)
-            && m_Patch.extracted.SetMesh(std::move(patch), &error))
-        {
-            m_Patch.source = std::move(source);
-            RebuildPatchPiece();
-            ClearPreview();     // the old dry-run was for another patch, even if this one failed to weld
-            m_Patch.statusText = L"Candidate patch: " + std::to_wstring(m_Patch.extracted.GetData().indices.size() / 3) + L" tris, joints";
-            for (uint32_t joint : m_Patch.source.joints)
-                m_Patch.statusText += L" " + std::to_wstring(joint);
-            m_Preview.previousPose.clear();
-            m_Patch.poseJointWorld = m_Patch.source.poseJointWorld;
-            m_Preview.dirty = true;
-        }
+        auto source = std::make_shared<BonePatchSource>();
+        WeldInput weldInput;
+        std::string error;
+        if (!ExtractBonePatch(*target->model, *target->instance, job.key.a, job.key.b, 0.0f, patch, *source, &error)
+            || !MakeWeldInput(patch, *source, weldInput, &error))
+            job.patchError = error;
         else
         {
-            DropPatch();
-            m_Patch.statusText = L"Candidate patch failed: " + Utility::UTF8ToWideString(error);
+            job.patchStatus = BuildPatchPiece(weldInput, kDefaultEpsilonScale, job.patch, job.weld, &job.patchError);
+            if (job.patchStatus == SliceStatus::Ok)
+            {
+                job.patchRadius = float(ComputePieceRadius(job.patch));
+                job.patchTriangles = uint32_t(patch.indices.size() / 3);
+                job.source.bone = source;
+                job.source.extractJoint = job.key.b;
+            }
         }
-        m_Candidate.extractMs = float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
-        ++m_Candidate.extractCount;
+        job.extractMs = ElapsedMs(start);
+        ++m_ExtractCount;
     }
 
-    // Runs once per frame after ModelInstance::Update. In debug mode the candidate patch follows the plane;
-    // the patch is skinned to the current pose; a requested cut or the preview runs on it; the confirmed
-    // pieces are skinned to the new pose (they stay when the patch is gone).
-    void CutController::Update(const Model& model, const ModelInstance& instance)
+    // 후보가 사라진 작업: 패치와 미리보기를 해제한다. 확정 결과와 출처는 남긴다.
+    void CutController::DropCandidate(CutJob& job)
     {
-        m_FramePoseValid = false;
-        if (m_PlaneEditing && m_PlaneValid)
-            UpdateCandidate(model, instance);
+        job.candidate = false;
+        job.extracted = false;
+        job.patch.Clear();
+        job.weld = WeldStats();
+        job.patchStatus = SliceStatus::InvalidInput;
+        job.patchError.clear();
+        job.patchTriangles = 0;
+        job.previousSkinMatrices.clear();
+        job.poseValid = false;
+        ClearPreview(job, ++m_Generation);
+    }
 
-        const bool havePatch = !m_Patch.piece.Empty() && m_Patch.status == SliceStatus::Ok;
-        if (!havePatch)
-            m_CutRequested = false;     // nothing to cut: do not keep the request for a later patch
-        if (!havePatch && !m_Confirmed.have)
-            return;
-        ScopedTimer _prof(L"Patch Pose Update");
-
-        std::string error;
-        int64_t skinTicks = 0;
-        const auto skin = [&](PatchPiece& piece, const std::vector<std::vector<DirectX::XMFLOAT4X4>>& matrices)
+    // 후보 패치와 확정 조각을 이번 자세로 옮긴다. 자세(스킨 행렬)가 바뀐 후보는 미리보기를 다시 계산하게 한다.
+    void CutController::SkinJobs()
+    {
+        for (auto& entry : m_Jobs)
         {
+            CutJob& job = entry.second;
+            job.poseValid = false;
+            job.skinError.clear();
+            const bool havePatch = job.candidate && job.patchStatus == SliceStatus::Ok && !job.patch.Empty() && job.source.bone;
+            if (!havePatch && !job.haveConfirmed)
+                continue;
+            const CutTarget* target = FindTarget(job.key.target);
+            if (target == nullptr || target->model == nullptr || !job.source.bone)
+            {
+                job.skinError = "no source";
+                continue;
+            }
+
+            std::string error;
+            if (!BuildSkinMatrices(*target->model, *target->instance, *job.source.bone, job.skinMatrices, &error))
+            {
+                job.skinError = error;
+                continue;
+            }
             const int64_t start = SystemTime::GetCurrentTick();
-            bool ok = false;
-            if (piece.skin)
-                ok = piece.skin->Apply(piece, matrices, nullptr, &error);
-            else
-                error = "piece has no skin";
-            skinTicks += SystemTime::GetCurrentTick() - start;
-            return ok;
-        };
-        uint32_t skinnedNodes = 0;
-        bool freshlyCut = false;
-
-        if (havePatch)
-        {
-            if (!BuildSkinMatrices(model, instance, m_Patch.source, m_Patch.skinMatrices, &error)
-                || !ComputePoseJointWorld(model, instance, m_Patch.source, m_Patch.poseJointWorld, &error))
+            bool ok = true;
+            if (havePatch)
             {
-                m_SkinError = error;
-                return;
-            }
-            if (!skin(m_Patch.piece, m_Patch.skinMatrices))
-            {
-                m_SkinError = error;
-                return;
-            }
-            skinnedNodes += uint32_t(m_Patch.piece.nodes.size());
-
-            // The preview is a dry-run of the current pose, so it is out of date when the animation moved.
-            const size_t poseBytes = m_Patch.poseJointWorld.size() * sizeof(Matrix4);
-            if (m_Preview.previousPose.size() != m_Patch.poseJointWorld.size()
-                || memcmp(m_Preview.previousPose.data(), m_Patch.poseJointWorld.data(), poseBytes) != 0)
-            {
-                m_Preview.previousPose = m_Patch.poseJointWorld;
-                m_Preview.dirty = true;
-            }
-
-            // One of: a confirmed cut (Enter), or a dry-run when something changed. Both read the patch
-            // skinned just above, so new pieces start in this pose.
-            if (m_CutRequested)
-            {
-                m_CutRequested = false;
-                if (m_PlaneValid)
-                    freshlyCut = ConfirmCut();      // a failed cut leaves the old pieces, which keep following below
-            }
-            else if (m_PlaneEditing && m_Preview.dirty && m_PlaneValid)
-                RunPreview();
-        }
-
-        if (m_Confirmed.have && !freshlyCut)
-        {
-            // Cut once, skinned every frame: same topology, new positions. The pieces use the skin slots of
-            // the patch they were cut from, which is not necessarily the current patch.
-            if (!BuildSkinMatrices(model, instance, m_Confirmed.source, m_Confirmed.skinMatrices, &error))
-            {
-                m_SkinError = error;
-                return;
-            }
-            PatchPiece* pieces[2] = { &m_Confirmed.positive, &m_Confirmed.negative };
-            for (PatchPiece* piece : pieces)
-            {
-                if (!skin(*piece, m_Confirmed.skinMatrices))
+                ok = job.patch.skin && job.patch.skin->Apply(job.patch, job.skinMatrices, nullptr, &error);
+                if (ok && !SameMatrices(job.previousSkinMatrices, job.skinMatrices))
                 {
-                    m_SkinError = error;
-                    return;
+                    job.previousSkinMatrices = job.skinMatrices;
+                    job.previewDirty = true;
                 }
-                skinnedNodes += uint32_t(piece->nodes.size());
             }
+            if (ok && job.haveConfirmed)
+            {
+                PatchPiece* pieces[2] = { &job.positive, &job.negative };
+                for (PatchPiece* piece : pieces)
+                    ok = ok && piece->skin && piece->skin->Apply(*piece, job.skinMatrices, nullptr, &error);
+            }
+            Smooth(job.skinMs, ElapsedMs(start));
+            if (!ok)
+            {
+                job.skinError = error.empty() ? "piece has no skin" : error;
+                continue;
+            }
+            job.poseValid = true;
         }
-        if (freshlyCut)
-            skinnedNodes += uint32_t(m_Confirmed.positive.nodes.size() + m_Confirmed.negative.nodes.size());
-
-        m_SkinError.clear();
-        m_SkinnedNodes = skinnedNodes;
-        const float ms = float(SystemTime::TimeBetweenTicks(0, skinTicks) * 1000.0);
-        m_SkinMs = m_SkinMs == 0.0f ? ms : m_SkinMs + (ms - m_SkinMs) * 0.1f;
-        m_FramePoseValid = true;
     }
 
-    // Puts the plane at the model's bounds center, normal world +Y (horizontal), half size radius / 2.
-    void CutController::PlacePlane(const ModelInstance& instance)
-    {
-        const Vector3 center = instance.GetCenter();
-        m_ModelRadius = float(instance.GetRadius());
-        if (!(m_ModelRadius > 0.0f))
-            m_ModelRadius = 1.0f;
-
-        const GizmoTool tool = m_Plane.GetGizmoTool();      // the tool the user chose stays
-        m_Plane = CutPlane::MakeHorizontal({ float(center.GetX()), float(center.GetY()), float(center.GetZ()) }, m_ModelRadius);
-        m_Plane.SetGizmoTool(tool);
-        m_PlaneValid = true;
-        m_Preview.dirty = true;
-    }
-
-    void CutController::ClearSlice()
-    {
-        m_CutRequested = false;
-        m_Confirmed.Clear();
-    }
-
-    void CutController::ClearPreview()
-    {
-        m_Preview.Clear();
-    }
-
-    SliceOptions CutController::MakeSliceOptions() const
+    // 무한 평면으로 자른 뒤, 모든 루프 점이 유한 사각형 안에 있어야 받아들인다. 실패하면 status와 detail만 채운다.
+    SliceStatus CutController::SliceWithPlane(const CutJob& job, SliceResult& result) const
     {
         SliceOptions options;
-        options.cap = CapMode::Create;     // the cap is always made
-        return options;
-    }
-
-    // The slicer cuts with the infinite plane; the rectangle only decides afterwards whether the cut is
-    // accepted: every loop point must lie inside it (with a small margin). On failure only status and
-    // detail are filled, like SlicePatch.
-    SliceStatus CutController::SliceWithPlane(SliceResult& result)
-    {
-        const SliceStatus status = SlicePatch(m_Patch.piece, m_Plane.ToSlicePlane(), 1, MakeSliceOptions(), result);
+        options.cap = CapMode::Create;
+        const SliceStatus status = SlicePatch(job.patch, m_Plane.ToSlicePlane(), 1, options, result);
         if (status != SliceStatus::Ok)
             return status;
 
+        const CutTarget* target = FindTarget(job.key.target);
+        const float margin = (target != nullptr ? target->radius : m_ModelRadius) * 0.01f;
         std::string detail;
-        if (!m_Plane.ContainsLoops(result.positive, result.loops, m_ModelRadius * 0.01f, &detail))
+        if (!m_Plane.ContainsLoops(result.positive, result.loops, margin, &detail))
         {
             result = SliceResult();
             result.status = SliceStatus::LoopOutsidePlane;
@@ -300,64 +450,99 @@ namespace MeshCutting
         return SliceStatus::Ok;
     }
 
-    // Dry-run of the current plane on the uncut patch. The result is only kept to be shown; the
-    // confirmed pieces are not touched.
-    void CutController::RunPreview()
+    // 현재 평면으로 미절단 패치를 시험 절단한다. 결과는 보여 주기만 하고 확정 조각은 건드리지 않는다.
+    void CutController::RunPreview(CutJob& job)
     {
-        m_Preview.dirty = false;
+        job.previewDirty = false;
         const int64_t start = SystemTime::GetCurrentTick();
-        m_Preview.status = SliceWithPlane(m_Preview.result);
-        const float ms = float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
-        m_Preview.ms = m_Preview.ms == 0.0f ? ms : m_Preview.ms + (ms - m_Preview.ms) * 0.1f;
-        m_Preview.have = true;
-        ++m_Preview.generation;
+        job.previewStatus = SliceWithPlane(job, job.preview);
+        Smooth(job.previewMs, ElapsedMs(start));
+        job.havePreview = true;
+        job.previewGeneration = ++m_Generation;
     }
 
-    // Cuts the uncut patch with the current plane (Enter). The pieces on screen are replaced only when
-    // the slice is Ok; otherwise the old pieces stay and the status says why. Either way the request is used up.
-    bool CutController::ConfirmCut()
+    // 후보 작업마다 독립으로 자른다. 성공한 작업만 확정 결과를 바꾸고, 실패한 작업은 이전 결과를 유지한다.
+    void CutController::ConfirmAll()
     {
-        m_Confirmed.attempted = true;
-        if (m_Patch.status != SliceStatus::Ok)
+        for (auto& entry : m_Jobs)
         {
-            m_Confirmed.status = m_Patch.status;
-            m_Confirmed.detail = m_Patch.detail;
-            m_Confirmed.info.clear();
-            return false;
-        }
-        const SlicePlane plane = m_Plane.ToSlicePlane();
+            CutJob& job = entry.second;
+            if (!job.candidate)
+                continue;
+            job.cutAttempted = true;
+            job.lastCutError.clear();
+            job.cutInfo.clear();
+            if (job.patchStatus != SliceStatus::Ok || !job.poseValid)
+            {
+                job.lastCutStatus = job.patchStatus != SliceStatus::Ok ? job.patchStatus : SliceStatus::InvalidInput;
+                job.lastCutError = job.patchStatus != SliceStatus::Ok ? job.patchError : job.skinError;
+                continue;
+            }
 
-        SliceResult result;
-        const int64_t start = SystemTime::GetCurrentTick();
-        m_Confirmed.status = SliceWithPlane(result);
-        m_Confirmed.ms = float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
-        m_Confirmed.detail = result.detail;
-        if (m_Confirmed.status != SliceStatus::Ok)
+            SliceResult result;
+            const int64_t start = SystemTime::GetCurrentTick();
+            job.lastCutStatus = SliceWithPlane(job, result);
+            job.cutMs = ElapsedMs(start);
+            job.lastCutError = result.detail;
+            if (job.lastCutStatus != SliceStatus::Ok)
+                continue;
+
+            job.confirmedNormal = m_Plane.ToSlicePlane().normal;
+            job.positive = result.positive;
+            job.negative = result.negative;
+            job.haveConfirmed = true;
+            job.confirmedGeneration = ++m_Generation;
+            ClearPreview(job, ++m_Generation);
+            job.previewDirty = false;
+
+            const double original = TotalArea(job.patch, PatchFaceKind::Surface);
+            const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
+            const double negative = TotalArea(result.negative, PatchFaceKind::Surface);
+            wchar_t info[200];
+            swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", result.loops.size(),
+                result.positive.faces.size(), result.negative.faces.size(), positive + negative - original);
+            job.cutInfo = info;
+        }
+    }
+
+    void CutController::Update()
+    {
+        ScopedTimer _prof(L"Patch Pose Update");
+        UpdateTargets();
+        if (m_PlaneEditing && m_PlaneValid)
+            UpdateCandidates();
+        else
+            ApplyDiff(DiffJobs(m_Jobs, {}), {});
+        SkinJobs();
+
+        if (m_CutRequested)
         {
-            m_Confirmed.info.clear();
-            return false;
+            m_CutRequested = false;
+            if (m_PlaneValid)
+                ConfirmAll();
         }
+        else if (m_PlaneEditing && m_PlaneValid)
+        {
+            for (auto& entry : m_Jobs)
+            {
+                CutJob& job = entry.second;
+                if (job.candidate && job.previewDirty && job.patchStatus == SliceStatus::Ok && job.poseValid)
+                    RunPreview(job);
+            }
+        }
+    }
 
-        m_Confirmed.shownNormal = plane.normal;
-        m_Confirmed.have = true;
-        // The pieces keep following the skin slots of this patch even after the candidate patch changes.
-        m_Confirmed.source = BonePatchSource();
-        m_Confirmed.source.paletteId = m_Patch.source.paletteId;
-        m_Confirmed.source.jointIndex = m_Patch.source.jointIndex;
-        m_Confirmed.source.joints = m_Patch.source.joints;
-        m_Confirmed.source.meshes = m_Patch.source.meshes;
-        m_Confirmed.positive = result.positive;
-        m_Confirmed.negative = result.negative;
-        ++m_Confirmed.generation;
-        ClearPreview();     // what the preview showed is now the result
+    // 모델 bounds 중심에 수평 평면을 놓는다 (반 크기 = 반지름 / 2).
+    void CutController::PlacePlane(const ModelInstance& instance)
+    {
+        const Vector3 center = instance.GetCenter();
+        m_ModelRadius = float(instance.GetRadius());
+        if (!(m_ModelRadius > 0.0f))
+            m_ModelRadius = 1.0f;
 
-        const double original = TotalArea(m_Patch.piece, PatchFaceKind::Surface);
-        const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
-        const double negative = TotalArea(result.negative, PatchFaceKind::Surface);
-        wchar_t info[200];
-        swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", result.loops.size(), result.positive.faces.size(),
-            result.negative.faces.size(), positive + negative - original);
-        m_Confirmed.info = info;
-        return true;
+        const GizmoTool tool = m_Plane.GetGizmoTool();      // 사용자가 고른 도구는 유지한다
+        m_Plane = CutPlane::MakeHorizontal({ float(center.GetX()), float(center.GetY()), float(center.GetZ()) }, m_ModelRadius);
+        m_Plane.SetGizmoTool(tool);
+        m_PlaneValid = true;
     }
 }

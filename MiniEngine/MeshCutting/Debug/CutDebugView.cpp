@@ -1,4 +1,4 @@
-#include "../pch.h"
+﻿#include "../pch.h"
 #include "CutDebugView.h"
 #include "../Runtime/CutController.h"
 #include "../Rendering/RenderBake.h"
@@ -32,19 +32,31 @@ namespace MeshCutting
                 mesh.SetMesh(std::move(data), &error);
         }
 
-        // The plane shows the status of the dry-run: green cuts, gray touches nothing, red fails.
+        // 평면 색은 후보 작업들의 시험 절단 상태를 합친 것이다. 초록: 자름, 회색: 아무것도 안 닿음, 빨강: 실패, 하늘색: 아직 계산 전.
         DirectX::XMFLOAT4 PlaneColor(const CutController& cut)
         {
-            if (cut.NoSegment())
-                return { 0.6f, 0.6f, 0.6f, 1.0f };
-            if (!cut.HasPreview())
-                return { 0.0f, 1.0f, 1.0f, 1.0f };
-            switch (cut.PreviewStatus())
+            bool anyCandidate = false, anyPreview = false, anyOk = false, anyFail = false;
+            for (const auto& entry : cut.GetJobs())
             {
-            case SliceStatus::Ok: return { 0.1f, 1.0f, 0.1f, 1.0f };
-            case SliceStatus::NoCut: return { 0.6f, 0.6f, 0.6f, 1.0f };
-            default: return { 1.0f, 0.15f, 0.15f, 1.0f };
+                const CutJob& job = entry.second;
+                if (!job.candidate)
+                    continue;
+                anyCandidate = true;
+                if (!job.havePreview)
+                    continue;
+                anyPreview = true;
+                if (job.previewStatus == SliceStatus::Ok)
+                    anyOk = true;
+                else if (job.previewStatus != SliceStatus::NoCut)
+                    anyFail = true;
             }
+            if (!anyCandidate)
+                return { 0.6f, 0.6f, 0.6f, 1.0f };
+            if (!anyPreview)
+                return { 0.0f, 1.0f, 1.0f, 1.0f };
+            if (anyFail)
+                return { 1.0f, 0.15f, 0.15f, 1.0f };
+            return anyOk ? DirectX::XMFLOAT4(0.1f, 1.0f, 0.1f, 1.0f) : DirectX::XMFLOAT4(0.6f, 0.6f, 0.6f, 1.0f);
         }
 
         // The cut plane as thin tubes: the rectangle border and a few cross lines in color, plus a white
@@ -119,82 +131,129 @@ namespace MeshCutting
         m_HaveGizmoView = true;
     }
 
-    void CutDebugView::Sync(const CutController& cut)
+
+    void CutDebugView::Sync(ProceduralMeshRenderer& renderer, const CutController& cut)
     {
         std::string error;
+        const std::map<CutJobKey, CutJob>& jobs = cut.GetJobs();
 
-        // The pieces were replaced (a new cut) or cleared, or the render mode changed how the sections are
-        // split: bake them again. Only the index order depends on the mode, so this never runs per frame.
-        const bool piecesChanged = cut.PieceGeneration() != m_PieceGeneration
-            || (cut.HasPieces() && m_BakedSectionSplit != SectionTint());
-        if (piecesChanged)
+        // 사라진 작업의 메시는 렌더러에 돌려준 뒤 지운다 (렌더러는 메시 주소로 GPU 버퍼를 기억한다).
+        for (auto it = m_JobMeshes.begin(); it != m_JobMeshes.end();)
         {
-            m_PieceGeneration = cut.PieceGeneration();
-            m_BakedSectionSplit = SectionTint();
-            if (!cut.HasPieces())
+            if (jobs.find(it->first) != jobs.end())
             {
-                m_PiecePositive.Clear();
-                m_PieceNegative.Clear();
-                m_PieceBoundaryPositive.Clear();
-                m_PieceBoundaryNegative.Clear();
+                ++it;
+                continue;
             }
-            else
+            renderer.ReleaseMesh(it->second.positive);
+            renderer.ReleaseMesh(it->second.negative);
+            renderer.ReleaseMesh(it->second.boundaryPositive);
+            renderer.ReleaseMesh(it->second.boundaryNegative);
+            renderer.ReleaseMesh(it->second.previewLoops);
+            it = m_JobMeshes.erase(it);
+        }
+
+        for (const auto& entry : jobs)
+        {
+            const CutJob& job = entry.second;
+            JobMeshes& meshes = m_JobMeshes[entry.first];
+
+            // 조각이 바뀌었거나(새 절단, 삭제) 렌더링 모드가 구역 분리를 바꿨으면 다시 굽는다.
+            const bool piecesChanged = job.confirmedGeneration != meshes.pieceGeneration
+                || (job.haveConfirmed && meshes.bakedSectionSplit != SectionSplit());
+            if (piecesChanged)
             {
-                const float tubeRadius = cut.PatchRadius() * 0.008f;
-                const auto bake = [&](const PatchPiece& piece, ProceduralMesh& mesh, ProceduralMesh& boundary)
+                meshes.pieceGeneration = job.confirmedGeneration;
+                meshes.bakedSectionSplit = SectionSplit();
+                if (!job.haveConfirmed)
                 {
-                    ProceduralMeshData data, tubes;
-                    RenderBakeOptions bakeOptions;
-                    bakeOptions.splitByOrigin = SectionTint();
-                    BuildRenderMesh(piece, data, bakeOptions);
-                    mesh.SetMesh(std::move(data), &error);
-                    BakeBoundaryDebug(piece, tubeRadius, tubes);
-                    if (tubes.indices.empty())
-                        boundary.Clear();
-                    else
-                        boundary.SetMesh(std::move(tubes), &error);
-                };
-                bake(cut.SlicedPositive(), m_PiecePositive, m_PieceBoundaryPositive);
-                bake(cut.SlicedNegative(), m_PieceNegative, m_PieceBoundaryNegative);
+                    meshes.positive.Clear();
+                    meshes.negative.Clear();
+                    meshes.boundaryPositive.Clear();
+                    meshes.boundaryNegative.Clear();
+                }
+                else
+                {
+                    const float tubeRadius = job.patchRadius * 0.008f;
+                    const auto bake = [&](const PatchPiece& piece, ProceduralMesh& mesh, ProceduralMesh& boundary)
+                    {
+                        ProceduralMeshData data, tubes;
+                        RenderBakeOptions bakeOptions;
+                        bakeOptions.splitByOrigin = SectionSplit();
+                        BuildRenderMesh(piece, data, bakeOptions);
+                        mesh.SetMesh(std::move(data), &error);
+                        BakeBoundaryDebug(piece, tubeRadius, tubes);
+                        if (tubes.indices.empty())
+                            boundary.Clear();
+                        else
+                            boundary.SetMesh(std::move(tubes), &error);
+                    };
+                    bake(job.positive, meshes.positive, meshes.boundaryPositive);
+                    bake(job.negative, meshes.negative, meshes.boundaryNegative);
+                }
+            }
+
+            // 시험 절단을 다시 했거나 지웠으면 평면이 어디를 자를지 루프만 보여 준다.
+            if (job.previewGeneration != meshes.previewGeneration)
+            {
+                meshes.previewGeneration = job.previewGeneration;
+                ProceduralMeshData loops;
+                if (job.havePreview && job.previewStatus == SliceStatus::Ok)
+                    BakeLoopDebug(job.preview.positive, job.preview.loops, job.patchRadius * 0.02f, GetJobColor(job.colorIndex), loops);
+                ReplaceOrUpdate(meshes.previewLoops, std::move(loops));
+            }
+
+            // 매 프레임 조각 위치만 갱신한다 (이번 프레임 스키닝이 끝난 작업만).
+            if (!job.poseValid || !job.haveConfirmed || piecesChanged)
+                continue;
+            const float tubeRadius = job.patchRadius * 0.008f;
+            const auto refreshTubes = [&](const PatchPiece& piece, ProceduralMesh& mesh)
+            {
+                ProceduralMeshData tubes;
+                BakeBoundaryDebug(piece, tubeRadius, tubes);
+                ReplaceOrUpdate(mesh, std::move(tubes));
+            };
+            const auto refreshSurface = [&](const PatchPiece& piece, ProceduralMesh& mesh)
+            {
+                std::vector<ProceduralVertex> vertices = mesh.GetData().vertices;
+                if (UpdateRenderPositions(piece, vertices))
+                    mesh.UpdateVertices(vertices, &error);
+            };
+            refreshSurface(job.positive, meshes.positive);
+            refreshSurface(job.negative, meshes.negative);
+            if (m_RenderMode == RenderMode::Debug)
+            {
+                refreshTubes(job.positive, meshes.boundaryPositive);
+                refreshTubes(job.negative, meshes.boundaryNegative);
             }
         }
 
-        // The dry-run was redone or cleared: show where the plane would cut. Only the loops are drawn.
-        if (cut.PreviewGeneration() != m_PreviewGeneration)
-        {
-            m_PreviewGeneration = cut.PreviewGeneration();
-            ProceduralMeshData loops;
-            if (cut.HasPreview() && cut.PreviewStatus() == SliceStatus::Ok)
-                BakeLoopDebug(cut.Preview().positive, cut.Preview().loops, cut.PatchRadius() * 0.012f,
-                    { 1.0f, 0.2f, 1.0f, 1.0f }, loops);
-            ReplaceOrUpdate(m_PreviewLoops, std::move(loops));
-        }
-
-        // The plane belongs to the world, not to the patch: it is rebuilt every frame while editing,
-        // even when there is no patch to cut.
+        // 평면은 패치가 아니라 월드에 속한다. 편집 중에는 자를 패치가 없어도 매 프레임 만든다.
         if (cut.PlaneEditing() && cut.PlaneValid())
         {
             ProceduralMeshData planeMesh;
-            BakePlaneDebug(cut.GetPlane().GetFrame(), cut.ModelRadius() * 0.006f, PlaneColor(cut), planeMesh);
+            BakePlaneDebug(cut.GetPlane().GetFrame(), cut.GetModelRadius() * 0.006f, PlaneColor(cut), planeMesh);
             ReplaceOrUpdate(m_PlaneDebug, std::move(planeMesh));
         }
         else if (!m_PlaneDebug.GetData().vertices.empty())
             m_PlaneDebug.Clear();
 
-        // The bone segments the plane crosses (yellow) and the crossing points (white crosses).
+        // 평면이 지나는 뼈 선분(노랑)과 교차점(흰 십자). 모든 후보 작업을 한 메시에 모은다.
         if (cut.PlaneEditing() && cut.PlaneValid())
         {
             ProceduralMeshData segments;
-            const float radius = cut.ModelRadius() * 0.01f;
-            const SkeletonPose& skeleton = cut.Skeleton();
-            for (const SegmentHit& hit : cut.Hits())
+            const float radius = cut.GetModelRadius() * 0.01f;
+            for (const auto& entry : jobs)
             {
-                if (hit.parentJoint >= skeleton.jointPositions.size() || hit.childJoint >= skeleton.jointPositions.size())
+                const CutJob& job = entry.second;
+                const SkeletonPose* skeleton = cut.FindSkeleton(job.key);
+                if (!job.candidate || skeleton == nullptr || job.hit.parentJoint >= skeleton->jointPositions.size()
+                    || job.hit.childJoint >= skeleton->jointPositions.size())
                     continue;
-                AppendDebugSegment(segments, skeleton.jointPositions[hit.parentJoint], skeleton.jointPositions[hit.childJoint],
+                AppendDebugSegment(segments, skeleton->jointPositions[job.hit.parentJoint], skeleton->jointPositions[job.hit.childJoint],
                     radius, { 1.0f, 0.85f, 0.1f, 1.0f });
                 const float arm = radius * 4.0f;
-                const DirectX::XMFLOAT3& p = hit.point;
+                const DirectX::XMFLOAT3& p = job.hit.point;
                 const DirectX::XMFLOAT4 white = { 1.0f, 1.0f, 1.0f, 1.0f };
                 AppendDebugSegment(segments, { p.x - arm, p.y, p.z }, { p.x + arm, p.y, p.z }, radius * 0.7f, white);
                 AppendDebugSegment(segments, { p.x, p.y - arm, p.z }, { p.x, p.y + arm, p.z }, radius * 0.7f, white);
@@ -207,7 +266,7 @@ namespace MeshCutting
         else if (!m_SegmentDebug.GetData().vertices.empty())
             m_SegmentDebug.Clear();
 
-        // The gizmo follows the plane; it is rebuilt every frame because its size depends on the camera.
+        // 기즈모는 평면을 따라가고, 크기가 카메라에 따라 달라서 매 프레임 만든다.
         if (m_HaveGizmoView && cut.GetPlane().GetGizmoTool() != GizmoTool::Hidden && cut.PlaneEditing() && cut.PlaneValid())
         {
             ProceduralMeshData gizmo;
@@ -216,53 +275,24 @@ namespace MeshCutting
         }
         else if (!m_GizmoMesh.GetData().vertices.empty())
             m_GizmoMesh.Clear();
-
-        // Per-frame position refresh of the pieces (only when the controller reached the end of its update).
-        if (!cut.FramePoseValid() || !cut.HasPieces() || piecesChanged)
-            return;
-        const float tubeRadius = cut.PatchRadius() * 0.008f;
-        const auto refreshTubes = [&](const PatchPiece& piece, ProceduralMesh& mesh)
-        {
-            ProceduralMeshData tubes;
-            BakeBoundaryDebug(piece, tubeRadius, tubes);
-            ReplaceOrUpdate(mesh, std::move(tubes));
-        };
-        const auto refreshSurface = [&](const PatchPiece& piece, ProceduralMesh& mesh)
-        {
-            std::vector<ProceduralVertex> vertices = mesh.GetData().vertices;
-            if (UpdateRenderPositions(piece, vertices))
-                mesh.UpdateVertices(vertices, &error);
-        };
-        refreshSurface(cut.SlicedPositive(), m_PiecePositive);
-        refreshSurface(cut.SlicedNegative(), m_PieceNegative);
-        if (m_RenderMode == RenderMode::Debug)
-        {
-            refreshTubes(cut.SlicedPositive(), m_PieceBoundaryPositive);
-            refreshTubes(cut.SlicedNegative(), m_PieceBoundaryNegative);
-        }
     }
 
     void CutDebugView::Draw(GraphicsContext& context, ProceduralMeshRenderer& renderer, const CutController& cut,
-        const Matrix4& viewProj, float modelRadius, const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor)
+        const Matrix4& viewProj, const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor)
     {
-        Sync(cut);
+        Sync(renderer, cut);
 
-        // The cut pieces are drawn beside the character (shifted by the model radius along X) and pulled
-        // apart along the plane normal, so the cut can be seen.
         ProceduralMeshRenderer::DrawOptions pieceOptions;
         pieceOptions.cull = ProceduralMeshRenderer::CullMode::TwoSided;
-        pieceOptions.sectionTint = SectionTint();
         const auto draw = [&](const ProceduralMesh& mesh, const Matrix4& world,
             const ProceduralMeshRenderer::DrawOptions& options = ProceduralMeshRenderer::DrawOptions())
         {
             renderer.Draw(context, mesh, world, viewProj, Graphics::g_SceneColorBuffer, Graphics::g_SceneDepthBuffer,
                 viewport, scissor, options);
         };
-        // Pieces follow the render mode: solid, solid with dark lines on top, or light lines only (Debug
-        // adds the section colors and the boundary tubes). Dark lines read on the solid fill; over the
-        // dark scene they need to be light.
+        // 조각은 렌더링 모드를 따른다: Solid, Solid + 어두운 선, 밝은 선만(Wire). Debug는 선 색이 작업 색이다.
         const auto drawSurface = [&](const ProceduralMesh& mesh, const Matrix4& world,
-            const ProceduralMeshRenderer::DrawOptions& options)
+            const ProceduralMeshRenderer::DrawOptions& options, const DirectX::XMFLOAT4& jobColor)
         {
             const bool wireOnly = m_RenderMode == RenderMode::Wire || m_RenderMode == RenderMode::Debug;
             if (!wireOnly)
@@ -271,36 +301,45 @@ namespace MeshCutting
             {
                 ProceduralMeshRenderer::DrawOptions wireOptions = options;
                 wireOptions.fill = ProceduralMeshRenderer::FillMode::Wireframe;
-                wireOptions.wireColor = wireOnly ? DirectX::XMFLOAT4(0.9f, 0.95f, 1.0f, 1.0f)
-                    : DirectX::XMFLOAT4(0.05f, 0.05f, 0.05f, 1.0f);
+                wireOptions.wireColor = m_RenderMode == RenderMode::Debug ? jobColor
+                    : (wireOnly ? DirectX::XMFLOAT4(0.9f, 0.95f, 1.0f, 1.0f) : DirectX::XMFLOAT4(0.05f, 0.05f, 0.05f, 1.0f));
                 draw(mesh, world, wireOptions);
             }
         };
 
-        if (cut.HasPieces())
+        // 조각은 대상 옆(대상 반지름만큼 X로 이동)에 두고 평면 법선으로 벌려서 절단을 볼 수 있게 한다.
+        // 형제 작업은 같은 결과를 그대로 두 번 그린다.
+        for (const auto& entry : cut.GetJobs())
         {
-            const float gap = cut.PatchRadius() * 0.05f;
-            const DirectX::XMFLOAT3& n = cut.ShownNormal();
+            const CutJob& job = entry.second;
+            const auto found = m_JobMeshes.find(entry.first);
+            if (!job.haveConfirmed || found == m_JobMeshes.end())
+                continue;
+            const JobMeshes& meshes = found->second;
+            const CutTarget* target = cut.FindTarget(job.key.target);
+            const float gap = job.patchRadius * 0.05f;
+            const DirectX::XMFLOAT3& n = job.confirmedNormal;
             const Vector3 shift = Vector3(n.x, n.y, n.z) * gap;
-            const Vector3 offset(modelRadius, 0.0f, 0.0f);
+            const Vector3 offset(target != nullptr ? target->radius : 0.0f, 0.0f, 0.0f);
             const Matrix4 positiveWorld(AffineTransform::MakeTranslation(offset + shift));
             const Matrix4 negativeWorld(AffineTransform::MakeTranslation(offset - shift));
-            drawSurface(m_PiecePositive, positiveWorld, pieceOptions);
-            drawSurface(m_PieceNegative, negativeWorld, pieceOptions);
+            const DirectX::XMFLOAT4 color = GetJobColor(job.colorIndex);
+            drawSurface(meshes.positive, positiveWorld, pieceOptions, color);
+            drawSurface(meshes.negative, negativeWorld, pieceOptions, color);
             if (m_RenderMode == RenderMode::Debug)
             {
-                draw(m_PieceBoundaryPositive, positiveWorld);
-                draw(m_PieceBoundaryNegative, negativeWorld);
+                draw(meshes.boundaryPositive, positiveWorld);
+                draw(meshes.boundaryNegative, negativeWorld);
             }
         }
 
-        // The plane, the expected loops, the crossed bone segments and the gizmo are in world space:
-        // draw them on the character. The gizmo ignores the depth buffer so it is never hidden.
+        // 평면, 예상 루프, 교차 선분, 기즈모는 월드 공간이라 캐릭터 위에 그린다. 기즈모는 깊이를 무시해서 가려지지 않는다.
         if (cut.PlaneEditing())
         {
             const Matrix4 worldIdentity(kIdentity);
             draw(m_PlaneDebug, worldIdentity);
-            draw(m_PreviewLoops, worldIdentity);
+            for (const auto& entry : m_JobMeshes)
+                draw(entry.second.previewLoops, worldIdentity);
             draw(m_SegmentDebug, worldIdentity);
             ProceduralMeshRenderer::DrawOptions overlay;
             overlay.depthTest = false;
@@ -308,42 +347,68 @@ namespace MeshCutting
         }
     }
 
-    void CutDebugView::DrawUI(TextContext& text, const CutController& cut, const std::function<std::wstring(uint32_t)>& jointName) const
+    void CutDebugView::DrawUI(TextContext& text, const CutController& cut, const JointNameFunction& jointName) const
     {
         text.DrawFormattedString(L"Debug mode %ls (T)   Tool: %ls (W/E/R/Q)   Render: %ls (V)\n",
             cut.PlaneEditing() ? L"ON" : L"off", ToolName(cut.GetPlane().GetGizmoTool()), RenderModeName(m_RenderMode));
 
+        const CutFrameStats stats = cut.GetFrameStats();
         if (cut.PlaneEditing())
         {
-            // What the plane crosses, the joints that will be cut (the weight view shows the first), and the
-            // time the candidate patch took.
-            std::wstring joints;
-            for (uint32_t joint : cut.CutJoints())
-                joints += L" " + std::to_wstring(joint) + L"(" + jointName(joint) + L")";
-            text.DrawFormattedString(L"Cut joints:%ls\n",
-                joints.empty() ? L" none (no bone segment crosses the plane)" : joints.c_str());
-            text.DrawFormattedString(L"Candidate patch %.3f ms (%u extractions)   follow %.3f ms\n", cut.ExtractMs(),
-                cut.ExtractCount(), cut.SkinMs());
-            if (!cut.CandidateError().empty())
-                text.DrawFormattedString(L"%ls\n", cut.CandidateError().c_str());
-            else if (cut.PatchStatus() != SliceStatus::Ok && !cut.CutJoints().empty())
-                text.DrawFormattedString(L"%ls %ls\n", cut.PatchStatusText().c_str(),
-                    Utility::UTF8ToWideString(cut.PatchDetail().substr(0, 100)).c_str());
-
-            if (cut.HasPreview())
-            {
-                text.DrawFormattedString(L"Preview: %hs   loops %zu   %.3f ms\n", SliceStatusName(cut.PreviewStatus()),
-                    cut.Preview().loops.size(), cut.PreviewMs());
-                if (cut.PreviewStatus() != SliceStatus::Ok && !cut.Preview().detail.empty())
-                    text.DrawFormattedString(L"  %ls\n", Utility::UTF8ToWideString(cut.Preview().detail.substr(0, 120)).c_str());
-            }
+            text.DrawFormattedString(L"Jobs %u (candidates %u, confirmed %u)   extract %.3f ms (%u extractions)   follow %.3f ms   preview %.3f ms   cut %.3f ms\n",
+                stats.jobs, stats.candidates, stats.confirmed, stats.extractMs, stats.extractCount, stats.skinMs, stats.previewMs, stats.cutMs);
+            for (const CutTarget& target : cut.GetTargets())
+                if (!target.error.empty())
+                    text.DrawFormattedString(L"[%ls] %ls\n", target.name.c_str(), target.error.c_str());
+            if (stats.candidates == 0)
+                text.DrawFormattedString(L"No bone segment crosses the plane\n");
         }
-        if (cut.CutAttempted())
+
+        for (const auto& entry : cut.GetJobs())
         {
-            text.DrawFormattedString(L"Cut: %hs   %ls   %.3f ms\n", SliceStatusName(cut.LastSliceStatus()),
-                cut.SliceInfo().c_str(), cut.CutMs());
-            if (cut.LastSliceStatus() != SliceStatus::Ok && !cut.LastSliceDetail().empty())
-                text.DrawFormattedString(L"  %ls\n", Utility::UTF8ToWideString(cut.LastSliceDetail().substr(0, 120)).c_str());
+            const CutJob& job = entry.second;
+            if (!cut.PlaneEditing() && !job.haveConfirmed && !job.cutAttempted)
+                continue;
+            const CutTarget* target = cut.FindTarget(job.key.target);
+            const std::wstring targetName = target != nullptr ? target->name : L"?";
+            std::wstring line = L"#" + std::to_wstring(job.colorIndex + 1) + L" [" + targetName + L"] pal " + std::to_wstring(job.key.a)
+                + L"  " + std::to_wstring(job.key.b) + L"(" + jointName(job.key.target, job.key.a, job.key.b) + L") -> "
+                + std::to_wstring(job.key.c) + L"(" + jointName(job.key.target, job.key.a, job.key.c) + L")";
+            if (job.candidate)
+            {
+                line += L"  " + std::to_wstring(job.patchTriangles) + L" tris";
+                if (job.havePreview)
+                    line += L"  preview " + Utility::UTF8ToWideString(SliceStatusName(job.previewStatus));
+            }
+            if (job.cutAttempted)
+                line += L"  cut " + Utility::UTF8ToWideString(SliceStatusName(job.lastCutStatus));
+            else if (job.haveConfirmed)
+                line += L"  cut Ok";
+            if (!job.candidate)
+                line += L"  (not under the plane)";
+            for (const auto& other : cut.GetJobs())
+                if (other.second.colorIndex < job.colorIndex && other.first.target == job.key.target && other.first.kind == job.key.kind
+                    && other.first.a == job.key.a && other.first.b == job.key.b)
+                {
+                    line += L"  same parent joint as #" + std::to_wstring(other.second.colorIndex + 1);
+                    break;
+                }
+            text.DrawFormattedString(L"%ls\n", line.c_str());
+
+            const auto detail = [&](const std::string& message)
+            {
+                if (!message.empty())
+                    text.DrawFormattedString(L"    %ls\n", Utility::UTF8ToWideString(message.substr(0, 110)).c_str());
+            };
+            if (job.candidate && job.patchStatus != SliceStatus::Ok)
+                detail(job.patchError);
+            detail(job.skinError);
+            if (job.candidate && job.havePreview && job.previewStatus != SliceStatus::Ok)
+                detail(job.preview.detail);
+            if (job.cutAttempted && job.lastCutStatus != SliceStatus::Ok)
+                detail(job.lastCutError);
+            else if (job.haveConfirmed && !job.cutInfo.empty())
+                text.DrawFormattedString(L"    %ls   %.3f ms\n", job.cutInfo.c_str(), job.cutMs);
         }
 
         text.DrawFormattedString(L"Space: animation   T: debug mode   V: render mode   Enter: cut   Ctrl+Z: undo cut   W/E/R/Q: gizmo tool\n");
@@ -352,12 +417,16 @@ namespace MeshCutting
 
     void CutDebugView::Release(ProceduralMeshRenderer& renderer)
     {
-        renderer.ReleaseMesh(m_PiecePositive);
-        renderer.ReleaseMesh(m_PieceNegative);
-        renderer.ReleaseMesh(m_PieceBoundaryPositive);
-        renderer.ReleaseMesh(m_PieceBoundaryNegative);
+        for (auto& entry : m_JobMeshes)
+        {
+            renderer.ReleaseMesh(entry.second.positive);
+            renderer.ReleaseMesh(entry.second.negative);
+            renderer.ReleaseMesh(entry.second.boundaryPositive);
+            renderer.ReleaseMesh(entry.second.boundaryNegative);
+            renderer.ReleaseMesh(entry.second.previewLoops);
+        }
+        m_JobMeshes.clear();
         renderer.ReleaseMesh(m_PlaneDebug);
-        renderer.ReleaseMesh(m_PreviewLoops);
         renderer.ReleaseMesh(m_SegmentDebug);
         renderer.ReleaseMesh(m_GizmoMesh);
     }

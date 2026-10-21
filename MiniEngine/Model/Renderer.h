@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -88,17 +88,12 @@ namespace Renderer
 			m_CurrentDraw = 0;
             m_WeightDebug = false;
             m_Wireframe = false;
-            m_SelectedStartJoint = UINT32_MAX;
-            m_SelectedJointIndex = UINT32_MAX;
 		}
 
 		void SetCamera( const BaseCamera& camera ) { m_Camera = &camera; }
-        void SetBoneDebug(bool enabled, uint32_t startJoint, uint32_t jointIndex)
-        {
-            m_WeightDebug = enabled;
-            m_SelectedStartJoint = startJoint;
-            m_SelectedJointIndex = jointIndex;
-        }
+        // 웨이트 뷰: 켜면 정점 색이 Σ(가중치 × joint 색)이 된다. 색 표는 팔레트(startJoint)별이고, 표가 없는 팔레트의 joint는 회색이다.
+        void SetWeightDebug(bool enabled) { m_WeightDebug = enabled; }
+        void SetJointColors(uint32_t startJoint, const DirectX::XMFLOAT4* colors, uint32_t count);
         void SetWireframe(bool enabled) { m_Wireframe = enabled; }
 		void SetViewport( const D3D12_VIEWPORT& viewport ) { m_Viewport = viewport; }
 		void SetScissor( const D3D12_RECT& scissor ) { m_Scissor = scissor; }
@@ -157,8 +152,13 @@ namespace Renderer
         uint32_t m_CurrentDraw;
         bool m_WeightDebug;
         bool m_Wireframe;
-        uint32_t m_SelectedStartJoint;
-        uint32_t m_SelectedJointIndex;
+        struct JointColorTable
+        {
+            uint32_t startJoint;
+            std::vector<DirectX::XMFLOAT4> colors;
+        };
+        std::vector<JointColorTable> m_JointColorTables;        // 웨이트 뷰의 팔레트별 joint 색 표
+        void FillJointColors(GlobalConstants& globals, uint32_t startJoint) const;
 
 		const BaseCamera* m_Camera;
 		D3D12_VIEWPORT m_Viewport;

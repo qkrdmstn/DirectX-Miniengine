@@ -51,6 +51,9 @@
     <ClInclude Include="Runtime\CutController.h">
       <Filter>Runtime</Filter>
     </ClInclude>
+    <ClInclude Include="Runtime\CutJob.h">
+      <Filter>Runtime</Filter>
+    </ClInclude>
     <ClInclude Include="Geometry\SliceTypes.h">
       <Filter>Geometry</Filter>
     </ClInclude>

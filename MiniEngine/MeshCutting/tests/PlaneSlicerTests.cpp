@@ -12,6 +12,7 @@
 #include "../Geometry/Skinning.h"
 #include "../Geometry/Slice.h"
 #include "../Rendering/RenderBake.h"
+#include "../Runtime/CutJob.h"
 #include "../ProceduralMesh.h"
 
 #include <algorithm>
@@ -2515,6 +2516,118 @@ static void TestSkinRefusesBadInput()
 
 // ---------------------------------------------------------------- main
 
+// ---------------------------------------------------------------- cut job tests (Runtime/CutJob.h)
+
+static CutJob CandidateJob(const CutJobKey& key)
+{
+    CutJob job;
+    job.key = key;
+    job.candidate = true;
+    return job;
+}
+
+static std::map<CutJobKey, CutJob> MakeJobs(const std::vector<CutJobKey>& candidates, const std::vector<CutJobKey>& confirmedOnly)
+{
+    std::map<CutJobKey, CutJob> jobs;
+    for (const CutJobKey& key : candidates)
+        jobs[key] = CandidateJob(key);
+    for (const CutJobKey& key : confirmedOnly)
+    {
+        CutJob job;
+        job.key = key;
+        job.haveConfirmed = true;
+        jobs[key] = job;
+    }
+    return jobs;
+}
+
+static void TestCutJobKey()
+{
+    // 같은 부모의 형제 선분은 자식 joint로 구분된다.
+    const CutJobKey torsoNeck = MakeSegmentKey(1, 0, 2, 3);
+    const CutJobKey torsoLeftArm = MakeSegmentKey(1, 0, 2, 5);
+    const CutJobKey torsoRightArm = MakeSegmentKey(1, 0, 2, 6);
+    CHECK(!(torsoNeck == torsoLeftArm) && !(torsoLeftArm == torsoRightArm));
+    CHECK(torsoNeck < torsoLeftArm && torsoLeftArm < torsoRightArm && !(torsoRightArm < torsoNeck));
+    CHECK(torsoNeck == MakeSegmentKey(1, 0, 2, 3) && !(torsoNeck < MakeSegmentKey(1, 0, 2, 3)));
+
+    // 대상, 팔레트, 부모 joint가 다르면 다른 작업이다. 대상이 가장 먼저 비교된다.
+    CHECK(!(MakeSegmentKey(1, 0, 2, 3) == MakeSegmentKey(2, 0, 2, 3)));
+    CHECK(MakeSegmentKey(1, 9, 9, 9) < MakeSegmentKey(2, 0, 0, 0));
+    CHECK(MakeSegmentKey(1, 0, 9, 9) < MakeSegmentKey(1, 1, 0, 0));
+    CHECK(MakeSegmentKey(1, 0, 2, 9) < MakeSegmentKey(1, 0, 3, 0));
+    CHECK(!(MakeSegmentKey(1, 0, 2, 3) == MakeSegmentKey(1, 1, 2, 3)) && !(MakeSegmentKey(1, 0, 2, 3) == MakeSegmentKey(1, 0, 4, 3)));
+
+    // 종류가 다르면 다른 작업이고, 스태틱 메시 key는 메시 번호만 쓴다.
+    const CutJobKey mesh = MakeStaticMeshKey(1, 4);
+    CHECK(mesh.kind == CutJobKind::StaticMesh && mesh.a == 4 && mesh.b == kNoNode && mesh.c == kNoNode);
+    CHECK(!(mesh == MakeSegmentKey(1, 4, kNoNode, kNoNode)));
+    CHECK(MakeSegmentKey(1, 9, 9, 9) < mesh);
+    CHECK(mesh == MakeStaticMeshKey(1, 4) && !(mesh == MakeStaticMeshKey(1, 5)) && !(mesh == MakeStaticMeshKey(2, 4)));
+
+    // std::map에서 같은 key는 하나로 합쳐지고 순서는 사전식이다.
+    std::map<CutJobKey, int> ordered;
+    ordered[torsoRightArm] = 3;
+    ordered[torsoNeck] = 1;
+    ordered[torsoLeftArm] = 2;
+    ordered[MakeSegmentKey(1, 0, 2, 3)] = 10;
+    CHECK(ordered.size() == 3 && ordered.begin()->first == torsoNeck && ordered.begin()->second == 10);
+    CHECK(ordered.rbegin()->first == torsoRightArm);
+}
+
+static void TestDiffJobs()
+{
+    const CutJobKey a = MakeSegmentKey(1, 0, 2, 3), b = MakeSegmentKey(1, 0, 2, 5), c = MakeSegmentKey(1, 0, 4, 5);
+    const CutJobKey d = MakeSegmentKey(2, 0, 1, 2);
+
+    // 작업이 하나도 없으면 이번 key가 모두 새 작업이다 (들어온 순서).
+    CutJobDiff diff = DiffJobs(MakeJobs({}, {}), { c, a });
+    CHECK(diff.added.size() == 2 && diff.added[0] == c && diff.added[1] == a && diff.lost.empty() && diff.kept.empty());
+
+    // 계속 후보인 작업은 kept, 새 key는 added, 사라진 후보는 lost.
+    diff = DiffJobs(MakeJobs({ a, b }, {}), { b, c });
+    CHECK(diff.kept.size() == 1 && diff.kept[0] == b);
+    CHECK(diff.added.size() == 1 && diff.added[0] == c);
+    CHECK(diff.lost.size() == 1 && diff.lost[0] == a);
+
+    // 확정 결과만 남은 작업은 후보가 아니므로 lost가 아니다. 다시 나타나면 패치를 다시 만들어야 해서 added다.
+    diff = DiffJobs(MakeJobs({ a }, { b }), { a });
+    CHECK(diff.kept.size() == 1 && diff.lost.empty() && diff.added.empty());
+    diff = DiffJobs(MakeJobs({ a }, { b }), { a, b });
+    CHECK(diff.kept.size() == 1 && diff.kept[0] == a && diff.added.size() == 1 && diff.added[0] == b && diff.lost.empty());
+
+    // 교차 선분이 하나도 없으면 후보였던 작업이 모두 lost다 (key 순서).
+    diff = DiffJobs(MakeJobs({ d, b, a }, { c }), {});
+    CHECK(diff.lost.size() == 3 && diff.lost[0] == a && diff.lost[1] == b && diff.lost[2] == d && diff.added.empty() && diff.kept.empty());
+
+    // 같은 key가 두 번 들어와도 한 번만 센다. 대상이 다르면 다른 key다.
+    diff = DiffJobs(MakeJobs({ a }, {}), { a, a, d, d });
+    CHECK(diff.kept.size() == 1 && diff.added.size() == 1 && diff.added[0] == d && diff.lost.empty());
+}
+
+static void TestJobColors()
+{
+    // 8색이 돌아가며 쓰이고, 이웃한 번호의 색은 서로 다르다.
+    for (uint32_t i = 0; i < kJobColorCount; ++i)
+    {
+        const XMFLOAT4 color = GetJobColor(i);
+        const XMFLOAT4 next = GetJobColor(i + 1);
+        CHECK(color.w == 1.0f && (color.x != next.x || color.y != next.y || color.z != next.z));
+        CHECK(GetJobColor(i + kJobColorCount).x == color.x && GetJobColor(i + 5 * kJobColorCount).z == color.z);
+    }
+    // 8색 모두 서로 다르다.
+    for (uint32_t i = 0; i < kJobColorCount; ++i)
+        for (uint32_t j = i + 1; j < kJobColorCount; ++j)
+        {
+            const XMFLOAT4 p = GetJobColor(i), q = GetJobColor(j);
+            CHECK(p.x != q.x || p.y != q.y || p.z != q.z);
+        }
+    // 작업이 만들어질 때 기본 상태.
+    const CutJob job;
+    CHECK(!job.candidate && !job.haveConfirmed && job.colorIndex == 0 && job.previewDirty && job.source.bone == nullptr);
+}
+
+
 int main()
 {
     TestWeldBox();
@@ -2585,6 +2698,10 @@ int main()
     TestSkinAfterTwoCuts();
     TestSkinningShared();
     TestSkinRefusesBadInput();
+
+    TestCutJobKey();
+    TestDiffJobs();
+    TestJobColors();
 
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures;

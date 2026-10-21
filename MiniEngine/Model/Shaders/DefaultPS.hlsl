@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -49,7 +49,7 @@ cbuffer GlobalConstants : register(b1)
     float _pad;
     float IBLRange;
     float IBLBias;
-    uint DebugJointIndex;
+    uint Reserved;
     uint WeightDebugEnabled;
 }
 
@@ -66,7 +66,7 @@ struct VSOutput
 #endif
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
-    float influence : TEXCOORD4;
+    float3 weightColor : TEXCOORD4;     // 웨이트 뷰의 정점 색
 };
 
 // Numeric constants
@@ -246,16 +246,7 @@ float3 ComputeNormal(VSOutput vsOutput)
 float4 main(VSOutput vsOutput) : SV_Target0
 {
     if (WeightDebugEnabled != 0)
-    {
-        float influence = saturate(vsOutput.influence);
-        float3 blue = float3(0.0, 0.2, 1.0);
-        float3 yellow = float3(1.0, 1.0, 0.0);
-        float3 red = float3(1.0, 0.0, 0.0);
-        float3 color = influence < 0.5
-            ? lerp(blue, yellow, influence * 2.0)
-            : lerp(yellow, red, (influence - 0.5) * 2.0);
-        return float4(influence > 0.0 ? color : float3(0.1, 0.1, 0.1), 1.0);
-    }
+        return float4(vsOutput.weightColor, 1.0);
 
     // Load and modulate textures
     float4 baseColor = baseColorFactor * baseColorTexture.Sample(baseColorSampler, UVSET(BASECOLOR));

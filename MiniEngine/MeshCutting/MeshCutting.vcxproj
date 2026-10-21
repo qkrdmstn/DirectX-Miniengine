@@ -149,6 +149,7 @@
     <ClInclude Include="Debug\CutDebugView.h" />
     <ClInclude Include="Debug\SceneViewCamera.h" />
     <ClInclude Include="Runtime\CutController.h" />
+    <ClInclude Include="Runtime\CutJob.h" />
     <ClInclude Include="Geometry\SliceTypes.h" />
     <ClInclude Include="Geometry\Patch.h" />
     <ClInclude Include="Geometry\Slice.h" />
