@@ -45,6 +45,12 @@
     <ClInclude Include="Debug\CutDebugView.h">
       <Filter>Debug</Filter>
     </ClInclude>
+    <ClInclude Include="Debug\PlaneGizmo.h">
+      <Filter>Debug</Filter>
+    </ClInclude>
+    <ClInclude Include="Debug\SceneViewCamera.h">
+      <Filter>Debug</Filter>
+    </ClInclude>
     <ClInclude Include="Runtime\CutController.h">
       <Filter>Runtime</Filter>
     </ClInclude>
@@ -90,6 +96,12 @@
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="Debug\CutDebugView.cpp">
+      <Filter>Debug</Filter>
+    </ClCompile>
+    <ClCompile Include="Debug\PlaneGizmo.cpp">
+      <Filter>Debug</Filter>
+    </ClCompile>
+    <ClCompile Include="Debug\SceneViewCamera.cpp">
       <Filter>Debug</Filter>
     </ClCompile>
     <ClCompile Include="Runtime\CutController.cpp">

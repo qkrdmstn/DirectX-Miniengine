@@ -29,7 +29,8 @@ namespace MeshCutting
         m_Pso(L"Procedural Mesh Color"),
         m_PsoBackCull(L"Procedural Mesh Color Back Cull"),
         m_PsoWire(L"Procedural Mesh Wire"),
-        m_PsoWireBackCull(L"Procedural Mesh Wire Back Cull")
+        m_PsoWireBackCull(L"Procedural Mesh Wire Back Cull"),
+        m_PsoNoDepth(L"Procedural Mesh No Depth")
     {
     }
 
@@ -89,6 +90,11 @@ namespace MeshCutting
         m_PsoWireBackCull = m_Pso;
         m_PsoWireBackCull.SetRasterizerState(wireBackCull);
         m_PsoWireBackCull.SetDepthStencilState(DepthStateReadOnly);
+
+        // Overlay (gizmo): no depth buffer at all, so it is always on top of the meshes. DepthStateDisabled needs
+        // a PSO whose depth format is unknown (GraphicsPSO::Finalize asserts it); see Draw.
+        m_PsoNoDepth = m_Pso;
+        m_PsoNoDepth.SetDepthStencilState(DepthStateDisabled);
         m_Initialized = true;
     }
 
@@ -168,6 +174,8 @@ namespace MeshCutting
             m_PsoWire.Finalize();
             m_PsoWireBackCull.SetRenderTargetFormat(m_ColorFormat, m_DepthFormat);
             m_PsoWireBackCull.Finalize();
+            m_PsoNoDepth.SetRenderTargetFormat(m_ColorFormat, DXGI_FORMAT_UNKNOWN);    // no depth buffer bound
+            m_PsoNoDepth.Finalize();
             m_PsoFinalized = true;
         }
         const ProceduralMeshData& data = mesh.GetData();
@@ -203,13 +211,24 @@ namespace MeshCutting
         context.TransitionResource(gpu.vertices->resource, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
         context.TransitionResource(gpu.indices->resource, D3D12_RESOURCE_STATE_INDEX_BUFFER);
         context.TransitionResource(color, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        context.TransitionResource(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
-        context.SetRenderTarget(color.GetRTV(), depth.GetDSV());
-        context.SetViewportAndScissor(viewport, scissor);
-        context.SetRootSignature(m_RootSignature);
         const bool wire = options.fill == FillMode::Wireframe;
         const bool backCull = options.cull == CullMode::Back;
-        context.SetPipelineState(wire ? (backCull ? m_PsoWireBackCull : m_PsoWire) : (backCull ? m_PsoBackCull : m_Pso));
+        // An overlay (no depth test) is drawn without a depth buffer bound: the engine only accepts a PSO with
+        // DepthStateDisabled when its depth format is unknown.
+        const bool noDepth = !options.depthTest && !wire;
+        if (noDepth)
+            context.SetRenderTarget(color.GetRTV());
+        else
+        {
+            context.TransitionResource(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
+            context.SetRenderTarget(color.GetRTV(), depth.GetDSV());
+        }
+        context.SetViewportAndScissor(viewport, scissor);
+        context.SetRootSignature(m_RootSignature);
+        if (noDepth)
+            context.SetPipelineState(m_PsoNoDepth);
+        else
+            context.SetPipelineState(wire ? (backCull ? m_PsoWireBackCull : m_PsoWire) : (backCull ? m_PsoBackCull : m_Pso));
         context.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         struct alignas(16) Transforms { Math::Matrix4 world; Math::Matrix4 viewProj; };
         const Transforms transforms{ world, viewProj };

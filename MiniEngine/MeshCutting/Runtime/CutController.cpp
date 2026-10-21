@@ -9,46 +9,6 @@ using namespace Math;
 
 namespace MeshCutting
 {
-    bool CutController::SetPatch(const Model& model, const ModelInstance& instance, uint32_t paletteId, uint32_t jointIndex)
-    {
-        if (m_PlaneEditing)
-        {
-            m_Patch.statusText = L"Leave cut mode (T) to copy a joint patch with C";
-            return false;
-        }
-
-        // Copies with the pose of the last ModelInstance::Update, i.e. what is on screen now.
-        ProceduralMeshData patch;
-        BonePatchSource source;
-        std::string error;
-        if (ExtractBonePatch(model, instance, paletteId, jointIndex, 0.0f, patch, source, &error)
-            && m_Patch.extracted.SetMesh(std::move(patch), &error))
-        {
-            m_Patch.source = std::move(source);
-            m_Patch.statusText = L"Patch: " + std::to_wstring(m_Patch.extracted.GetData().indices.size() / 3) + L" tris, "
-                + std::to_wstring(m_Patch.extracted.GetData().vertices.size()) + L" verts, mixed outside "
-                + std::to_wstring(m_Patch.source.mixedOutsideTriangles);
-            RebuildPatchPiece();
-            ClearSlice();
-            ClearPreview();
-            m_Preview.previousPose.clear();
-            m_Patch.poseJointWorld = m_Patch.source.poseJointWorld;
-            ++m_Patch.version;
-            return true;
-        }
-        m_Patch.statusText = L"Patch failed: " + Utility::UTF8ToWideString(error);
-        return false;
-    }
-
-    // X: the patch and the confirmed pieces. Not available in cut mode, where the plane decides the patch.
-    void CutController::ClearPatch()
-    {
-        if (m_PlaneEditing)
-            return;
-        DropPatch();
-        ClearSlice();
-    }
-
     // The patch only. The confirmed pieces and the plane stay.
     void CutController::DropPatch()
     {
@@ -58,17 +18,15 @@ namespace MeshCutting
         RebuildPatchPiece();
         ClearPreview();
         m_Preview.previousPose.clear();
-        ++m_Patch.version;
     }
 
     void CutController::ToggleEditPlane(const ModelInstance& instance, uint32_t paletteId)
     {
         m_PlaneEditing = !m_PlaneEditing;
         m_CutRequested = false;
-        DropPatch();    // a patch copied with C does not belong to the plane; the candidate patch replaces it
+        DropPatch();    // the candidate patch is rebuilt from the plane while debug mode is on
         m_Candidate.ResetSelection();
         m_Candidate.error.clear();
-        m_Candidate.weightCycle = 0;
         if (m_PlaneEditing)
         {
             m_Candidate.palette = paletteId;
@@ -78,81 +36,38 @@ namespace MeshCutting
         }
     }
 
-    void CutController::CycleWeightJoint()
-    {
-        if (!m_Candidate.cutJoints.empty())
-            m_Candidate.weightCycle = (m_Candidate.weightCycle + 1) % uint32_t(m_Candidate.cutJoints.size());
-    }
-
+    // The weight view shows the first cut joint: the shader takes one joint.
     uint32_t CutController::WeightJoint() const
     {
         if (!m_PlaneEditing || m_Candidate.cutJoints.empty())
             return kNoNode;
-        return m_Candidate.cutJoints[m_Candidate.weightCycle % m_Candidate.cutJoints.size()];
+        return m_Candidate.cutJoints.front();
     }
 
-    void CutController::ToggleCap()
-    {
-        m_CapEnabled = !m_CapEnabled;
-        m_Preview.dirty = true;      // the confirmed pieces keep the cap they were cut with
-    }
-
-    void CutController::ResetPlane(const ModelInstance& instance)
-    {
-        PlacePlane(instance);
-    }
-
-    void CutController::TranslatePlane(const Vector3& worldDelta)
+    void CutController::SetPlane(const CutPlane& plane)
     {
         if (!m_PlaneValid)
             return;
-        Translate(m_Plane, { float(worldDelta.GetX()), float(worldDelta.GetY()), float(worldDelta.GetZ()) });
+        m_Plane = plane;
+        ClampExtents(m_Plane, MinExtent(), MaxExtent());
         m_Preview.dirty = true;
     }
 
-    void CutController::MovePlaneAlongNormal(float distance)
-    {
-        if (!m_PlaneValid)
-            return;
-        const CutPlaneFrame frame = MakeFrame(m_Plane);
-        Translate(m_Plane, { frame.normal.x * distance, frame.normal.y * distance, frame.normal.z * distance });
-        m_Preview.dirty = true;
-    }
-
-    void CutController::RotatePlane(int localAxis, float radians)
-    {
-        if (!m_PlaneValid)
-            return;
-        RotateAroundLocalAxis(m_Plane, localAxis, radians);
-        m_Preview.dirty = true;
-    }
-
-    void CutController::ScalePlane(float factor, bool uOnly)
-    {
-        if (!m_PlaneValid)
-            return;
-        if (uOnly)
-            ScaleU(m_Plane, factor, MinExtent(), MaxExtent());
-        else
-            ScaleUniform(m_Plane, factor, MinExtent(), MaxExtent());
-        m_Preview.dirty = true;
-    }
-
-    // Without a patch there is nothing to cut, so a request would only wait for the next C.
+    // Without a patch there is nothing to cut, so a request is ignored.
     void CutController::RequestCut()
     {
         if (m_PlaneEditing && m_PlaneValid && !m_Patch.piece.Empty())
             m_CutRequested = true;
     }
 
-    // Only the confirmed pieces go. The patch stays, so it is on screen again; the preview resumes.
+    // Only the confirmed pieces go. The candidate patch stays and the preview resumes.
     void CutController::DiscardCut()
     {
         ClearSlice();
         m_Preview.dirty = true;
     }
 
-    // Welds the current patch into the slicer input. An empty source (after X) just clears everything.
+    // Welds the current patch into the slicer input. An empty source just clears everything.
     void CutController::RebuildPatchPiece()
     {
         m_Patch.piece.Clear();
@@ -179,7 +94,7 @@ namespace MeshCutting
         m_Patch.radius = float(ComputePieceRadius(m_Patch.piece));
     }
 
-    // In cut mode: finds the bone segments the plane crosses and, when their parent joints (the cut joints)
+    // In debug mode: finds the bone segments the plane crosses and, when their parent joints (the cut joints)
     // are not the ones the current patch was extracted for, extracts and welds a new patch for them. The same
     // joint set is never extracted twice in a row, even after a failure; the patch is only skinned then.
     void CutController::UpdateCandidate(const Model& model, const ModelInstance& instance)
@@ -198,7 +113,6 @@ namespace MeshCutting
 
         PickSegments(m_Candidate.skeleton, MakeFrame(m_Plane), m_Candidate.hits);
         m_Candidate.cutJoints = MeshCutting::CutJoints(m_Candidate.hits);
-        m_Candidate.weightCycle = m_Candidate.cutJoints.empty() ? 0 : m_Candidate.weightCycle % uint32_t(m_Candidate.cutJoints.size());
         if (m_Candidate.haveAttempt && m_Candidate.cutJoints == m_Candidate.attemptJoints)
             return;
         m_Candidate.haveAttempt = true;
@@ -226,7 +140,6 @@ namespace MeshCutting
             m_Preview.previousPose.clear();
             m_Patch.poseJointWorld = m_Patch.source.poseJointWorld;
             m_Preview.dirty = true;
-            ++m_Patch.version;
         }
         else
         {
@@ -237,7 +150,7 @@ namespace MeshCutting
         ++m_Candidate.extractCount;
     }
 
-    // Runs once per frame after ModelInstance::Update. In cut mode the candidate patch follows the plane;
+    // Runs once per frame after ModelInstance::Update. In debug mode the candidate patch follows the plane;
     // the patch is skinned to the current pose; a requested cut or the preview runs on it; the confirmed
     // pieces are skinned to the new pose (they stay when the patch is gone).
     void CutController::Update(const Model& model, const ModelInstance& instance)
@@ -363,7 +276,7 @@ namespace MeshCutting
     SliceOptions CutController::MakeSliceOptions() const
     {
         SliceOptions options;
-        options.cap = m_CapEnabled ? CapMode::Create : CapMode::None;
+        options.cap = CapMode::Create;     // the cap is always made
         return options;
     }
 
@@ -413,7 +326,7 @@ namespace MeshCutting
             m_Confirmed.info.clear();
             return false;
         }
-        const SlicePlane plane = CurrentPlane();
+        const SlicePlane plane = ToSlicePlane(MakeFrame(m_Plane));
 
         SliceResult result;
         const int64_t start = SystemTime::GetCurrentTick();
@@ -443,9 +356,8 @@ namespace MeshCutting
         const double positive = TotalArea(result.positive, FaceKind::Surface);
         const double negative = TotalArea(result.negative, FaceKind::Surface);
         wchar_t info[200];
-        swprintf_s(info, L"loops %zu  + %zu faces %zu nodes   - %zu faces %zu nodes   area +%.2f -%.2f original %.2f (diff %.1e)",
-            result.loops.size(), result.positive.faces.size(), result.positive.nodes.size(), result.negative.faces.size(),
-            result.negative.nodes.size(), positive, negative, original, positive + negative - original);
+        swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", result.loops.size(), result.positive.faces.size(),
+            result.negative.faces.size(), positive + negative - original);
         m_Confirmed.info = info;
         return true;
     }

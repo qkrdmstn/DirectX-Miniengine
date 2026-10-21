@@ -4,7 +4,7 @@
 >
 > v2: 절단 평면을 **world에 정의된 유한 평면(이동·회전·크기 조절)**으로 바꾸고, 한 번에 여러 선분을 자를 수 있게 했다.
 >
-> 상태: P-1(CutPlane)과 P-2(SegmentPick, joint 집합 추출, 후보 패치)는 구현됨. P-3(OpenLoop 확장, 표시 변환 분리의 나머지)은 아직 없다. 구현하면서 달라진 점은 `CutDebugDesign.md` 8~9절.
+> 상태: P-1(CutPlane)과 P-2(SegmentPick, joint 집합 추출, 후보 패치)는 구현됨. S-1~S-4(마우스, Scene 뷰 카메라, 기즈모, 키 정리)로 조작 체계가 바뀌었다. P-3(OpenLoop 확장, 표시 변환 분리의 나머지)은 아직 없다. 구현하면서 달라진 점은 `CutDebugDesign.md` 8~9절.
 
 ## 0. 왜 바꾸는가
 
@@ -64,21 +64,7 @@ bool ContainsInPlane(const CutPlaneFrame& frame, const DirectX::XMFLOAT3& p, flo
 - 평면 가장자리가 팔다리 안에서 끝나는 경우(부분 절개)는 지원하지 않는다. 그런 선분은 교차점이 사각형 안이면 통째로 자르는 것으로 보고, 루프가 사각형을 벗어나면 위 규칙으로 거절된다.
 
 ### 2.3 조작
-| 조작 | 키 | 기준 |
-| --- | --- | --- |
-| 이동 (화면 위/아래) | Home / End | 카메라 up 축 |
-| 이동 (화면 좌/우) | Delete / PgDn | 카메라 right 축 |
-| 이동 (법선 방향) | `[` / `]` | 평면 법선 |
-| 회전 (평면 U축) | `,` / `.` | 평면 로컬 축 |
-| 회전 (평면 V축) | `;` / `'` | 평면 로컬 축 |
-| 회전 (법선축) | Insert / PgUp | 사각형 방향 돌리기 |
-| 크기 (전체) | `-` / `=` | halfExtents 비율 유지 |
-| 크기 (U축만) | Shift + `-` / `=` | 가늘고 긴 칼날 모양 |
-| 초기화 | R | 모델 bounds 중심, 법선 world +Y(수평), 반 크기 = 모델 반지름 × 0.5 |
-
-- 이동 속도는 모델 반지름 × deltaT에 비례, 회전은 각속도 × deltaT. halfExtents는 모델 반지름의 0.01~3배로 제한한다.
-- 방향키는 프로파일러·튜닝 메뉴가 쓰므로 피했다. Shift는 FlyingFPSCamera가 쓰지만 ModelViewer 기본은 OrbitCamera다(플라이 카메라를 쓰면 충돌하니 UI에 표시).
-- 기존 "joint 로컬 base + offset/tilt" 상태(`ComputeBasePlane`/`UpdateBasePlane`, `m_PlaneOffset`/`TiltA`/`TiltB`)는 제거한다.
+> **S-4에서 바뀌었다.** 평면은 키보드가 아니라 마우스 기즈모(이동·회전·크기 도구)로 조작한다. 도구, 핸들, 드래그 방식은 `SceneViewControlsDesign.md` 3절. 크기 범위(모델 반지름의 0.01~3배)와 초기값(모델 bounds 중심, 법선 world +Y, 반 크기 = 반지름 × 0.5)은 그대로다. 아래 2.4절의 표시는 사각형 테두리, 십자선, 법선 화살표이고 기즈모가 그 위에 겹쳐진다.
 
 ### 2.4 표시
 - 사각형 테두리 + 십자 격자 몇 줄 + 법선 화살표를 튜브로 그린다(`BakeCutPlaneDebug`, 기존 `BakePlaneDebug`의 링 대신).
@@ -162,13 +148,7 @@ std::vector<uint32_t> CutJoints(const std::vector<SegmentHit>& hits);
 | 확정 piece | **옆** (기존 표시 오프셋 + 법선 방향 벌림) | 와이어·tint·경계 옵션 기존과 같음. N(overlay)은 캐릭터 위에 겹침 |
 
 ## 8. 그 밖의 키
-| 키 | 기능 | 비고 |
-| --- | --- | --- |
-| T | 절단 모드 켜기/끄기 | 들어갈 때 평면이 없으면 R과 같은 초기값 |
-| Tab | 웨이트 뷰에 표시할 절단 joint 순환 | 셰이더가 joint 하나만 받을 때 |
-| Enter / Backspace | 확정 절단 / 확정 결과 버리기 | 기존 (충돌은 CutDebugDesign 7절) |
-| M, U, Z, G, N, L | cap, 와이어, tint, 경계, overlay, 후면 컬링 | 기존 |
-| C / X | 절단 모드 밖에서 선택 joint 패치 확인용 복사/지우기 | 절단 모드에 들어가면 그 패치는 버린다 |
+> **S-4에서 바뀌었다.** 남은 키는 Space(애니메이션), T(디버그 모드), V(렌더링 모드), Enter(절단), Ctrl+Z(되돌리기)와 Scene 뷰 카메라·기즈모 키뿐이다 (`SceneViewControlsDesign.md` 5절). Tab(웨이트 뷰 순환), M, U, Z, G, N, L, C, X, R은 없어졌다. 웨이트 뷰는 디버그 모드에서 첫 절단 joint를 따른다.
 
 ## 9. 구현 단계
 

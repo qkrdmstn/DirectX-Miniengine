@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 
+#include "PlaneGizmo.h"
 #include "../ProceduralMesh.h"
 #include "../Rendering/ProceduralMeshRenderer.h"
 #include "VectorMath.h"
@@ -14,28 +15,37 @@ namespace MeshCutting
 {
     class CutController;
 
-    // Display side of the cutting demo: the debug meshes (patch, cut pieces, boundary tubes, plane),
-    // the display toggles and the status lines. It only reads the controller.
+    // V: 렌더링 모드. 원본 모델과 잘린 조각에 같이 적용된다.
+    enum class RenderMode
+    {
+        Solid,
+        SolidAndWire,
+        Wire,
+        Debug       // Wire + 구역(section) 색 + 경계 튜브
+    };
+
+    // Display side of the cutting demo: the cut pieces, the plane, the crossed bone segments, the expected
+    // loops and the gizmo, plus the status lines. It only reads the controller.
     class CutDebugView
     {
     public:
-        void ToggleBoundary() { m_BoundaryEnabled = !m_BoundaryEnabled; }    // G
-        void ToggleBackCull() { m_BackCull = !m_BackCull; }                  // L
-        void ToggleSectionTint() { m_SectionTint = !m_SectionTint; }         // Z
-        void ToggleOverlay() { m_OverlayEnabled = !m_OverlayEnabled; }       // N
+        void SetRenderMode(RenderMode mode) { m_RenderMode = mode; }
+        void CycleRenderMode() { m_RenderMode = RenderMode((int(m_RenderMode) + 1) % 4); }
+        RenderMode GetRenderMode() const { return m_RenderMode; }
+        static const wchar_t* RenderModeName(RenderMode mode);
 
-        // U: patch and cut pieces as Solid -> Solid + Wire -> Wire. Independent of the model's V wireframe.
-        enum class WireMode { Solid, SolidAndWire, Wire };
-        void CycleWireMode() { m_WireMode = WireMode((int(m_WireMode) + 1) % 3); }
+        // 기즈모를 그릴 때 필요한 것. 프레임마다 Draw 전에 부른다. view의 크기는 창 클라이언트 영역이다.
+        void SetGizmo(const GizmoView& view, GizmoTool tool, GizmoHandle hovered, GizmoHandle active);
 
-        // Brings the meshes up to date with the controller (rebakes after a new patch or a new cut,
-        // otherwise only refreshes positions) and draws them. modelRadius is the display offset of
-        // the copy beside the character (0 without a model).
+        // Brings the meshes up to date with the controller (rebakes after a new cut, otherwise only
+        // refreshes positions) and draws them. modelRadius is the display offset of the cut pieces
+        // beside the character (0 without a model). The plane, the bone segments, the loops and the
+        // gizmo are in world space and drawn on the character.
         void Draw(GraphicsContext& context, ProceduralMeshRenderer& renderer, const CutController& cut,
             const Math::Matrix4& viewProj, float modelRadius,
             const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor);
 
-        // The status lines under the bone info, drawn with the caller's text context.
+        // 화면 텍스트: 도구, 렌더링 모드, 디버그 모드 여부, 절단 상태, 키 도움말.
         // jointName turns a palette joint index into text (the view knows no Model).
         void DrawUI(TextContext& text, const CutController& cut, const std::function<std::wstring(uint32_t)>& jointName) const;
 
@@ -44,22 +54,22 @@ namespace MeshCutting
 
     private:
         void Sync(const CutController& cut);
+        bool SectionTint() const { return m_RenderMode == RenderMode::Debug; }
 
-        ProceduralMesh m_PatchMesh;
-        ProceduralMesh m_BoundaryDebug;
         ProceduralMesh m_PiecePositive, m_PieceNegative;
         ProceduralMesh m_PieceBoundaryPositive, m_PieceBoundaryNegative;
         ProceduralMesh m_PlaneDebug;
         ProceduralMesh m_PreviewLoops;          // where the current plane would cut (dry-run result)
         ProceduralMesh m_SegmentDebug;          // bone segments the plane crosses and where
+        ProceduralMesh m_GizmoMesh;
 
-        bool m_BoundaryEnabled = true;
-        bool m_BackCull = false;                // back-face culling PSO instead of two-sided
-        bool m_SectionTint = false;             // color surface and cap sections differently
-        bool m_OverlayEnabled = false;          // draw exactly on the character (no display offset, no gap)
-        WireMode m_WireMode = WireMode::Solid;
+        RenderMode m_RenderMode = RenderMode::Solid;
+        GizmoView m_GizmoView;
+        GizmoTool m_GizmoTool = GizmoTool::Move;
+        GizmoHandle m_GizmoHovered = GizmoHandle::None;
+        GizmoHandle m_GizmoActive = GizmoHandle::None;
+        bool m_HaveGizmoView = false;
 
-        uint64_t m_PatchVersion = 0;
         uint64_t m_PieceGeneration = 0;
         uint64_t m_PreviewGeneration = 0;
         bool m_BakedSectionSplit = false;       // the pieces were baked with splitByOrigin

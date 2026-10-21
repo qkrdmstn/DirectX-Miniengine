@@ -24,50 +24,35 @@ namespace MeshCutting
     class CutController
     {
     public:
-        // ---- patch (C / X) ----
-        // Copies the triangles of one joint with the pose of the last ModelInstance::Update. On
-        // failure the previous patch stays and PatchStatusText says why.
-        bool SetPatch(const Model& model, const ModelInstance& instance, uint32_t paletteId, uint32_t jointIndex);
-        void ClearPatch();
-
-        // ---- plane controls and cutting ----
+        // ---- debug mode and cutting ----
         // Moving the plane only changes the preview (a dry-run on the uncut patch). The confirmed
         // pieces change only on RequestCut, or are dropped by DiscardCut.
-        // The first T (or R) puts the plane at the model's bounds center, normal +Y, half size = radius / 2.
-        // Cut mode: the patch comes from the plane (the bones it crosses), not from J/K + C. Entering drops a
-        // patch copied with C; leaving drops the candidate patch. The confirmed pieces stay in both cases.
+        // The first T puts the plane at the model's bounds center, normal +Y, half size = radius / 2.
+        // In debug mode the patch comes from the plane (the bones it crosses). Leaving debug mode drops the
+        // candidate patch; the confirmed pieces and the plane stay.
         void ToggleEditPlane(const ModelInstance& instance, uint32_t paletteId);   // T
-        void CycleWeightJoint();                                    // Tab: which cut joint the weight view shows
-        void ToggleCap();                                           // M: applies to the preview and the next cut
-        void ResetPlane(const ModelInstance& instance);             // R
-        void TranslatePlane(const Math::Vector3& worldDelta);       // Home/End/Delete/PgDn (camera axes)
-        void MovePlaneAlongNormal(float distance);                  // [ ]
-        void RotatePlane(int localAxis, float radians);             // , . ; ' Insert PgUp  (0 = U, 1 = V, 2 = normal)
-        void ScalePlane(float factor, bool uOnly);                  // - =  (Shift: U only)
-        void RequestCut();                                          // Enter: one cut in the next Update (plane edit only)
-        void DiscardCut();                                          // Backspace: drop the confirmed pieces
+        void SetPlane(const CutPlane& plane);   // the gizmo moved, rotated or scaled it (extents are clamped)
+        void RequestCut();                      // Enter: one cut in the next Update (debug mode only)
+        void DiscardCut();                      // Ctrl+Z: drop the confirmed pieces
 
         // Once per frame, right after ModelInstance::Update: skins the patch and the pieces to the
         // current pose, then runs the requested cut or the preview. The plane stays where it is in world space.
         void Update(const Model& model, const ModelInstance& instance);
 
         // ---- read-only state for the view and the UI ----
-        const ProceduralMesh& ExtractedMesh() const { return m_Patch.extracted; }    // patch as extracted (CPU copy)
         const PatchPiece& Patch() const { return m_Patch.piece; }
-        const WeldStats& Weld() const { return m_Patch.weld; }
         SliceStatus PatchStatus() const { return m_Patch.status; }
         const std::string& PatchDetail() const { return m_Patch.detail; }
         const std::wstring& PatchStatusText() const { return m_Patch.statusText; }
-        uint64_t PatchVersion() const { return m_Patch.version; }    // changes on C and X
         float PatchRadius() const { return m_Patch.radius; }
 
-        bool PlaneValid() const { return m_PlaneValid; }            // the plane has been placed (first T or R)
+        bool PlaneValid() const { return m_PlaneValid; }            // the plane has been placed (first T)
         bool PlaneEditing() const { return m_PlaneEditing; }
-        bool CapEnabled() const { return m_CapEnabled; }
         const CutPlane& Plane() const { return m_Plane; }
         CutPlaneFrame PlaneFrame() const { return MakeFrame(m_Plane); }
-        SlicePlane CurrentPlane() const { return ToSlicePlane(MakeFrame(m_Plane)); }
         float ModelRadius() const { return m_ModelRadius; }         // scale of the plane controls and debug tubes
+        float PlaneMinExtent() const { return MinExtent(); }        // limits of the plane half lengths
+        float PlaneMaxExtent() const { return MaxExtent(); }
 
         // The candidate: what the plane crosses and the patch built from it (cut mode only).
         uint32_t EditPalette() const { return m_Candidate.palette; }      // the palette the cut mode works on (chosen when T was pressed)
@@ -75,7 +60,7 @@ namespace MeshCutting
         const std::vector<SegmentHit>& Hits() const { return m_Candidate.hits; }     // bone segments the plane crosses
         const std::vector<uint32_t>& CutJoints() const { return m_Candidate.cutJoints; }   // parent joints of the hits
         bool NoSegment() const { return m_PlaneEditing && m_PlaneValid && m_Candidate.hits.empty(); }
-        uint32_t WeightJoint() const;                               // cut joint for the weight view, kNoNode if none
+        uint32_t WeightJoint() const;                               // the first cut joint, for the weight view; kNoNode if none
         const std::wstring& CandidateError() const { return m_Candidate.error; }
         float ExtractMs() const { return m_Candidate.extractMs; }             // last candidate extraction + weld
         uint32_t ExtractCount() const { return m_Candidate.extractCount; }    // how many candidate extractions ran
@@ -85,7 +70,7 @@ namespace MeshCutting
         const PatchPiece& SlicedNegative() const { return m_Confirmed.negative; }
         uint64_t PieceGeneration() const { return m_Confirmed.generation; }  // changes when the pieces are replaced or cleared
         const DirectX::XMFLOAT3& ShownNormal() const { return m_Confirmed.shownNormal; }
-        bool CutAttempted() const { return m_Confirmed.attempted; }       // Enter was handled since the patch was copied
+        bool CutAttempted() const { return m_Confirmed.attempted; }       // Enter was handled since the last undo
         SliceStatus LastSliceStatus() const { return m_Confirmed.status; }   // of the last confirmed cut attempt
         const std::string& LastSliceDetail() const { return m_Confirmed.detail; }
         const std::wstring& SliceInfo() const { return m_Confirmed.info; }
@@ -121,8 +106,8 @@ namespace MeshCutting
         // ---- state, grouped by what it belongs to ----
         // patch -> (slice) -> preview / confirmed cut. Candidate is the cut mode's choice of the patch.
 
-        // The patch that is sliced: copied with C, or extracted for the cut joints in cut mode.
-        // Written by SetPatch / UpdateCandidate / DropPatch, skinned every frame by Update.
+        // The patch that is sliced: extracted for the cut joints in debug mode.
+        // Written by UpdateCandidate / DropPatch, skinned every frame by Update.
         struct PatchState
         {
             ProceduralMesh extracted;       // patch as extracted (CPU copy)
@@ -132,7 +117,6 @@ namespace MeshCutting
             WeldStats weld;
             SliceStatus status = SliceStatus::InvalidInput;     // of the welding
             std::string detail;
-            uint64_t version = 0;           // changes on every new or dropped patch (the view rebakes on it)
             float radius = 0.0f;            // bounds radius when the patch was copied (keeps debug sizes stable)
             std::vector<std::vector<DirectX::XMFLOAT4X4>> skinMatrices;     // per source mesh, at this frame's pose
             std::vector<Math::Matrix4> poseJointWorld;                      // palette joints, at this frame's pose
@@ -148,7 +132,6 @@ namespace MeshCutting
             std::vector<uint32_t> cutJoints;
             std::vector<uint32_t> attemptJoints;    // the last joint set an extraction was tried for
             bool haveAttempt = false;
-            uint32_t weightCycle = 0;
             std::wstring error;
             float extractMs = 0.0f;
             uint32_t extractCount = 0;
@@ -223,7 +206,6 @@ namespace MeshCutting
         // cut plane: a finite rectangle in world space (the space of the posed patch), tied to no joint
         bool m_PlaneEditing = false;
         bool m_CutRequested = false;    // Enter: one confirmed cut in the next Update
-        bool m_CapEnabled = true;
         bool m_PlaneValid = false;
         CutPlane m_Plane;
         float m_ModelRadius = 0.0f;     // of the instance when the plane was placed

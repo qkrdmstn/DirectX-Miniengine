@@ -433,6 +433,10 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
 
     D3D12_RASTERIZER_DESC wireRasterizer = (psoFlags & kTwoSided) ? RasterizerTwoSided : RasterizerDefault;
     wireRasterizer.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    // Reversed-Z: a positive bias moves the lines toward the camera, so they pass the depth test against the
+    // surface they lie on (Solid + Wire). Same values as the cut pieces (ProceduralMeshRenderer).
+    wireRasterizer.DepthBias = 200;
+    wireRasterizer.SlopeScaledDepthBias = 1.5f;
     ColorPSO.SetRasterizerState(wireRasterizer);
     // The solid depth prepass already wrote depth; compare against it without writing depth.
     ColorPSO.SetDepthStencilState(DepthStateReadOnly);

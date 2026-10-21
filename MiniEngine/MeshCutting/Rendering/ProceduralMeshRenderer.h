@@ -39,6 +39,8 @@ namespace MeshCutting
             // Wireframe: a brighter palette) so a cap can be told from the surface. Materials themselves
             // are not supported yet.
             bool sectionTint = false;
+            // false: no depth test and no depth write, so the mesh is drawn over everything (gizmo). Solid only.
+            bool depthTest = true;
         };
 
         void Initialize();
@@ -77,6 +79,7 @@ namespace MeshCutting
         GraphicsPSO m_PsoBackCull;      // back-face culling
         GraphicsPSO m_PsoWire;          // wireframe, two-sided
         GraphicsPSO m_PsoWireBackCull;  // wireframe, back-face culling
+        GraphicsPSO m_PsoNoDepth;       // solid, two-sided, no depth test (overlays)
         bool m_Initialized = false;
         bool m_PsoFinalized = false;
         DXGI_FORMAT m_ColorFormat = DXGI_FORMAT_UNKNOWN;

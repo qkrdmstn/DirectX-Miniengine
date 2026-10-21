@@ -189,6 +189,22 @@ namespace GameInput
     float GetAnalogInput( AnalogInput ai );
     float GetTimeCorrectedAnalogInput( AnalogInput ai );
 
+    // The mouse is exclusive by default (DirectInput hides the cursor and only reports relative motion).
+    // An application that wants a visible cursor calls SetMouseExclusive(false), before or after
+    // Initialize. Relative motion (kAnalogMouseX/Y), buttons and the wheel work in both modes.
+    // Returns false if the level could not be changed.
+    bool SetMouseExclusive( bool exclusive );
+    bool IsMouseExclusive();
+
+    // The cursor position in pixels of the window's client area (not the render resolution), and the same
+    // position divided by the client size (0 to 1, y downwards). Returns false, and sets all four values
+    // to -1, when the window is not the foreground window or the cursor is outside its client area.
+    bool GetCursorClientPos( float& x, float& y, float& normalizedX, float& normalizedY );
+
+    // The size in pixels of the window's client area, the space GetCursorClientPos is measured in.
+    // Returns false (and 0, 0) when there is no window or it has no area (minimized).
+    bool GetClientSize( float& width, float& height );
+
 #if !WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_TV_TITLE | WINAPI_PARTITION_DESKTOP)
     void SetKeyState(Windows::System::VirtualKey key, bool IsDown);
 #endif

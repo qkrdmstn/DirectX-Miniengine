@@ -1,11 +1,13 @@
-// Standalone tests for the slicing pipeline (Geometry/). No D3D12 device is needed.
+// Standalone tests for the slicing pipeline (Geometry/) and the pure part of the plane gizmo
+// (Debug/PlaneGizmo). No D3D12 device is needed.
 //
 // Build and run from a Visual Studio developer prompt in MiniEngine/MeshCutting:
 //   cl /nologo /EHsc /std:c++14 /W4 /MDd /Fo<outdir>\ /Fe<outdir>\PlaneSlicerTests.exe
-//      tests\PlaneSlicerTests.cpp Geometry\*.cpp ProceduralMesh.cpp
+//      tests\PlaneSlicerTests.cpp Geometry\*.cpp Debug\PlaneGizmo.cpp ProceduralMesh.cpp
 //   <outdir>\PlaneSlicerTests.exe
 // Keep <outdir> outside the repository. The exit code is the number of failed checks.
 
+#include "../Debug/PlaneGizmo.h"
 #include "../Geometry/CutPlane.h"
 #include "../Geometry/JointSet.h"
 #include "../Geometry/PatchGeometry.h"
@@ -1729,6 +1731,392 @@ static void TestJointSet()
     CHECK(!IsValidJointSet({}, 5) && !IsValidJointSet({ 3, 1 }, 5) && !IsValidJointSet({ 1, 1 }, 5) && !IsValidJointSet({ 5 }, 5));
 }
 
+// ---------------------------------------------------------------- plane gizmo tests (Debug/PlaneGizmo)
+
+// eye (0, 0, -5) looking at the origin, 60 degree vertical fov, near 0.1, far 100. The reversed variant swaps
+// near and far like MiniEngine does (depth 1 at the near plane, 0 at the far plane).
+static GizmoView MakeTestView(bool reversedZ, float width = 1600.0f, float height = 900.0f, float eyeZ = -5.0f)
+{
+    const XMFLOAT3 eye = { 0.0f, 0.0f, eyeZ };
+    const float fovY = XM_PI / 3.0f;
+    const XMMATRIX view = XMMatrixLookAtLH(XMLoadFloat3(&eye), XMVectorZero(), XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+    const float aspect = width / height;
+    const XMMATRIX projection = reversedZ ? XMMatrixPerspectiveFovLH(fovY, aspect, 100.0f, 0.1f)
+        : XMMatrixPerspectiveFovLH(fovY, aspect, 0.1f, 100.0f);
+    XMFLOAT4X4 viewProj;
+    XMStoreFloat4x4(&viewProj, view * projection);
+    return MakeGizmoView(viewProj, eye, width, height, reversedZ);
+}
+
+static GizmoRay MakeTestRay(float ox, float oy, float oz, float dx, float dy, float dz)
+{
+    GizmoRay ray;
+    ray.origin = { ox, oy, oz };
+    const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+    ray.direction = { dx / length, dy / length, dz / length };
+    return ray;
+}
+
+static GizmoPointer MakeTestPointer(float x, float y, const GizmoRay& ray)
+{
+    GizmoPointer pointer;
+    pointer.x = x;
+    pointer.y = y;
+    pointer.ray = ray;
+    return pointer;
+}
+
+static void TestGizmoRay()
+{
+    for (int variant = 0; variant < 2; ++variant)
+    {
+        const bool reversed = variant == 1;
+        const GizmoView view = MakeTestView(reversed);
+
+        // The middle of the window looks straight ahead (+Z), from a point on the near plane.
+        const GizmoRay center = MakeRay(view, 800.0f, 450.0f);
+        CHECK(std::fabs(center.direction.x) < 1e-4f && std::fabs(center.direction.y) < 1e-4f && std::fabs(center.direction.z - 1.0f) < 1e-4f);
+        CHECK(std::fabs(center.origin.z - (-4.9f)) < 1e-3f);
+
+        // The corners match the field of view: tan(30 degrees) vertically, times the aspect ratio horizontally.
+        const float tanHalf = std::tan(XM_PI / 6.0f), aspect = 1600.0f / 900.0f;
+        const GizmoRay topLeft = MakeRay(view, 0.0f, 0.0f);
+        CHECK(std::fabs(topLeft.direction.x / topLeft.direction.z + tanHalf * aspect) < 1e-3f);
+        CHECK(std::fabs(topLeft.direction.y / topLeft.direction.z - tanHalf) < 1e-3f);
+        const GizmoRay bottomRight = MakeRay(view, 1600.0f, 900.0f);
+        CHECK(std::fabs(bottomRight.direction.x / bottomRight.direction.z - tanHalf * aspect) < 1e-3f);
+        CHECK(std::fabs(bottomRight.direction.y / bottomRight.direction.z + tanHalf) < 1e-3f);
+
+        // Every ray passes through the eye.
+        const XMVECTOR toEye = XMVectorSet(view.eye.x - topLeft.origin.x, view.eye.y - topLeft.origin.y, view.eye.z - topLeft.origin.z, 0.0f);
+        const XMVECTOR dir = XMVectorSet(topLeft.direction.x, topLeft.direction.y, topLeft.direction.z, 0.0f);
+        CHECK(XMVectorGetX(XMVector3Length(XMVector3Cross(dir, toEye))) < 1e-3f);
+
+        // A point on a ray projects back to the pixel the ray came from.
+        const GizmoRay ray = MakeRay(view, 400.0f, 300.0f);
+        const XMFLOAT3 onRay = { ray.origin.x + ray.direction.x * 3.0f, ray.origin.y + ray.direction.y * 3.0f, ray.origin.z + ray.direction.z * 3.0f };
+        float px = 0.0f, py = 0.0f;
+        CHECK(ProjectToScreen(onRay, view, px, py) && std::fabs(px - 400.0f) < 0.5f && std::fabs(py - 300.0f) < 0.5f);
+
+        // Behind the camera there is no screen position.
+        CHECK(!ProjectToScreen({ 0.0f, 0.0f, -9.0f }, view, px, py));
+    }
+}
+
+static void TestGizmoAxisDrag()
+{
+    float param = 0.0f;
+    // A ray along -Y through (2, 3, 4) passes the X axis at x = 2.
+    CHECK(ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(2, 3, 4, 0, -1, 0), param) && std::fabs(param - 2.0f) < 1e-5f);
+    // The axis does not have to start at the origin, nor point along +X.
+    CHECK(ClosestParamOnAxis({ 5, 0, 0 }, { 0, 0, 1 }, MakeTestRay(4, 3, 7, 0, -1, 0), param) && std::fabs(param - 7.0f) < 1e-5f);
+    CHECK(ClosestParamOnAxis({ 0, 0, 0 }, { 0, 0, -1 }, MakeTestRay(0, 1, 6, 1, 0, 0), param) && std::fabs(param + 6.0f) < 1e-5f);
+    // Parallel and almost parallel rays give no answer instead of a huge number.
+    CHECK(!ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 0, 0), param));
+    CHECK(!ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 1e-4f, 0), param));
+    CHECK(ClosestParamOnAxis({ 0, 0, 0 }, { 1, 0, 0 }, MakeTestRay(0, 1, 0, 1, 0.05f, 0.05f), param) && std::isfinite(param));
+
+    // Ray and plane.
+    XMFLOAT3 hit;
+    CHECK(RayPlaneHit(MakeTestRay(1, 2, -5, 0, 0, 1), { 0, 0, 0 }, { 0, 0, 1 }, hit) && std::fabs(hit.x - 1.0f) < 1e-5f && std::fabs(hit.y - 2.0f) < 1e-5f && std::fabs(hit.z) < 1e-5f);
+    CHECK(!RayPlaneHit(MakeTestRay(1, 2, -5, 1, 0, 0), { 0, 0, 0 }, { 0, 0, 1 }, hit));     // parallel
+    CHECK(!RayPlaneHit(MakeTestRay(1, 2, -5, 0, 0, -1), { 0, 0, 0 }, { 0, 0, 1 }, hit));    // the plane is behind the ray
+
+    // Dragging the X arrow: the center follows the closest point on the axis and nothing else moves.
+    CutPlane plane;
+    GizmoDrag drag;
+    CHECK(BeginDrag(GizmoHandle::MoveX, plane, MakeTestPointer(0, 0, MakeTestRay(1, 0, -5, 0, 0, 1)), drag));
+    CutPlane moved;
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(3, 1.5f, -5, 0, 0, 1)), 0.1f, 3.0f, moved));
+    CHECK(std::fabs(moved.center.x - 2.0f) < 1e-5f && moved.center.y == 0.0f && moved.center.z == 0.0f);
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(-2, 0, -5, 0, 0, 1)), 0.1f, 3.0f, moved));
+    CHECK(std::fabs(moved.center.x + 3.0f) < 1e-5f);
+    // The result always starts from the plane the drag began with, so nothing adds up between updates.
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(1, 0, -5, 0, 0, 1)), 0.1f, 3.0f, moved) && std::fabs(moved.center.x) < 1e-5f);
+    // A ray parallel to the axis cannot be used: the plane is left as it was.
+    CutPlane untouched = moved;
+    untouched.center.x = 42.0f;
+    CHECK(!UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(0, 1, 0, 1, 0, 0)), 0.1f, 3.0f, untouched) && untouched.center.x == 42.0f);
+
+    // Dragging the XY square moves both axes by what the hit point on the plane moved.
+    CHECK(BeginDrag(GizmoHandle::MoveXY, plane, MakeTestPointer(0, 0, MakeTestRay(1, 1, -5, 0, 0, 1)), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(4, -2, -5, 0, 0, 1)), 0.1f, 3.0f, moved));
+    CHECK(std::fabs(moved.center.x - 3.0f) < 1e-5f && std::fabs(moved.center.y + 3.0f) < 1e-5f && std::fabs(moved.center.z) < 1e-5f);
+    // A ray lying in the plane cannot start the drag.
+    CHECK(!BeginDrag(GizmoHandle::MoveXY, plane, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
+}
+
+static void TestGizmoRotateDrag()
+{
+    CutPlane plane;     // center at the origin, local axes = world axes
+    GizmoDrag drag;
+    CutPlane turned;
+    const auto ray = [](float x, float y) { return MakeTestRay(x, y, -5, 0, 0, 1); };
+
+    // The normal ring: from (1, 0) to (0, 1) is +90 degrees about +Z, which turns U onto +Y.
+    CHECK(BeginDrag(GizmoHandle::RotateN, plane, MakeTestPointer(0, 0, ray(1, 0)), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(0, 2)), 0.1f, 3.0f, turned));
+    CutPlaneFrame frame = MakeFrame(turned);
+    CHECK(std::fabs(frame.axisU.x) < 1e-5f && std::fabs(frame.axisU.y - 1.0f) < 1e-5f && FrameIsOrthonormal(frame, 1e-5));
+    CHECK(std::fabs(QuaternionLength(turned) - 1.0) < 1e-6);
+
+    // The other way round is -90 degrees.
+    CHECK(BeginDrag(GizmoHandle::RotateN, plane, MakeTestPointer(0, 0, ray(1, 0)), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(0, -1)), 0.1f, 3.0f, turned));
+    frame = MakeFrame(turned);
+    CHECK(std::fabs(frame.axisU.y + 1.0f) < 1e-5f);
+
+    // Going around more than half a turn keeps adding up: 100, 200 and 300 degrees.
+    CHECK(BeginDrag(GizmoHandle::RotateN, plane, MakeTestPointer(0, 0, ray(1, 0)), drag));
+    const float degrees[3] = { 100.0f, 200.0f, 300.0f };
+    for (float d : degrees)
+    {
+        const float radians = d * XM_PI / 180.0f;
+        CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(std::cos(radians), std::sin(radians))), 0.1f, 3.0f, turned));
+        frame = MakeFrame(turned);
+        CHECK(std::fabs(frame.axisU.x - std::cos(radians)) < 1e-4f && std::fabs(frame.axisU.y - std::sin(radians)) < 1e-4f);
+    }
+    CHECK(std::fabs(drag.totalAngle - 300.0f * XM_PI / 180.0f) < 1e-4f);
+
+    // The U ring turns about the plane's own U axis (here +X): Y goes to Z, so the normal ends up at -Y.
+    CHECK(BeginDrag(GizmoHandle::RotateU, plane, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(-5, 0, 1, 1, 0, 0)), 0.1f, 3.0f, turned));
+    frame = MakeFrame(turned);
+    CHECK(std::fabs(frame.normal.y + 1.0f) < 1e-5f && std::fabs(frame.axisU.x - 1.0f) < 1e-5f);
+
+    // The turn follows the plane's own axis once the plane is already rotated.
+    CutPlane tilted;
+    RotateAroundLocalAxis(tilted, 1, 0.7f);
+    const CutPlaneFrame tiltedFrame = MakeFrame(tilted);
+    const XMFLOAT3 center = tilted.center;
+    // A ray along the U axis hits the ring's plane at the center; use one slightly off it, perpendicular to U.
+    const GizmoRay a = MakeTestRay(center.x - tiltedFrame.axisU.x * 5.0f + tiltedFrame.axisV.x, center.y - tiltedFrame.axisU.y * 5.0f + tiltedFrame.axisV.y,
+        center.z - tiltedFrame.axisU.z * 5.0f + tiltedFrame.axisV.z, tiltedFrame.axisU.x, tiltedFrame.axisU.y, tiltedFrame.axisU.z);
+    const GizmoRay b = MakeTestRay(center.x - tiltedFrame.axisU.x * 5.0f + tiltedFrame.normal.x, center.y - tiltedFrame.axisU.y * 5.0f + tiltedFrame.normal.y,
+        center.z - tiltedFrame.axisU.z * 5.0f + tiltedFrame.normal.z, tiltedFrame.axisU.x, tiltedFrame.axisU.y, tiltedFrame.axisU.z);
+    CHECK(BeginDrag(GizmoHandle::RotateU, tilted, MakeTestPointer(0, 0, a), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, b), 0.1f, 3.0f, turned));
+    const CutPlaneFrame after = MakeFrame(turned);
+    CHECK(std::fabs(Dot3(after.axisU, tiltedFrame.axisU) - 1.0) < 1e-4);         // the axis it turned about stays
+    CHECK(std::fabs(Dot3(after.axisV, tiltedFrame.normal) - 1.0) < 1e-4);        // V went to the old normal (+90 degrees)
+}
+
+static void TestGizmoScaleDrag()
+{
+    CutPlane plane;
+    plane.halfExtents = { 2.0f, 1.0f };
+    GizmoDrag drag;
+    CutPlane scaled;
+    const auto ray = [](float x, float y) { return MakeTestRay(x, y, -5, 0, 0, 1); };
+
+    // The U handle sits at the edge; dragging it by 1.5 widens the plane by 1.5. Only the U half length changes.
+    CHECK(BeginDrag(GizmoHandle::ScaleU, plane, MakeTestPointer(0, 0, ray(2, 0)), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(3.5f, 0.7f)), 0.1f, 4.0f, scaled));
+    CHECK(std::fabs(scaled.halfExtents.x - 3.5f) < 1e-5f && scaled.halfExtents.y == 1.0f);
+    // The range is kept at both ends.
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(100, 0)), 0.1f, 3.0f, scaled) && scaled.halfExtents.x == 3.0f);
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, ray(-100, 0)), 0.1f, 3.0f, scaled) && scaled.halfExtents.x == 0.1f);
+
+    // The V handle works on the other half length.
+    CHECK(BeginDrag(GizmoHandle::ScaleV, plane, MakeTestPointer(0, 0, MakeTestRay(-5, 1, 0, 1, 0, 0)), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(0, 0, MakeTestRay(-5, 2.5f, 0, 1, 0, 0)), 0.1f, 4.0f, scaled));
+    CHECK(scaled.halfExtents.x == 2.0f && std::fabs(scaled.halfExtents.y - 2.5f) < 1e-5f);
+
+    // The center handle scales both sides with the cursor: up and right grows, down and left shrinks, e per 150 pixels.
+    CHECK(BeginDrag(GizmoHandle::ScaleUniform, plane, MakeTestPointer(800, 450, ray(0, 0)), drag));
+    CHECK(UpdateDrag(drag, MakeTestPointer(800, 300, ray(0, 0)), 0.1f, 10.0f, scaled));
+    CHECK(std::fabs(scaled.halfExtents.x - 2.0f * std::exp(1.0f)) < 1e-4f && std::fabs(scaled.halfExtents.y - std::exp(1.0f)) < 1e-4f);
+    CHECK(UpdateDrag(drag, MakeTestPointer(650, 450, ray(0, 0)), 0.1f, 10.0f, scaled));
+    CHECK(std::fabs(scaled.halfExtents.x - 2.0f * std::exp(-1.0f)) < 1e-4f);
+    // At the limit the ratio of the two sides is kept: 2 x 1 can grow to 3 x 1.5 at most.
+    CHECK(UpdateDrag(drag, MakeTestPointer(1500, 0, ray(0, 0)), 0.1f, 3.0f, scaled));
+    CHECK(std::fabs(scaled.halfExtents.x - 3.0f) < 1e-5f && std::fabs(scaled.halfExtents.y - 1.5f) < 1e-5f);
+
+    // There is no handle for the normal.
+    CHECK(!BeginDrag(GizmoHandle::None, plane, MakeTestPointer(0, 0, ray(0, 0)), drag));
+}
+
+static void TestGizmoPicking()
+{
+    const GizmoView view = MakeTestView(true);
+    CutPlane plane;     // at the origin, looking at it from (0, 0, -5)
+
+    // The gizmo is about 100 pixels big wherever the camera is.
+    for (float eyeZ : { -5.0f, -12.0f })
+    {
+        const GizmoView v = MakeTestView(true, 1600.0f, 900.0f, eyeZ);
+        const float unit = GizmoUnit(v, plane.center);
+        float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+        CHECK(ProjectToScreen({ 0, 0, 0 }, v, x0, y0) && ProjectToScreen({ unit, 0, 0 }, v, x1, y1));
+        CHECK(std::fabs(std::hypot(x1 - x0, y1 - y0) - 100.0f) < 3.0f);
+    }
+
+    // The X arrow: its middle is on the handle, a few pixels off is still on it, far away is not.
+    const std::vector<GizmoPrimitive> move = BuildGizmoPrimitives(view, plane, GizmoTool::Move);
+    CHECK(move.size() == 6);
+    const GizmoPrimitive* xArrow = nullptr;
+    const GizmoPrimitive* xySquare = nullptr;
+    for (const GizmoPrimitive& p : move)
+    {
+        if (p.handle == GizmoHandle::MoveX)
+            xArrow = &p;
+        if (p.handle == GizmoHandle::MoveXY)
+            xySquare = &p;
+    }
+    CHECK(xArrow != nullptr && xySquare != nullptr);
+    if (xArrow != nullptr && xySquare != nullptr)
+    {
+        float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
+        CHECK(ProjectToScreen(xArrow->points[0], view, ax, ay) && ProjectToScreen(xArrow->points[1], view, bx, by));
+        const float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f;
+        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my) == GizmoHandle::MoveX);
+        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my + 7.0f) == GizmoHandle::MoveX);
+        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my + 9.0f) == GizmoHandle::None);
+        CHECK(PickHandle(view, plane, GizmoTool::Move, mx, my + 30.0f) == GizmoHandle::None);
+        // The middle of the XY square is on the square (a filled cell, not just its border).
+        float cx = 0.0f, cy = 0.0f;
+        float sx = 0.0f, sy = 0.0f;
+        CHECK(ProjectToScreen(xySquare->points[0], view, cx, cy) && ProjectToScreen(xySquare->points[2], view, sx, sy));
+        CHECK(PickHandle(view, plane, GizmoTool::Move, (cx + sx) * 0.5f, (cy + sy) * 0.5f) == GizmoHandle::MoveXY);
+    }
+
+    // The rings are picked on the ring line, not inside.
+    const std::vector<GizmoPrimitive> rings = BuildGizmoPrimitives(view, plane, GizmoTool::Rotate);
+    CHECK(rings.size() == 3);
+    float rx = 0.0f, ry = 0.0f;
+    CHECK(!rings.empty() && ProjectToScreen(rings[2].points[0], view, rx, ry));
+    CHECK(rings.size() == 3 && PickHandle(view, plane, GizmoTool::Rotate, rx, ry) != GizmoHandle::None);
+    // The U and V rings are seen edge-on from here and cross the center as lines, so test a point inside the N ring
+    // but away from those lines.
+    CHECK(PickHandle(view, plane, GizmoTool::Rotate, 840.0f, 410.0f) == GizmoHandle::None);
+
+    // The scale tool: the center handle, and the two edge handles at the half lengths.
+    CutPlane wide;
+    wide.halfExtents = { 2.0f, 1.0f };
+    float ux = 0.0f, uy = 0.0f, cx = 0.0f, cy = 0.0f;
+    CHECK(ProjectToScreen({ 2.0f, 0.0f, 0.0f }, view, ux, uy) && ProjectToScreen({ 0.0f, 0.0f, 0.0f }, view, cx, cy));
+    CHECK(PickHandle(view, wide, GizmoTool::Scale, ux, uy) == GizmoHandle::ScaleU);
+    CHECK(PickHandle(view, wide, GizmoTool::Scale, cx, cy) == GizmoHandle::ScaleUniform);
+    CHECK(PickHandle(view, wide, GizmoTool::Hidden, cx, cy) == GizmoHandle::None);
+
+    // Handles that overlap on the screen: the one closer to the camera wins, whatever the order.
+    GizmoPrimitive nearHandle, farHandle;
+    nearHandle.handle = GizmoHandle::MoveX;
+    nearHandle.shape = GizmoShape::Point;
+    nearHandle.points = { { 0.0f, 0.0f, 0.0f } };      // 5 from the eye
+    farHandle.handle = GizmoHandle::MoveY;
+    farHandle.shape = GizmoShape::Point;
+    farHandle.points = { { 0.0f, 0.0f, 2.0f } };       // 7 from the eye, same pixel
+    CHECK(PickFromPrimitives(view, { nearHandle, farHandle }, 800.0f, 450.0f) == GizmoHandle::MoveX);
+    CHECK(PickFromPrimitives(view, { farHandle, nearHandle }, 800.0f, 450.0f) == GizmoHandle::MoveX);
+    // Same distance to the eye: the one under the cursor wins.
+    GizmoPrimitive left, right;
+    left.handle = GizmoHandle::RotateU;
+    left.shape = GizmoShape::Point;
+    left.points = { { -0.05f, 0.0f, 0.0f } };
+    right.handle = GizmoHandle::RotateV;
+    right.shape = GizmoShape::Point;
+    right.points = { { 0.05f, 0.0f, 0.0f } };
+    float lx = 0.0f, ly = 0.0f;
+    CHECK(ProjectToScreen({ 0.05f, 0.0f, 0.0f }, view, lx, ly));
+    CHECK(PickFromPrimitives(view, { left, right }, lx, ly, 100.0f) == GizmoHandle::RotateV);
+    // A handle behind the camera is never picked.
+    GizmoPrimitive behind;
+    behind.handle = GizmoHandle::MoveZ;
+    behind.shape = GizmoShape::Point;
+    behind.points = { { 0.0f, 0.0f, -9.0f } };
+    CHECK(PickFromPrimitives(view, { behind }, 800.0f, 450.0f, 1000.0f) == GizmoHandle::None);
+}
+
+static void TestGizmoStateMachine()
+{
+    const GizmoView view = MakeTestView(true);
+    CutPlane plane;
+    PlaneGizmo gizmo;
+    gizmo.SetTool(GizmoTool::Move);
+    CutPlane next;
+
+    float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
+    const std::vector<GizmoPrimitive> prims = BuildGizmoPrimitives(view, plane, GizmoTool::Move);
+    CHECK(ProjectToScreen(prims[0].points[0], view, ax, ay) && ProjectToScreen(prims[0].points[1], view, bx, by));
+    GizmoInput input;
+    input.cursorValid = true;
+    input.x = (ax + bx) * 0.5f;
+    input.y = (ay + by) * 0.5f;
+
+    // Hover only.
+    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next));
+    CHECK(gizmo.Hovered() == GizmoHandle::MoveX && !gizmo.Dragging());
+
+    // While the camera is being used nothing is hovered or started.
+    input.blocked = true;
+    input.leftPressed = input.leftDown = true;
+    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && gizmo.Hovered() == GizmoHandle::None && !gizmo.Dragging());
+    input.blocked = false;
+
+    // Press on the handle, then move the cursor along the arrow: the plane follows.
+    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next));
+    CHECK(gizmo.Dragging() && gizmo.Active() == GizmoHandle::MoveX);
+    input.leftPressed = false;
+    input.x += 80.0f;
+    CHECK(gizmo.Update(view, plane, input, 0.1f, 3.0f, next));
+    CHECK(next.center.x > 0.2f && next.center.y == 0.0f && next.center.z == 0.0f);
+
+    // Outside the window the plane stays where it is; releasing ends the drag.
+    input.cursorValid = false;
+    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && gizmo.Dragging());
+    input.cursorValid = true;
+    input.leftDown = false;
+    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && !gizmo.Dragging());
+
+    // Changing the tool during a drag cancels it; the hidden tool shows and picks nothing.
+    input.leftDown = input.leftPressed = true;
+    input.x -= 80.0f;
+    gizmo.Update(view, plane, input, 0.1f, 3.0f, next);
+    CHECK(gizmo.Dragging());
+    gizmo.SetTool(GizmoTool::Hidden);
+    CHECK(!gizmo.Dragging() && gizmo.Hovered() == GizmoHandle::None);
+    CHECK(!gizmo.Update(view, plane, input, 0.1f, 3.0f, next) && !gizmo.Dragging());
+}
+
+static void TestGizmoBake()
+{
+    const GizmoView view = MakeTestView(true);
+    CutPlane plane;
+    ProceduralMeshData hidden;
+    BakeGizmo(view, plane, GizmoTool::Hidden, GizmoHandle::None, GizmoHandle::None, hidden);
+    CHECK(hidden.vertices.empty() && hidden.indices.empty() && hidden.sections.empty());
+
+    for (GizmoTool tool : { GizmoTool::Move, GizmoTool::Rotate, GizmoTool::Scale })
+    {
+        ProceduralMeshData data;
+        BakeGizmo(view, plane, tool, GizmoHandle::None, GizmoHandle::None, data);
+        CHECK(!data.vertices.empty() && !data.indices.empty() && data.sections.size() == 1);
+        ProceduralMesh mesh;
+        std::string error;
+        CHECK(mesh.SetMesh(data, &error));
+        // Nothing is yellow unless a handle is hovered or dragged.
+        bool yellow = false;
+        for (const ProceduralVertex& v : data.vertices)
+            yellow = yellow || (v.color.x == 1.0f && v.color.y == 0.9f && v.color.z == 0.1f);
+        CHECK(!yellow);
+    }
+
+    ProceduralMeshData hovered, dragged, plain;
+    BakeGizmo(view, plane, GizmoTool::Move, GizmoHandle::MoveX, GizmoHandle::None, hovered);
+    BakeGizmo(view, plane, GizmoTool::Move, GizmoHandle::None, GizmoHandle::MoveY, dragged);
+    BakeGizmo(view, plane, GizmoTool::Move, GizmoHandle::None, GizmoHandle::None, plain);
+    const auto yellowCount = [](const ProceduralMeshData& d)
+    {
+        size_t count = 0;
+        for (const ProceduralVertex& v : d.vertices)
+            count += (v.color.x == 1.0f && v.color.y == 0.9f && v.color.z == 0.1f);
+        return count;
+    };
+    CHECK(yellowCount(hovered) > 0 && yellowCount(dragged) > 0 && yellowCount(plain) == 0);
+    CHECK(hovered.vertices.size() == plain.vertices.size());
+}
+
 // ---------------------------------------------------------------- 2-5 tests (skinning)
 
 typedef std::vector<std::vector<DirectX::XMFLOAT4X4>> SlotMatrices;
@@ -2056,6 +2444,13 @@ int main()
     TestPickSharedParent();
     TestPickRejectsBadInput();
     TestJointSet();
+    TestGizmoRay();
+    TestGizmoAxisDrag();
+    TestGizmoRotateDrag();
+    TestGizmoScaleDrag();
+    TestGizmoPicking();
+    TestGizmoStateMachine();
+    TestGizmoBake();
 
     TestSkinIdentity();
     TestSkinSingleJoint();

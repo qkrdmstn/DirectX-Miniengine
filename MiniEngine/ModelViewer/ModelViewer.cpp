@@ -35,6 +35,7 @@
 #include "Display.h"
 #include "Utility.h"
 #include "../MeshCutting/Debug/CutDebugView.h"
+#include "../MeshCutting/Debug/SceneViewCamera.h"
 #include "../MeshCutting/Rendering/ProceduralMeshRenderer.h"
 #include "../MeshCutting/Runtime/CutController.h"
 
@@ -63,21 +64,19 @@ public:
 private:
 
     Camera m_Camera;
-    unique_ptr<CameraController> m_CameraController;
+    unique_ptr<MeshCutting::SceneViewCamera> m_SceneCamera;     // Unity Scene view style navigation
 
     D3D12_VIEWPORT m_MainViewport;
     D3D12_RECT m_MainScissor;
 
     ModelInstance m_ModelInst;
-    struct BoneSelection { uint32_t paletteId = 0; uint32_t jointIndex = 0; } m_BoneSelection;
-    bool m_BoneDebugEnabled = false;
-    bool m_WeightDebugEnabled = false;
-    bool m_WireframeEnabled = false;
+    uint32_t m_DebugPalette = 0;                // the skin palette the debug mode cuts (the first one with joints)
     bool m_AnimationsPaused = false;
     vector<AnimationState::eMode> m_ResumeModes;
     MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
-    MeshCutting::CutController m_Cut;           // patch, plane, cut pieces and their per-frame skinning
-    MeshCutting::CutDebugView m_CutView;        // debug meshes, display toggles and status lines
+    MeshCutting::CutController m_Cut;           // candidate patch, plane, cut pieces and their per-frame skinning
+    MeshCutting::CutDebugView m_CutView;        // debug meshes, render mode and status lines
+    MeshCutting::PlaneGizmo m_Gizmo;            // mouse gizmo of the cut plane
     ShadowCamera m_SunShadowCamera;
 
     void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
@@ -178,6 +177,9 @@ void LoadIBLTextures()
 
 void ModelViewer::Startup(void)
 {
+    // The mouse is exclusive by default, which hides the cursor. The cut debug controls need to see it.
+    GameInput::SetMouseExclusive(false);
+
     // MotionBlur::Enable = true;      // off: motion blur (the engine default is already false)
     TemporalEffects::EnableTAA = true;
     FXAA::Enable = false;
@@ -220,12 +222,15 @@ void ModelViewer::Startup(void)
         const Model* model = m_ModelInst.GetModel();
         if (model != nullptr)
         {
+            bool havePalette = false;
             for (uint32_t paletteId = 0; paletteId < model->m_SkinPalettes.size(); ++paletteId)
             {
                 const SkinPalette& palette = model->m_SkinPalettes[paletteId];
-                if (palette.numJoints > 0 && !m_BoneDebugEnabled)
-                    m_BoneSelection.paletteId = paletteId;
-                m_BoneDebugEnabled |= palette.numJoints > 0;
+                if (palette.numJoints > 0 && !havePalette)
+                {
+                    m_DebugPalette = paletteId;     // the debug mode cuts the first palette that has joints
+                    havePalette = true;
+                }
                 for (uint32_t jointIndex = 0; jointIndex < palette.numJoints; ++jointIndex)
                 {
                     const uint32_t nodeIndex = model->m_JointIndices[palette.startJoint + jointIndex];
@@ -243,10 +248,10 @@ void ModelViewer::Startup(void)
     }
 
     m_Camera.SetZRange(1.0f, 10000.0f);
-    if (gltfFileName.size() == 0)
-        m_CameraController.reset(new FlyingFPSCamera(m_Camera, Vector3(kYUnitVector)));
-    else
-        m_CameraController.reset(new OrbitCamera(m_Camera, m_ModelInst.GetBoundingSphere(), Vector3(kYUnitVector)));
+    // Without a model (the Sponza scene) there is nothing to frame: start with a large neutral sphere.
+    const Math::BoundingSphere focus = m_ModelInst.IsNull()
+        ? Math::BoundingSphere(Vector3(kZero), Scalar(1000.0f)) : m_ModelInst.GetBoundingSphere();
+    m_SceneCamera.reset(new MeshCutting::SceneViewCamera(m_Camera, focus, Vector3(kYUnitVector)));
 }
 
 void ModelViewer::Cleanup(void)
@@ -275,107 +280,30 @@ void ModelViewer::Update(float deltaT)
 
 
     const Model* model = m_ModelInst.GetModel();
-    if (model != nullptr && m_BoneDebugEnabled && m_BoneSelection.paletteId < model->m_SkinPalettes.size())
+    // T: debug mode (plane, gizmo, candidate patch, weight view). V: render mode. Ctrl+Z: undo the cut.
+    if (model != nullptr && GameInput::IsFirstPressed(GameInput::kKey_t))
+        m_Cut.ToggleEditPlane(m_ModelInst, m_DebugPalette);
+    if (GameInput::IsFirstPressed(GameInput::kKey_v))
+        m_CutView.CycleRenderMode();
+    if (GameInput::IsPressed(GameInput::kKey_lcontrol) && GameInput::IsFirstPressed(GameInput::kKey_z))
+        m_Cut.DiscardCut();
+    if (m_Cut.PlaneEditing())
     {
-        const SkinPalette& palette = model->m_SkinPalettes[m_BoneSelection.paletteId];
-        if (GameInput::IsFirstPressed(GameInput::kKey_b))
-            m_BoneDebugEnabled = false;
-        if (GameInput::IsFirstPressed(GameInput::kKey_h))
-            m_WeightDebugEnabled = !m_WeightDebugEnabled;
-        if (GameInput::IsFirstPressed(GameInput::kKey_v))
-            m_WireframeEnabled = !m_WireframeEnabled;
-        if (palette.numJoints > 0)
+        if (GameInput::IsFirstPressed(GameInput::kKey_return))
+            m_Cut.RequestCut();
+        // W/E/R/Q pick the gizmo tool, except while the right button is held (this frame's state): then they fly the camera.
+        if (!GameInput::IsPressed(GameInput::kMouse1))
         {
-            if (GameInput::IsFirstPressed(GameInput::kKey_j))
-                m_BoneSelection.jointIndex = (m_BoneSelection.jointIndex + palette.numJoints - 1) % palette.numJoints;
-            if (GameInput::IsFirstPressed(GameInput::kKey_k))
-                m_BoneSelection.jointIndex = (m_BoneSelection.jointIndex + 1) % palette.numJoints;
-        }
-        if (GameInput::IsFirstPressed(GameInput::kKey_i))
-        {
-            for (uint32_t step = 1; step <= model->m_SkinPalettes.size(); ++step)
-            {
-                uint32_t next = (m_BoneSelection.paletteId + step) % (uint32_t)model->m_SkinPalettes.size();
-                if (model->m_SkinPalettes[next].numJoints > 0)
-                {
-                    m_BoneSelection.paletteId = next;
-                    m_BoneSelection.jointIndex = 0;
-                    break;
-                }
-            }
-        }
-        if (GameInput::IsFirstPressed(GameInput::kKey_c))
-            m_Cut.SetPatch(*model, m_ModelInst, m_BoneSelection.paletteId, m_BoneSelection.jointIndex);
-        if (GameInput::IsFirstPressed(GameInput::kKey_x))
-            m_Cut.ClearPatch();
-        if (GameInput::IsFirstPressed(GameInput::kKey_g))
-            m_CutView.ToggleBoundary();
-        if (GameInput::IsFirstPressed(GameInput::kKey_n))
-            m_CutView.ToggleOverlay();
-        if (GameInput::IsFirstPressed(GameInput::kKey_u))
-            m_CutView.CycleWireMode();
-
-        {
-            if (GameInput::IsFirstPressed(GameInput::kKey_t))
-                m_Cut.ToggleEditPlane(m_ModelInst, m_BoneSelection.paletteId);
-            if (GameInput::IsFirstPressed(GameInput::kKey_m))
-                m_Cut.ToggleCap();
-            if (GameInput::IsFirstPressed(GameInput::kKey_l))
-                m_CutView.ToggleBackCull();
-            if (GameInput::IsFirstPressed(GameInput::kKey_z))
-                m_CutView.ToggleSectionTint();
-            if (GameInput::IsFirstPressed(GameInput::kKey_back))
-                m_Cut.DiscardCut();
-            // The plane keys and Enter only act while the plane is being edited.
-            if (m_Cut.PlaneEditing())
-            {
-                if (GameInput::IsFirstPressed(GameInput::kKey_r))
-                    m_Cut.ResetPlane(m_ModelInst);
-                if (GameInput::IsFirstPressed(GameInput::kKey_return))
-                    m_Cut.RequestCut();
-                if (GameInput::IsFirstPressed(GameInput::kKey_tab))
-                    m_Cut.CycleWeightJoint();
-
-                // Move: model radius per second. Turn: radians per second. Scale: e-fold per second.
-                const float move = m_Cut.ModelRadius() * deltaT, turn = 1.0f * deltaT;
-                const bool shift = GameInput::IsPressed(GameInput::kKey_lshift) || GameInput::IsPressed(GameInput::kKey_rshift);
-                const Vector3 up = m_Camera.GetUpVec(), right = m_Camera.GetRightVec();
-                if (GameInput::IsPressed(GameInput::kKey_home))
-                    m_Cut.TranslatePlane(up * move);
-                if (GameInput::IsPressed(GameInput::kKey_end))
-                    m_Cut.TranslatePlane(up * -move);
-                if (GameInput::IsPressed(GameInput::kKey_delete))
-                    m_Cut.TranslatePlane(right * -move);
-                if (GameInput::IsPressed(GameInput::kKey_pgdn))
-                    m_Cut.TranslatePlane(right * move);
-                if (GameInput::IsPressed(GameInput::kKey_lbracket))
-                    m_Cut.MovePlaneAlongNormal(-move);
-                if (GameInput::IsPressed(GameInput::kKey_rbracket))
-                    m_Cut.MovePlaneAlongNormal(move);
-                if (GameInput::IsPressed(GameInput::kKey_comma))
-                    m_Cut.RotatePlane(0, -turn);
-                if (GameInput::IsPressed(GameInput::kKey_period))
-                    m_Cut.RotatePlane(0, turn);
-                if (GameInput::IsPressed(GameInput::kKey_semicolon))
-                    m_Cut.RotatePlane(1, -turn);
-                if (GameInput::IsPressed(GameInput::kKey_apostrophe))
-                    m_Cut.RotatePlane(1, turn);
-                if (GameInput::IsPressed(GameInput::kKey_insert))
-                    m_Cut.RotatePlane(2, -turn);
-                if (GameInput::IsPressed(GameInput::kKey_pgup))
-                    m_Cut.RotatePlane(2, turn);
-                if (GameInput::IsPressed(GameInput::kKey_minus))
-                    m_Cut.ScalePlane(expf(-deltaT), shift);
-                if (GameInput::IsPressed(GameInput::kKey_equals))
-                    m_Cut.ScalePlane(expf(deltaT), shift);
-            }
-            // The preview and the cut itself run in CutController::Update, after this frame's pose is known.
+            if (GameInput::IsFirstPressed(GameInput::kKey_q))
+                m_Gizmo.SetTool(MeshCutting::GizmoTool::Hidden);
+            if (GameInput::IsFirstPressed(GameInput::kKey_w))
+                m_Gizmo.SetTool(MeshCutting::GizmoTool::Move);
+            if (GameInput::IsFirstPressed(GameInput::kKey_e))
+                m_Gizmo.SetTool(MeshCutting::GizmoTool::Rotate);
+            if (GameInput::IsFirstPressed(GameInput::kKey_r))
+                m_Gizmo.SetTool(MeshCutting::GizmoTool::Scale);
         }
     }
-    else if (model != nullptr && m_BoneSelection.paletteId < model->m_SkinPalettes.size()
-        && model->m_SkinPalettes[m_BoneSelection.paletteId].numJoints > 0
-        && GameInput::IsFirstPressed(GameInput::kKey_b))
-        m_BoneDebugEnabled = true;
 
     if (GameInput::IsFirstPressed(GameInput::kKey_space) && m_ModelInst.GetNumAnimations() > 0)
     {
@@ -411,7 +339,53 @@ void ModelViewer::Update(float deltaT)
     else if (GameInput::IsFirstPressed(GameInput::kRShoulder))
         DebugZoom.Increment();
 
-    m_CameraController->Update(deltaT);
+    // F: frame the cut plane in debug mode, the model otherwise (not while flying or dragging the gizmo).
+    if (GameInput::IsFirstPressed(GameInput::kKey_f) && !GameInput::IsPressed(GameInput::kMouse1) && !m_Gizmo.Dragging())
+    {
+        if (m_Cut.PlaneEditing() && m_Cut.PlaneValid())
+        {
+            const MeshCutting::CutPlane& plane = m_Cut.Plane();
+            m_SceneCamera->Frame(Vector3(plane.center.x, plane.center.y, plane.center.z),
+                std::sqrt(plane.halfExtents.x * plane.halfExtents.x + plane.halfExtents.y * plane.halfExtents.y));
+        }
+        else if (!m_ModelInst.IsNull())
+        {
+            const Math::BoundingSphere sphere = m_ModelInst.GetBoundingSphere();
+            m_SceneCamera->Frame(Vector3(sphere.GetCenter()), float(sphere.GetRadius()));
+        }
+    }
+
+    // The camera does not start new moves while a gizmo handle is being dragged.
+    m_SceneCamera->SetInputEnabled(!m_Gizmo.Dragging());
+    m_SceneCamera->Update(deltaT);
+
+    // The gizmo works on this frame's camera (updated just above) and the window's client area. TAA jitter is a
+    // viewport offset, so the camera's ViewProj used here has no jitter in it.
+    float clientWidth = 0.0f, clientHeight = 0.0f;
+    if (m_Cut.PlaneEditing() && m_Cut.PlaneValid() && GameInput::GetClientSize(clientWidth, clientHeight))
+    {
+        DirectX::XMFLOAT4X4 viewProj;
+        XMStoreFloat4x4(&viewProj, XMMATRIX(m_Camera.GetViewProjMatrix()));
+        const Vector3 eye = m_Camera.GetPosition();
+        const MeshCutting::GizmoView gizmoView = MeshCutting::MakeGizmoView(viewProj,
+            DirectX::XMFLOAT3(float(eye.GetX()), float(eye.GetY()), float(eye.GetZ())), clientWidth, clientHeight, true);
+
+        MeshCutting::GizmoInput input;
+        float normalizedX, normalizedY;
+        input.cursorValid = GameInput::GetCursorClientPos(input.x, input.y, normalizedX, normalizedY);
+        input.leftDown = GameInput::IsPressed(GameInput::kMouse0);
+        input.leftPressed = GameInput::IsFirstPressed(GameInput::kMouse0);
+        // While the camera moves, or Alt is held (Alt + left button orbits), the gizmo is not touched.
+        input.blocked = m_SceneCamera->IsNavigating() || GameInput::IsPressed(GameInput::kKey_lalt)
+            || GameInput::IsPressed(GameInput::kMouse1) || GameInput::IsPressed(GameInput::kMouse2);
+
+        MeshCutting::CutPlane changed;
+        if (m_Gizmo.Update(gizmoView, m_Cut.Plane(), input, m_Cut.PlaneMinExtent(), m_Cut.PlaneMaxExtent(), changed))
+            m_Cut.SetPlane(changed);
+        m_CutView.SetGizmo(gizmoView, m_Gizmo.Tool(), m_Gizmo.Hovered(), m_Gizmo.Active());
+    }
+    else
+        m_Gizmo.Cancel();
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 
@@ -494,21 +468,13 @@ void ModelViewer::RenderScene(void)
         sorter.SetCamera(m_Camera);
         sorter.SetViewport(viewport);
         sorter.SetScissor(scissor);
-        if (m_BoneDebugEnabled && model != nullptr
-            && m_BoneSelection.paletteId < model->m_SkinPalettes.size())
-        {
-            // In cut mode the weight view shows a joint the plane cuts (Tab picks which); otherwise J/K's joint.
-            uint32_t weightPalette = m_BoneSelection.paletteId, weightJoint = m_BoneSelection.jointIndex;
-            const uint32_t cutJoint = m_Cut.WeightJoint();
-            if (cutJoint != MeshCutting::kNoNode && m_Cut.EditPalette() < model->m_SkinPalettes.size())
-            {
-                weightPalette = m_Cut.EditPalette();
-                weightJoint = cutJoint;
-            }
-            const SkinPalette& palette = model->m_SkinPalettes[weightPalette];
-            sorter.SetBoneDebug(m_WeightDebugEnabled, palette.startJoint, weightJoint);
-            sorter.SetWireframe(m_WireframeEnabled);
-        }
+        // The original model follows the render mode: wire in Wire and Debug, solid otherwise (Solid + Wire adds
+        // a second wire pass below). In debug mode the weight view shows the first cut joint.
+        const MeshCutting::RenderMode renderMode = m_CutView.GetRenderMode();
+        sorter.SetWireframe(renderMode == MeshCutting::RenderMode::Wire || renderMode == MeshCutting::RenderMode::Debug);
+        const uint32_t weightJoint = m_Cut.WeightJoint();
+        if (weightJoint != MeshCutting::kNoNode && model != nullptr && m_Cut.EditPalette() < model->m_SkinPalettes.size())
+            sorter.SetBoneDebug(true, model->m_SkinPalettes[m_Cut.EditPalette()].startJoint, weightJoint);
         sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
         sorter.AddRenderTarget(g_SceneColorBuffer);
 
@@ -552,6 +518,31 @@ void ModelViewer::RenderScene(void)
                 gfxContext.SetViewportAndScissor(viewport, scissor);
 
                 sorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
+
+                // Solid + Wire: the lines of the original model go over the solid pass. They are drawn with the
+                // weight-view shader on the last joint of the palette, which colors every vertex without weight
+                // to that joint dark gray (an unselected joint would leave the color undefined); the depth the
+                // solid pass wrote keeps hidden lines out.
+                if (renderMode == MeshCutting::RenderMode::SolidAndWire)
+                {
+                    const bool havePalette = model != nullptr && m_DebugPalette < model->m_SkinPalettes.size();
+                    MeshSorter wireSorter(MeshSorter::kDefault);
+                    wireSorter.SetCamera(m_Camera);
+                    wireSorter.SetViewport(viewport);
+                    wireSorter.SetScissor(scissor);
+                    wireSorter.SetWireframe(true);
+                    // A model without skins has no joint to pick: its lines keep the normal shading.
+                    if (havePalette)
+                    {
+                        const SkinPalette& wirePalette = model->m_SkinPalettes[m_DebugPalette];
+                        wireSorter.SetBoneDebug(true, wirePalette.startJoint, wirePalette.numJoints > 0 ? wirePalette.numJoints - 1 : 0);
+                    }
+                    wireSorter.SetDepthStencilTarget(g_SceneDepthBuffer);
+                    wireSorter.AddRenderTarget(g_SceneColorBuffer);
+                    m_ModelInst.Render(wireSorter);
+                    wireSorter.Sort();
+                    wireSorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
+                }
             }
 
             //Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
@@ -595,32 +586,14 @@ void ModelViewer::RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D1
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
     const Model* model = m_ModelInst.GetModel();
-    if (!m_BoneDebugEnabled || model == nullptr || m_BoneSelection.paletteId >= model->m_SkinPalettes.size())
-        return;
-
-    const SkinPalette& palette = model->m_SkinPalettes[m_BoneSelection.paletteId];
-    if (m_BoneSelection.jointIndex >= palette.numJoints)
-        return;
-
-    const uint32_t nodeIndex = model->m_JointIndices[palette.startJoint + m_BoneSelection.jointIndex];
-    const uint32_t parent = nodeIndex < model->m_NodeParents.size()
-        ? model->m_NodeParents[nodeIndex] : UINT32_MAX;
-    const std::wstring name = BoneName(*model, nodeIndex, m_BoneSelection.jointIndex);
-    const std::wstring parentName = ParentName(*model, parent);
+    const uint32_t cutPalette = m_Cut.EditPalette();
 
     TextContext text(context);
     text.Begin();
     text.ResetCursor(20.0f, 70.0f);
-    text.DrawFormattedString(L"Skin %u/%u  Joint %u/%u  Node %u  %ls\n",
-        m_BoneSelection.paletteId, (uint32_t)model->m_SkinPalettes.size(),
-        m_BoneSelection.jointIndex, palette.numJoints, nodeIndex, name.c_str());
-    text.DrawFormattedString(L"Parent %u  %ls\n", parent, parentName.c_str());
-    text.DrawFormattedString(L"B: debug  J/K: joint  I: skin  H: weight %ls  V: wire %ls\n",
-        m_WeightDebugEnabled ? L"on" : L"off", m_WireframeEnabled ? L"on" : L"off");
-    const uint32_t cutPalette = m_Cut.EditPalette();
     m_CutView.DrawUI(text, m_Cut, [model, cutPalette](uint32_t joint) -> std::wstring
         {
-            if (cutPalette >= model->m_SkinPalettes.size() || joint >= model->m_SkinPalettes[cutPalette].numJoints)
+            if (model == nullptr || cutPalette >= model->m_SkinPalettes.size() || joint >= model->m_SkinPalettes[cutPalette].numJoints)
                 return L"?";
             const SkinPalette& cutSkin = model->m_SkinPalettes[cutPalette];
             return BoneName(*model, model->m_JointIndices[cutSkin.startJoint + joint], joint);
