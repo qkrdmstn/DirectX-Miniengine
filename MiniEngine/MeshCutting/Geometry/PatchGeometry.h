@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // Slice working data for a procedural patch. Nothing in Geometry/ depends on Model or Core,
 // so the whole slicing pipeline builds and tests without a D3D12 device.
@@ -12,23 +12,21 @@
 namespace MeshCutting
 {
     constexpr uint32_t kNoNode = 0xFFFFFFFFu;
-
-    // Epsilon is this fraction of the piece bounds radius.
+    
     constexpr float kDefaultEpsilonScale = 1e-5f;
 
-    // Skin data of one original patch node. Surface nodes created by slicing refer to these
-    // through SurfaceOrigin, so every piece can be skinned from the same source later.
+    // 바인드 자세에서의 각 정점 정보
     struct SkinNode
     {
         uint32_t meshSlot = 0;
         DirectX::XMFLOAT3 bindPosition = { 0.0f, 0.0f, 0.0f };
-        uint32_t jointCount = 0;            // joints[0..jointCount), ascending, weights > 0
+        uint32_t jointCount = 0;            
         uint16_t joints[4] = {};
         float weights[4] = {};
     };
 
-    // Barycentric origin of a surface node over at most three original nodes (SkinNode indices).
-    // Used slots come first with ascending node index; unused slots hold kNoNode and weight 0.
+    // 각 정점을 원본 메시에서 표현하는 방법을 저장
+    // 절단평면과 메시 사이의 교차점 정보를 간편하게 저장 가능(어떤 정점에 의해 어떤 가중치를 가지고 분할되는지)
     struct SurfaceOrigin
     {
         uint32_t node[3] = { kNoNode, kNoNode, kNoNode };
@@ -37,16 +35,17 @@ namespace MeshCutting
 
     enum class NodeKind : uint8_t { Surface, Cap };
 
-    // A geometric point. Every render corner that refers to it copies this position.
+    // 현재 자세에서의 정점 정보
+    // (SkinNode에서 애니메이션 변환 행렬을 곱하고, SurfaceOrigin의 가중치를 포함하면 교차점이던, 원래 있던 정점이던 현재 자세에서의 위치를 알 수 있다.)
     struct GeomNode
     {
         NodeKind kind = NodeKind::Surface;
-        SurfaceOrigin origin;               // Surface nodes only
-        uint32_t cutId = 0;                 // Cut that created the node (0 = original patch)
+        SurfaceOrigin origin;               
+        uint32_t cutId = 0;                 
         DirectX::XMFLOAT3 position = { 0.0f, 0.0f, 0.0f };
     };
 
-    // A render vertex: a node plus its own attributes (UV seams and hard normals live here).
+    // 각 정점을 렌더링할 때 필요한 정보
     struct RenderCorner
     {
         uint32_t node = 0;
@@ -57,6 +56,7 @@ namespace MeshCutting
 
     enum class FaceKind : uint8_t { Surface, Cap };
 
+    // 삼각형 정보
     struct Face
     {
         uint32_t corner[3] = { 0, 0, 0 };
@@ -85,6 +85,7 @@ namespace MeshCutting
         std::vector<uint32_t> loopSizes;    // node count of every loop in rimNodes
     };
 
+    // 메시 조각 하나. 절단 이후에는 PatchPiece 여러개로 나눠진다.
     struct PatchPiece
     {
         std::vector<SkinNode> originNodes;  // shared by all pieces cut from one patch
