@@ -112,9 +112,11 @@ namespace MeshCutting
     }
 
     void CutPick::PickJoints(const CutPickMesh& mesh, const std::vector<uint32_t>& jointParents,
-        const CutPlane& plane, float minWeight, float epsilon, std::vector<CutPickJoint>& out)
+        const CutPlane& plane, float minWeight, float epsilon, std::vector<CutPickJoint>& out, CutPickStats* stats)
     {
         out.clear();
+        if (stats)
+            *stats = CutPickStats();
         const size_t vertexCount = mesh.positions.size();
         const SlicePlane slice = plane.ToSlicePlane();
         if (mesh.skins.size() != vertexCount || ValidatePlane(slice) != SliceStatus::Ok)
@@ -138,6 +140,8 @@ namespace MeshCutting
         std::map<uint32_t, uint32_t> counts;
         for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
         {
+            if (stats)
+                ++stats->checkedTriangles;
             const uint32_t index[3] = { mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2] };
             if (index[0] >= vertexCount || index[1] >= vertexCount || index[2] >= vertexCount)
                 continue;
@@ -148,6 +152,8 @@ namespace MeshCutting
             const bool hasMinus = s[0] == -1 || s[1] == -1 || s[2] == -1;
             if (!hasPlus || !hasMinus)
                 continue;       // 한쪽에만 있거나 정점이나 에지만 평면에 닿는 삼각형
+            if (stats)
+                ++stats->mixedTriangles;
 
             // 절단선은 평면 위의 선분이다: 끝점은 평면 위의 정점과 부호가 반대인 에지의 교점이다. 이 선분이 사각형과 만나야 한다.
             DirectX::XMFLOAT3 ends[3];
@@ -172,7 +178,11 @@ namespace MeshCutting
 
             const uint32_t joint = ChooseJoint(mesh, index, jointParents, minWeight);
             if (joint != kNoNode)
+            {
                 ++counts[joint];
+                if (stats)
+                    ++stats->crossedTriangles;
+            }
         }
 
         for (const auto& entry : counts)

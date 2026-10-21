@@ -14,6 +14,6 @@
 | `RegionCutDesign.md` | 영역 작업, 걸친 joint 합친 뒤 자르기 (NDC 한계 돌파) | 설계안, JointCutDesign 다음 단계 | 한계 돌파 작업 전 |
 | `PlaneFirstCutDesign.md` | world 유한 평면, 후보 패치 (P-1, P-2) | P-1·P-2 완료, P-3 폐기 | 평면·후보 패치 코드를 고칠 때 |
 | `SceneViewControlsDesign.md` | 마우스 카메라, 평면 기즈모, 키 (S-1~S-4) | 완료 (`0fc39fe`), 현재 조작의 기준 | 입력·기즈모를 고칠 때 |
-| `CutDebugDesign.md` | 디버그 와이어프레임, 미리보기/확정 절단 (D-0~D-3) | 완료 (`d33b1a7`) | 디버그 표시를 고칠 때 |
+| `CutDebugDesign.md` | 디버그 와이어프레임, Enter 확정 절단 (D-0~D-3 이력 포함) | 완료 (`d33b1a7`), 자동 미리보기 제거 반영 (작업 트리, `a045aec` 이후) | 디버그 표시를 고칠 때 |
 | `PlaneSlicingDesign.md` | 평면 슬라이스, 루프, cap, 조각 스키닝 알고리즘 | 완료 (`3e0f55f`, `11c4be6`) | Slice/SliceCap/Skinning 알고리즘을 볼 때 |
 | `archive/ProjectFlowReport.md` | 2026-10-20 시점 흐름 보고서 (Codex 작성) | 보관, 줄 번호 낡음 | 과거 구조를 확인할 때만 |

@@ -106,16 +106,8 @@ namespace MeshCutting
         std::string patchError;
         float patchRadius = 0.0f;
         std::vector<std::vector<DirectX::XMFLOAT4X4>> skinMatrices;     // 이번 프레임의 스킨 행렬
-        std::vector<std::vector<DirectX::XMFLOAT4X4>> previousSkinMatrices;     // 지난 프레임의 스킨 행렬 (자세 변화 감지)
         bool poseValid = false;             // 이번 프레임 스키닝이 끝났는가
         std::string skinError;
-
-        SliceResult preview;                // 미리보기 (dry-run)
-        bool havePreview = false;
-        SliceStatus previewStatus = SliceStatus::InvalidInput;
-        bool previewDirty = true;
-        uint64_t previewGeneration = 0;
-        float previewMs = 0.0f;
 
         bool haveConfirmed = false;         // 확정 결과 (후보가 사라져도 유지, Ctrl+Z나 다음 Enter에서 지워진다)
         PatchPiece positive, negative;

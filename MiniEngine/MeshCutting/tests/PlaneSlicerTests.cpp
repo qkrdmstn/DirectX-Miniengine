@@ -2631,7 +2631,7 @@ static void TestJobColors()
         }
     // 작업이 만들어질 때 기본 상태.
     const CutJob job;
-    CHECK(!job.candidate && !job.haveConfirmed && job.colorIndex == 0 && job.previewDirty && job.source.bone == nullptr);
+    CHECK(!job.candidate && !job.haveConfirmed && job.colorIndex == 0 && job.source.bone == nullptr);
 }
 
 
@@ -2680,6 +2680,16 @@ static void TestPickJointsSingleJoint()
     const CutPickMesh prism = MakePrismMesh(1, 1);
     const std::vector<CutPickJoint> picked = Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 1, 0, 5.0f));
     CHECK(picked.size() == 1 && picked[0].joint == 1 && picked[0].triangleCount == 8);
+
+    // 계측 개수: 옆면 삼각형 8개를 모두 훑고, 모두 평면 양쪽에 걸쳤고, 모두 교차로 셌다. 사각형이 일부만 덮으면 교차만 줄어든다.
+    CutPickStats stats;
+    std::vector<CutPickJoint> counted;
+    CutPick::PickJoints(prism, { kNoNode, 0 }, HorizontalPlane(0, 1, 0, 5.0f), 0.05f, 0.0f, counted, &stats);
+    CHECK(stats.checkedTriangles == 8 && stats.mixedTriangles == 8 && stats.crossedTriangles == 8);
+    CutPick::PickJoints(prism, { kNoNode, 0 }, HorizontalPlane(1, 1, 0, 0.3f), 0.05f, 0.0f, counted, &stats);
+    CHECK(stats.checkedTriangles == 8 && stats.mixedTriangles == 8 && stats.crossedTriangles == 2);
+    CutPick::PickJoints(prism, { kNoNode, 0 }, HorizontalPlane(0, 3, 0, 5.0f), 0.05f, 0.0f, counted, &stats);
+    CHECK(stats.checkedTriangles == 8 && stats.mixedTriangles == 0 && stats.crossedTriangles == 0);
 
     // 법선이 반대여도 같은 삼각형이다.
     CutPlane flipped = HorizontalPlane(0, 1, 0, 5.0f);

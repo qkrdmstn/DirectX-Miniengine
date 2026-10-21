@@ -32,31 +32,15 @@ namespace MeshCutting
                 mesh.SetMesh(std::move(data), &error);
         }
 
-        // 평면 색은 후보 작업들의 시험 절단 상태를 합친 것이다. 초록: 자름, 회색: 아무것도 안 닿음, 빨강: 실패, 하늘색: 아직 계산 전.
+        // 평면 색은 교차 후보 유무만 표시한다. 절단 성공/실패는 Enter 뒤 상태 줄에서 확인한다.
         DirectX::XMFLOAT4 PlaneColor(const CutController& cut)
         {
-            bool anyCandidate = false, anyPreview = false, anyOk = false, anyFail = false;
             for (const auto& entry : cut.GetJobs())
             {
-                const CutJob& job = entry.second;
-                if (!job.candidate)
-                    continue;
-                anyCandidate = true;
-                if (!job.havePreview)
-                    continue;
-                anyPreview = true;
-                if (job.previewStatus == SliceStatus::Ok)
-                    anyOk = true;
-                else if (job.previewStatus != SliceStatus::NoCut)
-                    anyFail = true;
+                if (entry.second.candidate)
+                    return { 0.0f, 1.0f, 1.0f, 1.0f };
             }
-            if (!anyCandidate)
-                return { 0.6f, 0.6f, 0.6f, 1.0f };
-            if (!anyPreview)
-                return { 0.0f, 1.0f, 1.0f, 1.0f };
-            if (anyFail)
-                return { 1.0f, 0.15f, 0.15f, 1.0f };
-            return anyOk ? DirectX::XMFLOAT4(0.1f, 1.0f, 0.1f, 1.0f) : DirectX::XMFLOAT4(0.6f, 0.6f, 0.6f, 1.0f);
+            return { 0.6f, 0.6f, 0.6f, 1.0f };
         }
 
         // The cut plane as thin tubes: the rectangle border and a few cross lines in color, plus a white
@@ -149,7 +133,6 @@ namespace MeshCutting
             renderer.ReleaseMesh(it->second.negative);
             renderer.ReleaseMesh(it->second.boundaryPositive);
             renderer.ReleaseMesh(it->second.boundaryNegative);
-            renderer.ReleaseMesh(it->second.previewLoops);
             it = m_JobMeshes.erase(it);
         }
 
@@ -191,16 +174,6 @@ namespace MeshCutting
                     bake(job.positive, meshes.positive, meshes.boundaryPositive);
                     bake(job.negative, meshes.negative, meshes.boundaryNegative);
                 }
-            }
-
-            // 시험 절단을 다시 했거나 지웠으면 평면이 어디를 자를지 루프만 보여 준다.
-            if (job.previewGeneration != meshes.previewGeneration)
-            {
-                meshes.previewGeneration = job.previewGeneration;
-                ProceduralMeshData loops;
-                if (job.havePreview && job.previewStatus == SliceStatus::Ok)
-                    BakeLoopDebug(job.preview.positive, job.preview.loops, job.patchRadius * 0.02f, GetJobColor(job.colorIndex), loops);
-                ReplaceOrUpdate(meshes.previewLoops, std::move(loops));
             }
 
             // 매 프레임 조각 위치만 갱신한다 (이번 프레임 스키닝이 끝난 작업만).
@@ -348,13 +321,11 @@ namespace MeshCutting
             }
         }
 
-        // 평면, 예상 루프, 교차 선분, 기즈모는 월드 공간이라 캐릭터 위에 그린다. 기즈모는 깊이를 무시해서 가려지지 않는다.
+        // 평면, 교차 선분, 기즈모는 월드 공간이라 캐릭터 위에 그린다. 기즈모는 깊이를 무시해서 가려지지 않는다.
         if (cut.PlaneEditing())
         {
             const Matrix4 worldIdentity(kIdentity);
             draw(m_PlaneDebug, worldIdentity);
-            for (const auto& entry : m_JobMeshes)
-                draw(entry.second.previewLoops, worldIdentity);
             draw(m_SegmentDebug, worldIdentity);
             ProceduralMeshRenderer::DrawOptions overlay;
             overlay.depthTest = false;
@@ -370,8 +341,19 @@ namespace MeshCutting
         const CutFrameStats stats = cut.GetFrameStats();
         if (cut.PlaneEditing())
         {
-            text.DrawFormattedString(L"Jobs %u (candidates %u, confirmed %u)   pick %.3f ms   extract %.3f ms (%u extractions)   follow %.3f ms   preview %.3f ms   cut %.3f ms\n",
-                stats.jobs, stats.candidates, stats.confirmed, stats.pickMs, stats.extractMs, stats.extractCount, stats.skinMs, stats.previewMs, stats.cutMs);
+            text.DrawFormattedString(L"Jobs %u (candidates %u, confirmed %u)   pick %.3f ms   extract %.3f ms (%u extractions)   follow %.3f ms   cut %.3f ms\n",
+                stats.jobs, stats.candidates, stats.confirmed, stats.pickMs, stats.extractMs, stats.extractCount, stats.skinMs, stats.cutMs);
+            // 계측: 이번 프레임 개수와 단계별 시간 (이번 프레임 / 지수 평균, ms). 평균에는 건너뛴 프레임의 0이 들어간다.
+            text.DrawFormattedString(L"Count: targets %u pal %u  skinned verts cache %u job %u  tris checked %u mixed %u crossed %u\n",
+                stats.targets, stats.palettes, stats.cacheVertices, stats.jobVertices, stats.checkedTriangles, stats.mixedTriangles, stats.crossedTriangles);
+            text.DrawFormattedString(L"Jobs +%u =%u -%u  extractions %u   pick refresh: pose %u plane %u both %u skipped %u\n",
+                stats.jobsAdded, stats.jobsKept, stats.jobsLost, stats.extractions, stats.refreshPose, stats.refreshPlane, stats.refreshBoth, stats.refreshSkipped);
+            text.DrawFormattedString(L"ms now/avg: skeleton %.2f/%.2f  pickMat %.2f/%.2f  pickSkin %.2f/%.2f  pickTris %.2f/%.2f  segments %.2f/%.2f\n",
+                stats.skeleton.frame, stats.skeleton.average, stats.poseMatrices.frame, stats.poseMatrices.average, stats.cacheSkin.frame, stats.cacheSkin.average,
+                stats.pick.frame, stats.pick.average, stats.segments.frame, stats.segments.average);
+            text.DrawFormattedString(L"            jobUpdate %.2f/%.2f (extract %.2f/%.2f)  jobMat %.2f/%.2f  jobSkin %.2f/%.2f  confirm %.2f/%.2f\n",
+                stats.jobUpdate.frame, stats.jobUpdate.average, stats.extract.frame, stats.extract.average, stats.jobMatrices.frame, stats.jobMatrices.average,
+                stats.jobSkin.frame, stats.jobSkin.average, stats.confirm.frame, stats.confirm.average);
             for (const CutTarget& target : cut.GetTargets())
             {
                 if (!target.error.empty())
@@ -396,8 +378,6 @@ namespace MeshCutting
             if (job.candidate)
             {
                 line += L"  crossed " + std::to_wstring(job.pickTriangles) + L" tris  patch " + std::to_wstring(job.patchTriangles) + L" tris";
-                if (job.havePreview)
-                    line += L"  preview " + Utility::UTF8ToWideString(SliceStatusName(job.previewStatus));
             }
             if (job.cutAttempted)
                 line += L"  cut " + Utility::UTF8ToWideString(SliceStatusName(job.lastCutStatus));
@@ -415,8 +395,6 @@ namespace MeshCutting
             if (job.candidate && job.patchStatus != SliceStatus::Ok)
                 detail(job.patchError);
             detail(job.skinError);
-            if (job.candidate && job.havePreview && job.previewStatus != SliceStatus::Ok)
-                detail(job.preview.detail);
             if (job.cutAttempted && job.lastCutStatus != SliceStatus::Ok)
                 detail(job.lastCutError);
             else if (job.haveConfirmed && !job.cutInfo.empty())
@@ -435,7 +413,6 @@ namespace MeshCutting
             renderer.ReleaseMesh(entry.second.negative);
             renderer.ReleaseMesh(entry.second.boundaryPositive);
             renderer.ReleaseMesh(entry.second.boundaryNegative);
-            renderer.ReleaseMesh(entry.second.previewLoops);
         }
         m_JobMeshes.clear();
         renderer.ReleaseMesh(m_PlaneDebug);

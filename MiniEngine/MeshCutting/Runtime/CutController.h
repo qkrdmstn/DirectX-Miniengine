@@ -15,7 +15,14 @@ class ModelInstance;
 
 namespace MeshCutting
 {
-    // 작업 시간 합계. 교차 찾기, 추출, 절단은 마지막 값, 스키닝과 미리보기는 작업별 지수 평균의 합이다 (ms).
+    // 한 단계의 시간 (ms): 이번 프레임 값(대상·팔레트·작업이 여럿이면 합)과 지수 평균. 평균에는 그 단계를 건너뛴 프레임의 0도 들어간다.
+    struct CutPhaseTime
+    {
+        float frame = 0.0f;
+        float average = 0.0f;
+    };
+
+    // 작업 시간 합계(예전 값)와 계측값. 개수는 이번 프레임 값이다. 교차 찾기, 추출, 절단은 마지막 값, 스키닝은 작업별 지수 평균의 합이다 (ms).
     struct CutFrameStats
     {
         uint32_t jobs = 0;
@@ -25,8 +32,31 @@ namespace MeshCutting
         float pickMs = 0.0f;            // 교차 삼각형 찾기 (마지막으로 다시 계산한 시간)
         float extractMs = 0.0f;
         float skinMs = 0.0f;
-        float previewMs = 0.0f;
         float cutMs = 0.0f;
+
+        // 이번 프레임 개수
+        uint32_t targets = 0;
+        uint32_t palettes = 0;
+        uint32_t cacheVertices = 0;     // 캐시 정점의 현재 위치를 계산한 수
+        uint32_t jobVertices = 0;       // 작업의 패치·조각 정점을 스키닝한 수
+        uint32_t checkedTriangles = 0;
+        uint32_t mixedTriangles = 0;    // 평면 양쪽에 걸친 삼각형
+        uint32_t crossedTriangles = 0;  // 절단 joint를 고른 교차 삼각형
+        uint32_t jobsAdded = 0, jobsKept = 0, jobsLost = 0;
+        uint32_t extractions = 0;
+        uint32_t refreshPose = 0, refreshPlane = 0, refreshBoth = 0, refreshSkipped = 0;    // 팔레트별 교차 재계산 이유
+
+        // 단계별 시간
+        CutPhaseTime skeleton;          // ComputePaletteSkeleton
+        CutPhaseTime poseMatrices;      // 교차용 스킨 행렬 + 자세 변경 판단
+        CutPhaseTime cacheSkin;         // 캐시 정점 스키닝
+        CutPhaseTime pick;              // PickJoints
+        CutPhaseTime segments;          // 뼈 선분 표시용 PickSegments
+        CutPhaseTime jobUpdate;         // key 만들기 + DiffJobs + ApplyDiff (추출 포함)
+        CutPhaseTime extract;           // 새 작업의 추출·용접 (jobUpdate 안)
+        CutPhaseTime jobMatrices;       // 작업의 스킨 행렬
+        CutPhaseTime jobSkin;           // 작업의 패치·조각 스키닝
+        CutPhaseTime confirm;           // Enter의 ConfirmAll
     };
 
     class CutController
@@ -43,7 +73,7 @@ namespace MeshCutting
         void RequestCut();          // Enter: 다음 Update에서 이전 확정 결과를 지우고 후보 작업마다 절단
         void DiscardCut();          // Ctrl+Z: 모든 확정 결과를 지운다
 
-        // 모든 인스턴스의 Update 뒤에 한 번: 교차 선분 -> 작업 목록 -> 스키닝 -> 미리보기 또는 확정
+        // 모든 인스턴스의 Update 뒤에 한 번: 메시 교차 -> 작업 목록 -> 스키닝 -> Enter 요청 시 확정
         void Update();
 
         const CutPlane& GetPlane() const { return m_Plane; }
@@ -72,7 +102,6 @@ namespace MeshCutting
         void ExtractJob(CutJob& job);
         void DropCandidate(CutJob& job);
         void SkinJobs();
-        void RunPreview(CutJob& job);
         void ConfirmAll();
         SliceStatus SliceWithPlane(const CutJob& job, SliceResult& result) const;
         void PlacePlane(const ModelInstance& instance);
@@ -89,9 +118,10 @@ namespace MeshCutting
         uint64_t m_JobListGeneration = 0;
         uint32_t m_NextColorIndex = 0;
         uint32_t m_ExtractCount = 0;
-        uint64_t m_Generation = 0;          // 미리보기와 확정 결과의 세대 번호를 모든 작업에서 유일하게 만든다
+        uint64_t m_Generation = 0;          // 확정 결과의 세대 번호를 모든 작업에서 유일하게 만든다
         CutPlane::Frame m_PickedFrame;         // 마지막으로 교차를 찾은 평면
         bool m_HavePickedFrame = false;
         float m_PickMs = 0.0f;
+        CutFrameStats m_Frame;                // 이번 프레임 개수와 단계별 시간 (평균은 프레임을 넘어 유지)
     };
 }

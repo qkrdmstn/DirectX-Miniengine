@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-// 절단 데모의 화면 쪽: 작업별 절단 조각과 미리보기 루프, 평면, 교차 선분, 기즈모, 상태 줄. 컨트롤러를 읽기만 한다.
+// 절단 데모의 화면 쪽: 작업별 절단 조각, 평면, 교차 선분, 기즈모, 상태 줄. 컨트롤러를 읽기만 한다.
 
 #include "../Geometry/CutPlane.h"
 #include "../ProceduralMesh.h"
@@ -56,9 +56,7 @@ namespace MeshCutting
         {
             ProceduralMesh positive, negative;
             ProceduralMesh boundaryPositive, boundaryNegative;
-            ProceduralMesh previewLoops;
             uint64_t pieceGeneration = 0;
-            uint64_t previewGeneration = 0;
             bool bakedSectionSplit = false;
         };
 

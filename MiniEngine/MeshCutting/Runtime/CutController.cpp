@@ -37,13 +37,27 @@ namespace MeshCutting
             return true;
         }
 
-        void ClearPreview(CutJob& job, uint64_t generation)
+        // 한 단계의 시간을 재서 phase.frame에 더한다. 프로파일러 범위(ScopedTimer)도 함께 열고, 삼각형이나 정점마다 부르지 않는다.
+        // ScopedTimer는 Release에서 비어 있어서, 화면에 보이는 값은 직접 잰 시간이다.
+        class PhaseTimer
         {
-            job.preview = SliceResult();
-            job.havePreview = false;
-            job.previewStatus = SliceStatus::InvalidInput;
-            job.previewGeneration = generation;
+        public:
+            PhaseTimer(const wchar_t* name, CutPhaseTime& phase) : m_Profile(name), m_Phase(phase), m_Start(SystemTime::GetCurrentTick()) {}
+            ~PhaseTimer() { m_Phase.frame += ElapsedMs(m_Start); }
+            PhaseTimer(const PhaseTimer&) = delete;
+            PhaseTimer& operator=(const PhaseTimer&) = delete;
+        private:
+            ScopedTimer m_Profile;
+            CutPhaseTime& m_Phase;
+            int64_t m_Start;
+        };
+
+        // 프레임 값으로 지수 평균을 갱신한다 (건너뛴 프레임의 0도 평균에 들어간다).
+        void UpdateAverage(CutPhaseTime& phase)
+        {
+            phase.average = phase.average == 0.0f ? phase.frame : phase.average + (phase.frame - phase.average) * 0.1f;
         }
+
     }
 
     CutTargetId CutController::RegisterInstance(const ModelInstance& instance, std::wstring name)
@@ -111,7 +125,7 @@ namespace MeshCutting
 
     CutFrameStats CutController::GetFrameStats() const
     {
-        CutFrameStats stats;
+        CutFrameStats stats = m_Frame;
         stats.jobs = uint32_t(m_Jobs.size());
         stats.extractCount = m_ExtractCount;
         stats.pickMs = m_PickMs;
@@ -122,7 +136,6 @@ namespace MeshCutting
             stats.confirmed += job.haveConfirmed ? 1 : 0;
             stats.extractMs += job.extractMs;
             stats.skinMs += job.skinMs;
-            stats.previewMs += job.previewMs;
             stats.cutMs += job.cutMs;
         }
         return stats;
@@ -163,22 +176,13 @@ namespace MeshCutting
         for (CutTarget& target : m_Targets)
             for (CutTargetSource& cache : target.sources)
                 cache.attempted = cache.attempted && cache.source != nullptr;      // 실패한 캐시는 다시 시도한다
-        if (m_PlaneEditing)
-        {
-            if (!m_PlaneValid && m_Targets.front().instance != nullptr)
-                PlacePlane(*m_Targets.front().instance);
-            for (auto& entry : m_Jobs)
-                entry.second.previewDirty = true;
-        }
+        if (m_PlaneEditing && !m_PlaneValid && m_Targets.front().instance != nullptr)
+            PlacePlane(*m_Targets.front().instance);
     }
 
     bool CutController::UpdateGizmo(const GizmoView& view, const GizmoInput& input)
     {
-        if (!m_PlaneValid || !m_Plane.UpdateGizmo(view, input))
-            return false;
-        for (auto& entry : m_Jobs)
-            entry.second.previewDirty = true;
-        return true;
+        return m_PlaneValid && m_Plane.UpdateGizmo(view, input);
     }
 
     // 후보 작업이 하나도 없으면 요청은 버려진다.
@@ -215,7 +219,6 @@ namespace MeshCutting
                 ++m_JobListGeneration;
                 continue;
             }
-            job.previewDirty = true;
             ++it;
         }
     }
@@ -239,7 +242,12 @@ namespace MeshCutting
             for (size_t i = 0; i < target.palettes.size(); ++i)
             {
                 std::string error;
-                if (!ComputePaletteSkeleton(*model, *target.instance, target.palettes[i], target.skeletons[i], &error))
+                bool skeletonOk;
+                {
+                    PhaseTimer timer(L"Palette skeleton", m_Frame.skeleton);
+                    skeletonOk = ComputePaletteSkeleton(*model, *target.instance, target.palettes[i], target.skeletons[i], &error);
+                }
+                if (!skeletonOk)
                 {
                     target.skeletons[i] = SkeletonPose();
                     target.error = Utility::UTF8ToWideString(error);
@@ -298,20 +306,35 @@ namespace MeshCutting
         CutTargetSource& cache = target.sources[slot];
         std::vector<std::vector<DirectX::XMFLOAT4X4>> matrices;
         std::string error;
-        if (!BuildSkinMatrices(*target.model, *target.instance, *cache.source, matrices, &error))
+        bool poseChanged;
         {
-            cache.error = Utility::UTF8ToWideString(error);
-            cache.picked.clear();
+            PhaseTimer timer(L"Pick matrices", m_Frame.poseMatrices);
+            if (!BuildSkinMatrices(*target.model, *target.instance, *cache.source, matrices, &error))
+            {
+                cache.error = Utility::UTF8ToWideString(error);
+                cache.picked.clear();
+                return;
+            }
+            cache.error.clear();
+            poseChanged = !SameMatrices(cache.matrices, matrices);
+        }
+        if (!poseChanged && !planeChanged)
+        {
+            ++m_Frame.refreshSkipped;
             return;
         }
-        cache.error.clear();
-        const bool poseChanged = !SameMatrices(cache.matrices, matrices);
-        if (!poseChanged && !planeChanged)
-            return;
+        if (poseChanged && planeChanged)
+            ++m_Frame.refreshBoth;
+        else if (poseChanged)
+            ++m_Frame.refreshPose;
+        else
+            ++m_Frame.refreshPlane;
 
         const int64_t start = SystemTime::GetCurrentTick();
         if (poseChanged)
         {
+            PhaseTimer timer(L"Pick skinning", m_Frame.cacheSkin);
+            m_Frame.cacheVertices += uint32_t(cache.pose.positions.size());
             cache.matrices = std::move(matrices);
             for (size_t i = 0; i < cache.pose.positions.size(); ++i)
             {
@@ -323,7 +346,14 @@ namespace MeshCutting
                     skin.joints, skin.weights, 4, skin.bindPosition));
             }
         }
-        CutPick::PickJoints(cache.pose, target.skeletons[slot].parents, m_Plane, kPickMinWeight, target.radius * kDefaultEpsilonScale, cache.picked);
+        {
+            PhaseTimer timer(L"Pick triangles", m_Frame.pick);
+            CutPickStats pickStats;
+            CutPick::PickJoints(cache.pose, target.skeletons[slot].parents, m_Plane, kPickMinWeight, target.radius * kDefaultEpsilonScale, cache.picked, &pickStats);
+            m_Frame.checkedTriangles += pickStats.checkedTriangles;
+            m_Frame.mixedTriangles += pickStats.mixedTriangles;
+            m_Frame.crossedTriangles += pickStats.crossedTriangles;
+        }
         m_PickMs = ElapsedMs(start);
     }
 
@@ -340,10 +370,14 @@ namespace MeshCutting
         {
             for (size_t i = 0; i < target.palettes.size(); ++i)
             {
-                m_Plane.PickSegments(target.skeletons[i], target.segmentHits[i]);
+                {
+                    PhaseTimer timer(L"Pick segments", m_Frame.segments);
+                    m_Plane.PickSegments(target.skeletons[i], target.segmentHits[i]);
+                }
                 if (target.sources[i].source == nullptr)
                     continue;
                 RefreshPick(target, i, planeChanged);
+                PhaseTimer timer(L"Job update", m_Frame.jobUpdate);
                 for (const CutPickJoint& picked : target.sources[i].picked)
                 {
                     const CutJobKey key = MakeJointKey(target.id, target.palettes[i], picked.joint);
@@ -354,11 +388,15 @@ namespace MeshCutting
         }
         m_PickedFrame = frame;
         m_HavePickedFrame = true;
+        PhaseTimer timer(L"Job update", m_Frame.jobUpdate);
         ApplyDiff(DiffJobs(m_Jobs, current), triangles);
     }
 
     void CutController::ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, uint32_t>& triangles)
     {
+        m_Frame.jobsAdded += uint32_t(diff.added.size());
+        m_Frame.jobsKept += uint32_t(diff.kept.size());
+        m_Frame.jobsLost += uint32_t(diff.lost.size());
         for (const CutJobKey& key : diff.added)
         {
             const bool isNew = m_Jobs.find(key) == m_Jobs.end();
@@ -391,8 +429,6 @@ namespace MeshCutting
     void CutController::ExtractJob(CutJob& job)
     {
         job.extracted = true;
-        job.previewDirty = true;
-        ClearPreview(job, ++m_Generation);
         job.extractMs = 0.0f;
 
         const CutTarget* target = FindTarget(job.key.target);
@@ -407,6 +443,8 @@ namespace MeshCutting
             return;
         }
 
+        PhaseTimer timer(L"Extract job", m_Frame.extract);
+        ++m_Frame.extractions;
         const int64_t start = SystemTime::GetCurrentTick();
         ProceduralMeshData patch;
         auto source = std::make_shared<BonePatchSource>();
@@ -430,7 +468,7 @@ namespace MeshCutting
         ++m_ExtractCount;
     }
 
-    // 후보가 사라진 작업: 패치와 미리보기를 해제한다. 확정 결과와 출처는 남긴다.
+    // 후보가 사라진 작업: 패치를 해제한다. 확정 결과와 출처는 남긴다.
     void CutController::DropCandidate(CutJob& job)
     {
         job.candidate = false;
@@ -440,12 +478,10 @@ namespace MeshCutting
         job.patchStatus = SliceStatus::InvalidInput;
         job.patchError.clear();
         job.patchTriangles = 0;
-        job.previousSkinMatrices.clear();
         job.poseValid = false;
-        ClearPreview(job, ++m_Generation);
     }
 
-    // 후보 패치와 확정 조각을 이번 자세로 옮긴다. 자세(스킨 행렬)가 바뀐 후보는 미리보기를 다시 계산하게 한다.
+    // 후보 패치와 확정 조각을 이번 자세로 옮긴다. 절단 계산은 Enter 요청 때만 한다.
     void CutController::SkinJobs()
     {
         for (auto& entry : m_Jobs)
@@ -464,27 +500,34 @@ namespace MeshCutting
             }
 
             std::string error;
-            if (!BuildSkinMatrices(*target->model, *target->instance, *job.source.bone, job.skinMatrices, &error))
+            bool matricesOk;
+            {
+                PhaseTimer timer(L"Job matrices", m_Frame.jobMatrices);
+                matricesOk = BuildSkinMatrices(*target->model, *target->instance, *job.source.bone, job.skinMatrices, &error);
+            }
+            if (!matricesOk)
             {
                 job.skinError = error;
                 continue;
             }
             const int64_t start = SystemTime::GetCurrentTick();
             bool ok = true;
-            if (havePatch)
             {
-                ok = job.patch.skin && job.patch.skin->Apply(job.patch, job.skinMatrices, nullptr, &error);
-                if (ok && !SameMatrices(job.previousSkinMatrices, job.skinMatrices))
+                PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
+                if (havePatch)
                 {
-                    job.previousSkinMatrices = job.skinMatrices;
-                    job.previewDirty = true;
+                    ok = job.patch.skin && job.patch.skin->Apply(job.patch, job.skinMatrices, nullptr, &error);
+                    m_Frame.jobVertices += ok ? uint32_t(job.patch.nodes.size()) : 0;
                 }
-            }
-            if (ok && job.haveConfirmed)
-            {
-                PatchPiece* pieces[2] = { &job.positive, &job.negative };
-                for (PatchPiece* piece : pieces)
-                    ok = ok && piece->skin && piece->skin->Apply(*piece, job.skinMatrices, nullptr, &error);
+                if (ok && job.haveConfirmed)
+                {
+                    PatchPiece* pieces[2] = { &job.positive, &job.negative };
+                    for (PatchPiece* piece : pieces)
+                    {
+                        ok = ok && piece->skin && piece->skin->Apply(*piece, job.skinMatrices, nullptr, &error);
+                        m_Frame.jobVertices += ok ? uint32_t(piece->nodes.size()) : 0;
+                    }
+                }
             }
             Smooth(job.skinMs, ElapsedMs(start));
             if (!ok)
@@ -516,17 +559,6 @@ namespace MeshCutting
             return SliceStatus::LoopOutsidePlane;
         }
         return SliceStatus::Ok;
-    }
-
-    // 현재 평면으로 미절단 패치를 시험 절단한다. 결과는 보여 주기만 하고 확정 조각은 건드리지 않는다.
-    void CutController::RunPreview(CutJob& job)
-    {
-        job.previewDirty = false;
-        const int64_t start = SystemTime::GetCurrentTick();
-        job.previewStatus = SliceWithPlane(job, job.preview);
-        Smooth(job.previewMs, ElapsedMs(start));
-        job.havePreview = true;
-        job.previewGeneration = ++m_Generation;
     }
 
     // 먼저 이전 확정 결과를 모두 지우고(Ctrl+Z와 같다), 후보 작업마다 독립으로 자른다. 실패한 작업은 결과가 없다.
@@ -561,8 +593,6 @@ namespace MeshCutting
             job.negative = result.negative;
             job.haveConfirmed = true;
             job.confirmedGeneration = ++m_Generation;
-            ClearPreview(job, ++m_Generation);
-            job.previewDirty = false;
 
             const double original = TotalArea(job.patch, PatchFaceKind::Surface);
             const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
@@ -577,28 +607,42 @@ namespace MeshCutting
     void CutController::Update()
     {
         ScopedTimer _prof(L"Patch Pose Update");
+
+        // 이번 프레임의 개수와 단계 시간을 비운다 (평균은 남긴다).
+        const CutFrameStats previous = m_Frame;
+        m_Frame = CutFrameStats();
+        CutPhaseTime* phases[] = { &m_Frame.skeleton, &m_Frame.poseMatrices, &m_Frame.cacheSkin, &m_Frame.pick, &m_Frame.segments,
+            &m_Frame.jobUpdate, &m_Frame.extract, &m_Frame.jobMatrices, &m_Frame.jobSkin, &m_Frame.confirm };
+        const CutPhaseTime* before[] = { &previous.skeleton, &previous.poseMatrices, &previous.cacheSkin, &previous.pick, &previous.segments,
+            &previous.jobUpdate, &previous.extract, &previous.jobMatrices, &previous.jobSkin, &previous.confirm };
+        for (size_t i = 0; i < sizeof(phases) / sizeof(phases[0]); ++i)
+            phases[i]->average = before[i]->average;
+        m_Frame.targets = uint32_t(m_Targets.size());
+        for (const CutTarget& target : m_Targets)
+            m_Frame.palettes += uint32_t(target.palettes.size());
+
         UpdateTargets();
         if (m_PlaneEditing && m_PlaneValid)
             UpdateCandidates();
         else
+        {
+            PhaseTimer timer(L"Job update", m_Frame.jobUpdate);
             ApplyDiff(DiffJobs(m_Jobs, {}), {});
+        }
         SkinJobs();
 
         if (m_CutRequested)
         {
             m_CutRequested = false;
             if (m_PlaneValid)
-                ConfirmAll();
-        }
-        else if (m_PlaneEditing && m_PlaneValid)
-        {
-            for (auto& entry : m_Jobs)
             {
-                CutJob& job = entry.second;
-                if (job.candidate && job.previewDirty && job.patchStatus == SliceStatus::Ok && job.poseValid)
-                    RunPreview(job);
+                PhaseTimer timer(L"Confirm cut", m_Frame.confirm);
+                ConfirmAll();
             }
         }
+
+        for (CutPhaseTime* phase : phases)
+            UpdateAverage(*phase);
     }
 
     // 모델 bounds 중심에 수평 평면을 놓는다 (반 크기 = 반지름 / 2).
