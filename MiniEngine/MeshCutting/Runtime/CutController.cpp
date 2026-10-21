@@ -14,6 +14,8 @@ namespace MeshCutting
 {
     namespace
     {
+        const float kPickMinWeight = 0.05f;        // 절단 joint 후보가 되는 최소 가중치 (설계 2.2절)
+
         // 지수 평균. 값이 0이면 첫 표본으로 시작한다.
         void Smooth(float& value, float sample)
         {
@@ -81,6 +83,8 @@ namespace MeshCutting
             if (target.model->m_SkinPalettes[paletteId].numJoints > 0)
                 target.palettes.push_back(paletteId);
         target.skeletons.resize(target.palettes.size());
+        target.segmentHits.assign(target.palettes.size(), std::vector<SegmentHit>());
+        target.sources.assign(target.palettes.size(), CutTargetSource());      // 원본 캐시는 첫 편집 프레임에 만든다 (등록 때는 아직 자세가 없다)
     }
 
     void CutController::RemoveJobsOf(CutTargetId id)
@@ -105,22 +109,12 @@ namespace MeshCutting
         return nullptr;
     }
 
-    const SkeletonPose* CutController::FindSkeleton(const CutJobKey& key) const
-    {
-        const CutTarget* target = FindTarget(key.target);
-        if (target == nullptr || key.kind != CutJobKind::SkeletalSegment)
-            return nullptr;
-        for (size_t i = 0; i < target->palettes.size(); ++i)
-            if (target->palettes[i] == key.a)
-                return &target->skeletons[i];
-        return nullptr;
-    }
-
     CutFrameStats CutController::GetFrameStats() const
     {
         CutFrameStats stats;
         stats.jobs = uint32_t(m_Jobs.size());
         stats.extractCount = m_ExtractCount;
+        stats.pickMs = m_PickMs;
         for (const auto& entry : m_Jobs)
         {
             const CutJob& job = entry.second;
@@ -146,7 +140,7 @@ namespace MeshCutting
         for (const auto& entry : m_Jobs)
         {
             const CutJob& job = entry.second;
-            if (!job.candidate || job.key.target != target || job.key.kind != CutJobKind::SkeletalSegment || job.key.a != palette)
+            if (!job.candidate || job.key.target != target || job.key.kind != CutJobKind::SkeletalJoint || job.key.a != palette)
                 continue;
             any = true;
             const uint32_t joint = job.key.b;
@@ -165,6 +159,10 @@ namespace MeshCutting
             return;
         m_PlaneEditing = !m_PlaneEditing;
         m_CutRequested = false;
+        m_HavePickedFrame = false;      // 다음 Update에서 교차를 다시 찾는다
+        for (CutTarget& target : m_Targets)
+            for (CutTargetSource& cache : target.sources)
+                cache.attempted = cache.attempted && cache.source != nullptr;      // 실패한 캐시는 다시 시도한다
         if (m_PlaneEditing)
         {
             if (!m_PlaneValid && m_Targets.front().instance != nullptr)
@@ -246,33 +244,120 @@ namespace MeshCutting
                     target.skeletons[i] = SkeletonPose();
                     target.error = Utility::UTF8ToWideString(error);
                 }
-            }
-        }
-    }
-
-    // 평면이 지나는 선분을 찾아 작업 목록을 갱신한다. 새 key만 추출하고, 사라진 key는 후보와 패치를 해제한다.
-    void CutController::UpdateCandidates()
-    {
-        std::vector<CutJobKey> current;
-        std::map<CutJobKey, SegmentHit> hits;
-        for (const CutTarget& target : m_Targets)
-        {
-            for (size_t i = 0; i < target.palettes.size(); ++i)
-            {
-                std::vector<SegmentHit> found;
-                m_Plane.PickSegments(target.skeletons[i], found);
-                for (const SegmentHit& hit : found)
+                if (!target.sources[i].attempted)
                 {
-                    const CutJobKey key = MakeSegmentKey(target.id, target.palettes[i], hit.parentJoint, hit.childJoint);
-                    current.push_back(key);
-                    hits[key] = hit;
+                    target.sources[i].attempted = true;
+                    BuildSource(target, i);
                 }
             }
         }
-        ApplyDiff(DiffJobs(m_Jobs, current), hits);
     }
 
-    void CutController::ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, SegmentHit>& hits)
+    // 대상의 팔레트 하나를 모든 joint로 추출해 원본 캐시로 둔다: 이 팔레트 스킨 메시의 정점(바인드 위치, joint, 가중치)과 삼각형 전체.
+    void CutController::BuildSource(CutTarget& target, size_t slot)
+    {
+        CutTargetSource& cache = target.sources[slot];
+        const uint32_t palette = target.palettes[slot];
+        std::vector<uint32_t> joints(target.model->m_SkinPalettes[palette].numJoints);
+        for (uint32_t joint = 0; joint < joints.size(); ++joint)
+            joints[joint] = joint;
+
+        ProceduralMeshData mesh;
+        auto source = std::make_shared<BonePatchSource>();
+        std::string error;
+        if (!ExtractBonePatch(*target.model, *target.instance, palette, joints, 0.0f, mesh, *source, &error)
+            || source->vertices.size() != mesh.vertices.size())
+        {
+            cache.error = Utility::UTF8ToWideString(error.empty() ? "palette source does not match" : error);
+            return;
+        }
+
+        cache.pose.positions.resize(mesh.vertices.size());
+        cache.pose.skins.resize(mesh.vertices.size());
+        for (size_t i = 0; i < mesh.vertices.size(); ++i)
+        {
+            const BonePatchVertex& vertex = source->vertices[i];
+            cache.pose.positions[i] = mesh.vertices[i].position;
+            SkinVertex& skin = cache.pose.skins[i];
+            skin.meshSlot = vertex.meshSlot;
+            skin.bindPosition = vertex.position;
+            skin.jointCount = 4;
+            for (int k = 0; k < 4; ++k)
+            {
+                skin.joints[k] = vertex.joints[k];
+                skin.weights[k] = vertex.weights[k];
+            }
+        }
+        cache.pose.indices = mesh.indices;
+        cache.source = source;
+    }
+
+    // 캐시 정점을 현재 자세로 옮기고(자세가 바뀐 때만) 평면과 교차하는 삼각형의 절단 joint를 다시 고른다(평면이나 자세가 바뀐 때만).
+    void CutController::RefreshPick(CutTarget& target, size_t slot, bool planeChanged)
+    {
+        CutTargetSource& cache = target.sources[slot];
+        std::vector<std::vector<DirectX::XMFLOAT4X4>> matrices;
+        std::string error;
+        if (!BuildSkinMatrices(*target.model, *target.instance, *cache.source, matrices, &error))
+        {
+            cache.error = Utility::UTF8ToWideString(error);
+            cache.picked.clear();
+            return;
+        }
+        cache.error.clear();
+        const bool poseChanged = !SameMatrices(cache.matrices, matrices);
+        if (!poseChanged && !planeChanged)
+            return;
+
+        const int64_t start = SystemTime::GetCurrentTick();
+        if (poseChanged)
+        {
+            cache.matrices = std::move(matrices);
+            for (size_t i = 0; i < cache.pose.positions.size(); ++i)
+            {
+                const SkinVertex& skin = cache.pose.skins[i];
+                if (skin.meshSlot >= cache.matrices.size())
+                    continue;
+                const std::vector<DirectX::XMFLOAT4X4>& slotMatrices = cache.matrices[skin.meshSlot];
+                DirectX::XMStoreFloat3(&cache.pose.positions[i], Skinning::SkinPoint(slotMatrices.data(), uint32_t(slotMatrices.size()),
+                    skin.joints, skin.weights, 4, skin.bindPosition));
+            }
+        }
+        CutPick::PickJoints(cache.pose, target.skeletons[slot].parents, m_Plane, kPickMinWeight, target.radius * kDefaultEpsilonScale, cache.picked);
+        m_PickMs = ElapsedMs(start);
+    }
+
+    // 평면과 교차하는 삼각형이 고른 joint마다 작업을 만든다. 새 key만 추출하고, 사라진 key는 후보와 패치를 해제한다.
+    // 평면이 지나는 뼈 선분은 작업과 무관하게 표시용으로만 찾는다.
+    void CutController::UpdateCandidates()
+    {
+        const CutPlane::Frame frame = m_Plane.GetFrame();
+        const bool planeChanged = !m_HavePickedFrame || memcmp(&frame, &m_PickedFrame, sizeof(frame)) != 0;
+
+        std::vector<CutJobKey> current;
+        std::map<CutJobKey, uint32_t> triangles;
+        for (CutTarget& target : m_Targets)
+        {
+            for (size_t i = 0; i < target.palettes.size(); ++i)
+            {
+                m_Plane.PickSegments(target.skeletons[i], target.segmentHits[i]);
+                if (target.sources[i].source == nullptr)
+                    continue;
+                RefreshPick(target, i, planeChanged);
+                for (const CutPickJoint& picked : target.sources[i].picked)
+                {
+                    const CutJobKey key = MakeJointKey(target.id, target.palettes[i], picked.joint);
+                    current.push_back(key);
+                    triangles[key] = picked.triangleCount;
+                }
+            }
+        }
+        m_PickedFrame = frame;
+        m_HavePickedFrame = true;
+        ApplyDiff(DiffJobs(m_Jobs, current), triangles);
+    }
+
+    void CutController::ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, uint32_t>& triangles)
     {
         for (const CutJobKey& key : diff.added)
         {
@@ -285,11 +370,11 @@ namespace MeshCutting
                 ++m_JobListGeneration;
             }
             job.candidate = true;
-            job.hit = hits.at(key);
+            job.pickTriangles = triangles.at(key);
             ExtractJob(job);
         }
         for (const CutJobKey& key : diff.kept)
-            m_Jobs.at(key).hit = hits.at(key);
+            m_Jobs.at(key).pickTriangles = triangles.at(key);
         for (const CutJobKey& key : diff.lost)
         {
             CutJob& job = m_Jobs.at(key);
@@ -302,30 +387,13 @@ namespace MeshCutting
         }
     }
 
-    // 부모 joint 하나로 추출해 용접한다. 같은 대상·팔레트·부모 joint의 형제 작업이 이미 추출했으면 그 결과를 쓴다.
+    // 작업의 joint 하나(key.b)로 추출해 용접한다.
     void CutController::ExtractJob(CutJob& job)
     {
         job.extracted = true;
         job.previewDirty = true;
         ClearPreview(job, ++m_Generation);
         job.extractMs = 0.0f;
-
-        for (const auto& entry : m_Jobs)
-        {
-            const CutJob& sibling = entry.second;
-            if (&sibling == &job || !sibling.candidate || !sibling.extracted || sibling.key.target != job.key.target
-                || sibling.key.kind != job.key.kind || sibling.key.a != job.key.a || sibling.key.b != job.key.b)
-                continue;
-            job.patch = sibling.patch;
-            job.patchTriangles = sibling.patchTriangles;
-            job.weld = sibling.weld;
-            job.patchStatus = sibling.patchStatus;
-            job.patchError = sibling.patchError;
-            job.patchRadius = sibling.patchRadius;
-            job.source.bone = sibling.source.bone;
-            job.source.extractJoint = sibling.source.extractJoint;
-            return;
-        }
 
         const CutTarget* target = FindTarget(job.key.target);
         job.patch.Clear();

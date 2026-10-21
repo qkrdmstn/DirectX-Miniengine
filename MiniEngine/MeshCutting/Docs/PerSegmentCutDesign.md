@@ -2,7 +2,7 @@
 
 > 작성: 2026-10-21 · 기준: 커밋 `0fc39fe` + 작업 트리(Geometry 통합, CutPlane 클래스, Skinning 클래스까지 반영된 상태)
 >
-> 상태: **설계안**. 이 문서는 코드를 바꾸지 않았다. 근거는 실제 소스의 경로·함수명이다.
+> 상태: **구현** (`b606ba4`). 작업 식별(선분 → 작업)과 추출 기준(부모 joint 하나)은 `JointCutDesign.md`(설계안)로 대체 예정. 근거는 실제 소스의 경로·함수명이다.
 >
 > 참고: `Docs/NDC25Reference.md`(원본 기법), `Docs/ClassLayoutDesign.md`(클래스 정리 계획), `Docs/PlaneFirstCutDesign.md`(평면 우선 흐름)
 

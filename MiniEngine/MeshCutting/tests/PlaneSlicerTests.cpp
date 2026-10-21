@@ -8,6 +8,7 @@
 // Keep <outdir> outside the repository. The exit code is the number of failed checks.
 
 #include "../Geometry/CutPlane.h"
+#include "../Geometry/CutPick.h"
 #include "../Geometry/Patch.h"
 #include "../Geometry/Skinning.h"
 #include "../Geometry/Slice.h"
@@ -2573,6 +2574,12 @@ static void TestCutJobKey()
     ordered[MakeSegmentKey(1, 0, 2, 3)] = 10;
     CHECK(ordered.size() == 3 && ordered.begin()->first == torsoNeck && ordered.begin()->second == 10);
     CHECK(ordered.rbegin()->first == torsoRightArm);
+
+    // joint key: 팔레트와 joint만 쓰고, 선분 key와 종류로 구분되며, 같은 joint의 형제 선분은 하나로 합쳐진다.
+    const CutJobKey torso = MakeJointKey(1, 0, 2);
+    CHECK(torso.kind == CutJobKind::SkeletalJoint && torso.a == 0 && torso.b == 2 && torso.c == kNoNode);
+    CHECK(torso == MakeJointKey(1, 0, 2) && !(torso == MakeJointKey(1, 0, 3)) && !(torso == MakeJointKey(1, 1, 2)) && !(torso == MakeJointKey(2, 0, 2)));
+    CHECK(!(torso == MakeSegmentKey(1, 0, 2, kNoNode)) && torso < MakeJointKey(1, 0, 3) && torso < mesh && MakeSegmentKey(1, 9, 9, 9) < torso);
 }
 
 static void TestDiffJobs()
@@ -2625,6 +2632,198 @@ static void TestJobColors()
     // 작업이 만들어질 때 기본 상태.
     const CutJob job;
     CHECK(!job.candidate && !job.haveConfirmed && job.colorIndex == 0 && job.previewDirty && job.source.bone == nullptr);
+}
+
+
+// ---------------------------------------------------------------- cut pick tests (Geometry/CutPick.h)
+
+static SkinVertex MakeRigidSkin(uint32_t joint)
+{
+    SkinVertex skin;
+    skin.jointCount = 1;
+    skin.joints[0] = uint16_t(joint);
+    skin.weights[0] = 1.0f;
+    return skin;
+}
+
+// 높이 0..2의 사각 기둥 옆면 (위·아래 면은 없다). 아래 고리 정점 0~3, 위 고리 정점 4~7, 옆면 삼각형 8개.
+static CutPickMesh MakePrismMesh(uint32_t bottomJoint, uint32_t topJoint)
+{
+    CutPickMesh mesh;
+    const float xs[4] = { -1.0f, 1.0f, 1.0f, -1.0f }, zs[4] = { -1.0f, -1.0f, 1.0f, 1.0f };
+    for (int ring = 0; ring < 2; ++ring)
+        for (int i = 0; i < 4; ++i)
+        {
+            mesh.positions.push_back({ xs[i], ring == 0 ? 0.0f : 2.0f, zs[i] });
+            mesh.skins.push_back(MakeRigidSkin(ring == 0 ? bottomJoint : topJoint));
+        }
+    for (uint32_t i = 0; i < 4; ++i)
+    {
+        const uint32_t j = (i + 1) % 4;
+        const uint32_t quad[6] = { i, j, 4 + j, i, 4 + j, 4 + i };
+        mesh.indices.insert(mesh.indices.end(), quad, quad + 6);
+    }
+    return mesh;
+}
+
+static std::vector<CutPickJoint> Pick(const CutPickMesh& mesh, const std::vector<uint32_t>& parents, const CutPlane& plane,
+    float minWeight = 0.05f, float epsilon = 0.0f)
+{
+    std::vector<CutPickJoint> out;
+    CutPick::PickJoints(mesh, parents, plane, minWeight, epsilon, out);
+    return out;
+}
+
+static void TestPickJointsSingleJoint()
+{
+    // 한 joint로만 스키닝된 기둥을 가로로 자르면 절단 joint 하나에 옆면 삼각형 8개가 모두 모인다.
+    const CutPickMesh prism = MakePrismMesh(1, 1);
+    const std::vector<CutPickJoint> picked = Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 1, 0, 5.0f));
+    CHECK(picked.size() == 1 && picked[0].joint == 1 && picked[0].triangleCount == 8);
+
+    // 법선이 반대여도 같은 삼각형이다.
+    CutPlane flipped = HorizontalPlane(0, 1, 0, 5.0f);
+    flipped.RotateAroundLocalAxis(0, XM_PI);
+    const std::vector<CutPickJoint> flippedPicked = Pick(prism, { kNoNode, 0 }, flipped);
+    CHECK(flippedPicked.size() == 1 && flippedPicked[0].triangleCount == 8);
+
+    // 기둥을 비껴가는 평면은 교차 삼각형이 없다.
+    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 3, 0, 5.0f)).empty());
+    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, -1, 0, 5.0f)).empty());
+}
+
+static void TestPickJointsRootSide()
+{
+    // 아래 고리는 joint 1, 위 고리는 joint 2 (2의 부모가 1). 모든 옆면 삼각형이 두 joint를 섞으므로 루트 쪽 joint 1을 고른다.
+    const std::vector<CutPickJoint> mixed = Pick(MakePrismMesh(1, 2), { kNoNode, 0, 1 }, HorizontalPlane(0, 1, 0, 5.0f));
+    CHECK(mixed.size() == 1 && mixed[0].joint == 1 && mixed[0].triangleCount == 8);
+
+    // 부모와 자식이 바뀌어도 (아래가 자식) 루트에 가까운 joint를 고른다.
+    const std::vector<CutPickJoint> swapped = Pick(MakePrismMesh(2, 1), { kNoNode, 0, 1 }, HorizontalPlane(0, 1, 0, 5.0f));
+    CHECK(swapped.size() == 1 && swapped[0].joint == 1 && swapped[0].triangleCount == 8);
+
+    // 깊이는 부모를 따라 센다: 0(루트) - 3 - 1, 번호가 아니라 계층이 기준이다.
+    const std::vector<CutPickJoint> chain = Pick(MakePrismMesh(1, 3), { kNoNode, 3, 0, 0 }, HorizontalPlane(0, 1, 0, 5.0f));
+    CHECK(chain.size() == 1 && chain[0].joint == 3);
+}
+
+static void TestPickJointsSiblingTie()
+{
+    // 형제 joint 1, 2 (같은 깊이). 삼각형 A: 정점 셋의 가중치 합이 joint 2가 크다. 삼각형 B: 합이 같아 번호가 작은 joint 1.
+    CutPickMesh mesh;
+    mesh.positions = { { 0, -1, 0 }, { 1, 1, 0 }, { 0, 1, 1 }, { 5, -1, 0 }, { 6, 1, 0 }, { 5, 1, 1 } };
+    SkinVertex half;
+    half.jointCount = 2;
+    half.joints[0] = 1;
+    half.joints[1] = 2;
+    half.weights[0] = 0.5f;
+    half.weights[1] = 0.5f;
+    mesh.skins = { MakeRigidSkin(1), MakeRigidSkin(2), MakeRigidSkin(2), MakeRigidSkin(1), MakeRigidSkin(2), half };
+    mesh.indices = { 0, 1, 2, 3, 4, 5 };
+    const std::vector<CutPickJoint> picked = Pick(mesh, { kNoNode, 0, 0 }, HorizontalPlane(3, 0, 0, 10.0f));
+    CHECK(picked.size() == 2 && picked[0].joint == 1 && picked[0].triangleCount == 1 && picked[1].joint == 2 && picked[1].triangleCount == 1);
+}
+
+static void TestPickJointsTouchAndRectangle()
+{
+    const CutPickMesh prism = MakePrismMesh(1, 1);
+
+    // 정점이나 에지만 평면에 닿으면 교차가 아니다 (평면 y = 0은 아래 고리 에지 네 개를 지난다). 평면 법선의 float 오차를 epsilon이 흡수한다.
+    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 0, 0, 5.0f), 0.05f, 1e-4f).empty());
+    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 2, 0, 5.0f), 0.05f, 1e-4f).empty());
+
+    // epsilon 안의 정점은 평면 위로 본다: 위 고리(y = 2)에서 0.001 아래의 평면은 epsilon 0.01이면 닿기만 한 것이다.
+    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.05f, 0.0f).size() == 1);
+    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.05f, 0.01f).empty());
+
+    // 사각형 밖: 절단선이 사각형에 닿지 않으면 제외된다.
+    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(5, 1, 0, 0.5f)).empty());
+
+    // 사각형이 +x 면의 절단선 일부만 덮으면 그 면의 삼각형 둘만 교차 삼각형이다.
+    const std::vector<CutPickJoint> partial = Pick(prism, { kNoNode, 0 }, HorizontalPlane(1, 1, 0, 0.3f));
+    CHECK(partial.size() == 1 && partial[0].triangleCount == 2);
+
+    // 절단선 선분이 사각형을 가로지르면 양 끝점이 사각형 밖이어도 교차 삼각형이다: 선분 (-1,0,0)-(1,0,0)과 반 크기 0.5의 사각형.
+    CutPickMesh wide;
+    wide.positions = { { -2.0f, -1.0f, 0.0f }, { 2.0f, -1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f } };
+    wide.skins = { MakeRigidSkin(1), MakeRigidSkin(1), MakeRigidSkin(1) };
+    wide.indices = { 0, 1, 2 };
+    const std::vector<CutPickJoint> crossing = Pick(wide, { kNoNode, 0 }, HorizontalPlane(0, 0, 0, 0.5f), 0.05f, 1e-4f);
+    CHECK(crossing.size() == 1 && crossing[0].triangleCount == 1);
+    CHECK(Pick(wide, { kNoNode, 0 }, HorizontalPlane(0, 0, 3, 0.5f), 0.05f, 1e-4f).empty());        // 같은 평면 위지만 선분에서 멀다
+    CHECK(Pick(wide, { kNoNode, 0 }, HorizontalPlane(0, 0, 0.7f, 0.5f), 0.05f, 1e-4f).empty());     // 사각형이 선분 옆을 지난다
+    CHECK(Pick(wide, { kNoNode, 0 }, HorizontalPlane(1.4f, 0, 0, 0.5f), 0.05f, 1e-4f).size() == 1);  // 한 끝점 근처만 덮어도 만난다
+}
+
+static void TestPickJointsWeights()
+{
+    // minWeight 이하의 가중치만 가진 joint는 후보가 아니다: 모든 정점에 루트 joint 0이 0.03씩 섞여 있어도 joint 1을 고른다.
+    CutPickMesh prism = MakePrismMesh(1, 1);
+    for (SkinVertex& skin : prism.skins)
+    {
+        skin.jointCount = 2;
+        skin.joints[0] = 0;
+        skin.joints[1] = 1;
+        skin.weights[0] = 0.03f;
+        skin.weights[1] = 0.97f;
+    }
+    const std::vector<uint32_t> parents = { kNoNode, 0 };
+    const std::vector<CutPickJoint> filtered = Pick(prism, parents, HorizontalPlane(0, 1, 0, 5.0f), 0.05f);
+    CHECK(filtered.size() == 1 && filtered[0].joint == 1);
+    const std::vector<CutPickJoint> unfiltered = Pick(prism, parents, HorizontalPlane(0, 1, 0, 5.0f), 0.0f);
+    CHECK(unfiltered.size() == 1 && unfiltered[0].joint == 0);
+
+    // 같은 joint가 여러 칸에 있으면 합쳐서 본다: 루트 joint 0의 0.03 두 칸은 합 0.06이라 후보다.
+    for (SkinVertex& skin : prism.skins)
+    {
+        skin.jointCount = 3;
+        skin.joints[0] = 0;
+        skin.joints[1] = 0;
+        skin.joints[2] = 1;
+        skin.weights[0] = 0.03f;
+        skin.weights[1] = 0.03f;
+        skin.weights[2] = 0.94f;
+    }
+    const std::vector<CutPickJoint> merged = Pick(prism, parents, HorizontalPlane(0, 1, 0, 5.0f), 0.05f);
+    CHECK(merged.size() == 1 && merged[0].joint == 0);
+}
+
+static void TestPickJointsBadInput()
+{
+    const CutPickMesh prism = MakePrismMesh(1, 1);
+    const std::vector<uint32_t> parents = { kNoNode, 0 };
+    std::vector<CutPickJoint> out;
+    out.push_back(CutPickJoint());
+
+    // 평면이 올바르지 않으면 비어 있다 (먼저 비워진다).
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CutPick::PickJoints(prism, parents, CutPlane({ nan, 1.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f }), 0.05f, 0.0f, out);
+    CHECK(out.empty());
+
+    // 정점과 스킨의 크기가 다르면 비어 있다.
+    CutPickMesh sizes = prism;
+    sizes.skins.pop_back();
+    CHECK(Pick(sizes, parents, HorizontalPlane(0, 1, 0, 5.0f)).empty());
+
+    // 범위 밖 인덱스와 3의 배수가 아닌 끝은 건너뛴다.
+    CutPickMesh broken = prism;
+    broken.indices[2] = 99;
+    broken.indices.push_back(0);
+    const std::vector<CutPickJoint> picked = Pick(broken, parents, HorizontalPlane(0, 1, 0, 5.0f));
+    CHECK(picked.size() == 1 && picked[0].triangleCount == 7);
+
+    // 팔레트 밖 joint나 부모가 순환하는 joint는 후보가 아니다. 고를 joint가 없는 삼각형은 센 적이 없다.
+    CHECK(Pick(MakePrismMesh(9, 9), parents, HorizontalPlane(0, 1, 0, 5.0f)).empty());
+    CHECK(Pick(MakePrismMesh(1, 1), { 1, 0 }, HorizontalPlane(0, 1, 0, 5.0f)).empty());
+
+    // 스킨이 없는 정점만 있는 삼각형도 건너뛴다.
+    CutPickMesh unskinned = prism;
+    for (SkinVertex& skin : unskinned.skins)
+        skin = SkinVertex();
+    CHECK(Pick(unskinned, parents, HorizontalPlane(0, 1, 0, 5.0f)).empty());
+
+    // 비어 있는 메시.
+    CHECK(Pick(CutPickMesh(), parents, HorizontalPlane(0, 1, 0, 5.0f)).empty());
 }
 
 
@@ -2702,6 +2901,13 @@ int main()
     TestCutJobKey();
     TestDiffJobs();
     TestJobColors();
+
+    TestPickJointsSingleJoint();
+    TestPickJointsRootSide();
+    TestPickJointsSiblingTie();
+    TestPickJointsTouchAndRectangle();
+    TestPickJointsWeights();
+    TestPickJointsBadInput();
 
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures;

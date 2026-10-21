@@ -15,13 +15,14 @@ class ModelInstance;
 
 namespace MeshCutting
 {
-    // 작업 시간 합계. 추출과 절단은 마지막 값, 스키닝과 미리보기는 작업별 지수 평균의 합이다 (ms).
+    // 작업 시간 합계. 교차 찾기, 추출, 절단은 마지막 값, 스키닝과 미리보기는 작업별 지수 평균의 합이다 (ms).
     struct CutFrameStats
     {
         uint32_t jobs = 0;
         uint32_t candidates = 0;
         uint32_t confirmed = 0;
         uint32_t extractCount = 0;      // 지금까지 실제로 추출한 횟수 (형제가 공유한 작업은 세지 않는다)
+        float pickMs = 0.0f;            // 교차 삼각형 찾기 (마지막으로 다시 계산한 시간)
         float extractMs = 0.0f;
         float skinMs = 0.0f;
         float previewMs = 0.0f;
@@ -52,7 +53,6 @@ namespace MeshCutting
 
         const std::vector<CutTarget>& GetTargets() const { return m_Targets; }
         const CutTarget* FindTarget(CutTargetId id) const;
-        const SkeletonPose* FindSkeleton(const CutJobKey& key) const;       // 작업의 대상·팔레트의 이번 프레임 자세
         const std::map<CutJobKey, CutJob>& GetJobs() const { return m_Jobs; }
         uint64_t GetJobListGeneration() const { return m_JobListGeneration; }      // 작업이 생기거나 지워질 때 증가
         CutFrameStats GetFrameStats() const;
@@ -63,10 +63,12 @@ namespace MeshCutting
 
     private:
         void ReloadPalettes(CutTarget& target);
+        void BuildSource(CutTarget& target, size_t slot);
+        void RefreshPick(CutTarget& target, size_t slot, bool planeChanged);
         void RemoveJobsOf(CutTargetId id);
         void UpdateTargets();
         void UpdateCandidates();
-        void ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, SegmentHit>& hits);
+        void ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, uint32_t>& triangles);
         void ExtractJob(CutJob& job);
         void DropCandidate(CutJob& job);
         void SkinJobs();
@@ -88,5 +90,8 @@ namespace MeshCutting
         uint32_t m_NextColorIndex = 0;
         uint32_t m_ExtractCount = 0;
         uint64_t m_Generation = 0;          // 미리보기와 확정 결과의 세대 번호를 모든 작업에서 유일하게 만든다
+        CutPlane::Frame m_PickedFrame;         // 마지막으로 교차를 찾은 평면
+        bool m_HavePickedFrame = false;
+        float m_PickMs = 0.0f;
     };
 }

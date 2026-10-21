@@ -7,8 +7,11 @@
 | --- | --- | --- | --- |
 | `NDC25Reference.md` | 원본 기법(NDC25) 정리, 항목별 근거 수준 | 기준 문서 | 설계·구현·리뷰 판단 전 |
 | `CodeMap.md` | 계층, 호출 흐름, 상태의 주인 (줄 번호 없음) | 기준 문서 | 코드를 처음 열 때, 수정 위치를 찾을 때 |
+| [CurrentFlowReport.md](CurrentFlowReport.md) | 현재 선분별 작업의 데이터 흐름, 타입·객체·함수·파일 역할, 중복과 개선 조언 | 분석 완료 (`1287cb5` 기준) | 최신 실행 구조를 처음부터 이해할 때 (CodeMap의 구 흐름과 구분) |
 | `ClassLayoutDesign.md` | 기능을 클래스 6개로 묶는 계획 (K-0~K-6) | 설계안 | 클래스 정리 작업 전 |
-| `PerSegmentCutDesign.md` | 선분별·인스턴스별 절단 작업 | 구현 진행 중 (`b606ba4`), 단계는 10절 | 절단 작업 단위를 바꿀 때 |
+| `PerSegmentCutDesign.md` | 선분별·인스턴스별 절단 작업 | 구현 (`b606ba4`). 작업 식별은 JointCutDesign으로 대체됨 (선분 key는 모양만 남김) | 작업 목록·등록·Enter/Ctrl+Z·표시를 고칠 때 |
+| `JointCutDesign.md` | 메시 교차 기반 단일 joint 작업 (NDC 초기 단계, 한계 체험) | 구현 완료 (J-1~J-3, 커밋 전). 화면 확인 대기 | 무엇을 자를지(작업·패치 joint) 바꿀 때 |
+| `RegionCutDesign.md` | 영역 작업, 걸친 joint 합친 뒤 자르기 (NDC 한계 돌파) | 설계안, JointCutDesign 다음 단계 | 한계 돌파 작업 전 |
 | `PlaneFirstCutDesign.md` | world 유한 평면, 후보 패치 (P-1, P-2) | P-1·P-2 완료, P-3 폐기 | 평면·후보 패치 코드를 고칠 때 |
 | `SceneViewControlsDesign.md` | 마우스 카메라, 평면 기즈모, 키 (S-1~S-4) | 완료 (`0fc39fe`), 현재 조작의 기준 | 입력·기즈모를 고칠 때 |
 | `CutDebugDesign.md` | 디버그 와이어프레임, 미리보기/확정 절단 (D-0~D-3) | 완료 (`d33b1a7`) | 디버그 표시를 고칠 때 |

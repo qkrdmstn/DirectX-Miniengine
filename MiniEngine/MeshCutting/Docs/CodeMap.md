@@ -35,7 +35,7 @@ ModelViewer.cpp        입력을 읽어 컨트롤러에 전달하고, 프레임 
 
 ```
 절단 모드(T)이면 UpdateCandidate
-    ComputePaletteSkeleton → CutPlane::PickSegments(평면이 지나는 뼈 선분) → CutPlane::CutJoints(부모 joint 집합)
+    CutPick::PickJoints(평면과 교차하는 삼각형이 고른 절단 joint, 등록 후 첫 편집 프레임에 만든 원본 캐시 사용). PickSegments는 뼈 선분 tube 표시용
     집합이 직전 시도와 다르면 ExtractBonePatch(집합) → RebuildPatchPiece(BuildPatchPiece)
 패치가 있으면
     BuildSkinMatrices → Skinning::Apply(패치를 이번 포즈로)
@@ -67,6 +67,7 @@ Geometry/Patch      패치 조각 자료구조(PatchPiece 등)와 검증, 정점
 Geometry/Slice      평면으로 자르기 (SlicePatch). 내부에서 SliceCap.cpp의 루프 추출·검증과 cap 생성을 부른다
 Geometry/Skinning   스킨 정점 표(Skinning)와 piece 스키닝(Apply), joint 집합 선택 규칙. piece들이 shared_ptr<const Skinning>으로 공유한다
 Geometry/CutPlane   world 유한 사각 평면, 조작, 루프 사각형 검사, 평면이 지나는 뼈 선분 찾기
+Geometry/CutPick    평면과 교차하는 삼각형을 찾아 삼각형마다 절단 joint 하나를 고른다 (CutPick::PickJoints)
 Rendering/RenderBake  piece -> ProceduralMesh 변환(BuildRenderMesh, UpdateRenderPositions)과 디버그 튜브
 ```
 

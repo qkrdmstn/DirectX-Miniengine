@@ -2,6 +2,7 @@
 
 // 절단 작업(선분 하나 = 독립 패치 하나)의 식별자, 상태, 목록 비교. Model, Core에 의존하지 않는다 (설계: Docs/PerSegmentCutDesign.md 4절).
 
+#include "../Geometry/CutPick.h"
 #include "../Geometry/CutPlane.h"
 #include "../Geometry/Patch.h"
 #include "../Geometry/Slice.h"
@@ -22,7 +23,8 @@ namespace MeshCutting
 
     enum class CutJobKind : uint8_t
     {
-        SkeletalSegment,    // 스킨 팔레트의 부모 -> 자식 뼈 선분
+        SkeletalSegment,    // 스킨 팔레트의 부모 -> 자식 뼈 선분 (예전 방식, key 모양만 남아 있다)
+        SkeletalJoint,      // 스킨 팔레트의 joint 하나 (평면과 교차하는 삼각형이 고른 절단 joint)
         StaticMesh          // 스킨 없는 메시 하나 (구조만)
     };
 
@@ -60,6 +62,16 @@ namespace MeshCutting
         return key;
     }
 
+    inline CutJobKey MakeJointKey(CutTargetId target, uint32_t palette, uint32_t joint)
+    {
+        CutJobKey key;
+        key.target = target;
+        key.kind = CutJobKind::SkeletalJoint;
+        key.a = palette;
+        key.b = joint;
+        return key;
+    }
+
     inline CutJobKey MakeStaticMeshKey(CutTargetId target, uint32_t meshIndex)
     {
         CutJobKey key;
@@ -84,7 +96,7 @@ namespace MeshCutting
         uint32_t colorIndex = 0;            // 생성 순서로 정한 고정 색 번호 (GetJobColor)
 
         bool candidate = false;             // 이번 프레임에 평면이 이 작업을 지나는가
-        SegmentHit hit;                     // 마지막 교차 (표시용)
+        uint32_t pickTriangles = 0;         // 이 joint를 고른 교차 삼각형 수
 
         bool extracted = false;             // 후보가 되어 추출을 마쳤는가 (실패 포함)
         PatchPiece patch;                   // 미절단 패치 (후보일 때만 유지)
@@ -119,6 +131,17 @@ namespace MeshCutting
         float skinMs = 0.0f;
     };
 
+    // 대상의 팔레트 하나의 원본 캐시: 등록 때 팔레트의 모든 joint로 추출한 스킨 메시와, 이번 프레임의 교차 결과
+    struct CutTargetSource
+    {
+        std::shared_ptr<const BonePatchSource> source;      // 전체 추출의 출처 (vertices, meshes)
+        CutPickMesh pose;                                   // 정점의 현재 위치 (skins는 등록 때 채운다)
+        std::vector<std::vector<DirectX::XMFLOAT4X4>> matrices;     // pose를 계산한 스킨 행렬 (자세 변화 감지)
+        std::vector<CutPickJoint> picked;                   // 마지막 교차 결과
+        bool attempted = false;                             // 원본 캐시를 만들어 보았는가 (실패하면 편집 모드를 다시 켤 때 재시도)
+        std::wstring error;
+    };
+
     // 등록된 모델 인스턴스. instance는 UnregisterInstance 전까지 유효해야 한다.
     struct CutTarget
     {
@@ -128,6 +151,8 @@ namespace MeshCutting
         std::wstring name;
         std::vector<uint32_t> palettes;             // numJoints > 0인 스킨 팔레트 전부
         std::vector<SkeletonPose> skeletons;        // palettes와 같은 순서, 이번 프레임 자세
+        std::vector<CutTargetSource> sources;       // palettes와 같은 순서
+        std::vector<std::vector<SegmentHit>> segmentHits;       // palettes와 같은 순서, 평면이 지나는 뼈 선분 (표시용)
         std::wstring error;                         // 마지막 자세 읽기 오류
         float radius = 0.0f;                        // 표시 오프셋과 tube 크기
     };

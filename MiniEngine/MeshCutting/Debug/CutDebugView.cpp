@@ -238,26 +238,30 @@ namespace MeshCutting
         else if (!m_PlaneDebug.GetData().vertices.empty())
             m_PlaneDebug.Clear();
 
-        // 평면이 지나는 뼈 선분(노랑)과 교차점(흰 십자). 모든 후보 작업을 한 메시에 모은다.
+        // 평면이 지나는 뼈 선분(노랑)과 교차점(흰 십자). 작업과 무관한 표시용이고, 모든 대상·팔레트를 한 메시에 모은다.
         if (cut.PlaneEditing() && cut.PlaneValid())
         {
             ProceduralMeshData segments;
             const float radius = cut.GetModelRadius() * 0.01f;
-            for (const auto& entry : jobs)
+            for (const CutTarget& target : cut.GetTargets())
             {
-                const CutJob& job = entry.second;
-                const SkeletonPose* skeleton = cut.FindSkeleton(job.key);
-                if (!job.candidate || skeleton == nullptr || job.hit.parentJoint >= skeleton->jointPositions.size()
-                    || job.hit.childJoint >= skeleton->jointPositions.size())
-                    continue;
-                AppendDebugSegment(segments, skeleton->jointPositions[job.hit.parentJoint], skeleton->jointPositions[job.hit.childJoint],
-                    radius, { 1.0f, 0.85f, 0.1f, 1.0f });
-                const float arm = radius * 4.0f;
-                const DirectX::XMFLOAT3& p = job.hit.point;
-                const DirectX::XMFLOAT4 white = { 1.0f, 1.0f, 1.0f, 1.0f };
-                AppendDebugSegment(segments, { p.x - arm, p.y, p.z }, { p.x + arm, p.y, p.z }, radius * 0.7f, white);
-                AppendDebugSegment(segments, { p.x, p.y - arm, p.z }, { p.x, p.y + arm, p.z }, radius * 0.7f, white);
-                AppendDebugSegment(segments, { p.x, p.y, p.z - arm }, { p.x, p.y, p.z + arm }, radius * 0.7f, white);
+                for (size_t slot = 0; slot < target.segmentHits.size(); ++slot)
+                {
+                    const SkeletonPose& skeleton = target.skeletons[slot];
+                    for (const SegmentHit& hit : target.segmentHits[slot])
+                    {
+                        if (hit.parentJoint >= skeleton.jointPositions.size() || hit.childJoint >= skeleton.jointPositions.size())
+                            continue;
+                        AppendDebugSegment(segments, skeleton.jointPositions[hit.parentJoint], skeleton.jointPositions[hit.childJoint],
+                            radius, { 1.0f, 0.85f, 0.1f, 1.0f });
+                        const float arm = radius * 4.0f;
+                        const DirectX::XMFLOAT3& p = hit.point;
+                        const DirectX::XMFLOAT4 white = { 1.0f, 1.0f, 1.0f, 1.0f };
+                        AppendDebugSegment(segments, { p.x - arm, p.y, p.z }, { p.x + arm, p.y, p.z }, radius * 0.7f, white);
+                        AppendDebugSegment(segments, { p.x, p.y - arm, p.z }, { p.x, p.y + arm, p.z }, radius * 0.7f, white);
+                        AppendDebugSegment(segments, { p.x, p.y, p.z - arm }, { p.x, p.y, p.z + arm }, radius * 0.7f, white);
+                    }
+                }
             }
             if (!segments.indices.empty())
                 segments.sections.push_back({ 0, uint32_t(segments.indices.size()), 0 });
@@ -355,13 +359,18 @@ namespace MeshCutting
         const CutFrameStats stats = cut.GetFrameStats();
         if (cut.PlaneEditing())
         {
-            text.DrawFormattedString(L"Jobs %u (candidates %u, confirmed %u)   extract %.3f ms (%u extractions)   follow %.3f ms   preview %.3f ms   cut %.3f ms\n",
-                stats.jobs, stats.candidates, stats.confirmed, stats.extractMs, stats.extractCount, stats.skinMs, stats.previewMs, stats.cutMs);
+            text.DrawFormattedString(L"Jobs %u (candidates %u, confirmed %u)   pick %.3f ms   extract %.3f ms (%u extractions)   follow %.3f ms   preview %.3f ms   cut %.3f ms\n",
+                stats.jobs, stats.candidates, stats.confirmed, stats.pickMs, stats.extractMs, stats.extractCount, stats.skinMs, stats.previewMs, stats.cutMs);
             for (const CutTarget& target : cut.GetTargets())
+            {
                 if (!target.error.empty())
                     text.DrawFormattedString(L"[%ls] %ls\n", target.name.c_str(), target.error.c_str());
+                for (size_t slot = 0; slot < target.sources.size(); ++slot)
+                    if (!target.sources[slot].error.empty())
+                        text.DrawFormattedString(L"[%ls] pal %u source: %ls\n", target.name.c_str(), target.palettes[slot], target.sources[slot].error.c_str());
+            }
             if (stats.candidates == 0)
-                text.DrawFormattedString(L"No bone segment crosses the plane\n");
+                text.DrawFormattedString(L"No triangle crosses the plane\n");
         }
 
         for (const auto& entry : cut.GetJobs())
@@ -372,11 +381,10 @@ namespace MeshCutting
             const CutTarget* target = cut.FindTarget(job.key.target);
             const std::wstring targetName = target != nullptr ? target->name : L"?";
             std::wstring line = L"#" + std::to_wstring(job.colorIndex + 1) + L" [" + targetName + L"] pal " + std::to_wstring(job.key.a)
-                + L"  " + std::to_wstring(job.key.b) + L"(" + jointName(job.key.target, job.key.a, job.key.b) + L") -> "
-                + std::to_wstring(job.key.c) + L"(" + jointName(job.key.target, job.key.a, job.key.c) + L")";
+                + L"  joint " + std::to_wstring(job.key.b) + L"(" + jointName(job.key.target, job.key.a, job.key.b) + L")";
             if (job.candidate)
             {
-                line += L"  " + std::to_wstring(job.patchTriangles) + L" tris";
+                line += L"  crossed " + std::to_wstring(job.pickTriangles) + L" tris  patch " + std::to_wstring(job.patchTriangles) + L" tris";
                 if (job.havePreview)
                     line += L"  preview " + Utility::UTF8ToWideString(SliceStatusName(job.previewStatus));
             }
@@ -386,13 +394,6 @@ namespace MeshCutting
                 line += L"  cut Ok";
             if (!job.candidate)
                 line += L"  (not under the plane)";
-            for (const auto& other : cut.GetJobs())
-                if (other.second.colorIndex < job.colorIndex && other.first.target == job.key.target && other.first.kind == job.key.kind
-                    && other.first.a == job.key.a && other.first.b == job.key.b)
-                {
-                    line += L"  same parent joint as #" + std::to_wstring(other.second.colorIndex + 1);
-                    break;
-                }
             text.DrawFormattedString(L"%ls\n", line.c_str());
 
             const auto detail = [&](const std::string& message)
