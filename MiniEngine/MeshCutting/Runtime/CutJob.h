@@ -117,7 +117,7 @@ namespace MeshCutting
         uint64_t previewGeneration = 0;
         float previewMs = 0.0f;
 
-        bool haveConfirmed = false;         // 확정 결과 (후보가 사라져도 Ctrl+Z 전까지 유지)
+        bool haveConfirmed = false;         // 확정 결과 (후보가 사라져도 유지, Ctrl+Z나 다음 Enter에서 지워진다)
         PatchPiece positive, negative;
         DirectX::XMFLOAT3 confirmedNormal = { 0.0f, 1.0f, 0.0f };
         uint64_t confirmedGeneration = 0;

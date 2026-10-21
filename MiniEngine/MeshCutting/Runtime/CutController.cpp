@@ -529,9 +529,10 @@ namespace MeshCutting
         job.previewGeneration = ++m_Generation;
     }
 
-    // 후보 작업마다 독립으로 자른다. 성공한 작업만 확정 결과를 바꾸고, 실패한 작업은 이전 결과를 유지한다.
+    // 먼저 이전 확정 결과를 모두 지우고(Ctrl+Z와 같다), 후보 작업마다 독립으로 자른다. 실패한 작업은 결과가 없다.
     void CutController::ConfirmAll()
     {
+        DiscardCut();
         for (auto& entry : m_Jobs)
         {
             CutJob& job = entry.second;

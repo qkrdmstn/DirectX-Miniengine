@@ -40,7 +40,7 @@ namespace MeshCutting
         void SetGizmoTool(GizmoTool tool) { m_Plane.SetGizmoTool(tool); }
         bool UpdateGizmo(const GizmoView& view, const GizmoInput& input);   // 드래그로 평면이 바뀌면 true
         void CancelGizmo() { m_Plane.CancelGizmo(); }
-        void RequestCut();          // Enter: 다음 Update에서 후보 작업마다 절단
+        void RequestCut();          // Enter: 다음 Update에서 이전 확정 결과를 지우고 후보 작업마다 절단
         void DiscardCut();          // Ctrl+Z: 모든 확정 결과를 지운다
 
         // 모든 인스턴스의 Update 뒤에 한 번: 교차 선분 -> 작업 목록 -> 스키닝 -> 미리보기 또는 확정
