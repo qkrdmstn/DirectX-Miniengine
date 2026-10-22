@@ -414,6 +414,7 @@ void glTF::Asset::ProcessMaterials( json& materials )
         if (thisMaterial.find("normalTextureScale") != thisMaterial.end())
             material.normalTextureScale = thisMaterial.at("normalTextureScale");
 
+        material.emissiveFactor[0] = material.emissiveFactor[1] = material.emissiveFactor[2] = 0.0f;  // glTF default when absent
         if (thisMaterial.find("emissiveFactor") != thisMaterial.end())
             ReadFloats(thisMaterial.at("emissiveFactor"), material.emissiveFactor);
 

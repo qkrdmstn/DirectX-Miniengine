@@ -93,10 +93,10 @@ private:
 };
 
 // 정적 테스트 모델의 크기와 위치는 캐릭터 반지름의 배수다. 위치는 캐릭터 중심에서 +X로 떨어진 거리다.
-// 절단 조각이 대상 옆 +X에 놓이므로 간격을 넉넉히 둔다 (조각 폭은 대상 반지름의 약 2.3배).
+// 조각은 원본에 붙으므로 옆 공간이 필요 없다. 시작 카메라(캐릭터 구, 16:9)의 가로 시야 반폭이 반지름의 약 2.1배라 그 안에 모은다.
 static const float kStaticSizeRatio = 0.6f;
-static const float kCubeOffsetRatio = 4.0f;
-static const float kBunnyOffsetRatio = 8.0f;
+static const float kCubeOffsetRatio = 0.9f;
+static const float kBunnyOffsetRatio = 1.75f;
 
 CREATE_APPLICATION(ModelViewer)
 
