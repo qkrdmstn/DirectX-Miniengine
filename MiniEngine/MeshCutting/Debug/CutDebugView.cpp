@@ -299,6 +299,20 @@ namespace MeshCutting
             const JobMeshes& meshes = found->second;
             const CutTarget* target = cut.FindTarget(job.key.target);
             const float radius = target != nullptr ? target->radius : cut.GetModelRadius();
+            const DirectX::XMFLOAT4 color = GetJobColor(job.colorIndex);
+            if (job.breakNode != kNoNode)
+            {
+                // 끊긴 작업의 조각은 스키닝된 자리에 그대로 그린다 (남는 조각은 몸에, 떨어지는 조각은 떨어진 팔에 붙는다)
+                const Matrix4 worldIdentity(kIdentity);
+                drawSurface(meshes.positive, worldIdentity, pieceOptions, color);
+                drawSurface(meshes.negative, worldIdentity, pieceOptions, color);
+                if (m_RenderMode == RenderMode::Debug)
+                {
+                    draw(meshes.boundaryPositive, worldIdentity);
+                    draw(meshes.boundaryNegative, worldIdentity);
+                }
+                continue;
+            }
             const float gap = radius * 0.05f;
             const DirectX::XMFLOAT3& n = job.confirmedNormal;
             const Vector3 shift = Vector3(n.x, n.y, n.z) * gap;
@@ -314,7 +328,6 @@ namespace MeshCutting
             const Vector3 offset(slotCenter - centerX, 0.0f, 0.0f);
             const Matrix4 positiveWorld(AffineTransform::MakeTranslation(offset + shift));
             const Matrix4 negativeWorld(AffineTransform::MakeTranslation(offset - shift));
-            const DirectX::XMFLOAT4 color = GetJobColor(job.colorIndex);
             drawSurface(meshes.positive, positiveWorld, pieceOptions, color);
             drawSurface(meshes.negative, negativeWorld, pieceOptions, color);
             if (m_RenderMode == RenderMode::Debug)

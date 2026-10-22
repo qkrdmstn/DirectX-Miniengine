@@ -172,7 +172,7 @@ public:
     void ClearVertexColorOverride(uint32_t meshIndex);
 
     // Debug stand-in for Unreal BreakConstraint: pins the node at its world matrix from the last Update and moves it by offset
-    // (an immediate shift instead of Unreal's Impulse). Descendants still animate on top of it. Does nothing if the node is already broken.
+    // (an immediate shift in node-matrix (m_NodeWorld) space instead of Unreal's Impulse). Descendants still animate on top of it. Does nothing if the node is already broken.
     void BreakConstraint(const Math::Vector3& offset, uint32_t nodeIndex);
     void ResetBrokenConstraints();
     bool IsConstraintBroken(uint32_t nodeIndex) const;

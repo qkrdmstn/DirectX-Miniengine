@@ -117,6 +117,34 @@ namespace MeshCutting
             return BuildSkinMatrices(*target.model, *target.instance, *job.source.bone, out, error);
         }
 
+        // 끊긴 작업의 조각 하나의 행렬: 지금 행렬에서 한쪽 joint를 절단 순간 값에 강체 이동(지금 world * inverse(절단 world))을 곱한 것으로 바꾼다.
+        // 떨어지는 조각은 끊기지 않은 joint를 끊긴 노드 world로, 남는 조각은 끊긴 joint를 부모 world로 따라간다.
+        bool BuildPieceMatrices(const CutTarget& target, const CutJob& job, bool positive, std::vector<std::vector<DirectX::XMFLOAT4X4>>& out, std::string* error)
+        {
+            if (!BuildJobMatrices(target, job, out, error))
+                return false;
+            if (job.breakNode == kNoNode)
+                return true;
+            const bool falling = positive == job.positiveFalls;
+            const Matrix4* nodeWorld = target.instance->GetNodeWorldMatrices();
+            Matrix4 follow(kIdentity);      // 부모가 없는 남는 조각은 절단 순간 자리에 그대로 둔다
+            if (falling || job.breakHasParent)
+            {
+                const uint32_t followNode = falling ? job.breakNode : job.breakParent;
+                const DirectX::XMFLOAT4X4& followCut = falling ? job.breakNodeWorld : job.breakParentWorld;
+                follow = nodeWorld[followNode] * Invert(Matrix4(DirectX::XMLoadFloat4x4(&followCut)));
+            }
+            const BonePatchSource& source = *job.source.bone;
+            for (size_t slot = 0; slot < out.size() && slot < job.breakCutMatrices.size(); ++slot)
+            {
+                const Matrix4 meshFollow = nodeWorld[source.meshes[slot].worldMatrixIndex] * follow;
+                for (size_t j = 0; j < out[slot].size() && j < job.breakDetached.size(); ++j)
+                    if ((job.breakDetached[j] != 0) != falling)
+                        DirectX::XMStoreFloat4x4(&out[slot][j], DirectX::XMMATRIX(meshFollow * Matrix4(DirectX::XMLoadFloat4x4(&job.breakCutMatrices[slot][j]))));
+            }
+            return true;
+        }
+
     }
 
     CutTargetId CutController::RegisterInstance(ModelInstance& instance, std::wstring name)
@@ -202,7 +230,7 @@ namespace MeshCutting
         {
             const CutJob& job = entry.second;
             if (job.key.target == target.id && job.key.kind == CutJobKind::SkeletalJoint && job.haveConfirmed && job.breakNode != kNoNode)
-                wanted.emplace(job.breakNode, Vector3(job.breakOffset.x, job.breakOffset.y, job.breakOffset.z));
+                wanted.emplace(job.breakNode, Vector3(job.breakOffsetNode.x, job.breakOffsetNode.y, job.breakOffsetNode.z));
         }
         bool same = wanted.size() == target.brokenNodes.size();
         for (auto it = wanted.begin(); same && it != wanted.end(); ++it)
@@ -239,6 +267,44 @@ namespace MeshCutting
         const float distance = ChildSide(model, source, node, plane) * target->radius * kBreakOffsetRatio;
         job.breakNode = node;
         job.breakOffset = { plane.normal.x * distance, plane.normal.y * distance, plane.normal.z * distance };
+
+        // 절단 순간 값 저장: 끊기 전 자세의 slot 행렬(메시 world는 뺀다), 끊긴 노드와 부모의 world, 끊긴 joint 집합
+        const Matrix4* nodeWorld = target->instance->GetNodeWorldMatrices();
+        if (nodeWorld == nullptr || job.skinMatrices.size() != source.meshes.size())
+        {
+            job.breakNode = kNoNode;
+            return;
+        }
+        // world 이동량을 노드 행렬 공간(메시 world를 뺀 공간)으로 바꾼다
+        const Vector3 nodeOffset = Invert(nodeWorld[source.meshes[0].worldMatrixIndex]).Get3x3() * Vector3(job.breakOffset.x, job.breakOffset.y, job.breakOffset.z);
+        DirectX::XMStoreFloat3(&job.breakOffsetNode, DirectX::XMVECTOR(nodeOffset));
+        job.breakCutMatrices = job.skinMatrices;
+        for (size_t slot = 0; slot < source.meshes.size(); ++slot)
+        {
+            const Matrix4 inverseMeshWorld = Invert(nodeWorld[source.meshes[slot].worldMatrixIndex]);
+            for (DirectX::XMFLOAT4X4& matrix : job.breakCutMatrices[slot])
+                DirectX::XMStoreFloat4x4(&matrix, DirectX::XMMATRIX(inverseMeshWorld * Matrix4(DirectX::XMLoadFloat4x4(&matrix))));
+        }
+        DirectX::XMStoreFloat4x4(&job.breakNodeWorld, DirectX::XMMATRIX(nodeWorld[node]));
+        job.breakParent = model.m_NodeParents[node];
+        job.breakHasParent = job.breakParent < model.m_NumNodes;
+        if (job.breakHasParent)
+            DirectX::XMStoreFloat4x4(&job.breakParentWorld, DirectX::XMMATRIX(nodeWorld[job.breakParent]));
+        job.breakDetached.assign(palette.numJoints, 0);
+        for (uint32_t j = 0; j < palette.numJoints; ++j)
+        {
+            uint32_t ancestor = model.m_JointIndices[palette.startJoint + j];
+            for (uint32_t depth = 0; depth <= model.m_NumNodes && ancestor < model.m_NodeParents.size(); ++depth)
+            {
+                if (ancestor == node)
+                {
+                    job.breakDetached[j] = 1;
+                    break;
+                }
+                ancestor = model.m_NodeParents[ancestor];
+            }
+        }
+        job.positiveFalls = job.breakOffset.x * plane.normal.x + job.breakOffset.y * plane.normal.y + job.breakOffset.z * plane.normal.z > 0.0f;
     }
 
     // 확정된 스켈레탈 작업이 복사한 joint 영향 범위를 메시별 버텍스 컬러(R=255)로 덮어써 원본에서 숨긴다 (Unreal SetVertexColorOverride).
@@ -743,26 +809,26 @@ namespace MeshCutting
             }
 
             std::string error;
-            bool matricesOk;
+            bool matricesOk = true;
+            bool ok = true;
+            const int64_t start = SystemTime::GetCurrentTick();
+            PatchPiece* pieces[2] = { &job.positive, &job.negative };
+            for (int side = 0; side < 2 && matricesOk && ok; ++side)
             {
-                PhaseTimer timer(L"Job matrices", m_Frame.jobMatrices);
-                matricesOk = BuildJobMatrices(*target, job, job.skinMatrices, &error);
+                {
+                    PhaseTimer timer(L"Job matrices", m_Frame.jobMatrices);
+                    matricesOk = BuildPieceMatrices(*target, job, side == 0, job.skinMatrices, &error);     // 끊긴 작업은 조각마다 행렬이 다르다
+                }
+                if (!matricesOk)
+                    break;
+                PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
+                ok = pieces[side]->skin && pieces[side]->skin->Apply(*pieces[side], job.skinMatrices, nullptr, &error);
+                m_Frame.jobVertices += ok ? uint32_t(pieces[side]->nodes.size()) : 0;
             }
             if (!matricesOk)
             {
                 job.skinError = error;
                 continue;
-            }
-            const int64_t start = SystemTime::GetCurrentTick();
-            bool ok = true;
-            {
-                PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
-                PatchPiece* pieces[2] = { &job.positive, &job.negative };
-                for (PatchPiece* piece : pieces)
-                {
-                    ok = ok && piece->skin && piece->skin->Apply(*piece, job.skinMatrices, nullptr, &error);
-                    m_Frame.jobVertices += ok ? uint32_t(piece->nodes.size()) : 0;
-                }
             }
             Smooth(job.skinMs, ElapsedMs(start));
             if (!ok)
