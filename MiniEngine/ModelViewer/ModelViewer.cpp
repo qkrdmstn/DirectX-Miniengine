@@ -79,8 +79,6 @@ private:
         MeshCutting::CutTargetId target = 0;
     };
     std::deque<StaticTestInstance> m_StaticInsts;
-    bool m_AnimationsPaused = false;
-    vector<AnimationState::eMode> m_ResumeModes;
     MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
     MeshCutting::CutController m_Cut;           // candidate patch, plane, cut pieces and their per-frame skinning
     MeshCutting::CutDebugView m_CutView;        // debug meshes, render mode and status lines
@@ -92,11 +90,10 @@ private:
     void AddStaticInstance(const std::wstring& fileName, float sizeRatio, float offsetRatio, bool forceRebuild);
 };
 
-// 정적 테스트 모델의 크기와 위치는 캐릭터 반지름의 배수다. 위치는 캐릭터 중심에서 +X로 떨어진 거리다.
-// 조각은 원본에 붙으므로 옆 공간이 필요 없다. 시작 카메라(캐릭터 구, 16:9)의 가로 시야 반폭이 반지름의 약 2.1배라 그 안에 모은다.
-static const float kStaticSizeRatio = 0.6f;
-static const float kCubeOffsetRatio = 0.9f;
-static const float kBunnyOffsetRatio = 1.75f;
+// cube를 기준으로 정적 메시 절단을 확인한다. 크기는 bounds 반지름 단위다.
+static const float kStaticRadius = 100.0f;
+static const float kBunnySizeRatio = 0.8f;
+static const float kBunnyOffsetRatio = 2.4f;
 
 CREATE_APPLICATION(ModelViewer)
 
@@ -105,15 +102,6 @@ static std::wstring BoneName(const Model& model, uint32_t nodeIndex, uint32_t jo
     if (nodeIndex < model.m_NodeNames.size() && !model.m_NodeNames[nodeIndex].empty())
         return Utility::UTF8ToWideString(model.m_NodeNames[nodeIndex]);
     return L"Joint_" + std::to_wstring(jointIndex);
-}
-
-static std::wstring ParentName(const Model& model, uint32_t nodeIndex)
-{
-    if (nodeIndex >= model.m_NodeNames.size())
-        return L"None";
-    if (!model.m_NodeNames[nodeIndex].empty())
-        return Utility::UTF8ToWideString(model.m_NodeNames[nodeIndex]);
-    return L"Node_" + std::to_wstring(nodeIndex);
 }
 
 ExpVar g_SunLightIntensity("Viewer/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
@@ -208,65 +196,39 @@ void ModelViewer::Startup(void)
 
     LoadIBLTextures();
 
-    std::wstring gltfFileName = L"Models/Xbot.glb";
+    const std::wstring gltfFileName = L"Models/cube.glb";
 
     bool forceRebuild = false;
     uint32_t rebuildValue;
     if (CommandLineArgs::GetInteger(L"rebuild", rebuildValue))
         forceRebuild = rebuildValue != 0;
 
-    if (gltfFileName.empty())
+    m_ModelInst = Renderer::LoadModel(gltfFileName, forceRebuild);
+    if (!m_ModelInst.IsNull())
     {
-#ifdef LEGACY_RENDERER
-        Sponza::Startup(m_Camera);
-#else
-        m_ModelInst = Renderer::LoadModel(L"Sponza/PBR/sponza2.gltf", forceRebuild);
-        m_ModelInst.Resize(100.0f * m_ModelInst.GetRadius());
-        OrientedBox obb = m_ModelInst.GetBoundingBox();
-        float modelRadius = Length(obb.GetDimensions()) * 0.5f;
-        const Vector3 eye = obb.GetCenter() + Vector3(modelRadius * 0.5f, 0.0f, 0.0f);
-        m_Camera.SetEyeAtUp(eye, Vector3(kZero), Vector3(kYUnitVector));
-#endif
+        m_ModelInst.Resize(kStaticRadius);
+        m_ModelInst.SetPosition(-m_ModelInst.GetCenter());
+        m_CutTarget = m_Cut.RegisterInstance(m_ModelInst, gltfFileName);
+        AddStaticInstance(L"Models/bunny.glb", kBunnySizeRatio, kBunnyOffsetRatio, forceRebuild);
     }
-    else
-    {
-        m_ModelInst = Renderer::LoadModel(gltfFileName, forceRebuild);
-        m_ModelInst.PlayAnimation(6, true); // 확인한 Xbot 파일의 walk
-        m_ModelInst.Resize(0.01f);
-
-        const Model* model = m_ModelInst.GetModel();
-        if (model != nullptr)
-        {
-            for (uint32_t paletteId = 0; paletteId < model->m_SkinPalettes.size(); ++paletteId)
-            {
-                const SkinPalette& palette = model->m_SkinPalettes[paletteId];
-                for (uint32_t jointIndex = 0; jointIndex < palette.numJoints; ++jointIndex)
-                {
-                    const uint32_t nodeIndex = model->m_JointIndices[palette.startJoint + jointIndex];
-                    const uint32_t parent = nodeIndex < model->m_NodeParents.size()
-                        ? model->m_NodeParents[nodeIndex] : UINT32_MAX;
-                    const std::wstring name = BoneName(*model, nodeIndex, jointIndex);
-                    const std::wstring parentName = ParentName(*model, parent);
-                    Utility::Printf(L"Skin %u Joint %u Node %u %ls Parent %u %ls\n",
-                        paletteId, jointIndex, nodeIndex, name.c_str(), parent, parentName.c_str());
-                }
-            }
-            m_CutTarget = m_Cut.RegisterInstance(m_ModelInst, gltfFileName);     // 해제는 Cleanup에서 (인스턴스보다 먼저)
-            AddStaticInstance(L"Models/cube.glb", kStaticSizeRatio, kCubeOffsetRatio, forceRebuild);
-            AddStaticInstance(L"Models/bunny.glb", kStaticSizeRatio, kBunnyOffsetRatio, forceRebuild);
-        }
-
-        MotionBlur::Enable = false;
-    }
+    MotionBlur::Enable = false;
 
     m_Camera.SetZRange(1.0f, 10000.0f);
-    // Without a model (the Sponza scene) there is nothing to frame: start with a large neutral sphere.
-    const Math::BoundingSphere focus = m_ModelInst.IsNull()
-        ? Math::BoundingSphere(Vector3(kZero), Scalar(1000.0f)) : m_ModelInst.GetBoundingSphere();
+    // 두 정적 모델의 bounds를 모두 담는 구에 시작 카메라를 맞춘다.
+    Vector3 focusCenter = m_ModelInst.GetCenter();
+    float focusRadius = m_ModelInst.IsNull() ? kStaticRadius : float(m_ModelInst.GetRadius());
+    if (!m_StaticInsts.empty())
+    {
+        const ModelInstance& other = m_StaticInsts.front().instance;
+        const Vector3 delta = other.GetCenter() - focusCenter;
+        focusCenter += delta * 0.5f;
+        focusRadius = float(Length(delta)) * 0.5f + std::max(focusRadius, float(other.GetRadius()));
+    }
+    const Math::BoundingSphere focus(focusCenter, Scalar(focusRadius));
     m_SceneCamera.reset(new MeshCutting::SceneViewCamera(m_Camera, focus, Vector3(kYUnitVector)));
 }
 
-// 정적 모델을 불러와 캐릭터 옆에 놓고 절단 대상으로 등록한다. 파일이 없거나 실패하면 건너뛴다.
+// 정적 모델을 불러와 기준 cube 옆에 놓고 절단 대상으로 등록한다. 파일이 없거나 실패하면 건너뛴다.
 // 크기와 위치를 정한 뒤에 등록해야 한다 (대상 반지름을 등록 때 읽는다).
 void ModelViewer::AddStaticInstance(const std::wstring& fileName, float sizeRatio, float offsetRatio, bool forceRebuild)
 {
@@ -278,10 +240,10 @@ void ModelViewer::AddStaticInstance(const std::wstring& fileName, float sizeRati
     StaticTestInstance& entry = m_StaticInsts.back();
     entry.instance = model;
 
-    const float characterRadius = float(m_ModelInst.GetRadius());
-    entry.instance.Resize(characterRadius * sizeRatio);
+    const float referenceRadius = float(m_ModelInst.GetRadius());
+    entry.instance.Resize(referenceRadius * sizeRatio);
     entry.instance.SetPosition(Vector3(kZero));
-    const Vector3 wanted = m_ModelInst.GetCenter() + Vector3(characterRadius * offsetRatio, 0.0f, 0.0f);
+    const Vector3 wanted = m_ModelInst.GetCenter() + Vector3(referenceRadius * offsetRatio, 0.0f, 0.0f);
     entry.instance.SetPosition(wanted - entry.instance.GetCenter());       // 모델 원점이 아니라 중심을 목표 위치에 맞춘다
 
     entry.target = m_Cut.RegisterInstance(entry.instance, fileName);
@@ -339,35 +301,6 @@ void ModelViewer::Update(float deltaT)
                 m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Rotate);
             if (GameInput::IsFirstPressed(GameInput::kKey_r))
                 m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Scale);
-        }
-    }
-
-    if (GameInput::IsFirstPressed(GameInput::kKey_space) && m_ModelInst.GetNumAnimations() > 0)
-    {
-        if (!m_AnimationsPaused)
-        {
-            m_ResumeModes.resize(m_ModelInst.GetNumAnimations(), AnimationState::kStopped);
-            bool anyPlaying = false;
-            for (uint32_t i = 0; i < m_ResumeModes.size(); ++i)
-            {
-                m_ResumeModes[i] = m_ModelInst.GetAnimationMode(i);
-                if (m_ResumeModes[i] != AnimationState::kStopped)
-                {
-                    m_ModelInst.PauseAnimation(i);
-                    anyPlaying = true;
-                }
-            }
-            m_AnimationsPaused = anyPlaying;
-        }
-        else
-        {
-            for (uint32_t i = 0; i < m_ResumeModes.size(); ++i)
-            {
-                if (m_ResumeModes[i] != AnimationState::kStopped)
-                    m_ModelInst.PlayAnimation(i, m_ResumeModes[i] == AnimationState::kLooping);
-            }
-            m_ResumeModes.clear();
-            m_AnimationsPaused = false;
         }
     }
 

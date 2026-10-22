@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>주간 발표 - 메시 절단</title>
+<style>
+@page { size: 1280px 720px; margin: 0; }
+:root {
+    --navy: #12294A;
+    --blue: #1A6BC4;
+    --sky: #35B3E8;
+    --bg: #F5F9FD;
+    --card: #FFFFFF;
+    --line: #DCE6F2;
+    --text: #12294A;
+    --sub: #5F7590;
+    --pos: #2E9E6B;
+    --neg: #C2417A;
+    --cap: #E39B2D;
+    --soft: #E8F2FC;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #888; }
+body { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; color: var(--text); }
+.slide {
+    width: 1280px; height: 720px; position: relative; overflow: hidden;
+    background: var(--bg); margin: 0 auto 24px; page-break-after: always; break-after: page;
+}
+@media print { html, body { background: none; } .slide { margin: 0; } }
+.slide::before { content: ""; position: absolute; left: 0; top: 0; right: 0; height: 12px; background: var(--blue); }
+.kicker { position: absolute; left: 62px; top: 42px; font-size: 12px; font-weight: 700; letter-spacing: 3.5px; color: var(--blue); }
+.title { position: absolute; left: 62px; top: 68px; font-size: 40px; font-weight: 700; letter-spacing: -0.5px; }
+.subtitle { position: absolute; left: 64px; top: 130px; font-size: 16px; color: var(--sub); }
+.rule { position: absolute; left: 62px; right: 62px; top: 168px; border-top: 1.5px solid var(--line); }
+.body { position: absolute; left: 62px; right: 62px; top: 196px; bottom: 56px; }
+.footer { position: absolute; left: 64px; bottom: 24px; font-size: 10.5px; letter-spacing: 2px; color: var(--sub); }
+.pageno { position: absolute; right: 62px; bottom: 22px; font-size: 13px; font-weight: 700; color: var(--blue); }
+
+.card { background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 22px 26px; position: relative; }
+.card.bar { border-left: 7px solid var(--blue); }
+.card h3 { font-size: 21px; font-weight: 700; margin-bottom: 10px; }
+.card p, .card li { font-size: 16px; color: var(--sub); line-height: 1.55; }
+.card ul { padding-left: 20px; }
+.card li { margin-bottom: 4px; }
+.num { color: var(--blue); font-weight: 700; }
+.row { display: flex; gap: 22px; }
+.col { flex: 1; }
+.banner { background: var(--navy); color: #fff; border-radius: 12px; padding: 20px 34px; display: flex; align-items: center; gap: 40px; }
+.banner .label { color: #8CC8F2; font-size: 20px; font-weight: 700; white-space: nowrap; }
+.banner .msg { font-size: 23px; font-weight: 700; }
+.tag { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 6px; background: var(--soft); color: var(--blue); margin-right: 6px; }
+.tag.done { background: #E3F4EC; color: var(--pos); }
+.tag.plan { background: #FFF1DC; color: #B26C00; }
+.tag.q { background: #FCE6EF; color: var(--neg); }
+.mono { font-family: Consolas, "Malgun Gothic", monospace; font-size: 0.92em; color: var(--navy); }
+.note { font-size: 13.5px; color: var(--sub); }
+
+/* 스크린샷 자리: 파일이 없으면 img가 지워지고 회색 자리표시가 보인다 */
+.shot { position: relative; background: #D5DCE4; border: 1.5px dashed #9AA8B8; border-radius: 10px; overflow: hidden; }
+.shot .ph { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #5B6878; font-size: 15px; text-align: center; gap: 6px; padding: 10px; }
+.shot .ph b { font-size: 17px; color: #3E4B5B; }
+.shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #10141A; }
+.cap-label { font-size: 14px; color: var(--sub); margin-top: 8px; text-align: center; }
+
+/* 표지 */
+.cover { background: var(--navy); }
+.cover::before { left: 0; top: 0; bottom: 0; width: 18px; height: auto; right: auto; background: var(--sky); }
+.cover .big { position: absolute; left: 92px; top: 196px; font-size: 52px; font-weight: 700; color: #fff; line-height: 1.3; }
+.cover .line { position: absolute; left: 92px; top: 398px; width: 600px; border-top: 4px solid var(--sky); }
+.cover .sub { position: absolute; left: 92px; top: 428px; font-size: 24px; color: #D6E6F6; }
+.cover .who { position: absolute; left: 92px; bottom: 64px; font-size: 17px; color: #A9C3DE; }
+.cover .what { position: absolute; right: 92px; bottom: 64px; font-size: 17px; color: #A9C3DE; }
+</style>
+</head>
+<body>
+
+<!-- 1. 표지 -->
+<section class="slide cover">
+    <div class="big">평면 절단 기반<br>실시간 스켈레탈 메시 절단</div>
+    <div class="line"></div>
+    <div class="sub">주간 진행 발표 — 스태틱 메시 평면 절단 구현</div>
+    <div class="who">박은수 / 애니메이션1실</div>
+    <div class="what">주간 발표</div>
+</section>
+
+<!-- 2. 주제 확장 -->
+<section class="slide">
+    <div class="kicker">01 / TOPIC</div>
+    <div class="title">주제 확장</div>
+    <div class="subtitle">평면 절단을 기반으로, 애니메이션이 유지되는 스켈레탈 메시 절단과 내부 표현까지</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="height: 330px;">
+            <div class="card bar col">
+                <span class="tag">기반</span>
+                <h3 style="margin-top: 12px;">평면 절단</h3>
+                <p>메시를 평면으로 나누고 열린 단면을 cap으로 채우는 기본 파이프라인.</p>
+                <p style="margin-top: 10px;">모든 확장의 공통 연산이다.</p>
+            </div>
+            <div class="card bar col">
+                <span class="tag">확장 1</span>
+                <h3 style="margin-top: 12px;">실시간 스켈레탈 메시 절단</h3>
+                <p>기존 방식은 잘리면 <b>래그돌</b>로 바뀐다.</p>
+                <p style="margin-top: 10px;">잘린 뒤에도 <b>기존 스켈레탈 애니메이션이 유지</b>되는 절단 시스템을 만든다.</p>
+            </div>
+            <div class="card bar col">
+                <span class="tag">확장 2</span>
+                <h3 style="margin-top: 12px;">내부 텍스처 표현</h3>
+                <p>단면 안쪽을 그럴듯하게 보여 주는 렌더링.</p>
+                <p style="margin-top: 10px;"><b>내부 이중 메시</b> 기반 (Dead Island 2 사례 참고).</p>
+            </div>
+        </div>
+        <div class="banner" style="margin-top: 26px;">
+            <div class="label">연구 목표</div>
+            <div class="msg">평면 절단 → 애니메이션 유지 스켈레탈 절단 → 내부 표현</div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">2</div>
+</section>
+
+<!-- 3. 동기: 래그돌 vs 애니메이션 유지 -->
+<section class="slide">
+    <div class="kicker">01 / MOTIVATION</div>
+    <div class="title">왜 애니메이션 유지인가</div>
+    <div class="subtitle">잘린 순간 캐릭터 전체가 래그돌이 되면, 잘리지 않은 부분의 동작까지 사라진다</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="height: 440px;">
+            <div class="card col" style="padding: 18px 22px;">
+                <h3>기존: 절단 → 래그돌</h3>
+                <svg viewBox="0 0 520 300" width="100%" height="300">
+                    <line x1="20" y1="268" x2="500" y2="268" stroke="#B9C6D6" stroke-width="3"/>
+                    <!-- 서 있는 캐릭터 (회색, 이전 상태) -->
+                    <g stroke="#B9C6D6" stroke-width="7" stroke-linecap="round" fill="none">
+                        <circle cx="100" cy="70" r="20"/>
+                        <line x1="100" y1="90" x2="100" y2="170"/>
+                        <line x1="100" y1="110" x2="70" y2="160"/>
+                        <line x1="100" y1="110" x2="132" y2="155"/>
+                        <line x1="100" y1="170" x2="80" y2="265"/>
+                        <line x1="100" y1="170" x2="122" y2="265"/>
+                    </g>
+                    <line x1="140" y1="140" x2="160" y2="170" stroke="#C2417A" stroke-width="4" stroke-dasharray="7 5"/>
+                    <path d="M190 150 L250 150" stroke="#5F7590" stroke-width="3" marker-end="url(#arr)"/>
+                    <!-- 쓰러진 캐릭터 -->
+                    <g stroke="#12294A" stroke-width="7" stroke-linecap="round" fill="none">
+                        <circle cx="300" cy="248" r="18"/>
+                        <line x1="318" y1="252" x2="400" y2="258"/>
+                        <line x1="340" y1="254" x2="352" y2="226"/>
+                        <line x1="400" y1="258" x2="470" y2="244"/>
+                        <line x1="400" y1="258" x2="466" y2="264"/>
+                    </g>
+                    <g stroke="#C2417A" stroke-width="7" stroke-linecap="round"><line x1="355" y1="262" x2="385" y2="264"/></g>
+                    <text x="300" y="200" font-size="17" fill="#5F7590">전신이 물리로 전환</text>
+                    <defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#5F7590"/></marker></defs>
+                </svg>
+                <p class="note">걷기·공격 등 남은 몸의 애니메이션이 끊김</p>
+            </div>
+            <div class="card col" style="padding: 18px 22px; border-color: #9CC6EE;">
+                <h3>목표: 절단 → 애니메이션 유지</h3>
+                <svg viewBox="0 0 520 300" width="100%" height="300">
+                    <line x1="20" y1="268" x2="500" y2="268" stroke="#B9C6D6" stroke-width="3"/>
+                    <g stroke="#12294A" stroke-width="7" stroke-linecap="round" fill="none">
+                        <circle cx="200" cy="70" r="20"/>
+                        <line x1="200" y1="90" x2="200" y2="170"/>
+                        <line x1="200" y1="110" x2="168" y2="158"/>
+                        <line x1="200" y1="110" x2="226" y2="140"/>
+                        <line x1="200" y1="170" x2="170" y2="265"/>
+                        <line x1="200" y1="170" x2="236" y2="262"/>
+                    </g>
+                    <!-- 잘린 단면 -->
+                    <circle cx="228" cy="142" r="6" fill="#E39B2D"/>
+                    <!-- 떨어진 팔 -->
+                    <g stroke="#C2417A" stroke-width="7" stroke-linecap="round"><line x1="320" y1="262" x2="372" y2="258"/></g>
+                    <circle cx="318" cy="262" r="6" fill="#E39B2D"/>
+                    <path d="M120 120 C 105 130, 105 160, 122 170" stroke="#1A6BC4" stroke-width="3" fill="none" marker-end="url(#arr2)"/>
+                    <text x="34" y="112" font-size="17" fill="#1A6BC4">걷기 계속</text>
+                    <text x="300" y="232" font-size="17" fill="#5F7590">잘린 부분만 분리</text>
+                    <defs><marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker></defs>
+                </svg>
+                <p class="note">자른 부위만 떼어 내고 나머지 몸은 원래 애니메이션을 그대로 재생</p>
+            </div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">3</div>
+</section>
+
+<!-- 4. 참고: Unreal -->
+<section class="slide">
+    <div class="kicker">02 / REFERENCE</div>
+    <div class="title">참고 1 — Unreal ProceduralMesh 절단</div>
+    <div class="subtitle">Unreal Engine은 ProceduralMeshComponent에 대한 평면 절단 기능을 이미 제공한다 → 이번 구현의 모티프</div>
+    <div class="rule"></div>
+    <div class="body">
+        <svg viewBox="0 0 1156 230" width="1156" height="230">
+            <defs><marker id="a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker></defs>
+            <g font-family="Malgun Gothic" text-anchor="middle">
+                <rect x="0" y="40" width="250" height="130" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="125" y="88" font-size="20" font-weight="700" fill="#12294A">StaticMesh</text>
+                <text x="125" y="118" font-size="15" fill="#5F7590">원본 (GPU 렌더용)</text>
+                <rect x="300" y="40" width="250" height="130" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="425" y="80" font-size="20" font-weight="700" fill="#12294A">ProceduralMesh</text>
+                <text x="425" y="110" font-size="15" fill="#5F7590">런타임에 정점을</text>
+                <text x="425" y="132" font-size="15" fill="#5F7590">수정할 수 있는 메시</text>
+                <rect x="600" y="40" width="270" height="130" rx="14" fill="#12294A"/>
+                <text x="735" y="88" font-size="19" font-weight="700" fill="#fff">SliceProceduralMesh</text>
+                <text x="735" y="118" font-size="15" fill="#B9D3EE">평면 위치 + 법선</text>
+                <rect x="920" y="10" width="236" height="80" rx="14" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+                <text x="1038" y="46" font-size="17" font-weight="700" fill="#2E9E6B">남는 쪽 (+)</text>
+                <text x="1038" y="72" font-size="14" fill="#5F7590">원본 컴포넌트 그대로</text>
+                <rect x="920" y="120" width="236" height="80" rx="14" fill="#fff" stroke="#C2417A" stroke-width="2"/>
+                <text x="1038" y="156" font-size="17" font-weight="700" fill="#C2417A">반대쪽 (−)</text>
+                <text x="1038" y="182" font-size="14" fill="#5F7590">새 컴포넌트 + cap</text>
+            </g>
+            <g stroke="#1A6BC4" stroke-width="3" fill="none">
+                <line x1="252" y1="105" x2="296" y2="105" marker-end="url(#a4)"/>
+                <line x1="552" y1="105" x2="596" y2="105" marker-end="url(#a4)"/>
+                <path d="M872 95 L 900 60 L 916 55" marker-end="url(#a4)"/>
+                <path d="M872 115 L 900 150 L 916 158" marker-end="url(#a4)"/>
+            </g>
+            <text x="275" y="222" text-anchor="middle" font-size="13" fill="#5F7590" font-family="Consolas">CopyProceduralMeshFromStaticMeshComponent</text>
+        </svg>
+        <div class="row" style="margin-top: 18px; height: 180px;">
+            <div class="card bar col">
+                <h3>제공하는 것</h3>
+                <ul>
+                    <li>복사 → 자르기 → 반쪽 생성의 공개 API</li>
+                    <li><span class="mono">bCreateOtherHalf</span>, <span class="mono">CapOption</span> (NoCap / 새 섹션 / 마지막 섹션)</li>
+                </ul>
+            </div>
+            <div class="card bar col">
+                <h3>제공하지 않는 것</h3>
+                <ul>
+                    <li>뼈·웨이트 개념이 없다 → "어느 뼈를 자를지"는 직접 만들어야 함</li>
+                    <li>이 구현은 API 이름·인자 모양을 그대로 따랐다</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">4</div>
+</section>
+
+<!-- 5. 참고: NDC25 부분 절단 -->
+<section class="slide">
+    <div class="kicker">02 / REFERENCE</div>
+    <div class="title">참고 2 — 부분 절단 (NDC25)</div>
+    <div class="subtitle">「저 메시의 목을 쳐라! - 실시간 스켈레탈 메시 절단」 넥슨 팀 컴플루언스 전수현, NDC 2025</div>
+    <div class="rule"></div>
+    <div class="body">
+        <svg viewBox="0 0 1156 300" width="1156" height="300">
+            <defs><marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker></defs>
+            <g font-family="Malgun Gothic">
+                <!-- 1 -->
+                <rect x="0" y="0" width="360" height="300" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="22" y="36" font-size="15" font-weight="700" fill="#1A6BC4">01</text>
+                <text x="56" y="36" font-size="18" font-weight="700" fill="#12294A">뼈 영향 범위만 복사</text>
+                <path d="M40 150 Q 120 120 200 140 T 330 150" stroke="#C9D3DF" stroke-width="44" fill="none" stroke-linecap="round"/>
+                <path d="M150 133 Q 200 138 250 146" stroke="#E39B2D" stroke-width="46" fill="none" stroke-linecap="butt" opacity="0.85"/>
+                <circle cx="60" cy="148" r="7" fill="#12294A"/><circle cx="180" cy="136" r="7" fill="#12294A"/><circle cx="300" cy="150" r="7" fill="#12294A"/>
+                <line x1="60" y1="148" x2="180" y2="136" stroke="#12294A" stroke-width="3"/><line x1="180" y1="136" x2="300" y2="150" stroke="#12294A" stroke-width="3"/>
+                <text x="22" y="240" font-size="15" fill="#5F7590">선택한 뼈에 웨이트가 있는 삼각형을</text>
+                <text x="22" y="264" font-size="15" fill="#5F7590">ProceduralMesh로 복사 (주황)</text>
+                <!-- 2 -->
+                <rect x="398" y="0" width="360" height="300" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="420" y="36" font-size="15" font-weight="700" fill="#1A6BC4">02</text>
+                <text x="454" y="36" font-size="18" font-weight="700" fill="#12294A">복사본을 평면으로 절단</text>
+                <path d="M470 140 L 565 140" stroke="#2E9E6B" stroke-width="46" fill="none"/>
+                <path d="M600 140 L 690 140" stroke="#C2417A" stroke-width="46" fill="none"/>
+                <rect x="561" y="117" width="8" height="46" fill="#E39B2D"/><rect x="596" y="117" width="8" height="46" fill="#E39B2D"/>
+                <line x1="583" y1="80" x2="583" y2="200" stroke="#12294A" stroke-width="2.5" stroke-dasharray="7 5"/>
+                <text x="420" y="240" font-size="15" fill="#5F7590">두 조각과 단면(cap)이 생긴다</text>
+                <text x="420" y="264" font-size="15" fill="#5F7590">원본은 아직 건드리지 않음</text>
+                <!-- 3 -->
+                <rect x="796" y="0" width="360" height="300" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="818" y="36" font-size="15" font-weight="700" fill="#1A6BC4">03</text>
+                <text x="852" y="36" font-size="18" font-weight="700" fill="#12294A">원본 분리 + 늘어난 범위 숨김</text>
+                <path d="M840 150 L 1110 150" stroke="#C9D3DF" stroke-width="44" fill="none" stroke-dasharray="10 8" opacity="0.7"/>
+                <path d="M850 150 L 950 150" stroke="#2E9E6B" stroke-width="44" fill="none"/>
+                <path d="M1010 190 L 1110 205" stroke="#C2417A" stroke-width="44" fill="none"/>
+                <text x="818" y="240" font-size="15" fill="#5F7590">BreakConstraint로 관절을 끊고,</text>
+                <text x="818" y="264" font-size="15" fill="#5F7590">늘어난 원본은 버텍스 컬러로 마스킹</text>
+            </g>
+        </svg>
+        <div class="banner" style="margin-top: 26px; padding: 16px 30px;">
+            <div class="label">핵심</div>
+            <div class="msg" style="font-size: 20px;">메시 전체가 아니라 <u>자를 뼈의 영향 범위만</u> 복사해서 자른다 → 나머지 몸은 스켈레탈 애니메이션 유지</div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">5</div>
+</section>
+
+<!-- 6. 참고: Dead Island 2 -->
+<section class="slide">
+    <div class="kicker">02 / REFERENCE</div>
+    <div class="title">참고 3 — 내부 이중 메시 (Dead Island 2)</div>
+    <div class="subtitle">외피 아래에 내부 메시를 두고, 손상 부위에서 내부를 드러내는 방식 — NDC25에서도 참고 사례로 언급</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="height: 440px;">
+            <div class="card col" style="flex: 1.15; padding: 18px;">
+                <svg viewBox="0 0 560 400" width="100%" height="400">
+                    <g font-family="Malgun Gothic">
+                        <!-- 단면 모식도: 외피 / 내부 메시 / 뼈 -->
+                        <ellipse cx="230" cy="200" rx="190" ry="150" fill="#F1D3C2" stroke="#C99A82" stroke-width="3"/>
+                        <ellipse cx="230" cy="200" rx="160" ry="122" fill="#B8423F"/>
+                        <ellipse cx="230" cy="200" rx="58" ry="44" fill="#F3E6C4" stroke="#D9C38E" stroke-width="3"/>
+                        <!-- 손상 영역 -->
+                        <path d="M60 140 Q 90 90 150 70 L 175 120 Q 120 140 100 170 Z" fill="#B8423F" stroke="#8A2A28" stroke-width="2"/>
+                        <line x1="418" y1="120" x2="470" y2="90" stroke="#5F7590" stroke-width="2"/>
+                        <text x="474" y="94" font-size="16" fill="#12294A" font-weight="700">외피 메시</text>
+                        <line x1="360" y1="250" x2="470" y2="270" stroke="#5F7590" stroke-width="2"/>
+                        <text x="474" y="275" font-size="16" fill="#12294A" font-weight="700">내부 메시</text>
+                        <line x1="270" y1="205" x2="470" y2="200" stroke="#5F7590" stroke-width="2"/>
+                        <text x="474" y="205" font-size="16" fill="#12294A" font-weight="700">뼈</text>
+                        <line x1="110" y1="110" x2="70" y2="40" stroke="#5F7590" stroke-width="2"/>
+                        <text x="20" y="32" font-size="16" fill="#12294A" font-weight="700">손상 부위: 외피 제거 → 내부 노출</text>
+                    </g>
+                </svg>
+            </div>
+            <div class="col" style="display: flex; flex-direction: column; gap: 18px;">
+                <div class="card bar" style="flex: 1;">
+                    <h3>아이디어</h3>
+                    <p>단면에 텍스처만 붙이는 대신, 안쪽에 <b>미리 만든 내부 메시</b>를 두고 외피가 사라진 곳에서 보이게 한다. 경계는 데칼로 섞는다.</p>
+                </div>
+                <div class="card bar" style="flex: 1;">
+                    <h3>이 연구에서의 위치</h3>
+                    <p>평면 절단의 cap과 결합해 <b>단면 내부 표현</b>으로 확장할 후보.</p>
+                    <p class="note" style="margin-top: 8px;">※ 구현 세부는 공개 자료로 추가 조사 필요. NDC25 시스템 자체가 이중 메시를 쓴다는 의미는 아님</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">6</div>
+</section>
+
+<!-- 7. 로드맵 -->
+<section class="slide">
+    <div class="kicker">02 / ROADMAP</div>
+    <div class="title">전체 로드맵</div>
+    <div class="subtitle">평면 절단을 바닥에 깔고 스켈레탈 → 내부 표현 순서로 쌓는다</div>
+    <div class="rule"></div>
+    <div class="body">
+        <svg viewBox="0 0 1156 300" width="1156" height="300">
+            <g font-family="Malgun Gothic" text-anchor="middle">
+                <line x1="110" y1="120" x2="1046" y2="120" stroke="#DCE6F2" stroke-width="6"/>
+                <line x1="110" y1="120" x2="234" y2="120" stroke="#1A6BC4" stroke-width="6"/>
+                <!-- 1 이번 주 -->
+                <circle cx="110" cy="120" r="30" fill="#1A6BC4"/>
+                <text x="110" y="128" font-size="22" font-weight="700" fill="#fff">1</text>
+                <rect x="20" y="22" width="180" height="40" rx="20" fill="#E39B2D"/>
+                <text x="110" y="48" font-size="16" font-weight="700" fill="#fff">이번 주 ✓</text>
+                <text x="110" y="185" font-size="18" font-weight="700" fill="#12294A">스태틱 메시</text>
+                <text x="110" y="210" font-size="18" font-weight="700" fill="#12294A">평면 절단</text>
+                <text x="110" y="240" font-size="14" fill="#5F7590">복사 · 절단 · 원본 대체</text>
+                <!-- 2 -->
+                <circle cx="344" cy="120" r="30" fill="#fff" stroke="#1A6BC4" stroke-width="4"/>
+                <text x="344" y="128" font-size="22" font-weight="700" fill="#1A6BC4">2</text>
+                <rect x="264" y="22" width="160" height="40" rx="20" fill="#E8F2FC"/>
+                <text x="344" y="48" font-size="16" font-weight="700" fill="#1A6BC4">다음 단계</text>
+                <text x="344" y="185" font-size="18" font-weight="700" fill="#12294A">스켈레탈</text>
+                <text x="344" y="210" font-size="18" font-weight="700" fill="#12294A">부분 절단</text>
+                <text x="344" y="240" font-size="14" fill="#5F7590">뼈 영향 범위 복사 · 마스킹</text>
+                <!-- 3 -->
+                <circle cx="578" cy="120" r="30" fill="#fff" stroke="#9AA8B8" stroke-width="4"/>
+                <text x="578" y="128" font-size="22" font-weight="700" fill="#5F7590">3</text>
+                <text x="578" y="185" font-size="18" font-weight="700" fill="#12294A">분리 · 애니메이션</text>
+                <text x="578" y="210" font-size="18" font-weight="700" fill="#12294A">유지</text>
+                <text x="578" y="240" font-size="14" fill="#5F7590">관절 분리 · 남는 쪽 보정</text>
+                <!-- 4 -->
+                <circle cx="812" cy="120" r="30" fill="#fff" stroke="#9AA8B8" stroke-width="4"/>
+                <text x="812" y="128" font-size="22" font-weight="700" fill="#5F7590">4</text>
+                <text x="812" y="185" font-size="18" font-weight="700" fill="#12294A">내부 표현</text>
+                <text x="812" y="210" font-size="18" font-weight="700" fill="#12294A">(이중 메시)</text>
+                <text x="812" y="240" font-size="14" fill="#5F7590">cap · 내부 메시 텍스처</text>
+                <!-- 5 -->
+                <circle cx="1046" cy="120" r="30" fill="#fff" stroke="#9AA8B8" stroke-width="4"/>
+                <text x="1046" y="128" font-size="22" font-weight="700" fill="#5F7590">5</text>
+                <text x="1046" y="185" font-size="18" font-weight="700" fill="#12294A">측정 · 최적화</text>
+                <text x="1046" y="210" font-size="18" font-weight="700" fill="#12294A">데모</text>
+                <text x="1046" y="240" font-size="14" fill="#5F7590">절단 프레임 비용</text>
+            </g>
+        </svg>
+        <div class="card" style="margin-top: 22px; padding: 18px 26px;">
+            <p style="font-size: 16px;"><span class="tag done">완료</span> 1단계는 이번 주 결과 &nbsp;&nbsp; <span class="tag plan">계획</span> 2~5단계는 아직 발표할 결과가 없는 계획 단계</p>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">7</div>
+</section>
+
+<!-- 8. 이번 주 결과 요약 -->
+<section class="slide">
+    <div class="kicker">03 / THIS WEEK</div>
+    <div class="title">이번 주 결과 — 스태틱 메시 평면 절단</div>
+    <div class="subtitle">Unreal의 복사 → 자르기 → 원본 대체 흐름을 MiniEngine(DX12) 위에 구현</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="height: 440px;">
+            <div class="col" style="display: flex; flex-direction: column; gap: 14px; flex: 0.95;">
+                <div class="card bar" style="flex: 1; padding: 16px 24px;">
+                    <h3><span class="num">01</span>&nbsp; 원본 → ProceduralMesh 복사</h3>
+                    <p>스태틱 메시의 정점·인덱스를 CPU 쪽 편집 가능한 메시로 복사</p>
+                </div>
+                <div class="card bar" style="flex: 1; padding: 16px 24px;">
+                    <h3><span class="num">02</span>&nbsp; 자르기 연산</h3>
+                    <p>런타임에 정점 정보를 수정: 삼각형 분할, 새 교점, 단면 cap 생성</p>
+                </div>
+                <div class="card bar" style="flex: 1; padding: 16px 24px;">
+                    <h3><span class="num">03</span>&nbsp; 원본 대체</h3>
+                    <p>원본 메시 그리기를 끄고 잘린 두 메시를 표시</p>
+                </div>
+                <p class="note">검증: CPU 단위 테스트(PlaneSlicerTests), Debug/Release 빌드</p>
+            </div>
+            <div class="col">
+                <div class="shot" style="height: 400px;">
+                    <div class="ph"><b>스크린샷 자리</b>shots/summary_bunny_cut.png<br>토끼를 비스듬히 자른 결과 (Solid)</div>
+                    <img src="shots/summary_bunny_cut.png" onerror="this.remove()" alt="">
+                </div>
+                <div class="cap-label">bunny.glb 절단 결과</div>
+            </div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">8</div>
+</section>
+
+<!-- 9. 시스템 구조 -->
+<section class="slide">
+    <div class="kicker">03 / ARCHITECTURE</div>
+    <div class="title">시스템 구조</div>
+    <div class="subtitle">하나의 ProceduralMesh 타입이 복사 · 절단 · 표시를 모두 담당한다</div>
+    <div class="rule"></div>
+    <div class="body">
+        <svg viewBox="0 0 1156 440" width="1156" height="440">
+            <defs>
+                <marker id="a9" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker>
+                <marker id="a9g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9AA8B8"/></marker>
+            </defs>
+            <g font-family="Malgun Gothic">
+                <!-- 원본 -->
+                <rect x="0" y="40" width="210" height="150" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="105" y="80" text-anchor="middle" font-size="19" font-weight="700" fill="#12294A">원본 Model</text>
+                <text x="105" y="108" text-anchor="middle" font-size="14" fill="#5F7590">StaticMesh (GPU 버퍼)</text>
+                <text x="105" y="130" text-anchor="middle" font-size="14" fill="#5F7590">+ CPU 사본 보존</text>
+                <text x="105" y="160" text-anchor="middle" font-size="13" fill="#1A6BC4">ModelInstance (world)</text>
+                <!-- 복사 -->
+                <line x1="212" y1="115" x2="290" y2="115" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a9)"/>
+                <text x="250" y="100" text-anchor="middle" font-size="13" fill="#1A6BC4">Enter</text>
+                <!-- ProceduralMesh -->
+                <rect x="294" y="0" width="300" height="250" rx="14" fill="#12294A"/>
+                <text x="444" y="36" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">ProceduralMesh</text>
+                <rect x="314" y="52" width="260" height="104" rx="10" fill="#1E3B63"/>
+                <text x="330" y="78" font-size="14" font-weight="700" fill="#8CC8F2">MeshGeometry</text>
+                <text x="330" y="102" font-size="13.5" fill="#D6E6F6">Vertex: 위치 (용접된 기하 점)</text>
+                <text x="330" y="124" font-size="13.5" fill="#D6E6F6">Corner: 법선 · UV (seam 보존)</text>
+                <text x="330" y="146" font-size="13.5" fill="#D6E6F6">Face: Corner 3개 · 표면/cap</text>
+                <rect x="314" y="166" width="260" height="68" rx="10" fill="#1E3B63"/>
+                <text x="330" y="192" font-size="14" font-weight="700" fill="#8CC8F2">렌더 캐시 · bounds</text>
+                <text x="330" y="216" font-size="13.5" fill="#D6E6F6">위상이 바뀔 때만 다시 굽기</text>
+                <text x="444" y="282" text-anchor="middle" font-size="13" fill="#5F7590" font-family="Consolas">CopyProceduralMeshFromStaticMesh</text>
+                <!-- Slice -->
+                <line x1="596" y1="115" x2="664" y2="115" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a9)"/>
+                <rect x="668" y="60" width="200" height="110" rx="14" fill="#fff" stroke="#1A6BC4" stroke-width="2.5"/>
+                <text x="768" y="100" text-anchor="middle" font-size="17" font-weight="700" fill="#12294A" font-family="Consolas">SliceProcedural</text>
+                <text x="768" y="122" text-anchor="middle" font-size="17" font-weight="700" fill="#12294A" font-family="Consolas">Mesh</text>
+                <text x="768" y="150" text-anchor="middle" font-size="13" fill="#5F7590">world 평면 위치 · 법선</text>
+                <!-- 결과 -->
+                <line x1="870" y1="95" x2="926" y2="58" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a9)"/>
+                <line x1="870" y1="135" x2="926" y2="172" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a9)"/>
+                <rect x="930" y="10" width="226" height="80" rx="14" fill="#fff" stroke="#2E9E6B" stroke-width="2.5"/>
+                <text x="1043" y="44" text-anchor="middle" font-size="16" font-weight="700" fill="#2E9E6B">ProceduralMesh (+)</text>
+                <text x="1043" y="70" text-anchor="middle" font-size="13" fill="#5F7590">표면 + cap</text>
+                <rect x="930" y="140" width="226" height="80" rx="14" fill="#fff" stroke="#C2417A" stroke-width="2.5"/>
+                <text x="1043" y="174" text-anchor="middle" font-size="16" font-weight="700" fill="#C2417A">ProceduralMesh (−)</text>
+                <text x="1043" y="200" text-anchor="middle" font-size="13" fill="#5F7590">표면 + cap</text>
+                <!-- 아래 줄: 원본 대체 -->
+                <rect x="0" y="320" width="560" height="100" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="24" y="356" font-size="17" font-weight="700" fill="#12294A">원본 대체</text>
+                <text x="24" y="384" font-size="14.5" fill="#5F7590">성공한 두 메시만 저장 → 원본 메시 그리기 끔 (Unreal SetVisibility)</text>
+                <text x="24" y="406" font-size="14.5" fill="#5F7590">Ctrl+Z: 결과 버리고 원본 다시 보이기</text>
+                <rect x="596" y="320" width="560" height="100" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="620" y="356" font-size="17" font-weight="700" fill="#12294A">매 프레임</text>
+                <text x="620" y="384" font-size="14.5" fill="#5F7590">UpdatePose: world 행렬 하나로 위치 · bounds 갱신</text>
+                <text x="620" y="406" font-size="14.5" fill="#5F7590">렌더러는 확정 메시를 그대로 그린다 (변환 단계 없음)</text>
+                <path d="M1043 222 L 1043 300 L 860 300" stroke="#9AA8B8" stroke-width="2.5" fill="none" marker-end="url(#a9g)"/>
+                <path d="M105 192 L 105 316" stroke="#9AA8B8" stroke-width="2.5" fill="none" stroke-dasharray="6 5" marker-end="url(#a9g)"/>
+            </g>
+        </svg>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">9</div>
+</section>
+
+<!-- 10. 알고리즘 1: 분류와 분할 -->
+<section class="slide">
+    <div class="kicker">03 / ALGORITHM</div>
+    <div class="title">절단 알고리즘 ① 분류와 분할</div>
+    <div class="subtitle">정점마다 평면까지의 부호 거리를 구해 +, 0, − 세 상태로 나누고, 걸친 삼각형만 쪼갠다</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="height: 450px;">
+            <div class="card col" style="flex: 1.25; padding: 16px 18px;">
+                <svg viewBox="0 0 640 410" width="100%" height="410">
+                    <g font-family="Malgun Gothic">
+                        <rect x="0" y="0" width="640" height="200" fill="#EAF6F0"/>
+                        <rect x="0" y="200" width="640" height="210" fill="#FBEAF1"/>
+                        <text x="14" y="28" font-size="16" font-weight="700" fill="#2E9E6B">+ 쪽 (d &gt; ε)</text>
+                        <text x="14" y="396" font-size="16" font-weight="700" fill="#C2417A">− 쪽 (d &lt; −ε)</text>
+                        <!-- 삼각형 A: 위쪽만 -->
+                        <polygon points="40,60 150,50 100,150" fill="#fff" stroke="#2E9E6B" stroke-width="2.5"/>
+                        <text x="78" y="175" font-size="14" fill="#5F7590">그대로 +</text>
+                        <!-- 삼각형 B: 두 에지 분할 (+,+,−) -->
+                        <polygon points="200,80 330,90 260,330" fill="#fff" stroke="#12294A" stroke-width="2.5"/>
+                        <circle cx="229" cy="200" r="7" fill="#E39B2D"/>
+                        <circle cx="295" cy="200" r="7" fill="#E39B2D"/>
+                        <line x1="229" y1="200" x2="330" y2="90" stroke="#12294A" stroke-width="1.5" stroke-dasharray="5 4"/>
+                        <polygon points="229,200 295,200 260,330" fill="#C2417A" opacity="0.25"/>
+                        <polygon points="200,80 330,90 295,200 229,200" fill="#2E9E6B" opacity="0.2"/>
+                        <text x="210" y="360" font-size="14" fill="#5F7590">(+,+,−) → 3개</text>
+                        <!-- 삼각형 C: 꼭짓점 0 (0,+,−) -->
+                        <polygon points="380,200 500,70 520,320" fill="#fff" stroke="#12294A" stroke-width="2.5"/>
+                        <circle cx="380" cy="200" r="7" fill="#1A6BC4"/>
+                        <circle cx="510" cy="200" r="7" fill="#E39B2D"/>
+                        <polygon points="380,200 500,70 510,200" fill="#2E9E6B" opacity="0.2"/>
+                        <polygon points="380,200 510,200 520,320" fill="#C2417A" opacity="0.25"/>
+                        <text x="410" y="360" font-size="14" fill="#5F7590">(0,+,−) → 2개</text>
+                        <!-- 삼각형 D: 아래만 -->
+                        <polygon points="560,250 625,240 590,330" fill="#fff" stroke="#C2417A" stroke-width="2.5"/>
+                        <!-- 평면 -->
+                        <line x1="0" y1="200" x2="640" y2="200" stroke="#12294A" stroke-width="3"/>
+                        <text x="560" y="190" font-size="15" font-weight="700" fill="#12294A">평면</text>
+                    </g>
+                </svg>
+            </div>
+            <div class="col" style="display: flex; flex-direction: column; gap: 14px;">
+                <div class="card bar" style="padding: 16px 22px;">
+                    <h3 style="font-size: 18px;">3상태 분류</h3>
+                    <p style="font-size: 15px;">|d| ≤ ε 인 정점은 0 — 그 자체가 단면 위의 점 <span style="color:#1A6BC4">●</span>. 길이 0 선분이나 면적 0 삼각형이 생기지 않는다</p>
+                </div>
+                <div class="card bar" style="padding: 16px 22px;">
+                    <h3 style="font-size: 18px;">교점은 에지당 한 번</h3>
+                    <p style="font-size: 15px;">양 끝 부호가 반대인 에지만 교점 <span style="color:#E39B2D">●</span> 생성. 에지 캐시로 이웃 삼각형이 같은 점을 공유 → 틈 없음</p>
+                </div>
+                <div class="card bar" style="padding: 16px 22px;">
+                    <h3 style="font-size: 18px;">위치와 속성 분리</h3>
+                    <p style="font-size: 15px;">위치는 Vertex 하나, UV · 법선은 Corner가 보간. UV seam이 있어도 양쪽 위치가 비트 단위로 같다</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">10</div>
+</section>
+
+<!-- 11. 알고리즘 2: 루프와 cap -->
+<section class="slide">
+    <div class="kicker">03 / ALGORITHM</div>
+    <div class="title">절단 알고리즘 ② 루프 추출과 단면(cap)</div>
+    <div class="subtitle">잘린 경계를 닫힌 루프로 잇고, 평면 2D로 투영해 삼각분할한다</div>
+    <div class="rule"></div>
+    <div class="body">
+        <svg viewBox="0 0 1156 330" width="1156" height="330">
+            <defs><marker id="a11" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker></defs>
+            <g font-family="Malgun Gothic">
+                <!-- 1 루프 -->
+                <rect x="0" y="0" width="356" height="330" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="20" y="34" font-size="15" font-weight="700" fill="#1A6BC4">01</text>
+                <text x="52" y="34" font-size="18" font-weight="700" fill="#12294A">루프 추출</text>
+                <polygon points="80,120 170,80 280,110 300,200 220,260 110,240" fill="none" stroke="#E39B2D" stroke-width="4"/>
+                <g fill="#E39B2D"><circle cx="80" cy="120" r="6"/><circle cx="170" cy="80" r="6"/><circle cx="280" cy="110" r="6"/><circle cx="300" cy="200" r="6"/><circle cx="220" cy="260" r="6"/><circle cx="110" cy="240" r="6"/></g>
+                <path d="M125 100 L 150 89" stroke="#12294A" stroke-width="2" marker-end="url(#a11)"/>
+                <text x="20" y="300" font-size="14" fill="#5F7590">각 조각의 경계 중 양 끝이 평면 위인 에지</text>
+                <text x="20" y="320" font-size="14" fill="#5F7590">→ winding 방향으로 연결</text>
+                <!-- 2 검증 -->
+                <rect x="400" y="0" width="356" height="330" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="420" y="34" font-size="15" font-weight="700" fill="#1A6BC4">02</text>
+                <text x="452" y="34" font-size="18" font-weight="700" fill="#12294A">2D 투영 · 포함 관계</text>
+                <polygon points="460,110 560,70 690,100 700,210 610,270 480,240" fill="#FFF1DC" stroke="#E39B2D" stroke-width="3.5"/>
+                <polygon points="560,150 620,140 630,195 570,205" fill="#fff" stroke="#E39B2D" stroke-width="3.5"/>
+                <text x="470" y="100" font-size="13" fill="#B26C00">외곽 (깊이 0)</text>
+                <text x="555" y="230" font-size="13" fill="#B26C00">구멍 (깊이 1)</text>
+                <text x="420" y="300" font-size="14" fill="#5F7590">자기 교차 · 루프 간 교차 · 방향 검사</text>
+                <text x="420" y="320" font-size="14" fill="#5F7590">관처럼 속이 빈 단면은 구멍으로 처리</text>
+                <!-- 3 cap -->
+                <rect x="800" y="0" width="356" height="330" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+                <text x="820" y="34" font-size="15" font-weight="700" fill="#1A6BC4">03</text>
+                <text x="852" y="34" font-size="18" font-weight="700" fill="#12294A">ear clipping으로 cap</text>
+                <g stroke="#B26C00" stroke-width="1.6" fill="#FFE2B5">
+                    <polygon points="860,110 960,70 1090,100"/>
+                    <polygon points="860,110 1090,100 960,150"/>
+                    <polygon points="960,150 1090,100 1020,140"/>
+                    <polygon points="1090,100 1100,210 1030,195"/>
+                    <polygon points="1090,100 1030,195 1020,140"/>
+                    <polygon points="860,110 960,150 880,240"/>
+                    <polygon points="880,240 960,150 970,205"/>
+                    <polygon points="880,240 970,205 1010,270"/>
+                    <polygon points="970,205 1030,195 1010,270"/>
+                    <polygon points="1030,195 1100,210 1010,270"/>
+                </g>
+                <polygon points="960,150 1020,140 1030,195 970,205" fill="#fff" stroke="#E39B2D" stroke-width="3"/>
+                <text x="820" y="300" font-size="14" fill="#5F7590">구멍은 외곽에 브리지로 합쳐 한 번에 분할</text>
+                <text x="820" y="320" font-size="14" fill="#5F7590">cap은 루프 정점을 공유 → 표면과 수밀</text>
+            </g>
+        </svg>
+        <div class="card" style="margin-top: 16px; padding: 14px 24px;">
+            <p style="font-size: 15px;"><b style="color: var(--navy);">실패하면 아무것도 바꾸지 않는다</b> — 열린 루프 · 평면과 겹친 면 · 삼각분할 실패는 상태 코드로 거절하고 원본 메시를 유지. 유한 사각형 평면은 루프 전체가 사각형 안에 있을 때만 확정</p>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">11</div>
+</section>
+
+<!-- 12. 데모 -->
+<section class="slide">
+    <div class="kicker">03 / DEMO</div>
+    <div class="title">데모 — ModelViewer에서 절단</div>
+    <div class="subtitle">평면을 배치하고 Enter → 원본이 사라지고 잘린 두 메시가 제자리에서 평면 법선 방향으로 벌어진다</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="gap: 18px;">
+            <div class="col">
+                <div class="shot" style="height: 330px;">
+                    <div class="ph"><b>스크린샷 자리</b>shots/demo1_plane.png<br>평면 배치 (디버그 모드)</div>
+                    <img src="shots/demo1_plane.png" onerror="this.remove()" alt="">
+                </div>
+                <div class="cap-label"><b>① 평면 배치</b> — T, W/E/R 기즈모</div>
+            </div>
+            <div class="col">
+                <div class="shot" style="height: 330px;">
+                    <div class="ph"><b>스크린샷 자리</b>shots/demo2_solid.png<br>Enter 후 Solid</div>
+                    <img src="shots/demo2_solid.png" onerror="this.remove()" alt="">
+                </div>
+                <div class="cap-label"><b>② 절단 결과</b> — 원본 숨김, 두 조각 (조명 없는 단색)</div>
+            </div>
+            <div class="col">
+                <div class="shot" style="height: 330px;">
+                    <div class="ph"><b>스크린샷 자리</b>shots/demo3_wire.png<br>Solid + Wire</div>
+                    <img src="shots/demo3_wire.png" onerror="this.remove()" alt="">
+                </div>
+                <div class="cap-label"><b>③ 와이어프레임</b> — 분할 삼각형과 cap</div>
+            </div>
+        </div>
+        <p class="note" style="margin-top: 22px;">※ 두 조각을 법선 방향으로 반지름의 12%씩 벌린 것은 단면을 보이게 하는 디버그 배치이며 물리 결과가 아님</p>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">12</div>
+</section>
+
+<!-- 13. 원본 대체와 물리 -->
+<section class="slide">
+    <div class="kicker">03 / OPEN QUESTION</div>
+    <div class="title">원본 대체 — 물리 연산은 어떻게 할 것인가</div>
+    <div class="subtitle">지금은 "보이는 것"까지 대체했다. 잘린 조각이 떨어지고 부딪히는 부분은 아직 없다</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="height: 300px;">
+            <div class="card bar col">
+                <span class="tag done">현재</span>
+                <h3 style="margin-top: 12px;">시각적 대체만</h3>
+                <ul>
+                    <li>원본 메시 그리기를 끈다</li>
+                    <li>두 조각을 world 행렬 하나로 표시</li>
+                    <li>충돌 · 중력 · 래그돌 물리 없음</li>
+                    <li>MiniEngine에는 물리 엔진이 없다</li>
+                </ul>
+            </div>
+            <div class="card bar col">
+                <span class="tag">Unreal</span>
+                <h3 style="margin-top: 12px;">엔진이 맡는 부분</h3>
+                <ul>
+                    <li>SliceProceduralMesh가 단순 볼록 충돌체도 함께 자른다</li>
+                    <li>반대쪽 반쪽은 새 컴포넌트 → 물리 시뮬레이션에 맡김</li>
+                </ul>
+            </div>
+            <div class="card bar col" style="border-left-color: var(--neg);">
+                <span class="tag q">향후 과제</span>
+                <h3 style="margin-top: 12px;">선택지</h3>
+                <ul>
+                    <li>A. 조각용 간단한 강체(중력 · 바닥)만 직접</li>
+                    <li>B. 외부 물리 라이브러리 도입</li>
+                    <li>C. 연구 범위는 절단 · 애니메이션 유지로 두고 물리는 제외</li>
+                </ul>
+            </div>
+        </div>
+        <div class="banner" style="margin-top: 24px; padding: 16px 30px;">
+            <div class="label">의견 요청</div>
+            <div class="msg" style="font-size: 20px;">연구 초점(애니메이션 유지 절단)을 생각하면 물리를 어디까지 다뤄야 할까?</div>
+        </div>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">13</div>
+</section>
+
+<!-- 14. 다음 주 계획 -->
+<section class="slide">
+    <div class="kicker">04 / NEXT</div>
+    <div class="title">다음 주 계획</div>
+    <div class="subtitle">같은 ProceduralMesh 파이프라인을 스켈레탈 메시로 확장</div>
+    <div class="rule"></div>
+    <div class="body">
+        <div class="row" style="flex-wrap: wrap; gap: 18px;">
+            <div class="card col" style="flex-basis: 45%; padding: 18px 24px;">
+                <h3><span class="num">01</span>&nbsp; 뼈 영향 범위 복사</h3>
+                <p>평면이 지나는 뼈를 고르고, 그 뼈에 웨이트가 있는 삼각형만 ProceduralMesh로</p>
+            </div>
+            <div class="card col" style="flex-basis: 45%; padding: 18px 24px;">
+                <h3><span class="num">02</span>&nbsp; 원본 숨김 (마스킹)</h3>
+                <p>복사한 범위를 원본 스켈레탈 메시에서 버텍스 컬러로 가린다</p>
+            </div>
+            <div class="card col" style="flex-basis: 45%; padding: 18px 24px;">
+                <h3><span class="num">03</span>&nbsp; 관절 분리 · 남는 쪽 보정</h3>
+                <p>떨어진 뼈의 기여를 절단 순간 위치로 바꿔 남는 조각이 늘어나지 않게</p>
+            </div>
+            <div class="card col" style="flex-basis: 45%; padding: 18px 24px;">
+                <h3><span class="num">04</span>&nbsp; 측정 · 물리 방향 결정</h3>
+                <p>절단 프레임의 복사 · 절단 시간을 측정하고, 물리 범위를 정한다</p>
+            </div>
+        </div>
+        <p class="note" style="margin-top: 22px;">목표 화면: 걷는 캐릭터의 팔을 잘라도 몸은 계속 걷고, 잘린 경계가 늘어나지 않는다</p>
+    </div>
+    <div class="footer">DIRECTX 12 / MINIENGINE</div>
+    <div class="pageno">14</div>
+</section>
+
+<!-- 15. Q&A -->
+<section class="slide cover">
+    <div class="big" style="top: 236px; font-size: 56px; letter-spacing: 2px;">THANK YOU</div>
+    <div class="sub" style="top: 330px;">평면 절단 기반 실시간 스켈레탈 메시 절단</div>
+    <div class="line" style="top: 386px; width: 640px; border-top-width: 3px;"></div>
+    <div class="sub" style="top: 414px; font-size: 22px; color: #fff;">Q &amp; A</div>
+</section>
+
+</body>
+</html>
