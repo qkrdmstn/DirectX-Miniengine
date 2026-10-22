@@ -67,6 +67,7 @@ struct VSOutput
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
     float3 weightColor : TEXCOORD4;     // 웨이트 뷰의 정점 색
+    float cutMask : TEXCOORD5;          // vertex color override R (>= 0.5 means hidden)
 };
 
 // Numeric constants
@@ -245,6 +246,9 @@ float3 ComputeNormal(VSOutput vsOutput)
 [RootSignature(Renderer_RootSig)]
 float4 main(VSOutput vsOutput) : SV_Target0
 {
+    if (vsOutput.cutMask >= 0.5)
+        discard;
+
     if (WeightDebugEnabled != 0)
         return float4(vsOutput.weightColor, 1.0);
 

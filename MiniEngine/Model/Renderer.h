@@ -112,7 +112,8 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
-            const Joint* skeleton = nullptr);
+            const Joint* skeleton = nullptr,
+            D3D12_GPU_VIRTUAL_ADDRESS vertexColors = 0);    // skinned meshes only: per-vertex RGBA8 override (0 = none)
 
         void Sort();
 
@@ -142,6 +143,7 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV;
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV;
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr;
+            D3D12_GPU_VIRTUAL_ADDRESS vertexColors;
         };
 
         std::vector<SortObject> m_SortObjects;

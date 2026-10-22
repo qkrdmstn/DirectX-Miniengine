@@ -104,6 +104,7 @@ namespace MeshCutting
         void PickStaticMeshes(CutTarget& target, bool planeChanged, std::vector<CutJobKey>& current, std::map<CutJobKey, uint32_t>& triangles);
         void RemoveJobsOf(CutTargetId id);
         void SetOriginalVisible(const CutJob& job, bool visible);
+        void UpdateSkinMask(CutTarget& target);
         void UpdateTargets();
         void UpdateCandidates();
         void ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, uint32_t>& triangles);

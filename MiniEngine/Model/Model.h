@@ -23,6 +23,8 @@
 #include "../Core/Math/BoundingBox.h"
 #include "../Core/Math/BoundingSphere.h"
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace Renderer
 {
@@ -114,7 +116,8 @@ public:
         const GpuBuffer& meshConstants,
         const Math::AffineTransform sphereTransforms[],
         const Joint* skeleton,
-        const std::vector<uint8_t>* meshHidden = nullptr) const;     // meshHidden[i] != 0 skips the i-th mesh
+        const std::vector<uint8_t>* meshHidden = nullptr,           // meshHidden[i] != 0 skips the i-th mesh
+        const std::vector<std::unique_ptr<ByteAddressBuffer>>* vertexColors = nullptr) const;     // vertexColors[i], if set, overrides the i-th mesh's vertex colors
 
     Math::BoundingSphere m_BoundingSphere; // Object-space bounding sphere
     Math::AxisAlignedBox m_BoundingBox;
@@ -163,6 +166,11 @@ public:
     void SetMeshVisibility(uint32_t meshIndex, bool visible);
     bool IsMeshVisible(uint32_t meshIndex) const;
 
+    // Per-instance vertex colors for a skinned mesh (like Unreal SetVertexColorOverride): one RGBA8 per vertex, in the mesh's vertex buffer order.
+    // R >= 0.5 clips the pixel in color, depth and shadow passes. Returns false (and changes nothing) if the mesh is not skinned or the count differs.
+    bool SetVertexColorOverride(uint32_t meshIndex, const std::vector<uint32_t>& colors);
+    void ClearVertexColorOverride(uint32_t meshIndex);
+
     void Resize(float newRadius);
     void SetPosition(const Math::Vector3& position);    // world position of the model origin (scale is kept)
     Math::Vector3 GetCenter() const;
@@ -198,4 +206,5 @@ private:
     std::vector<AnimationState> m_AnimState;    // Per-animation (not per-curve)
     std::unique_ptr<Joint[]> m_Skeleton;
     std::vector<uint8_t> m_MeshHidden;          // Hidden flag per mesh index (reset to all visible when the model changes)
+    std::vector<std::unique_ptr<ByteAddressBuffer>> m_VertexColors;     // Vertex color override per mesh index (null = none; reset when the model changes)
 };

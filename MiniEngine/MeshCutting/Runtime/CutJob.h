@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -159,6 +160,7 @@ namespace MeshCutting
         std::vector<CutTargetSource> sources;       // palettes와 같은 순서
         std::vector<std::vector<SegmentHit>> segmentHits;       // palettes와 같은 순서, 평면이 지나는 뼈 선분 (표시용)
         std::vector<CutStaticMesh> staticMeshes;    // 스킨 없는 메시 전부
+        std::set<uint32_t> maskedMeshes;            // 버텍스 컬러 마스크를 덮어쓴 스킨 메시 번호 (U-4b)
         std::wstring error;                         // 마지막 자세 읽기 오류
         float radius = 0.0f;                        // 표시 오프셋과 tube 크기
     };

@@ -23,6 +23,18 @@ namespace MeshCutting
             value = value == 0.0f ? sample : value + (sample - value) * 0.1f;
         }
 
+        // 모델의 메시 하나의 정점 수 (VB 크기 / stride). 범위 밖이면 0.
+        uint32_t MeshVertexCount(const Model& model, uint32_t meshIndex)
+        {
+            const uint8_t* meshPtr = model.m_MeshData.get();
+            if (meshPtr == nullptr || meshIndex >= model.m_NumMeshes)
+                return 0;
+            for (uint32_t i = 0; i < meshIndex; ++i)
+                meshPtr += sizeof(Mesh) + (((const Mesh*)meshPtr)->numDraws - 1) * sizeof(Mesh::Draw);
+            const Mesh& mesh = *(const Mesh*)meshPtr;
+            return mesh.vbStride == 0 ? 0 : mesh.vbSize / mesh.vbStride;
+        }
+
         float ElapsedMs(int64_t start)
         {
             return float(SystemTime::TimeBetweenTicks(start, SystemTime::GetCurrentTick()) * 1000.0);
@@ -145,6 +157,46 @@ namespace MeshCutting
             }
             else
                 ++it;
+        }
+        for (CutTarget& target : m_Targets)
+            if (target.id == id)
+                UpdateSkinMask(target);
+    }
+
+    // 확정된 스켈레탈 작업이 복사한 joint 영향 범위를 메시별 버텍스 컬러(R=255)로 덮어써 원본에서 숨긴다 (Unreal SetVertexColorOverride).
+    // 대상의 확정 작업을 처음부터 다시 모으므로 (대상, 메시)별 OR가 되고, 더는 확정이 없는 메시는 덮어쓴 색을 지운다.
+    void CutController::UpdateSkinMask(CutTarget& target)
+    {
+        std::map<uint32_t, std::vector<uint32_t>> masks;
+        for (const auto& entry : m_Jobs)
+        {
+            const CutJob& job = entry.second;
+            if (job.key.target != target.id || job.key.kind != CutJobKind::SkeletalJoint || !job.haveConfirmed || job.source.bone == nullptr)
+                continue;
+            const BonePatchSource& source = *job.source.bone;
+            for (const BonePatchVertex& vertex : source.vertices)
+            {
+                if (vertex.meshSlot >= source.meshes.size()
+                    || !Skinning::InJointSet(vertex.joints, vertex.weights, source.joints, source.minWeight))
+                    continue;
+                const uint32_t meshIndex = source.meshes[vertex.meshSlot].meshIndex;
+                std::vector<uint32_t>& colors = masks[meshIndex];
+                if (colors.empty())
+                    colors.assign(MeshVertexCount(*target.model, meshIndex), 0u);
+                if (vertex.sourceVertex < colors.size())
+                    colors[vertex.sourceVertex] = 0x000000FFu;     // RGBA8의 R 채널이 마스크
+            }
+        }
+        for (uint32_t meshIndex : target.maskedMeshes)
+            if (masks.find(meshIndex) == masks.end())
+                target.instance->ClearVertexColorOverride(meshIndex);
+        target.maskedMeshes.clear();
+        for (const auto& mask : masks)
+        {
+            if (target.instance->SetVertexColorOverride(mask.first, mask.second))
+                target.maskedMeshes.insert(mask.first);
+            else
+                target.instance->ClearVertexColorOverride(mask.first);
         }
     }
 
@@ -270,6 +322,8 @@ namespace MeshCutting
             }
             ++it;
         }
+        for (CutTarget& target : m_Targets)
+            UpdateSkinMask(target);
     }
 
     // 모델이 바뀐 대상의 작업을 지우고, 평면을 편집 중이면 자세를 읽는다.
@@ -705,6 +759,8 @@ namespace MeshCutting
             ConfirmJob(job);
             job.patch.Clear();
         }
+        for (CutTarget& target : m_Targets)
+            UpdateSkinMask(target);     // 스켈레탈 확정마다가 아니라 한 번에 덮어쓴다
     }
 
     // 후보 작업 하나를 지금 자세에서 추출하고 스키닝한 뒤 자른다. 실패한 작업은 결과가 없다.

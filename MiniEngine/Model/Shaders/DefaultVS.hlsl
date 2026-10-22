@@ -62,6 +62,7 @@ struct VSInput
 #ifdef ENABLE_SKINNING
     uint4 jointIndices : BLENDINDICES;
     float4 jointWeights : BLENDWEIGHT;
+    float4 cutColor : COLOR;        // vertex color override (slot 2); R >= 0.5 hides the vertex
 #endif
 };
 
@@ -79,6 +80,7 @@ struct VSOutput
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
     float3 weightColor : TEXCOORD4;     // 웨이트 뷰의 정점 색
+    float cutMask : TEXCOORD5;          // vertex color override R (>= 0.5 means hidden)
 };
 
 [RootSignature(Renderer_RootSig)]
@@ -86,6 +88,7 @@ VSOutput main(VSInput vsInput)
 {
     VSOutput vsOutput;
     vsOutput.weightColor = float3(0.12, 0.12, 0.12);     // 색 표에 없는 joint와 스킨 없는 메시는 회색
+    vsOutput.cutMask = 0.0;
 
     float4 position = float4(vsInput.position, 1.0);
     float3 normal = vsInput.normal * 2 - 1;
@@ -114,6 +117,7 @@ VSOutput main(VSInput vsInput)
         Joints[vsInput.jointIndices.w].PosMatrix * weights.w;
 
     position = mul(skinPosMat, position);
+    vsOutput.cutMask = vsInput.cutColor.r;
 
     float4x3 skinNrmMat =
         Joints[vsInput.jointIndices.x].NrmMatrix * weights.x +

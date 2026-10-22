@@ -14,9 +14,12 @@
 #include "Model.h"
 #include "Renderer.h"
 #include "ConstantBuffers.h"
+#include "../Core/CommandListManager.h"
+#include "../Core/GraphicsCore.h"
 
 using namespace Math;
 using namespace Renderer;
+using namespace Graphics;
 
 void Model::Destroy()
 {
@@ -34,7 +37,8 @@ void Model::Render(
     const GpuBuffer& meshConstants,
     const AffineTransform sphereTransforms[],
     const Joint* skeleton,
-    const std::vector<uint8_t>* meshHidden ) const
+    const std::vector<uint8_t>* meshHidden,
+    const std::vector<std::unique_ptr<ByteAddressBuffer>>* vertexColors ) const
 {
     // Pointer to current mesh
     const uint8_t* pMesh = m_MeshData.get();
@@ -63,7 +67,9 @@ void Model::Render(
             sorter.AddMesh(mesh, distance,
                 meshConstants.GetGpuVirtualAddress() + sizeof(MeshConstants) * mesh.meshCBV,
                 m_MaterialConstants.GetGpuVirtualAddress() + sizeof(MaterialConstants) * mesh.materialCBV,
-                m_DataBuffer.GetGpuVirtualAddress(), skeleton);
+                m_DataBuffer.GetGpuVirtualAddress(), skeleton,
+                vertexColors != nullptr && i < vertexColors->size() && (*vertexColors)[i] != nullptr
+                    ? (*vertexColors)[i]->GetGpuVirtualAddress() : 0);
         }
 
         pMesh += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
@@ -76,7 +82,7 @@ void ModelInstance::Render(MeshSorter& sorter) const
     {
         //const Frustum& frustum = sorter.GetWorldFrustum();
         m_Model->Render(sorter, m_MeshConstantsGPU, m_BoundingSphereTransforms.get(),
-            m_Skeleton.get(), &m_MeshHidden);
+            m_Skeleton.get(), &m_MeshHidden, &m_VertexColors);
     }
 }
 
@@ -91,6 +97,36 @@ void ModelInstance::SetMeshVisibility(uint32_t meshIndex, bool visible)
 bool ModelInstance::IsMeshVisible(uint32_t meshIndex) const
 {
     return meshIndex >= m_MeshHidden.size() || m_MeshHidden[meshIndex] == 0;
+}
+
+bool ModelInstance::SetVertexColorOverride(uint32_t meshIndex, const std::vector<uint32_t>& colors)
+{
+    if (m_Model == nullptr || meshIndex >= m_Model->m_NumMeshes)
+        return false;
+    const uint8_t* pMesh = m_Model->m_MeshData.get();
+    for (uint32_t i = 0; i < meshIndex; ++i)
+        pMesh += sizeof(Mesh) + (((const Mesh*)pMesh)->numDraws - 1) * sizeof(Mesh::Draw);
+    const Mesh& mesh = *(const Mesh*)pMesh;
+    if ((mesh.psoFlags & PSOFlags::kHasSkin) == 0 || mesh.vbStride == 0 || colors.size() != mesh.vbSize / mesh.vbStride)
+        return false;
+
+    ClearVertexColorOverride(meshIndex);
+    m_VertexColors.resize(m_Model->m_NumMeshes);
+    m_VertexColors[meshIndex].reset(new ByteAddressBuffer());
+    // The upload helper copies in 16-byte units, so hand it a copy padded to a multiple of four colors.
+    std::vector<uint32_t> padded(colors);
+    padded.resize((colors.size() + 3) & ~size_t(3), 0u);
+    m_VertexColors[meshIndex]->Create(L"Vertex Color Override", (uint32_t)colors.size(), sizeof(uint32_t), padded.data());
+    return true;
+}
+
+void ModelInstance::ClearVertexColorOverride(uint32_t meshIndex)
+{
+    if (meshIndex >= m_VertexColors.size() || m_VertexColors[meshIndex] == nullptr)
+        return;
+    // Queued draws may still read the buffer; this is a rare edit, so drain the GPU before freeing it.
+    g_CommandManager.GetGraphicsQueue().WaitForIdle();
+    m_VertexColors[meshIndex] = nullptr;
 }
 
 ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
@@ -139,6 +175,11 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
 {
     m_Model = sourceModel;
     m_MeshHidden.clear();
+    if (!m_VertexColors.empty())
+    {
+        g_CommandManager.GetGraphicsQueue().WaitForIdle();
+        m_VertexColors.clear();
+    }
     m_Locator = UniformTransform(kIdentity);
     if (sourceModel == nullptr)
     {

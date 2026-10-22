@@ -38,6 +38,7 @@
 #include "CompiledShaders/DefaultNoTangentNoUV1PS.h"
 #include "CompiledShaders/DepthOnlyVS.h"
 #include "CompiledShaders/DepthOnlySkinVS.h"
+#include "CompiledShaders/DepthOnlySkinPS.h"
 #include "CompiledShaders/CutoutDepthVS.h"
 #include "CompiledShaders/CutoutDepthSkinVS.h"
 #include "CompiledShaders/CutoutDepthPS.h"
@@ -72,12 +73,17 @@ namespace Renderer
     GraphicsPSO m_DefaultPSO(L"Renderer: Default PSO"); // Not finalized.  Used as a template.
 
     DescriptorHandle m_CommonTextures;
+
+    ByteAddressBuffer s_ZeroVertexColor;    // One zero RGBA8, bound with stride 0 for skinned meshes without a color override
 }
 
 void Renderer::Initialize(void)
 {
     if (s_Initialized)
         return;
+
+    alignas(16) const uint32_t zeroColor[4] = {};     // the upload helper copies in 16-byte units
+    s_ZeroVertexColor.Create(L"Zero Vertex Color", 1, sizeof(uint32_t), zeroColor);
 
     SamplerDesc DefaultSamplerDesc;
     DefaultSamplerDesc.MaxAnisotropy = 8;
@@ -117,6 +123,7 @@ void Renderer::Initialize(void)
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_UNORM, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM,        2, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
     D3D12_INPUT_ELEMENT_DESC skinPosAndUV[] =
@@ -125,6 +132,7 @@ void Renderer::Initialize(void)
         { "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT,       0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_UNORM, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM,        2, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
     ASSERT(sm_PSOs.size() == 0);
@@ -155,6 +163,7 @@ void Renderer::Initialize(void)
     GraphicsPSO SkinDepthOnlyPSO = DepthOnlyPSO;
     SkinDepthOnlyPSO.SetInputLayout(_countof(skinPos), skinPos);
     SkinDepthOnlyPSO.SetVertexShader(g_pDepthOnlySkinVS, sizeof(g_pDepthOnlySkinVS));
+    SkinDepthOnlyPSO.SetPixelShader(g_pDepthOnlySkinPS, sizeof(g_pDepthOnlySkinPS));     // clips the cut mask
     SkinDepthOnlyPSO.Finalize();
     sm_PSOs.push_back(SkinDepthOnlyPSO);
 
@@ -307,6 +316,7 @@ void Renderer::Shutdown(void)
 {
     s_RadianceCubeMap = nullptr;
     s_IrradianceCubeMap = nullptr;
+    s_ZeroVertexColor.Destroy();
     TextureManager::Shutdown();
     s_TextureHeap.Destroy();
     s_SamplerHeap.Destroy();
@@ -338,6 +348,7 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
     {
         vertexLayout.push_back({ "BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 });
         vertexLayout.push_back({ "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_UNORM, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 });
+        vertexLayout.push_back({ "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 2, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 });
     }
 
     ColorPSO.SetInputLayout((uint32_t)vertexLayout.size(), vertexLayout.data());
@@ -487,7 +498,8 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
     D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
-    const Joint* skeleton)
+    const Joint* skeleton,
+    D3D12_GPU_VIRTUAL_ADDRESS vertexColors)
 {
     SortKey key;
     key.value = m_SortObjects.size();
@@ -542,7 +554,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_PassCounts[kOpaque]++;
     }
 
-    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr };
+    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr, vertexColors };
     m_SortObjects.push_back(object);
 }
 
@@ -732,6 +744,15 @@ void MeshSorter::RenderMeshes(
             else
             {
                 context.SetVertexBuffer(0, {object.bufferPtr + mesh.vbOffset, mesh.vbSize, mesh.vbStride});
+            }
+
+            if (mesh.psoFlags & PSOFlags::kHasSkin)
+            {
+                // Slot 2 is the per-vertex cut mask color (slot 1 is the missing-UV0 fallback in GetPSO). Without an override, stride 0 makes every vertex read the shared zero.
+                if (object.vertexColors != 0)
+                    context.SetVertexBuffer(2, {object.vertexColors, mesh.vbSize / mesh.vbStride * 4, 4});
+                else
+                    context.SetVertexBuffer(2, {s_ZeroVertexColor.GetGpuVirtualAddress(), 4, 0});
             }
 
             context.SetIndexBuffer({object.bufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat});
