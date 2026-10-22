@@ -110,13 +110,14 @@ namespace MeshCutting
         void UpdateTargets();
         void UpdateCandidates();
         void ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, uint32_t>& triangles);
-        void ExtractJob(CutJob& job);
+        void ExtractJob(CutJob& job, ProceduralMesh& mesh);
         void DropCandidate(CutJob& job);
         void SkinJobs();
         void ConfirmAll();
         void ConfirmJob(CutJob& job);
-        bool SkinPatch(CutJob& job, std::string& error);
-        SliceStatus SliceWithPlane(const CutJob& job, SliceResult& result) const;
+        bool SkinPatch(CutJob& job, ProceduralMesh& mesh, std::string& error);
+        SliceStatus SliceWithPlane(const CutJob& job, ProceduralMesh& mesh, ProceduralMesh& other,
+            std::vector<std::vector<uint32_t>>& loops, std::string& error) const;
         void PlacePlane(const ModelInstance& instance);
 
         CutPlane m_Plane;

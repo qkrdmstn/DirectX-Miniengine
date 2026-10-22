@@ -54,7 +54,7 @@ namespace MeshCutting
         }
     }
 
-    SliceStatus ExtractCutLoops(const PatchPiece& piece, const std::vector<uint8_t>& onPlane,
+    SliceStatus ExtractCutLoops(const MeshGeometry& piece, const std::vector<uint8_t>& onPlane,
         const SlicePlane& plane, bool positiveSide, float epsilonScale,
         std::vector<SliceLoop>& loops, std::string* detail)
     {
@@ -64,21 +64,21 @@ namespace MeshCutting
         SlicePlaneBasis basis;
         if (!MakePlaneBasis(plane, basis))
             return Fail(detail, SliceStatus::InvalidInput, "plane is invalid");
-        if (onPlane.size() != piece.nodes.size())
-            return Fail(detail, SliceStatus::InvalidInput, "onPlane does not match the node count");
+        if (onPlane.size() != piece.vertices.size())
+            return Fail(detail, SliceStatus::InvalidInput, "onPlane does not match the vertex count");
         const double epsilon = ComputePieceRadius(piece) * double(epsilonScale);
 
         // Directed cut edges from the faces: each boundary edge belongs to exactly one face.
-        const size_t nodeCount = piece.nodes.size();
-        std::vector<uint32_t> outCount(nodeCount, 0), inCount(nodeCount, 0), next(nodeCount, kNoNode);
-        for (const PatchFace& face : piece.faces)
+        const size_t nodeCount = piece.vertices.size();
+        std::vector<uint32_t> outCount(nodeCount, 0), inCount(nodeCount, 0), next(nodeCount, kInvalidIndex);
+        for (const MeshFace& face : piece.faces)
         {
             for (int k = 0; k < 3; ++k)
             {
-                const uint32_t from = piece.corners[face.corner[k]].node;
-                const uint32_t to = piece.corners[face.corner[(k + 1) % 3]].node;
-                const auto tag = piece.boundary.find(MakeEdgeKey(from, to));
-                if (tag == piece.boundary.end() || tag->second != PatchEdgeKind::Cut || !onPlane[from] || !onPlane[to])
+                const uint32_t from = piece.corners[face.corner[k]].vertex;
+                const uint32_t to = piece.corners[face.corner[(k + 1) % 3]].vertex;
+                const auto tag = piece.edgeTags.find(MakeEdgeKey(from, to));
+                if (tag == piece.edgeTags.end() || tag->second != MeshEdgeTag::Cut || !onPlane[from] || !onPlane[to])
                     continue;
                 ++outCount[from];
                 ++inCount[to];
@@ -86,22 +86,22 @@ namespace MeshCutting
             }
         }
 
-        // What else the boundary touches at a node, in key order so the message is stable.
+        // What else the boundary touches at a vertex, in key order so the message is stable.
         std::vector<int> blocker(nodeCount, -1);
         std::vector<uint64_t> keys;
-        keys.reserve(piece.boundary.size());
-        for (const auto& entry : piece.boundary)
+        keys.reserve(piece.edgeTags.size());
+        for (const auto& entry : piece.edgeTags)
             keys.push_back(entry.first);
         std::sort(keys.begin(), keys.end());
         for (uint64_t key : keys)
         {
-            const PatchEdgeKind kind = piece.boundary.at(key);
-            if (kind == PatchEdgeKind::CapSeam)
+            const MeshEdgeTag kind = piece.edgeTags.at(key);
+            if (kind == MeshEdgeTag::CapSeam)
                 continue;
             const uint32_t a = EdgeKeyLow(key), b = EdgeKeyHigh(key);
             if (a >= nodeCount || b >= nodeCount)
                 continue;
-            if (kind == PatchEdgeKind::Cut && onPlane[a] && onPlane[b])
+            if (kind == MeshEdgeTag::Cut && onPlane[a] && onPlane[b])
                 continue;       // a cut edge of this plane, not a blocker
             if (blocker[a] < 0)
                 blocker[a] = int(kind);
@@ -110,7 +110,7 @@ namespace MeshCutting
         }
 
         // Degree check: open ends caused by another boundary are OpenLoop, the rest NonManifoldLoop.
-        uint32_t openNode = kNoNode, badNode = kNoNode;
+        uint32_t openNode = kInvalidIndex, badNode = kInvalidIndex;
         for (uint32_t n = 0; n < nodeCount; ++n)
         {
             const uint32_t out = outCount[n], in = inCount[n];
@@ -120,36 +120,36 @@ namespace MeshCutting
                 continue;
             if (out + in == 1 && blocker[n] >= 0)
             {
-                if (openNode == kNoNode)
+                if (openNode == kInvalidIndex)
                     openNode = n;
             }
-            else if (badNode == kNoNode)
+            else if (badNode == kInvalidIndex)
                 badNode = n;
         }
-        if (badNode != kNoNode)
-            return Fail(detail, SliceStatus::NonManifoldLoop, "cut node " + Num(badNode) + " has " + Num(outCount[badNode])
+        if (badNode != kInvalidIndex)
+            return Fail(detail, SliceStatus::NonManifoldLoop, "cut vertex " + Num(badNode) + " has " + Num(outCount[badNode])
                 + " outgoing and " + Num(inCount[badNode]) + " incoming cut edges");
-        if (openNode != kNoNode)
-            return Fail(detail, SliceStatus::OpenLoop, "cut loop ends at node " + Num(openNode) + " on a "
-                + EdgeKindName(PatchEdgeKind(blocker[openNode])) + " boundary");
+        if (openNode != kInvalidIndex)
+            return Fail(detail, SliceStatus::OpenLoop, "cut loop ends at vertex " + Num(openNode) + " on a "
+                + EdgeTagName(MeshEdgeTag(blocker[openNode])) + " boundary");
 
-        // Every remaining cut node has one way in and one way out, so the cut edges are cycles.
+        // Every remaining cut vertex has one way in and one way out, so the cut edges are cycles.
         std::vector<uint8_t> visited(nodeCount, 0);
         for (uint32_t start = 0; start < nodeCount; ++start)
         {
             if (outCount[start] != 1 || visited[start])
                 continue;
             SliceLoop loop;
-            uint32_t node = start;
+            uint32_t vertex = start;
             do
             {
-                visited[node] = 1;
-                loop.nodes.push_back(node);
-                node = next[node];
-            } while (node != start);
-            if (loop.nodes.size() < 3)
-                return Fail(detail, SliceStatus::InvalidLoop, "loop through node " + Num(start) + " has only "
-                    + Num(loop.nodes.size()) + " nodes");
+                visited[vertex] = 1;
+                loop.vertices.push_back(vertex);
+                vertex = next[vertex];
+            } while (vertex != start);
+            if (loop.vertices.size() < 3)
+                return Fail(detail, SliceStatus::InvalidLoop, "loop through vertex " + Num(start) + " has only "
+                    + Num(loop.vertices.size()) + " vertices");
             loops.push_back(std::move(loop));
         }
         if (loops.empty())
@@ -159,16 +159,16 @@ namespace MeshCutting
         std::vector<std::vector<Point2>> points(loops.size());
         for (size_t l = 0; l < loops.size(); ++l)
         {
-            for (uint32_t n : loops[l].nodes)
+            for (uint32_t n : loops[l].vertices)
             {
-                const DirectX::XMFLOAT3& p = piece.nodes[n].position;
+                const DirectX::XMFLOAT3& p = piece.vertices[n].position;
                 const double d[3] = { double(p.x) - basis.origin[0], double(p.y) - basis.origin[1], double(p.z) - basis.origin[2] };
                 points[l].push_back({ d[0] * basis.u[0] + d[1] * basis.u[1] + d[2] * basis.u[2],
                     d[0] * basis.v[0] + d[1] * basis.v[1] + d[2] * basis.v[2] });
             }
         }
 
-        // Segments of one loop may only meet at their shared node; loops may not meet at all.
+        // Segments of one loop may only meet at their shared vertex; loops may not meet at all.
         for (size_t a = 0; a < loops.size(); ++a)
         {
             const size_t na = points[a].size();
@@ -180,16 +180,16 @@ namespace MeshCutting
                     if (i == 0 && j == na - 1)
                         continue;       // adjacent through the closing segment
                     if (SegmentDistance(a0, a1, points[a][j], points[a][(j + 1) % na]) <= epsilon)
-                        return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(a) + " crosses or touches itself between nodes "
-                            + Num(loops[a].nodes[i]) + " and " + Num(loops[a].nodes[j]));
+                        return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(a) + " crosses or touches itself between vertices "
+                            + Num(loops[a].vertices[i]) + " and " + Num(loops[a].vertices[j]));
                 }
                 for (size_t b = a + 1; b < loops.size(); ++b)
                 {
                     const size_t nb = points[b].size();
                     for (size_t j = 0; j < nb; ++j)
                         if (SegmentDistance(a0, a1, points[b][j], points[b][(j + 1) % nb]) <= epsilon)
-                            return Fail(detail, SliceStatus::InvalidLoop, "loops " + Num(a) + " and " + Num(b) + " cross or touch near nodes "
-                                + Num(loops[a].nodes[i]) + " and " + Num(loops[b].nodes[j]));
+                            return Fail(detail, SliceStatus::InvalidLoop, "loops " + Num(a) + " and " + Num(b) + " cross or touch near vertices "
+                                + Num(loops[a].vertices[i]) + " and " + Num(loops[b].vertices[j]));
                 }
             }
         }
@@ -211,7 +211,7 @@ namespace MeshCutting
         for (size_t l = 0; l < loops.size(); ++l)
         {
             uint32_t depth = 0;
-            uint32_t parent = kNoNode;
+            uint32_t parent = kInvalidIndex;
             for (size_t m = 0; m < loops.size(); ++m)
             {
                 if (m == l || std::fabs(loops[m].signedArea) <= std::fabs(loops[l].signedArea))
@@ -219,7 +219,7 @@ namespace MeshCutting
                 if (!PointInPolygon(points[l][0], points[m]))
                     continue;
                 ++depth;
-                if (parent == kNoNode || std::fabs(loops[m].signedArea) < std::fabs(loops[parent].signedArea))
+                if (parent == kInvalidIndex || std::fabs(loops[m].signedArea) < std::fabs(loops[parent].signedArea))
                     parent = uint32_t(m);
             }
             if (depth > 1)
@@ -241,11 +241,11 @@ namespace MeshCutting
 
     namespace
     {
-        // One vertex of a ring being triangulated. Bridge edges repeat a node, so a node id can
+        // One vertex of a ring being triangulated. Bridge edges repeat a vertex, so a vertex id can
         // appear twice in the combined ring.
         struct RingVertex
         {
-            uint32_t node;
+            uint32_t vertex;
             Point2 p;
         };
 
@@ -308,7 +308,7 @@ namespace MeshCutting
                     for (size_t i = 0; i < wall.size() && !blocked; ++i)
                     {
                         const RingVertex &a = wall[i], &b = wall[(i + 1) % wall.size()];
-                        if (a.node == from.node || b.node == from.node || a.node == to.node || b.node == to.node)
+                        if (a.vertex == from.vertex || b.vertex == from.vertex || a.vertex == to.vertex || b.vertex == to.vertex)
                             continue;
                         blocked = SegmentDistance(from.p, to.p, a.p, b.p) <= epsilon;
                     }
@@ -338,8 +338,8 @@ namespace MeshCutting
             return false;
         }
 
-        // Ear clipping over a counter-clockwise ring that may repeat nodes (bridges). Only
-        // strictly convex tips with enough area are clipped, so straight rim nodes stay in the ring
+        // Ear clipping over a counter-clockwise ring that may repeat vertices (bridges). Only
+        // strictly convex tips with enough area are clipped, so straight rim vertices stay in the ring
         // and every ring edge ends up on exactly one triangle.
         bool EarClip(const std::vector<RingVertex>& ring, double epsilon, std::vector<uint32_t>& triangles, std::string& why)
         {
@@ -365,7 +365,7 @@ namespace MeshCutting
                     bool blocked = false;
                     for (size_t w = next[q]; w != p && !blocked; w = next[w])
                     {
-                        if (ring[w].node == ring[p].node || ring[w].node == ring[i].node || ring[w].node == ring[q].node)
+                        if (ring[w].vertex == ring[p].vertex || ring[w].vertex == ring[i].vertex || ring[w].vertex == ring[q].vertex)
                             continue;
                         blocked = Cross(ring[p].p, ring[i].p, ring[w].p) >= -minCross
                             && Cross(ring[i].p, ring[q].p, ring[w].p) >= -minCross
@@ -373,7 +373,7 @@ namespace MeshCutting
                     }
                     if (blocked)
                         continue;
-                    triangles.insert(triangles.end(), { ring[p].node, ring[i].node, ring[q].node });
+                    triangles.insert(triangles.end(), { ring[p].vertex, ring[i].vertex, ring[q].vertex });
                     next[p] = q;
                     prev[q] = p;
                     tip = p;
@@ -393,7 +393,7 @@ namespace MeshCutting
                 why = "the last triangle has no area";
                 return false;
             }
-            triangles.insert(triangles.end(), { ring[a].node, ring[b].node, ring[c].node });
+            triangles.insert(triangles.end(), { ring[a].vertex, ring[b].vertex, ring[c].vertex });
             return true;
         }
 
@@ -405,7 +405,7 @@ namespace MeshCutting
         }
     }
 
-    SliceStatus BuildCap(PatchPiece& piece, const SlicePlane& plane, bool positiveSide, uint32_t cutId,
+    SliceStatus BuildCap(MeshGeometry& piece, const SlicePlane& plane, bool positiveSide, uint32_t cutId,
         const std::vector<SliceLoop>& loops, float epsilonScale, float uvScale, std::string* detail)
     {
         if (detail)
@@ -420,13 +420,13 @@ namespace MeshCutting
         // Loops in plane coordinates, as rings.
         std::vector<std::vector<RingVertex>> rings(loops.size());
         for (size_t l = 0; l < loops.size(); ++l)
-            for (uint32_t node : loops[l].nodes)
+            for (uint32_t vertex : loops[l].vertices)
             {
-                if (node >= piece.nodes.size())
-                    return Fail(detail, "loop node " + Num(node) + " is out of range");
-                const DirectX::XMFLOAT3& pos = piece.nodes[node].position;
+                if (vertex >= piece.vertices.size())
+                    return Fail(detail, "loop vertex " + Num(vertex) + " is out of range");
+                const DirectX::XMFLOAT3& pos = piece.vertices[vertex].position;
                 const double d[3] = { double(pos.x) - basis.origin[0], double(pos.y) - basis.origin[1], double(pos.z) - basis.origin[2] };
-                rings[l].push_back({ node, { d[0] * basis.u[0] + d[1] * basis.u[1] + d[2] * basis.u[2],
+                rings[l].push_back({ vertex, { d[0] * basis.u[0] + d[1] * basis.u[1] + d[2] * basis.u[2],
                     d[0] * basis.v[0] + d[1] * basis.v[1] + d[2] * basis.v[2] } });
             }
 
@@ -442,7 +442,7 @@ namespace MeshCutting
             expectedArea += outer ? std::fabs(area) : -std::fabs(area);
         }
 
-        std::vector<uint32_t> triangles;        // node triples, counter-clockwise in (u, v)
+        std::vector<uint32_t> triangles;        // vertex triples, counter-clockwise in (u, v)
         for (size_t l = 0; l < loops.size(); ++l)
         {
             if (loops[l].depth != 0)
@@ -473,35 +473,35 @@ namespace MeshCutting
                 return Fail(detail, "loop " + Num(l) + ": " + why);
         }
 
-        // Append the cap: one corner per rim node, outward normal, planar UVs. A copy of the piece
+        // Append the cap: one corner per rim vertex, outward normal, planar UVs. A copy of the piece
         // is edited first so a failed check leaves the caller's piece untouched.
-        PatchPiece capped = piece;
+        MeshGeometry capped = piece;
         const double sign = positiveSide ? -1.0 : 1.0;      // cap normal = -n for the positive piece
         const DirectX::XMFLOAT3 normal = { float(sign * basis.n[0]), float(sign * basis.n[1]), float(sign * basis.n[2]) };
         std::unordered_map<uint32_t, uint32_t> cornerOf;
-        const auto cornerFor = [&](uint32_t node)
+        const auto cornerFor = [&](uint32_t vertex)
         {
-            const auto found = cornerOf.find(node);
+            const auto found = cornerOf.find(vertex);
             if (found != cornerOf.end())
                 return found->second;
-            const DirectX::XMFLOAT3& pos = capped.nodes[node].position;
+            const DirectX::XMFLOAT3& pos = capped.vertices[vertex].position;
             const double d[3] = { double(pos.x) - basis.origin[0], double(pos.y) - basis.origin[1], double(pos.z) - basis.origin[2] };
-            PatchCorner corner;
-            corner.node = node;
+            MeshCorner corner;
+            corner.vertex = vertex;
             corner.normal = normal;
             corner.uv = { float((d[0] * basis.u[0] + d[1] * basis.u[1] + d[2] * basis.u[2]) * double(uvScale)),
                 float((d[0] * basis.v[0] + d[1] * basis.v[1] + d[2] * basis.v[2]) * double(uvScale)) };
             corner.color = { 0.9f, 0.9f, 0.9f, 1.0f };
             const uint32_t id = uint32_t(capped.corners.size());
             capped.corners.push_back(corner);
-            cornerOf.emplace(node, id);
+            cornerOf.emplace(vertex, id);
             return id;
         };
         for (size_t t = 0; t < triangles.size(); t += 3)
         {
-            PatchFace face;
-            face.kind = PatchFaceKind::Cap;
-            face.sourceTriangle = kNoNode;
+            MeshFace face;
+            face.kind = MeshFaceKind::Cap;
+            face.sourceTriangle = kInvalidIndex;
             face.cutId = cutId;
             // Counter-clockwise in (u, v); the positive piece needs the opposite winding.
             const uint32_t a = triangles[t], b = triangles[t + (positiveSide ? 2 : 1)], c = triangles[t + (positiveSide ? 1 : 2)];
@@ -513,27 +513,27 @@ namespace MeshCutting
 
         // Every cut edge must now be shared by the surface and exactly one cap face, used in
         // opposite directions. Then it is a seam instead of a boundary.
-        PatchEdgeUsageMap usage;
+        MeshEdgeUsageMap usage;
         CollectEdgeUsage(capped, usage);
         for (const SliceLoop& loop : loops)
-            for (size_t i = 0; i < loop.nodes.size(); ++i)
+            for (size_t i = 0; i < loop.vertices.size(); ++i)
             {
-                const uint32_t a = loop.nodes[i], b = loop.nodes[(i + 1) % loop.nodes.size()];
+                const uint32_t a = loop.vertices[i], b = loop.vertices[(i + 1) % loop.vertices.size()];
                 const uint64_t key = MakeEdgeKey(a, b);
                 const auto use = usage.find(key);
                 if (use == usage.end() || use->second.count != 2 || use->second.forward != 1 || use->second.backward != 1)
                     return Fail(detail, "cut edge (" + Num(a) + ", " + Num(b) + ") is not matched by exactly one cap face");
-                capped.boundary[key] = PatchEdgeKind::CapSeam;
+                capped.edgeTags[key] = MeshEdgeTag::CapSeam;
             }
 
         double capArea = 0.0;
-        for (const PatchFace& face : capped.faces)
-            if (face.kind == PatchFaceKind::Cap && face.cutId == cutId)
+        for (const MeshFace& face : capped.faces)
+            if (face.kind == MeshFaceKind::Cap && face.cutId == cutId)
                 capArea += FaceArea(capped, face);
         if (std::fabs(capArea - expectedArea) > 1e-4 * std::max(expectedArea, 1e-12))
             return Fail(detail, "cap area " + std::to_string(capArea) + " differs from the loop area " + std::to_string(expectedArea));
 
-        PatchCap record;
+        MeshCutRecord record;
         record.cutId = cutId;
         record.planePoint = plane.point;
         record.planeNormal = normal;
@@ -541,13 +541,13 @@ namespace MeshCutting
             for (const SliceLoop& loop : loops)
                 if ((loop.depth == 0) == (pass == 0))
                 {
-                    record.rimNodes.insert(record.rimNodes.end(), loop.nodes.begin(), loop.nodes.end());
-                    record.loopSizes.push_back(uint32_t(loop.nodes.size()));
+                    record.rimVertices.insert(record.rimVertices.end(), loop.vertices.begin(), loop.vertices.end());
+                    record.loopSizes.push_back(uint32_t(loop.vertices.size()));
                 }
         capped.caps.push_back(record);
 
         std::string why;
-        const SliceStatus valid = ValidatePatchPiece(capped, epsilonScale, &why);
+        const SliceStatus valid = ValidateMeshGeometry(capped, epsilonScale, &why);
         if (valid != SliceStatus::Ok)
             return Fail(detail, std::string("capped piece is invalid: ") + SliceStatusName(valid) + " (" + why + ")");
 

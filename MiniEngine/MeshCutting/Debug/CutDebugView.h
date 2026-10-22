@@ -54,7 +54,7 @@ namespace MeshCutting
         // 작업 하나의 표시 메시. std::map에 두어 주소가 바뀌지 않는다.
         struct JobMeshes
         {
-            ProceduralMesh positive, negative;
+            std::shared_ptr<ProceduralMesh> positive, negative;
             ProceduralMesh boundaryPositive, boundaryNegative;
             uint64_t pieceGeneration = 0;
             bool bakedSectionSplit = false;

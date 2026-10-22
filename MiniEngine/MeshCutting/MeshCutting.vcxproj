@@ -152,7 +152,7 @@
     <ClInclude Include="Runtime\CutController.h" />
     <ClInclude Include="Runtime\CutJob.h" />
     <ClInclude Include="Geometry\SliceTypes.h" />
-    <ClInclude Include="Geometry\Patch.h" />
+    <ClInclude Include="Geometry\MeshGeometry.h" />
     <ClInclude Include="Geometry\Slice.h" />
     <ClInclude Include="Geometry\Skinning.h" />
     <ClInclude Include="Geometry\CutPlane.h" />
@@ -173,7 +173,7 @@
     <ClCompile Include="Runtime\CutController.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>
-    <ClCompile Include="Geometry\Patch.cpp">
+    <ClCompile Include="Geometry\MeshGeometry.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <ClCompile Include="Geometry\Slice.cpp">

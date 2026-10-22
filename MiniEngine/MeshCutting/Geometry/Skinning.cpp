@@ -40,7 +40,7 @@ namespace MeshCutting
         return SkinPoint(&matrix, 1, &joint, &weight, 1, bindPosition);
     }
 
-    bool Skinning::Apply(PatchPiece& piece, const std::vector<std::vector<XMFLOAT4X4>>& slotMatrices,
+    bool Skinning::Apply(MeshGeometry& piece, const std::vector<std::vector<XMFLOAT4X4>>& slotMatrices,
         SkinStats* stats, std::string* error) const
     {
         if (stats)
@@ -52,19 +52,19 @@ namespace MeshCutting
 
         // 쓰기 전에 piece가 쓰는 스킨 정점을 모두 검사한다.
         std::vector<uint8_t> needed(m_Vertices.size(), 0);
-        for (size_t n = 0; n < piece.nodes.size(); ++n)
+        for (size_t n = 0; n < piece.vertices.size(); ++n)
         {
-            const PatchNode& node = piece.nodes[n];
-            if (node.kind != PatchNodeKind::Surface)
+            const MeshVertex& vertex = piece.vertices[n];
+            if (vertex.kind != MeshVertexKind::Surface)
                 continue;
-            if (node.origin.skinVertex[0] == kNoNode)
-                return Fail(error, "node " + Num(n) + " has no skin vertex");
-            for (int k = 0; k < 3 && node.origin.skinVertex[k] != kNoNode; ++k)
+            if (vertex.origin.skinVertex[0] == kInvalidIndex)
+                return Fail(error, "vertex " + Num(n) + " has no skin vertex");
+            for (int k = 0; k < 3 && vertex.origin.skinVertex[k] != kInvalidIndex; ++k)
             {
-                if (node.origin.skinVertex[k] >= m_Vertices.size())
-                    return Fail(error, "node " + Num(n) + " refers to skin vertex " + Num(node.origin.skinVertex[k])
+                if (vertex.origin.skinVertex[k] >= m_Vertices.size())
+                    return Fail(error, "vertex " + Num(n) + " refers to skin vertex " + Num(vertex.origin.skinVertex[k])
                         + " beyond " + Num(m_Vertices.size()));
-                needed[node.origin.skinVertex[k]] = 1;
+                needed[vertex.origin.skinVertex[k]] = 1;
             }
         }
 
@@ -103,28 +103,28 @@ namespace MeshCutting
         }
 
         // 정점 위치 = 스킨 정점 혼합의 bary 가중합
-        std::vector<XMFLOAT3> positions(piece.nodes.size());
+        std::vector<XMFLOAT3> positions(piece.vertices.size());
         uint32_t written = 0, skipped = 0;
-        for (size_t n = 0; n < piece.nodes.size(); ++n)
+        for (size_t n = 0; n < piece.vertices.size(); ++n)
         {
-            const PatchNode& node = piece.nodes[n];
-            if (node.kind != PatchNodeKind::Surface)
+            const MeshVertex& vertex = piece.vertices[n];
+            if (vertex.kind != MeshVertexKind::Surface)
             {
-                positions[n] = node.position;
+                positions[n] = vertex.position;
                 ++skipped;
                 continue;
             }
             XMVECTOR sum = XMVectorZero();
-            for (int k = 0; k < 3 && node.origin.skinVertex[k] != kNoNode; ++k)
-                sum = XMVectorMultiplyAdd(XMLoadFloat3(&blend[node.origin.skinVertex[k]]), XMVectorReplicate(node.origin.bary[k]), sum);
+            for (int k = 0; k < 3 && vertex.origin.skinVertex[k] != kInvalidIndex; ++k)
+                sum = XMVectorMultiplyAdd(XMLoadFloat3(&blend[vertex.origin.skinVertex[k]]), XMVectorReplicate(vertex.origin.bary[k]), sum);
             XMStoreFloat3(&positions[n], sum);
             if (!std::isfinite(positions[n].x) || !std::isfinite(positions[n].y) || !std::isfinite(positions[n].z))
-                return Fail(error, "node " + Num(n) + " ends up at a non-finite position");
+                return Fail(error, "vertex " + Num(n) + " ends up at a non-finite position");
             ++written;
         }
 
-        for (size_t n = 0; n < piece.nodes.size(); ++n)
-            piece.nodes[n].position = positions[n];
+        for (size_t n = 0; n < piece.vertices.size(); ++n)
+            piece.vertices[n].position = positions[n];
         if (stats)
         {
             stats->skinVerticesEvaluated = evaluated;

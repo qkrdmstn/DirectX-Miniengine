@@ -1,10 +1,12 @@
+상태: 설계안 (참고 기록) — 채택한 ProceduralMesh 통합은 ProceduralMeshSimplification.md에서 구현. 아래 6클래스 스케치 전체를 적용했다는 뜻은 아니다 (`d418fcd` 이후 작업 트리).
+
 # 클래스 단위 캡슐화 설계
 
 > 작성: 2026-10-21 · 기준: `0fc39fe` + 작업 트리(Geometry 파일 통합: Patch/Slice/SliceCap/Skinning/CutPlane, Rendering/RenderBake)
 >
 > 목적: 기능을 클래스 6개로 묶어 가독성과 일관성을 높인다.
 >
-> 상태: **설계안**. 아래 코드는 아직 없다.
+> 적용 진행: `ProceduralMeshSimplification.md`에서 작은 단계로 진행한다. 아래 통합 클래스 코드는 설계 스케치다.
 
 ## 0. 지금 코드의 기능 분포
 

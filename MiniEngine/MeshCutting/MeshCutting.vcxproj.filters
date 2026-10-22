@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="소스 파일">
@@ -60,7 +60,7 @@
     <ClInclude Include="Geometry\SliceTypes.h">
       <Filter>Geometry</Filter>
     </ClInclude>
-    <ClInclude Include="Geometry\Patch.h">
+    <ClInclude Include="Geometry\MeshGeometry.h">
       <Filter>Geometry</Filter>
     </ClInclude>
     <ClInclude Include="Geometry\Slice.h">
@@ -101,7 +101,7 @@
     <ClCompile Include="Runtime\CutController.cpp">
       <Filter>Runtime</Filter>
     </ClCompile>
-    <ClCompile Include="Geometry\Patch.cpp">
+    <ClCompile Include="Geometry\MeshGeometry.cpp">
       <Filter>Geometry</Filter>
     </ClCompile>
     <ClCompile Include="Geometry\Slice.cpp">

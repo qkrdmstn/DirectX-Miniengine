@@ -1,6 +1,7 @@
+상태: 완료 (채택한 U-1~U-5b 코드 경로) — 현재 공통 메시 API는 ProceduralMeshSimplification.md 기준. 아래는 과거 설계 이력이며 실제 물리는 미구현 (`d418fcd` 이후 작업 트리).
+
 # Unreal 방식 정렬 로드맵
 
-> 상태: **U-1~U-3b는 `ccf0349`, U-3c는 `762538f`에서 구현 (설계 기준 `cd9a09e`)**. 화면 확인(U-1: 작업 색, 확정 조각 배치, 상태 줄 / U-2: Enter 결과가 U-1과 같음)은 사용자 확인 필요. U-3b·U-3c의 화면 확인(cube·bunny에 평면을 걸치고 Enter, 조각 배치, 상태 줄)도 사용자 확인 필요. U-4 이후는 설계안.
 >
 > 목적: 절단 기능을 Unreal의 `ProceduralMeshComponent`, `UKismetProceduralMeshLibrary::SliceProceduralMesh`, `BreakConstraint` 흐름에 맞춘다. BVH는 쓰지 않는다. 근거: `NDC25Reference.md` 7절, 측정은 `PickPerformanceDesign.md`.
 

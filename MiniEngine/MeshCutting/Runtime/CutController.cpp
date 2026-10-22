@@ -37,7 +37,7 @@ namespace MeshCutting
         }
 
         // 끊을 노드의 자손 joint(없으면 자기 자신)가 평면 법선 쪽에 있으면 +1, 아니면 -1. 절단 때 자세(poseJointWorld) 기준.
-        float ChildSide(const Model& model, const BonePatchSource& source, uint32_t breakNode, const SlicePlane& plane)
+        float ChildSide(const Model& model, const MeshSource& source, uint32_t breakNode, const SlicePlane& plane)
         {
             const SkinPalette& palette = model.m_SkinPalettes[source.paletteId];
             const Vector3 normal(plane.normal.x, plane.normal.y, plane.normal.z);
@@ -113,8 +113,8 @@ namespace MeshCutting
         bool BuildJobMatrices(const CutTarget& target, const CutJob& job, std::vector<std::vector<DirectX::XMFLOAT4X4>>& out, std::string* error)
         {
             if (job.key.kind == CutJobKind::StaticMesh)
-                return BuildRigidMatrices(*target.model, *target.instance, *job.source.bone, out, error);
-            return BuildSkinMatrices(*target.model, *target.instance, *job.source.bone, out, error);
+                return BuildRigidMatrices(*target.model, *target.instance, *job.source, out, error);
+            return BuildSkinMatrices(*target.model, *target.instance, *job.source, out, error);
         }
 
         // 끊긴 작업의 조각 하나의 행렬: 지금 행렬에서 한쪽 joint를 절단 순간 값에 강체 이동(지금 world * inverse(절단 world))을 곱한 것으로 바꾼다.
@@ -123,7 +123,7 @@ namespace MeshCutting
         {
             if (!BuildJobMatrices(target, job, out, error))
                 return false;
-            if (job.breakNode == kNoNode)
+            if (job.breakNode == kInvalidIndex)
                 return true;
             const bool falling = positive == job.positiveFalls;
             const Matrix4* nodeWorld = target.instance->GetNodeWorldMatrices();
@@ -134,7 +134,7 @@ namespace MeshCutting
                 const DirectX::XMFLOAT4X4& followCut = falling ? job.breakNodeWorld : job.breakParentWorld;
                 follow = nodeWorld[followNode] * Invert(Matrix4(DirectX::XMLoadFloat4x4(&followCut)));
             }
-            const BonePatchSource& source = *job.source.bone;
+            const MeshSource& source = *job.source;
             for (size_t slot = 0; slot < out.size() && slot < job.breakCutMatrices.size(); ++slot)
             {
                 const Matrix4 meshFollow = nodeWorld[source.meshes[slot].worldMatrixIndex] * follow;
@@ -229,7 +229,7 @@ namespace MeshCutting
         for (const auto& entry : m_Jobs)
         {
             const CutJob& job = entry.second;
-            if (job.key.target == target.id && job.key.kind == CutJobKind::SkeletalJoint && job.haveConfirmed && job.breakNode != kNoNode)
+            if (job.key.target == target.id && job.key.kind == CutJobKind::SkeletalJoint && job.haveConfirmed && job.breakNode != kInvalidIndex)
                 wanted.emplace(job.breakNode, Vector3(job.breakOffsetNode.x, job.breakOffsetNode.y, job.breakOffsetNode.z));
         }
         bool same = wanted.size() == target.brokenNodes.size();
@@ -249,11 +249,11 @@ namespace MeshCutting
     // 확정된 스켈레탈 joint 작업의 끊을 노드와 이동량을 정한다: 평면 법선 방향 x 반지름 x 비율, 부호는 자손 쪽 (끊긴 쪽이 평면에서 멀어진다).
     void CutController::SetBreakOf(CutJob& job)
     {
-        job.breakNode = kNoNode;
+        job.breakNode = kInvalidIndex;
         const CutTarget* target = FindTarget(job.key.target);
-        if (job.key.kind != CutJobKind::SkeletalJoint || !job.haveConfirmed || !job.source.bone || target == nullptr || target->model == nullptr)
+        if (job.key.kind != CutJobKind::SkeletalJoint || !job.haveConfirmed || !job.source || target == nullptr || target->model == nullptr)
             return;
-        const BonePatchSource& source = *job.source.bone;
+        const MeshSource& source = *job.source;
         const Model& model = *target->model;
         if (source.paletteId >= model.m_SkinPalettes.size())
             return;
@@ -272,7 +272,7 @@ namespace MeshCutting
         const Matrix4* nodeWorld = target->instance->GetNodeWorldMatrices();
         if (nodeWorld == nullptr || job.skinMatrices.size() != source.meshes.size())
         {
-            job.breakNode = kNoNode;
+            job.breakNode = kInvalidIndex;
             return;
         }
         // world 이동량을 노드 행렬 공간(메시 world를 뺀 공간)으로 바꾼다
@@ -315,13 +315,13 @@ namespace MeshCutting
         for (const auto& entry : m_Jobs)
         {
             const CutJob& job = entry.second;
-            if (job.key.target != target.id || job.key.kind != CutJobKind::SkeletalJoint || !job.haveConfirmed || job.source.bone == nullptr)
+            if (job.key.target != target.id || job.key.kind != CutJobKind::SkeletalJoint || !job.haveConfirmed || job.source == nullptr)
                 continue;
-            const BonePatchSource& source = *job.source.bone;
-            for (const BonePatchVertex& vertex : source.vertices)
+            const MeshSource& source = *job.source;
+            for (const SourceVertex& vertex : source.vertices)
             {
                 if (vertex.meshSlot >= source.meshes.size()
-                    || !Skinning::InJointSet(vertex.joints, vertex.weights, source.joints, source.minWeight))
+                    || !vertex.selected)
                     continue;
                 const uint32_t meshIndex = source.meshes[vertex.meshSlot].meshIndex;
                 std::vector<uint32_t>& colors = masks[meshIndex];
@@ -451,13 +451,13 @@ namespace MeshCutting
             if (job.haveConfirmed)
                 SetOriginalVisible(job, true);
             job.haveConfirmed = false;
-            job.breakNode = kNoNode;
+            job.breakNode = kInvalidIndex;
             job.cutAttempted = false;
             job.lastCutStatus = SliceStatus::InvalidInput;
             job.lastCutError.clear();
             job.cutInfo.clear();
-            job.positive.Clear();
-            job.negative.Clear();
+            job.positive.reset();
+            job.negative.reset();
             job.confirmedGeneration = ++m_Generation;
             if (!job.candidate)
             {
@@ -522,12 +522,12 @@ namespace MeshCutting
     void CutController::BuildStaticCache(const CutTarget& target, CutStaticMesh& mesh)
     {
         ProceduralMeshData copy;
-        BonePatchSource source;
+        MeshSource source;
         std::string error;
         mesh.positions.clear();
         mesh.indices.clear();
         mesh.havePicked = false;
-        if (!CopyProceduralMeshFromStaticMesh(*target.model, *target.instance, mesh.meshIndex, copy, source, &error))
+        if (!ReadStaticMesh(*target.model, *target.instance, mesh.meshIndex, copy, source, &error))
         {
             mesh.error = Utility::UTF8ToWideString(error);
             return;
@@ -535,7 +535,7 @@ namespace MeshCutting
         mesh.error.clear();
         mesh.positions.resize(source.vertices.size());
         for (size_t i = 0; i < source.vertices.size(); ++i)
-            mesh.positions[i] = source.vertices[i].position;
+            mesh.positions[i] = copy.bindings[i].bindPosition;
         mesh.indices = std::move(copy.indices);
     }
 
@@ -586,9 +586,9 @@ namespace MeshCutting
             joints[joint] = joint;
 
         ProceduralMeshData mesh;
-        auto source = std::make_shared<BonePatchSource>();
+        auto source = std::make_shared<MeshSource>();
         std::string error;
-        if (!ExtractBonePatch(*target.model, *target.instance, palette, joints, 0.0f, mesh, *source, &error)
+        if (!ReadBonePatch(*target.model, *target.instance, palette, joints, 0.0f, mesh, *source, &error)
             || source->vertices.size() != mesh.vertices.size())
         {
             cache.error = Utility::UTF8ToWideString(error.empty() ? "palette source does not match" : error);
@@ -599,11 +599,11 @@ namespace MeshCutting
         cache.pose.skins.resize(mesh.vertices.size());
         for (size_t i = 0; i < mesh.vertices.size(); ++i)
         {
-            const BonePatchVertex& vertex = source->vertices[i];
+            const MeshVertexBinding& vertex = mesh.bindings[i];
             cache.pose.positions[i] = mesh.vertices[i].position;
             SkinVertex& skin = cache.pose.skins[i];
             skin.meshSlot = vertex.meshSlot;
-            skin.bindPosition = vertex.position;
+            skin.bindPosition = vertex.bindPosition;
             skin.jointCount = 4;
             for (int k = 0; k < 4; ++k)
             {
@@ -741,44 +741,32 @@ namespace MeshCutting
     }
 
     // 작업을 추출해 용접한다 (스켈레탈: joint 하나(key.b), 스태틱: 메시 하나를 복사). Enter 때만 부른다.
-    void CutController::ExtractJob(CutJob& job)
+    void CutController::ExtractJob(CutJob& job, ProceduralMesh& mesh)
     {
         job.extractMs = 0.0f;
-
-        const CutTarget* target = FindTarget(job.key.target);
-        job.patch.Clear();
         job.weld = WeldStats();
         job.patchStatus = SliceStatus::InvalidInput;
         job.patchError.clear();
         job.patchTriangles = 0;
+        const CutTarget* target = FindTarget(job.key.target);
         if (target == nullptr || target->model == nullptr)
         {
             job.patchError = "no model";
             return;
         }
-
         PhaseTimer timer(L"Extract job", m_Frame.extract);
         ++m_Frame.extractions;
         const int64_t start = SystemTime::GetCurrentTick();
-        ProceduralMeshData patch;
-        auto source = std::make_shared<BonePatchSource>();
-        WeldInput weldInput;
-        std::string error;
-        const bool isStatic = job.key.kind == CutJobKind::StaticMesh;
-        const bool extracted = isStatic ? CopyProceduralMeshFromStaticMesh(*target->model, *target->instance, job.key.a, patch, *source, &error)
-            : ExtractBonePatch(*target->model, *target->instance, job.key.a, job.key.b, 0.0f, patch, *source, &error);
-        if (!extracted || !MakeWeldInput(patch, *source, weldInput, &error))
-            job.patchError = error;
-        else
+        auto source = std::make_shared<MeshSource>();
+        job.patchStatus = job.key.kind == CutJobKind::StaticMesh
+            ? CopyProceduralMeshFromStaticMesh(*target->model, *target->instance, job.key.a,
+                mesh, *source, job.weld, &job.patchError)
+            : ExtractBonePatch(*target->model, *target->instance, job.key.a, job.key.b, 0.0f,
+                mesh, *source, job.weld, &job.patchError);
+        if (job.patchStatus == SliceStatus::Ok)
         {
-            job.patchStatus = BuildPatchPiece(weldInput, kDefaultEpsilonScale, job.patch, job.weld, &job.patchError);
-            if (job.patchStatus == SliceStatus::Ok)
-            {
-                job.patchTriangles = uint32_t(patch.indices.size() / 3);
-                job.source.bone = source;
-                job.source.kind = job.key.kind;
-                job.source.extractJoint = isStatic ? kNoNode : job.key.b;
-            }
+            job.patchTriangles = uint32_t(mesh.GetGeometry().faces.size());
+            job.source = std::move(source);
         }
         job.extractMs = ElapsedMs(start);
         ++m_ExtractCount;
@@ -802,7 +790,7 @@ namespace MeshCutting
             if (!job.haveConfirmed)
                 continue;
             const CutTarget* target = FindTarget(job.key.target);
-            if (target == nullptr || target->model == nullptr || !job.source.bone)
+            if (target == nullptr || target->model == nullptr || !job.source)
             {
                 job.skinError = "no source";
                 continue;
@@ -812,7 +800,7 @@ namespace MeshCutting
             bool matricesOk = true;
             bool ok = true;
             const int64_t start = SystemTime::GetCurrentTick();
-            PatchPiece* pieces[2] = { &job.positive, &job.negative };
+            ProceduralMesh* pieces[2] = { job.positive.get(), job.negative.get() };
             for (int side = 0; side < 2 && matricesOk && ok; ++side)
             {
                 {
@@ -822,8 +810,8 @@ namespace MeshCutting
                 if (!matricesOk)
                     break;
                 PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
-                ok = pieces[side]->skin && pieces[side]->skin->Apply(*pieces[side], job.skinMatrices, nullptr, &error);
-                m_Frame.jobVertices += ok ? uint32_t(pieces[side]->nodes.size()) : 0;
+                ok = pieces[side] && pieces[side]->UpdatePose(job.skinMatrices, &error);
+                m_Frame.jobVertices += ok ? uint32_t(pieces[side]->GetGeometry().vertices.size()) : 0;
             }
             if (!matricesOk)
             {
@@ -840,41 +828,27 @@ namespace MeshCutting
         }
     }
 
-    // 무한 평면으로 자른 뒤(SliceProceduralMesh), 모든 루프 점이 유한 사각형 안에 있어야 받아들인다.
-    // result는 positive, negative, loops, status, detail만 채운다. 실패하면 status와 detail만 채운다.
-    SliceStatus CutController::SliceWithPlane(const CutJob& job, SliceResult& result) const
+    // 유한 사각 평면 절단: 내부 분할 후 전체 절단 루프의 사각형 범위를 승인한다.
+    SliceStatus CutController::SliceWithPlane(const CutJob& job, ProceduralMesh& mesh,
+        ProceduralMesh& other, std::vector<std::vector<uint32_t>>& loops, std::string& error) const
     {
-        result = SliceResult();
         const SlicePlane plane = m_Plane.ToSlicePlane();
-        PatchPiece mesh = job.patch;        // 제자리 절단용 사본 (job.patch는 면적 비교에 남긴다)
         SliceStatus status = SliceStatus::InvalidInput;
-        if (!SliceProceduralMesh(mesh, plane.point, plane.normal, true, &result.negative,
-            SliceCapOption::CreateNewSectionForCap, 1, &status, &result.detail, &result.loops))
-        {
-            result.status = status;
+        if (!SliceProceduralMesh(mesh, plane.point, plane.normal, true, &other,
+            SliceCapOption::CreateNewSectionForCap, 1, &status, &error, &loops))
             return status;
-        }
-        result.positive = std::move(mesh);
-        result.status = status;
-
         const CutTarget* target = FindTarget(job.key.target);
         const float margin = (target != nullptr ? target->radius : m_ModelRadius) * 0.01f;
-        std::string detail;
-        if (!m_Plane.ContainsLoops(result.positive, result.loops, margin, &detail))
-        {
-            result = SliceResult();
-            result.status = SliceStatus::LoopOutsidePlane;
-            result.detail = detail;
+        if (!m_Plane.ContainsLoops(mesh.GetGeometry(), loops, margin, &error))
             return SliceStatus::LoopOutsidePlane;
-        }
         return SliceStatus::Ok;
     }
 
     // 미절단 패치를 지금 자세로 옮긴다. Enter 때만 부른다.
-    bool CutController::SkinPatch(CutJob& job, std::string& error)
+    bool CutController::SkinPatch(CutJob& job, ProceduralMesh& mesh, std::string& error)
     {
         const CutTarget* target = FindTarget(job.key.target);
-        if (target == nullptr || target->model == nullptr || !job.source.bone)
+        if (target == nullptr || target->model == nullptr || !job.source)
         {
             error = "no source";
             return false;
@@ -885,13 +859,13 @@ namespace MeshCutting
                 return false;
         }
         PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
-        if (!job.patch.skin || !job.patch.skin->Apply(job.patch, job.skinMatrices, nullptr, &error))
+        if (!mesh.UpdatePose(job.skinMatrices, &error))
         {
             if (error.empty())
                 error = "patch has no skin";
             return false;
         }
-        m_Frame.jobVertices += uint32_t(job.patch.nodes.size());
+        m_Frame.jobVertices += uint32_t(mesh.GetGeometry().vertices.size());
         return true;
     }
 
@@ -905,7 +879,6 @@ namespace MeshCutting
             if (!job.candidate)
                 continue;
             ConfirmJob(job);
-            job.patch.Clear();
         }
         for (CutTarget& target : m_Targets)
         {
@@ -920,46 +893,42 @@ namespace MeshCutting
         job.cutAttempted = true;
         job.lastCutError.clear();
         job.cutInfo.clear();
-        ExtractJob(job);
+        auto positive = std::make_shared<ProceduralMesh>();
+        auto negative = std::make_shared<ProceduralMesh>();
+        ExtractJob(job, *positive);
         if (job.patchStatus != SliceStatus::Ok)
         {
             job.lastCutStatus = job.patchStatus;
             job.lastCutError = job.patchError;
             return;
         }
-        std::string skinError;
-        if (!SkinPatch(job, skinError))
+        if (!SkinPatch(job, *positive, job.lastCutError))
         {
             job.lastCutStatus = SliceStatus::InvalidInput;
-            job.lastCutError = skinError;
             return;
         }
-
-        SliceResult result;
+        const double originalArea = TotalArea(positive->GetGeometry(), MeshFaceKind::Surface);
+        std::vector<std::vector<uint32_t>> loops;
         {
             PhaseTimer timer(L"Cut job", m_Frame.cut);
             const int64_t start = SystemTime::GetCurrentTick();
-            job.lastCutStatus = SliceWithPlane(job, result);
+            job.lastCutStatus = SliceWithPlane(job, *positive, *negative, loops, job.lastCutError);
             job.cutMs = ElapsedMs(start);
         }
-        job.lastCutError = result.detail;
         if (job.lastCutStatus != SliceStatus::Ok)
             return;
-
         job.confirmedNormal = m_Plane.ToSlicePlane().normal;
-        job.positive = result.positive;
-        job.negative = result.negative;
+        job.positive = std::move(positive);
+        job.negative = std::move(negative);
         job.haveConfirmed = true;
         job.confirmedGeneration = ++m_Generation;
         SetOriginalVisible(job, false);
         SetBreakOf(job);
-
-        const double original = TotalArea(job.patch, PatchFaceKind::Surface);
-        const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
-        const double negative = TotalArea(result.negative, PatchFaceKind::Surface);
+        const double area = TotalArea(job.positive->GetGeometry(), MeshFaceKind::Surface)
+            + TotalArea(job.negative->GetGeometry(), MeshFaceKind::Surface);
         wchar_t info[200];
-        swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", result.loops.size(),
-            result.positive.faces.size(), result.negative.faces.size(), positive + negative - original);
+        swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", loops.size(),
+            job.positive->GetGeometry().faces.size(), job.negative->GetGeometry().faces.size(), area - originalArea);
         job.cutInfo = info;
     }
 

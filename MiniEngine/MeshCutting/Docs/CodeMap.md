@@ -1,94 +1,66 @@
-# 코드 지도: 실행 흐름과 상태의 주인
+상태: 완료 — ProceduralMesh 통합 구현 및 CPU·Debug/Release 빌드 검증 완료 (`d418fcd` 이후 작업 트리, 구현 커밋은 README 참조).
 
-> 목적: 코드를 처음 열었을 때 "누가 무엇을 부르고, 상태는 어디에 있는가"를 빨리 찾기 위한 한 장 요약이다.
-> 줄 번호는 적지 않는다(자주 바뀐다). 함수 이름으로 찾는다. 알고리즘 설명은 `PlaneSlicingDesign.md`, `PlaneFirstCutDesign.md`, `CutDebugDesign.md`.
+# 코드 지도: 하나의 메시 객체를 따라가기
 
-## 1. 계층
+## 1. 먼저 읽을 큰 흐름
 
-```
-ModelViewer.cpp        입력을 읽어 컨트롤러에 전달하고, 프레임 갱신과 그리기를 호출한다
-                       └ 정적 테스트 인스턴스: cube.glb, bunny.glb를 `m_StaticInsts`(deque)에 담아 캐릭터 옆에 놓고 `RegisterInstance`로 등록한다 (`AddStaticInstance`, 크기·간격 상수는 파일 위쪽 `kStaticSizeRatio` 등). Update·RenderScene의 세 sorter에서 캐릭터와 같이 갱신·그린다
-   │
-   ├─ Runtime/CutController      후보 key 목록, Enter 확정 절단(그때 패치 추출), 확정 조각 스키닝을 조율한다 (그리기 없음)
-   │     ├─ BonePatch            Model에서 패치/뼈대를 읽는다 (Model 의존은 여기까지)
-   │     ├─ StaticMeshCopy       스킨 없는 메시 하나를 절단 입력으로 복사하고, 강체 위치 갱신 행렬을 만든다 (U-3a), 스킨 없는 메시 목록(ListStaticMeshes)도 준다 (U-3b에서 CutController에 연결)
-   │     └─ Geometry/*           Model, D3D12를 모르는 순수 계산
-   │
-   └─ Debug/CutDebugView         컨트롤러의 결과를 읽어 ProceduralMesh로 굽고 그린다 (상태를 바꾸지 않는다)
-         └─ Rendering/ProceduralMeshRenderer   GPU 버퍼와 PSO
-```
+원본 모델의 필요한 범위를 ProceduralMesh로 생성한다. 같은 객체를 현재 자세로 옮겨 절단하고,
+성공한 두 ProceduralMesh를 저장한다. 이후 프레임은 각 메시의 자세를 갱신하고 그대로 그린다.
+WeldInput과 PatchPiece라는 별도 작업 메시 타입은 없다.
 
-의존은 위에서 아래로만 간다. `Geometry/`는 `Model`, `Core`를 include하지 않아서 `tests/PlaneSlicerTests.cpp`가 GPU 없이 단독 빌드된다.
-
-## 2. 프레임 흐름
-
-`ModelViewer::Update` → `ModelViewer::RenderScene` → `ModelViewer::RenderUI` 순서다.
-
-| 순서 | 위치 | 하는 일 |
+| 순서 | 호출 위치 / 함수 | 입출력과 역할 |
 | --- | --- | --- |
-| 1 | `ModelViewer::Update` (키 처리) | T, Enter, Ctrl+Z와 마우스 기즈모 입력을 `CutController`에 전달한다. 컨트롤러는 키를 모른다 |
-| 2 | `ModelInstance::Update` | 이번 프레임 포즈 계산 |
-| 3 | `CutController::Update` | 아래 3절 |
-| 4 | `ModelViewer::RenderProceduralMeshes` → `CutDebugView::Draw` | `Sync`로 메시를 갱신하고 그린다 |
-| 5 | `ModelViewer::RenderUI` → `CutDebugView::DrawUI` | 상태 줄 출력 |
-| 종료 | `ModelViewer::Cleanup` → `CutDebugView::Release` | GPU 버퍼 반납 |
+| 등록 | ModelViewer::Startup, AddStaticInstance → CutController::RegisterInstance | 여러 ModelInstance를 등록 |
+| 프레임 | ModelViewer::Update → ModelInstance::Update → CutController::Update | 원본 포즈 계산 후 절단 시스템 갱신 |
+| 선택 | CutController::UpdateCandidates → CutPick::PickJoints / PickStaticMeshes | 실제 메시와 유한 사각 평면의 교차로 작업 key 생성. 뼈 선분은 표시용 |
+| 생성 (Enter) | ConfirmJob → ExtractJob → ExtractBonePatch / CopyProceduralMeshFromStaticMesh | Model + instance → ProceduralMesh + MeshSource |
+| 생성 내부 | ProceduralMesh::Build → BuildMeshGeometry → SetTopology | 원본 입력을 한 번 용접하여 메시의 기하와 렌더 캐시 구성 |
+| 현재 자세 | SkinPatch → BuildJobMatrices → ProceduralMesh::UpdatePose | 스킨 또는 강체 행렬로 현재 위치 갱신 |
+| 절단 | SliceWithPlane → SliceProceduralMesh | ProceduralMesh 하나 → 같은 타입의 양·음쪽 메시 |
+| 범위 승인 | CutPlane::ContainsLoops | 내부 평면 분할 후 루프 전체가 사각형 안인지 검사. 밖이면 확정하지 않음 |
+| 확정 | ConfirmJob → UpdateSkinMask, UpdateBrokenJoints | 원본 숨김·디버그 분리, 성공한 두 메시만 저장 |
+| 후속 프레임 | SkinJobs → BuildPieceMatrices → ProceduralMesh::UpdatePose | 양쪽에 맞는 행렬로 기하·렌더 위치·bounds 함께 갱신 |
+| 표시 | RenderScene → CutDebugView::Draw → ProceduralMeshRenderer::Draw | 뷰는 확정 메시를 그대로 그리며 별도 표면 메시를 만들지 않음 |
 
-## 3. CutController::Update (포즈 갱신 뒤 한 번)
+다음 Enter는 이전 확정을 되돌린 뒤 원본에서 다시 생성한다. 누적 재절단 기능을 추가한 작업은 아니다.
+이미 분리된 joint가 있으면 한 프레임은 복원만 하고, 다음 Update에서 원래 자세로 다시 생성한다.
 
-```
-UpdateTargets: 모델 교체 확인, 편집 중 현재 뼈대 읽기와 최초 원본 캐시 준비
-절단 모드(T)이면 UpdateCandidates
-    RefreshPick: 자세 변경 시 전체 캐시 정점 스키닝, 자세/평면 변경 시 CutPick::PickJoints
-    PickSegments는 뼈 선분 tube 표시용
-    PickStaticMeshes: 스킨 없는 메시마다 CutPick::SphereMayCross(조기 판정) -> CutPick::CountCrossedTriangles (평면/world 행렬이 바뀔 때만). 교차가 있으면 StaticMesh 후보 key
-    ApplyDiff: 후보 key 목록만 갱신한다 (패치 추출 없음). 사라진 후보는 후보 표시만 끄고, 확정 결과가 없으면 작업 삭제
-편집 모드가 아니면 모든 후보 해제 (확정 결과는 유지)
-Enter 요청이 있으면 ConfirmAll (SkinJobs보다 먼저)
-    이전 확정 결과를 모두 지운 뒤 후보마다 ConfirmJob을 수행하고 미절단 패치는 버림
-    ConfirmJob = ExtractJob(ExtractBonePatch → MakeWeldInput → BuildPatchPiece) → SkinPatch(BuildSkinMatrices → Skinning::Apply, 현재 자세) → SliceWithPlane
-    SliceWithPlane = SliceProceduralMesh(무한 평면, 단면 생성, SlicePatch를 감쌈) + CutPlane::ContainsLoops(사각형 검사)
-    성공한 조각만 저장, 실패한 작업은 status/detail로 표시하고 자동 재시도하지 않음
-SkinJobs: 확정 조각만 BuildSkinMatrices → Skinning::Apply로 이번 포즈에 맞춤 (후보 작업은 패치가 없다)
-```
+## 2. 데이터의 주인
 
-자동 시험 절단과 예상 고리 표시는 없다. 후보가 사라져도 확정 조각은 남고, Ctrl+Z나 다음 Enter에서 지운다.
+| 파일 | 클래스 / 자료형 | 보관하는 것 |
+| --- | --- | --- |
+| ProceduralMesh.h | ProceduralMesh | 기하, 스킨 표 연결, 렌더 캐시, bounds, 변경 버전 |
+| ProceduralMesh.h | MeshGeometry | 메시 내부의 실제 기하 저장 레코드. 별도 런타임 메시나 변환 단계가 아님 |
+| ProceduralMesh.h | MeshVertex / MeshVertexOrigin | 위치와 원본 스킨 정점 조합 |
+| ProceduralMesh.h | MeshCorner / MeshFace | 면별 속성과 Corner 세 개의 연결 |
+| ProceduralMesh.h | MeshEdgeTag / MeshCutRecord | 두 Vertex 사이 경계 태그와 단면 기록 |
+| ProceduralMesh.h | MeshRenderVertex / ProceduralMeshData | GPU에 보낼 렌더 형식. 원본 import에서도 임시 입력으로 사용 |
+| ProceduralMesh.h | MeshVertexBinding | import 시 바인드/로컬 위치·meshSlot·joint/weight. 생성 뒤 const Skinning 표로 통합 |
+| Geometry/Skinning.h | Skinning / SkinVertex | 잘린 양쪽이 공유하는 원본 스킨 정점 표 |
+| BonePatch.h | MeshSource / SourceMesh·Vertex·Triangle | 원본 메시·정점·삼각형 추적, 마스크 판정, 분리 순간 기준. 위치·법선·스킨 정점 배열을 복제 보관하지 않음 |
+| Runtime/CutJob.h | CutJob | 후보 key, 원본 출처, 확정 메시 두 개, 분리 스냅샷, 상태·계측. 미절단 메시 필드 없음 |
+| Runtime/CutJob.h | CutTargetSource / CutStaticMesh | 삼각형 선택용 캐시. 작업의 절단 메시와 목적이 다름 |
 
-## 4. 상태의 주인 (`Runtime/CutJob.h`, CutController가 관리)
+두 조각의 Vertex/Corner/Face 배열은 각자 소유하고 const Skinning 표만 공유한다.
+뷰는 확정 메시와 같은 shared_ptr를 보관하여 GPU 등록 해제까지 주소와 수명을 유지한다.
 
-| 구조체 | 담는 것 | 쓰는 곳 | 읽는 곳 |
-| --- | --- | --- | --- |
-| `CutTarget` | 등록 인스턴스, 팔레트, 현재 뼈대, 표시용 선분 교차 | `UpdateTargets`, `UpdateCandidates` | 대상 선택, 선분 표시 |
-| `CutTargetSource` | 전체 메시 원본 캐시, 현재 정점 위치, 마지막 선택 결과 | `BuildSource`, `RefreshPick` | 삼각형 교차와 joint 선택 |
-| `CutJob` | joint별 후보 key, Enter 중에만 있는 미절단 패치, 확정 조각 둘, 마지막 절단 상태와 시간 | `ApplyDiff`, `ConfirmJob`, `SkinJobs`, `DiscardCut` | 슬라이스 입력, 결과 표시, UI |
+## 3. 파일 역할
 
-그 밖에 평면과 편집 여부, Enter 요청, 원본 캐시의 평면 변경 감지 상태는 컨트롤러가 보관한다.
-
-뷰는 `confirmedGeneration` 또는 표시 구역 분리 방식이 바뀌면 메시를 다시 굽고(`CutDebugView::Sync`), 그 밖의 프레임에는 정점 위치를 갱신한다.
-
-## 5. Geometry 파이프라인 (순수 계산)
-
-```
-Geometry/Patch      패치 조각 자료구조(PatchPiece 등)와 검증, 정점 -> 노드/코너 용접 (BuildPatchPiece)
-Geometry/Slice      평면으로 자르기 (SlicePatch, Unreal 모양의 SliceProceduralMesh). 내부에서 SliceCap.cpp의 루프 추출·검증과 cap 생성을 부른다
-Geometry/Skinning   스킨 정점 표(Skinning)와 piece 스키닝(Apply), joint 집합 선택 규칙. piece들이 shared_ptr<const Skinning>으로 공유한다
-Geometry/CutPlane   world 유한 사각 평면, 조작, 루프 사각형 검사, 평면이 지나는 뼈 선분 찾기
-Geometry/CutPick    평면과 교차하는 삼각형을 찾아 삼각형마다 절단 joint 하나를 고른다 (CutPick::PickJoints). 스킨 없는 메시용 CountCrossedTriangles(평면을 로컬로 옮겨 교차 삼각형 수만)와 SphereMayCross(바운딩 구 조기 판정)
-Rendering/RenderBake  piece -> ProceduralMesh 변환(BuildRenderMesh, UpdateRenderPositions)과 디버그 튜브
-```
-
-파일은 기능 단위로 합쳐져 있다 (Patch = PatchGeometry + PatchWeld, Slice/SliceCap = PlaneSlicer + CutLoops + CapBuilder, Skinning = PieceSkinning + JointSet, CutPlane = CutPlane + SegmentPick). RenderBake는 Rendering/으로 옮겼지만 Core에 의존하지 않는다.
-
-`PatchNode`(위치의 주인)와 `PatchCorner`(노드 + UV/법선/색)를 나눈 것은 UV 이음매를 용접하면서도 렌더 정점은 따로 두기 위해서다. 절단선의 노드는 두 조각이 공유한다.
-
-## 6. 진입점 찾기
-
-| 알고 싶은 것 | 시작할 함수 |
+| 파일 묶음 | 하는 일 |
 | --- | --- |
-| 키가 어떤 동작이 되는가 | `ModelViewer::Update`의 `m_Cut.*` 호출 |
-| 절단 모드에서 무엇을 자를지(후보 key)가 어떻게 정해지는가 | `CutController::UpdateCandidates`, `CutPick::PickJoints` |
-| 패치가 언제 어떻게 만들어지는가 (Enter) | `CutController::ConfirmJob`, `ExtractJob`, `SkinPatch` |
-| Enter에서 절단하는 과정 | `CutController::ConfirmAll` → `SliceWithPlane` |
-| 화면에 무엇이 그려지는가 | `CutDebugView::Sync`, `Draw` |
-| 절단 알고리즘 | `SliceProceduralMesh` → `SlicePatch` (`Geometry/Slice.cpp`) |
-| cap이 어느 section·재질로 구워지는가 | `PatchCap::materialSlot`·`inLastSection`, `BuildRenderMesh` |
-| 프레임마다 piece가 움직이는 방식 | `CutController::Update`, `Skinning::Apply` |
+| BonePatch | 스킨 원본의 영향 범위 import, 스킨 행렬, 뼈대 읽기 |
+| StaticMeshCopy | 스킨 없는 원본 메시 import, 메시 world 행렬 |
+| ProceduralMesh | 공통 메시 API와 기하·렌더 캐시 소유. SetTopology / UpdatePose / SetSectionSplit |
+| Geometry/MeshGeometry | 기하 검증·용접·면적·에지 사용 계산. 자료구조 정의는 ProceduralMesh.h |
+| Geometry/Slice, SliceCap | 공개 SliceProceduralMesh와 내부 SliceGeometry, 루프 검사·단면 생성 |
+| Geometry/Skinning | 내부 기하의 위치 계산과 joint 영향 규칙. 외부 프레임 갱신은 ProceduralMesh::UpdatePose |
+| Geometry/CutPlane, CutPlaneGizmo | world 사각 평면과 편집 기즈모. ContainsLoops, PickSegments |
+| Geometry/CutPick | 실제 삼각형 교차와 joint 선택, 스태틱 구 조기 판정 |
+| Runtime/CutController, CutJob | 입력 요청·대상·작업·확정·복원 조율 |
+| Rendering/RenderBake | 내부 렌더 캐시 굽기와 디버그 튜브의 순수 계산 |
+| Rendering/ProceduralMeshRenderer, VS/PS | D3D12 업로드·그리기·fence 수명 관리와 색 표시 |
+| Debug/CutDebugView, SceneViewCamera | 확정 메시 표시, 경계·평면·기즈모·상태 UI, 카메라 |
+
+Geometry 계산은 Model/Core/D3D12에 의존하지 않는다. ReadBonePatch와 ReadStaticMesh는 선택 캐시용 raw 읽기다.
+공개 절단 파이프라인의 중간 메시가 아니다. 새 교점 생성과 GPU용 배열 갱신, 실패 원자성을 위한 임시 배열은 필요하다.
+원본 숨김과 분리는 구현됐지만 실제 충돌·중력·래그돌 물리는 없다. 조각 재질은 아직 디버그 색 표시 중심이다.

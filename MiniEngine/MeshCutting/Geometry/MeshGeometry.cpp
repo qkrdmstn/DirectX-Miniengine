@@ -1,6 +1,7 @@
 ﻿// 이 파일은 패치 조각 자료구조의 검증과 보조 함수(PatchGeometry)와, 렌더 정점을 노드로 합치는 용접(PatchWeld)을 구현한다.
 #include "../pch.h"
-#include "Patch.h"
+#include "MeshGeometry.h"
+#include "../ProceduralMesh.h"
 #include "Skinning.h"
 
 #include <algorithm>
@@ -11,14 +12,14 @@ namespace MeshCutting
 {
     namespace
     {
-        // Checks the barycentric origin of a surface node. why receives the reason.
-        bool ValidateOrigin(const PatchOrigin& origin, size_t skinVertexCount, std::string& why)
+        // Checks the barycentric origin of a surface vertex. why receives the reason.
+        bool ValidateOrigin(const MeshVertexOrigin& origin, size_t skinVertexCount, std::string& why)
         {
             double sum = 0.0;
             bool ended = false;
             for (int i = 0; i < 3; ++i)
             {
-                if (origin.skinVertex[i] == kNoNode)
+                if (origin.skinVertex[i] == kInvalidIndex)
                 {
                     if (origin.bary[i] != 0.0f)
                     {
@@ -50,7 +51,7 @@ namespace MeshCutting
                 }
                 sum += origin.bary[i];
             }
-            if (origin.skinVertex[0] == kNoNode)
+            if (origin.skinVertex[0] == kInvalidIndex)
             {
                 why = "no skin vertex";
                 return false;
@@ -85,15 +86,15 @@ namespace MeshCutting
         return "Unknown";
     }
 
-    const char* EdgeKindName(PatchEdgeKind kind)
+    const char* EdgeTagName(MeshEdgeTag kind)
     {
         switch (kind)
         {
-        case PatchEdgeKind::Interior: return "Interior";
-        case PatchEdgeKind::Replacement: return "Replacement";
-        case PatchEdgeKind::UnweldedSeam: return "UnweldedSeam";
-        case PatchEdgeKind::Cut: return "Cut";
-        case PatchEdgeKind::CapSeam: return "CapSeam";
+        case MeshEdgeTag::Interior: return "Interior";
+        case MeshEdgeTag::Replacement: return "Replacement";
+        case MeshEdgeTag::UnweldedSeam: return "UnweldedSeam";
+        case MeshEdgeTag::Cut: return "Cut";
+        case MeshEdgeTag::CapSeam: return "CapSeam";
         }
         return "Unknown";
     }
@@ -141,22 +142,22 @@ namespace MeshCutting
         return true;
     }
 
-    void CollectEdgeUsage(const PatchPiece& piece, PatchEdgeUsageMap& usage)
+    void CollectEdgeUsage(const MeshGeometry& piece, MeshEdgeUsageMap& usage)
     {
         usage.clear();
         usage.reserve(piece.faces.size() * 2);
-        for (const PatchFace& face : piece.faces)
+        for (const MeshFace& face : piece.faces)
         {
-            uint32_t node[3];
+            uint32_t vertex[3];
             for (int k = 0; k < 3; ++k)
-                node[k] = piece.corners[face.corner[k]].node;
+                vertex[k] = piece.corners[face.corner[k]].vertex;
             for (int k = 0; k < 3; ++k)
             {
-                const uint32_t from = node[k];
-                const uint32_t to = node[(k + 1) % 3];
+                const uint32_t from = vertex[k];
+                const uint32_t to = vertex[(k + 1) % 3];
                 if (from == to)
                     continue;
-                PatchEdgeUsage& use = usage[MakeEdgeKey(from, to)];
+                MeshEdgeUsage& use = usage[MakeEdgeKey(from, to)];
                 ++use.count;
                 if (from < to)
                     ++use.forward;
@@ -166,15 +167,15 @@ namespace MeshCutting
         }
     }
 
-    double ComputePieceRadius(const PatchPiece& piece)
+    double ComputePieceRadius(const MeshGeometry& piece)
     {
-        if (piece.nodes.empty())
+        if (piece.vertices.empty())
             return 0.0;
-        double lo[3] = { piece.nodes[0].position.x, piece.nodes[0].position.y, piece.nodes[0].position.z };
+        double lo[3] = { piece.vertices[0].position.x, piece.vertices[0].position.y, piece.vertices[0].position.z };
         double hi[3] = { lo[0], lo[1], lo[2] };
-        for (const PatchNode& node : piece.nodes)
+        for (const MeshVertex& vertex : piece.vertices)
         {
-            const double p[3] = { node.position.x, node.position.y, node.position.z };
+            const double p[3] = { vertex.position.x, vertex.position.y, vertex.position.z };
             for (int k = 0; k < 3; ++k)
             {
                 lo[k] = std::min(lo[k], p[k]);
@@ -183,21 +184,21 @@ namespace MeshCutting
         }
         const double center[3] = { (lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5 };
         double radiusSquared = 0.0;
-        for (const PatchNode& node : piece.nodes)
+        for (const MeshVertex& vertex : piece.vertices)
         {
-            const double dx = node.position.x - center[0];
-            const double dy = node.position.y - center[1];
-            const double dz = node.position.z - center[2];
+            const double dx = vertex.position.x - center[0];
+            const double dy = vertex.position.y - center[1];
+            const double dz = vertex.position.z - center[2];
             radiusSquared = std::max(radiusSquared, dx * dx + dy * dy + dz * dz);
         }
         return std::sqrt(radiusSquared);
     }
 
-    double FaceArea(const PatchPiece& piece, const PatchFace& face)
+    double FaceArea(const MeshGeometry& piece, const MeshFace& face)
     {
-        const DirectX::XMFLOAT3& a = piece.nodes[piece.corners[face.corner[0]].node].position;
-        const DirectX::XMFLOAT3& b = piece.nodes[piece.corners[face.corner[1]].node].position;
-        const DirectX::XMFLOAT3& c = piece.nodes[piece.corners[face.corner[2]].node].position;
+        const DirectX::XMFLOAT3& a = piece.vertices[piece.corners[face.corner[0]].vertex].position;
+        const DirectX::XMFLOAT3& b = piece.vertices[piece.corners[face.corner[1]].vertex].position;
+        const DirectX::XMFLOAT3& c = piece.vertices[piece.corners[face.corner[2]].vertex].position;
         const double e1[3] = { double(b.x) - a.x, double(b.y) - a.y, double(b.z) - a.z };
         const double e2[3] = { double(c.x) - a.x, double(c.y) - a.y, double(c.z) - a.z };
         const double cx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -206,16 +207,16 @@ namespace MeshCutting
         return 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
     }
 
-    double TotalArea(const PatchPiece& piece, PatchFaceKind kind)
+    double TotalArea(const MeshGeometry& piece, MeshFaceKind kind)
     {
         double total = 0.0;
-        for (const PatchFace& face : piece.faces)
+        for (const MeshFace& face : piece.faces)
             if (face.kind == kind)
                 total += FaceArea(piece, face);
         return total;
     }
 
-    SliceStatus ValidatePatchPiece(const PatchPiece& piece, float epsilonScale, std::string* detail)
+    SliceStatus ValidateMeshGeometry(const MeshGeometry& piece, float epsilonScale, std::string* detail)
     {
         if (!std::isfinite(epsilonScale) || epsilonScale < 0.0f)
             return Fail(detail, SliceStatus::InvalidInput, "epsilon scale is not a finite non-negative value");
@@ -223,25 +224,25 @@ namespace MeshCutting
             return Fail(detail, SliceStatus::InvalidInput, "piece has no faces");
 
         const size_t skinVertexCount = piece.skin ? piece.skin->GetVertices().size() : 0;     // skin이 없으면 빈 표로 본다
-        for (size_t i = 0; i < piece.nodes.size(); ++i)
+        for (size_t i = 0; i < piece.vertices.size(); ++i)
         {
-            const PatchNode& node = piece.nodes[i];
-            if (!Finite(node.position))
-                return Fail(detail, SliceStatus::InvalidInput, "node " + Num(i) + " position is not finite");
-            if (node.kind == PatchNodeKind::Surface)
+            const MeshVertex& vertex = piece.vertices[i];
+            if (!Finite(vertex.position))
+                return Fail(detail, SliceStatus::InvalidInput, "vertex " + Num(i) + " position is not finite");
+            if (vertex.kind == MeshVertexKind::Surface)
             {
                 std::string why;
-                if (!ValidateOrigin(node.origin, skinVertexCount, why))
-                    return Fail(detail, SliceStatus::InvalidOrigin, "node " + Num(i) + " origin: " + why);
+                if (!ValidateOrigin(vertex.origin, skinVertexCount, why))
+                    return Fail(detail, SliceStatus::InvalidOrigin, "vertex " + Num(i) + " origin: " + why);
             }
         }
 
         for (size_t i = 0; i < piece.corners.size(); ++i)
         {
-            const PatchCorner& corner = piece.corners[i];
-            if (corner.node >= piece.nodes.size())
-                return Fail(detail, SliceStatus::InvalidInput, "corner " + Num(i) + " refers to node " + Num(corner.node)
-                    + " beyond " + Num(piece.nodes.size()) + " nodes");
+            const MeshCorner& corner = piece.corners[i];
+            if (corner.vertex >= piece.vertices.size())
+                return Fail(detail, SliceStatus::InvalidInput, "corner " + Num(i) + " refers to vertex " + Num(corner.vertex)
+                    + " beyond " + Num(piece.vertices.size()) + " vertices");
             if (!Finite(corner.normal) || !Finite(corner.uv) || !Finite(corner.color))
                 return Fail(detail, SliceStatus::InvalidInput, "corner " + Num(i) + " has a non-finite attribute");
         }
@@ -249,25 +250,25 @@ namespace MeshCutting
         const double epsilon = ComputePieceRadius(piece) * double(epsilonScale);
         for (size_t f = 0; f < piece.faces.size(); ++f)
         {
-            const PatchFace& face = piece.faces[f];
+            const MeshFace& face = piece.faces[f];
             for (int k = 0; k < 3; ++k)
                 if (face.corner[k] >= piece.corners.size())
                     return Fail(detail, SliceStatus::InvalidInput, "face " + Num(f) + " refers to corner "
                         + Num(face.corner[k]) + " beyond " + Num(piece.corners.size()) + " corners");
-            if (face.kind != PatchFaceKind::Surface && face.kind != PatchFaceKind::Cap)
+            if (face.kind != MeshFaceKind::Surface && face.kind != MeshFaceKind::Cap)
                 return Fail(detail, SliceStatus::InvalidInput, "face " + Num(f) + " has an unknown kind");
 
-            const uint32_t n0 = piece.corners[face.corner[0]].node;
-            const uint32_t n1 = piece.corners[face.corner[1]].node;
-            const uint32_t n2 = piece.corners[face.corner[2]].node;
+            const uint32_t n0 = piece.corners[face.corner[0]].vertex;
+            const uint32_t n1 = piece.corners[face.corner[1]].vertex;
+            const uint32_t n2 = piece.corners[face.corner[2]].vertex;
             if (n0 == n1 || n1 == n2 || n0 == n2)
-                return Fail(detail, SliceStatus::DegenerateInput, "face " + Num(f) + " repeats a node");
+                return Fail(detail, SliceStatus::DegenerateInput, "face " + Num(f) + " repeats a vertex");
             if (FaceArea(piece, face) <= epsilon * epsilon)
                 return Fail(detail, SliceStatus::DegenerateInput, "face " + Num(f) + " has area "
                     + std::to_string(FaceArea(piece, face)) + " <= epsilon^2");
         }
 
-        PatchEdgeUsageMap usage;
+        MeshEdgeUsageMap usage;
         CollectEdgeUsage(piece, usage);
         // Report the lowest edge key so the message does not depend on hash order.
         uint64_t worst = 0;
@@ -275,7 +276,7 @@ namespace MeshCutting
         std::string worstMessage;
         for (const auto& entry : usage)
         {
-            const PatchEdgeUsage& use = entry.second;
+            const MeshEdgeUsage& use = entry.second;
             std::string message;
             if (use.count > 2)
                 message = "used by " + Num(use.count) + " faces";
@@ -300,12 +301,12 @@ namespace MeshCutting
         {
             if (entry.second.count != 1)
                 continue;
-            const auto tag = piece.boundary.find(entry.first);
+            const auto tag = piece.edgeTags.find(entry.first);
             std::string message;
-            if (tag == piece.boundary.end())
+            if (tag == piece.edgeTags.end())
                 message = "boundary edge has no kind";
-            else if (tag->second == PatchEdgeKind::Interior || tag->second == PatchEdgeKind::CapSeam)
-                message = std::string("boundary edge is tagged ") + EdgeKindName(tag->second);
+            else if (tag->second == MeshEdgeTag::Interior || tag->second == MeshEdgeTag::CapSeam)
+                message = std::string("boundary edge is tagged ") + EdgeTagName(tag->second);
             else
                 continue;
             if (!found || entry.first < worst)
@@ -398,7 +399,7 @@ namespace MeshCutting
         };
 
         // Positive weights only, equal joints merged, ascending joint order.
-        void CanonicalSkin(const WeldInputVertex& vertex, SkinVertex& skin)
+        void CanonicalSkin(const MeshVertexBinding& vertex, SkinVertex& skin)
         {
             skin.jointCount = 0;
             for (int slot = 0; slot < 4; ++slot)
@@ -427,29 +428,32 @@ namespace MeshCutting
         }
     }
 
-    SliceStatus BuildPatchPiece(const WeldInput& in, float epsilonScale, PatchPiece& out,
+    SliceStatus BuildMeshGeometry(const ProceduralMeshData& in, float epsilonScale, MeshGeometry& out,
         WeldStats& stats, std::string* detail)
     {
-        out = PatchPiece();
+        out = MeshGeometry();
         stats = WeldStats();
         if (detail)
             detail->clear();
 
+        if (in.bindings.size() != in.vertices.size())
+            return Fail(detail, SliceStatus::InvalidInput, "Vertex bindings must match the vertex count for cutting");
         if (in.indices.empty() || in.indices.size() % 3 != 0)
             return Fail(detail, SliceStatus::InvalidInput, "index count must be a positive multiple of three");
 
         size_t rigidVertices = 0, firstRigid = 0;      // 가중치가 모두 0인 정점 (스킨 없는 메시의 강체 정점)
         for (size_t i = 0; i < in.vertices.size(); ++i)
         {
-            const WeldInputVertex& v = in.vertices[i];
-            bool finite = Finite(v.bindPosition) && Finite(v.position) && Finite(v.normal)
+            const MeshRenderVertex& v = in.vertices[i];
+            const MeshVertexBinding& binding = in.bindings[i];
+            bool finite = Finite(binding.bindPosition) && Finite(v.position) && Finite(v.normal)
                 && std::isfinite(v.uv.x) && std::isfinite(v.uv.y) && std::isfinite(v.color.x)
                 && std::isfinite(v.color.y) && std::isfinite(v.color.z) && std::isfinite(v.color.w);
             float weightSum = 0.0f;
             for (int k = 0; k < 4; ++k)
             {
-                finite = finite && std::isfinite(v.weights[k]) && v.weights[k] >= 0.0f;
-                weightSum += v.weights[k];
+                finite = finite && std::isfinite(binding.weights[k]) && binding.weights[k] >= 0.0f;
+                weightSum += binding.weights[k];
             }
             if (!finite)
                 return Fail(detail, SliceStatus::InvalidInput, "vertex " + Num(i) + " has a non-finite value or a negative weight");
@@ -463,25 +467,26 @@ namespace MeshCutting
             if (in.indices[i] >= in.vertices.size())
                 return Fail(detail, SliceStatus::InvalidInput, "index " + Num(i) + " refers beyond the vertex array");
 
-        PatchPiece piece;
+        MeshGeometry piece;
         std::vector<SkinVertex> skinVertices;
         std::unordered_map<WeldKey, uint32_t, WeldKeyHash> nodeOf;
-        std::unordered_map<PositionKey, uint32_t, PositionKeyHash> positionNodeCount;
-        std::vector<uint32_t> nodeOfVertex(in.vertices.size());
+        std::unordered_map<PositionKey, uint32_t, PositionKeyHash> positionVertexCount;
+        std::vector<uint32_t> vertexOfCorner(in.vertices.size());
 
         for (size_t i = 0; i < in.vertices.size(); ++i)
         {
-            const WeldInputVertex& v = in.vertices[i];
+            const MeshRenderVertex& v = in.vertices[i];
+            const MeshVertexBinding& binding = in.bindings[i];
             SkinVertex skin;
-            skin.meshSlot = v.meshSlot;
-            skin.bindPosition = v.bindPosition;
-            CanonicalSkin(v, skin);
+            skin.meshSlot = binding.meshSlot;
+            skin.bindPosition = binding.bindPosition;
+            CanonicalSkin(binding, skin);
 
             WeldKey key = {};
-            key.position.slot = v.meshSlot;
-            key.position.bits[0] = Bits(v.bindPosition.x);
-            key.position.bits[1] = Bits(v.bindPosition.y);
-            key.position.bits[2] = Bits(v.bindPosition.z);
+            key.position.slot = binding.meshSlot;
+            key.position.bits[0] = Bits(binding.bindPosition.x);
+            key.position.bits[1] = Bits(binding.bindPosition.y);
+            key.position.bits[2] = Bits(binding.bindPosition.z);
             key.jointCount = skin.jointCount;
             for (uint32_t k = 0; k < skin.jointCount; ++k)
             {
@@ -492,30 +497,30 @@ namespace MeshCutting
             const auto found = nodeOf.find(key);
             if (found != nodeOf.end())
             {
-                nodeOfVertex[i] = found->second;
+                vertexOfCorner[i] = found->second;
                 continue;
             }
 
-            const uint32_t node = uint32_t(piece.nodes.size());
-            nodeOf.emplace(key, node);
-            ++positionNodeCount[key.position];
-            nodeOfVertex[i] = node;
+            const uint32_t vertex = uint32_t(piece.vertices.size());
+            nodeOf.emplace(key, vertex);
+            ++positionVertexCount[key.position];
+            vertexOfCorner[i] = vertex;
 
-            PatchNode geom;
-            geom.kind = PatchNodeKind::Surface;
-            geom.origin.skinVertex[0] = node;
+            MeshVertex geom;
+            geom.kind = MeshVertexKind::Surface;
+            geom.origin.skinVertex[0] = vertex;
             geom.origin.bary[0] = 1.0f;
             geom.position = v.position;     // first render vertex wins; later ones copy it
-            piece.nodes.push_back(geom);
+            piece.vertices.push_back(geom);
             skinVertices.push_back(skin);
         }
         piece.skin = std::make_shared<const Skinning>(std::move(skinVertices));
 
         for (size_t i = 0; i < in.vertices.size(); ++i)
         {
-            const WeldInputVertex& v = in.vertices[i];
-            PatchCorner corner;
-            corner.node = nodeOfVertex[i];
+            const MeshRenderVertex& v = in.vertices[i];
+            MeshCorner corner;
+            corner.vertex = vertexOfCorner[i];
             corner.normal = v.normal;
             corner.uv = v.uv;
             corner.color = v.color;
@@ -523,25 +528,25 @@ namespace MeshCutting
         }
         for (size_t i = 0; i < in.indices.size(); i += 3)
         {
-            PatchFace face;
+            MeshFace face;
             for (int k = 0; k < 3; ++k)
                 face.corner[k] = in.indices[i + k];
-            face.kind = PatchFaceKind::Surface;
+            face.kind = MeshFaceKind::Surface;
             face.sourceTriangle = uint32_t(i / 3);
             face.cutId = 0;
             piece.faces.push_back(face);
         }
 
         stats.corners = uint32_t(in.vertices.size());
-        stats.nodes = uint32_t(piece.nodes.size());
-        stats.positionNodes = uint32_t(positionNodeCount.size());
-        for (const auto& entry : positionNodeCount)
+        stats.vertices = uint32_t(piece.vertices.size());
+        stats.positionVertices = uint32_t(positionVertexCount.size());
+        for (const auto& entry : positionVertexCount)
             if (entry.second > 1)
                 ++stats.skinSplitPositions;
         stats.faces = uint32_t(piece.faces.size());
 
         // Boundary edges and their kinds. Indices are valid by construction here.
-        PatchEdgeUsageMap usage;
+        MeshEdgeUsageMap usage;
         CollectEdgeUsage(piece, usage);
         std::vector<uint64_t> boundaryKeys;
         for (const auto& entry : usage)
@@ -556,30 +561,30 @@ namespace MeshCutting
         // A boundary edge is an unwelded seam when another boundary edge covers the same bind
         // positions of the same slot, or the same posed positions (separate slots).
         std::unordered_map<PositionKey, uint32_t, PositionKeyHash> bindId, worldId;
-        std::vector<uint32_t> nodeBindId(piece.nodes.size()), nodeWorldId(piece.nodes.size());
-        for (size_t n = 0; n < piece.nodes.size(); ++n)
+        std::vector<uint32_t> vertexBindId(piece.vertices.size()), vertexWorldId(piece.vertices.size());
+        for (size_t n = 0; n < piece.vertices.size(); ++n)
         {
             const SkinVertex& skin = piece.skin->GetVertices()[n];
             PositionKey bind = { skin.meshSlot, { Bits(skin.bindPosition.x), Bits(skin.bindPosition.y), Bits(skin.bindPosition.z) } };
-            PositionKey world = { 0xFFFFFFFFu, { Bits(piece.nodes[n].position.x), Bits(piece.nodes[n].position.y), Bits(piece.nodes[n].position.z) } };
-            nodeBindId[n] = bindId.emplace(bind, uint32_t(bindId.size())).first->second;
-            nodeWorldId[n] = worldId.emplace(world, uint32_t(worldId.size())).first->second;
+            PositionKey world = { 0xFFFFFFFFu, { Bits(piece.vertices[n].position.x), Bits(piece.vertices[n].position.y), Bits(piece.vertices[n].position.z) } };
+            vertexBindId[n] = bindId.emplace(bind, uint32_t(bindId.size())).first->second;
+            vertexWorldId[n] = worldId.emplace(world, uint32_t(worldId.size())).first->second;
         }
         const auto pairKey = [](uint32_t a, uint32_t b) { return MakeEdgeKey(a, b); };
         std::unordered_map<uint64_t, uint32_t> bindPairCount, worldPairCount;
         for (uint64_t key : boundaryKeys)
         {
             const uint32_t a = EdgeKeyLow(key), b = EdgeKeyHigh(key);
-            ++bindPairCount[pairKey(nodeBindId[a], nodeBindId[b])];
-            ++worldPairCount[pairKey(nodeWorldId[a], nodeWorldId[b])];
+            ++bindPairCount[pairKey(vertexBindId[a], vertexBindId[b])];
+            ++worldPairCount[pairKey(vertexWorldId[a], vertexWorldId[b])];
         }
-        std::unordered_map<uint64_t, PatchEdgeKind> boundary;
+        std::unordered_map<uint64_t, MeshEdgeTag> boundary;
         for (uint64_t key : boundaryKeys)
         {
             const uint32_t a = EdgeKeyLow(key), b = EdgeKeyHigh(key);
-            const bool seam = bindPairCount[pairKey(nodeBindId[a], nodeBindId[b])] > 1
-                || worldPairCount[pairKey(nodeWorldId[a], nodeWorldId[b])] > 1;
-            boundary[key] = seam ? PatchEdgeKind::UnweldedSeam : PatchEdgeKind::Replacement;
+            const bool seam = bindPairCount[pairKey(vertexBindId[a], vertexBindId[b])] > 1
+                || worldPairCount[pairKey(vertexWorldId[a], vertexWorldId[b])] > 1;
+            boundary[key] = seam ? MeshEdgeTag::UnweldedSeam : MeshEdgeTag::Replacement;
             ++stats.boundaryEdges;
             if (seam)
                 ++stats.unweldedSeamEdges;
@@ -587,9 +592,9 @@ namespace MeshCutting
                 ++stats.replacementEdges;
         }
 
-        piece.boundary = std::move(boundary);
+        piece.edgeTags = std::move(boundary);
         std::string why;
-        const SliceStatus status = ValidatePatchPiece(piece, epsilonScale, &why);
+        const SliceStatus status = ValidateMeshGeometry(piece, epsilonScale, &why);
         if (status != SliceStatus::Ok)
             return Fail(detail, status, why);
 

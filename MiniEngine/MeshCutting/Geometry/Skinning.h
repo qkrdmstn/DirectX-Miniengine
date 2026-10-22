@@ -2,7 +2,7 @@
 
 // 스킨 정점 표와 스키닝 계산(바인드 포즈 -> 현재 포즈), joint 집합 판정. Model, Core에 의존하지 않는다 (설계: Docs/ClassLayoutDesign.md 1.2절).
 
-#include "Patch.h"
+#include "MeshGeometry.h"
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -37,7 +37,7 @@ namespace MeshCutting
 
         // slotMatrices[meshSlot][joint]로 piece의 모든 정점을 현재 포즈로 옮긴다. 강체 정점은 slotMatrices[meshSlot][0](메시 world)을 쓴다.
         // 실패하면 piece를 바꾸지 않는다.
-        bool Apply(PatchPiece& piece, const std::vector<std::vector<DirectX::XMFLOAT4X4>>& slotMatrices,
+        bool Apply(MeshGeometry& piece, const std::vector<std::vector<DirectX::XMFLOAT4X4>>& slotMatrices,
             SkinStats* stats = nullptr, std::string* error = nullptr) const;
 
         // 바인드 포즈 정점 하나를 joint 가중치의 선형 합으로 현재 월드 위치로 옮긴다.

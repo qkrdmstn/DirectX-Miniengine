@@ -3,7 +3,7 @@
 // 절단 평면: 어떤 joint에도 묶이지 않는 world 공간의 유한 사각형과 마우스 기즈모. Model, Core에 의존하지 않는다.
 // 설계: Docs/PlaneFirstCutDesign.md 2절, Docs/SceneViewControlsDesign.md 3절, Docs/ClassLayoutDesign.md 1.3절.
 
-#include "Patch.h"
+#include "MeshGeometry.h"
 #include "../ProceduralMesh.h"
 #include <cfloat>
 #include <string>
@@ -15,14 +15,14 @@ namespace MeshCutting
     struct SkeletonPose
     {
         std::vector<DirectX::XMFLOAT3> jointPositions;
-        std::vector<uint32_t> parents;      // 팔레트 로컬 부모 joint, 없으면 kNoNode
+        std::vector<uint32_t> parents;      // 팔레트 로컬 부모 joint, 없으면 kInvalidIndex
     };
 
     // 평면이 지나는 부모 -> 자식 뼈 선분 하나
     struct SegmentHit
     {
-        uint32_t parentJoint = kNoNode;     // 자를 joint (선분의 부모 쪽 끝)
-        uint32_t childJoint = kNoNode;
+        uint32_t parentJoint = kInvalidIndex;     // 자를 joint (선분의 부모 쪽 끝)
+        uint32_t childJoint = kInvalidIndex;
         float t = 0.0f;                     // 부모 0 -> 자식 1
         DirectX::XMFLOAT3 point = { 0.0f, 0.0f, 0.0f };     // 선분과 평면이 만나는 점
     };
@@ -131,7 +131,7 @@ namespace MeshCutting
         Frame GetFrame() const;
         SlicePlane ToSlicePlane() const;                            // 슬라이서에는 무한 평면으로 넘긴다
         bool Contains(const DirectX::XMFLOAT3& p, float margin) const;      // p를 평면에 내린 점이 사각형 안인가
-        bool ContainsLoops(const PatchPiece& positive, const std::vector<std::vector<uint32_t>>& loops, float margin,
+        bool ContainsLoops(const MeshGeometry& positive, const std::vector<std::vector<uint32_t>>& loops, float margin,
             std::string* error = nullptr) const;
 
         void SetExtentLimits(float minExtent, float maxExtent);

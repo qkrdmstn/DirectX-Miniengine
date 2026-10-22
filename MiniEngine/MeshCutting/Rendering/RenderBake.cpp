@@ -9,40 +9,40 @@ namespace MeshCutting
 {
     // ---- Render data: the piece as a ProceduralMesh, and its per-frame position update ----
 
-    void BuildRenderMesh(const PatchPiece& piece, ProceduralMeshData& out, const RenderBakeOptions& options)
+    void BuildRenderMesh(const MeshGeometry& piece, ProceduralMeshData& out, const RenderBakeOptions& options)
     {
         out = ProceduralMeshData();
         if (piece.faces.empty())
             return;
         out.vertices.reserve(piece.corners.size());
-        for (const PatchCorner& corner : piece.corners)
+        for (const MeshCorner& corner : piece.corners)
         {
-            ProceduralVertex vertex;
-            vertex.position = piece.nodes[corner.node].position;
+            MeshRenderVertex vertex;
+            vertex.position = piece.vertices[corner.vertex].position;
             vertex.normal = corner.normal;
             vertex.uv = corner.uv;
             vertex.color = corner.color;
             out.vertices.push_back(vertex);
         }
-        // cap 면의 재질 규칙은 같은 cutId의 PatchCap에 있다 (기록이 없으면 새 section, 슬롯 1)
-        const auto capOf = [&](const PatchFace& face) -> const PatchCap*
+        // cap 면의 재질 규칙은 같은 cutId의 MeshCutRecord에 있다 (기록이 없으면 새 section, 슬롯 1)
+        const auto capOf = [&](const MeshFace& face) -> const MeshCutRecord*
         {
-            for (const PatchCap& cap : piece.caps)
+            for (const MeshCutRecord& cap : piece.caps)
                 if (cap.cutId == face.cutId)
                     return &cap;
             return nullptr;
         };
-        const auto inLastSection = [&](const PatchFace& face)
+        const auto inLastSection = [&](const MeshFace& face)
         {
-            const PatchCap* cap = capOf(face);
+            const MeshCutRecord* cap = capOf(face);
             return cap != nullptr && cap->inLastSection;
         };
-        const auto capSlot = [&](const PatchFace& face)
+        const auto capSlot = [&](const MeshFace& face)
         {
-            const PatchCap* cap = capOf(face);
+            const MeshCutRecord* cap = capOf(face);
             return cap != nullptr ? cap->materialSlot : 1u;
         };
-        const auto add = [&](const PatchFace& face)
+        const auto add = [&](const MeshFace& face)
         {
             out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
         };
@@ -53,12 +53,12 @@ namespace MeshCutting
         for (int pass = 0; pass <= lastSurfacePass; ++pass)
         {
             const uint32_t first = uint32_t(out.indices.size());
-            for (const PatchFace& face : piece.faces)
-                if (face.kind == PatchFaceKind::Surface && (!options.splitByOrigin || (face.cutId != 0) == (pass == 1)))
+            for (const MeshFace& face : piece.faces)
+                if (face.kind == MeshFaceKind::Surface && (!options.splitByOrigin || (face.cutId != 0) == (pass == 1)))
                     add(face);
             if (pass == lastSurfacePass)
-                for (const PatchFace& face : piece.faces)
-                    if (face.kind == PatchFaceKind::Cap && inLastSection(face))
+                for (const MeshFace& face : piece.faces)
+                    if (face.kind == MeshFaceKind::Cap && inLastSection(face))
                         add(face);
             const uint32_t count = uint32_t(out.indices.size()) - first;
             if (count > 0)
@@ -67,9 +67,9 @@ namespace MeshCutting
 
         // Cap sections: one per material slot, in the order the slots first appear in the faces.
         std::vector<uint32_t> slots;
-        for (const PatchFace& face : piece.faces)
+        for (const MeshFace& face : piece.faces)
         {
-            if (face.kind != PatchFaceKind::Cap || inLastSection(face))
+            if (face.kind != MeshFaceKind::Cap || inLastSection(face))
                 continue;
             const uint32_t slot = capSlot(face);
             if (std::find(slots.begin(), slots.end(), slot) == slots.end())
@@ -78,9 +78,9 @@ namespace MeshCutting
         for (uint32_t slot : slots)
         {
             const uint32_t first = uint32_t(out.indices.size());
-            for (const PatchFace& face : piece.faces)
+            for (const MeshFace& face : piece.faces)
             {
-                if (face.kind != PatchFaceKind::Cap || inLastSection(face))
+                if (face.kind != MeshFaceKind::Cap || inLastSection(face))
                     continue;
                 if (capSlot(face) == slot)
                     add(face);
@@ -89,31 +89,31 @@ namespace MeshCutting
         }
     }
 
-    bool UpdateRenderPositions(const PatchPiece& piece, std::vector<ProceduralVertex>& vertices)
+    bool UpdateRenderPositions(const MeshGeometry& piece, std::vector<MeshRenderVertex>& vertices)
     {
         if (vertices.size() != piece.corners.size())
             return false;
         for (size_t i = 0; i < vertices.size(); ++i)
         {
-            if (piece.corners[i].node >= piece.nodes.size())
+            if (piece.corners[i].vertex >= piece.vertices.size())
                 return false;
         }
         for (size_t i = 0; i < vertices.size(); ++i)
-            vertices[i].position = piece.nodes[piece.corners[i].node].position;
+            vertices[i].position = piece.vertices[piece.corners[i].vertex].position;
         return true;
     }
 
     // ---- Debug shapes: thin tubes for boundaries, loops and the cut plane (CutDebugView bakes them) ----
 
-    DirectX::XMFLOAT4 EdgeKindColor(PatchEdgeKind kind)
+    DirectX::XMFLOAT4 EdgeTagColor(MeshEdgeTag kind)
     {
         switch (kind)
         {
-        case PatchEdgeKind::Replacement: return { 1.0f, 0.95f, 0.0f, 1.0f };     // yellow
-        case PatchEdgeKind::UnweldedSeam: return { 0.1f, 1.0f, 0.1f, 1.0f };    // green
-        case PatchEdgeKind::Cut: return { 1.0f, 0.45f, 0.0f, 1.0f };            // orange
-        case PatchEdgeKind::CapSeam: return { 1.0f, 1.0f, 1.0f, 1.0f };         // white
-        case PatchEdgeKind::Interior: break;
+        case MeshEdgeTag::Replacement: return { 1.0f, 0.95f, 0.0f, 1.0f };     // yellow
+        case MeshEdgeTag::UnweldedSeam: return { 0.1f, 1.0f, 0.1f, 1.0f };    // green
+        case MeshEdgeTag::Cut: return { 1.0f, 0.45f, 0.0f, 1.0f };            // orange
+        case MeshEdgeTag::CapSeam: return { 1.0f, 1.0f, 1.0f, 1.0f };         // white
+        case MeshEdgeTag::Interior: break;
         }
         return { 0.5f, 0.5f, 0.5f, 1.0f };
     }
@@ -148,7 +148,7 @@ namespace MeshCutting
             {
                 const double c = std::cos(angle[k]), s = std::sin(angle[k]);
                 const double nx = u[0] * c + v[0] * s, ny = u[1] * c + v[1] * s, nz = u[2] * c + v[2] * s;
-                ProceduralVertex vertex;
+                MeshRenderVertex vertex;
                 vertex.position = { float(p.x + radius * nx), float(p.y + radius * ny), float(p.z + radius * nz) };
                 vertex.normal = { float(nx), float(ny), float(nz) };
                 vertex.uv = { 0.0f, 0.0f };
@@ -164,31 +164,31 @@ namespace MeshCutting
         }
     }
 
-    void BakeBoundaryDebug(const PatchPiece& piece, float radius, ProceduralMeshData& out)
+    void BakeBoundaryDebug(const MeshGeometry& piece, float radius, ProceduralMeshData& out)
     {
         out = ProceduralMeshData();
         std::vector<uint64_t> keys;
-        keys.reserve(piece.boundary.size());
-        for (const auto& entry : piece.boundary)
+        keys.reserve(piece.edgeTags.size());
+        for (const auto& entry : piece.edgeTags)
         {
             // CapSeam edges are interior; they are tagged but not drawn as open boundary.
-            if (entry.second != PatchEdgeKind::CapSeam)
+            if (entry.second != MeshEdgeTag::CapSeam)
                 keys.push_back(entry.first);
         }
         std::sort(keys.begin(), keys.end());
         for (uint64_t key : keys)
         {
             const uint32_t a = EdgeKeyLow(key), b = EdgeKeyHigh(key);
-            if (a >= piece.nodes.size() || b >= piece.nodes.size())
+            if (a >= piece.vertices.size() || b >= piece.vertices.size())
                 continue;
-            AppendDebugSegment(out, piece.nodes[a].position, piece.nodes[b].position, radius,
-                EdgeKindColor(piece.boundary.at(key)));
+            AppendDebugSegment(out, piece.vertices[a].position, piece.vertices[b].position, radius,
+                EdgeTagColor(piece.edgeTags.at(key)));
         }
         if (!out.indices.empty())
             out.sections.push_back({ 0, uint32_t(out.indices.size()), 0 });
     }
 
-    void BakeLoopDebug(const PatchPiece& piece, const std::vector<std::vector<uint32_t>>& loops, float radius,
+    void BakeLoopDebug(const MeshGeometry& piece, const std::vector<std::vector<uint32_t>>& loops, float radius,
         const DirectX::XMFLOAT4& color, ProceduralMeshData& out)
     {
         out = ProceduralMeshData();
@@ -197,8 +197,8 @@ namespace MeshCutting
             for (size_t i = 0; i < loop.size(); ++i)
             {
                 const uint32_t a = loop[i], b = loop[(i + 1) % loop.size()];
-                if (a < piece.nodes.size() && b < piece.nodes.size())
-                    AppendDebugSegment(out, piece.nodes[a].position, piece.nodes[b].position, radius, color);
+                if (a < piece.vertices.size() && b < piece.vertices.size())
+                    AppendDebugSegment(out, piece.vertices[a].position, piece.vertices[b].position, radius, color);
             }
         }
         if (!out.indices.empty())

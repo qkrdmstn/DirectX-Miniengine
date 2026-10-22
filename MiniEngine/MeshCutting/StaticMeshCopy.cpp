@@ -99,8 +99,8 @@ namespace MeshCutting
         }
     }
 
-    bool CopyProceduralMeshFromStaticMesh(const Model& model, const ModelInstance& instance, uint32_t meshIndex,
-        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
+    bool ReadStaticMesh(const Model& model, const ModelInstance& instance, uint32_t meshIndex,
+        ProceduralMeshData& outMesh, MeshSource& outSource, std::string* error)
     {
         // 입력 검사: 모델, 자세, 스킨 없는 메시, 레이아웃, 버퍼 범위, 인덱스 형식
         const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
@@ -137,9 +137,9 @@ namespace MeshCutting
         const Matrix3 worldIT = InverseTranspose(nodeWorld[srcMesh.meshCBV].Get3x3());
 
         ProceduralMeshData mesh;
-        BonePatchSource source;
-        source.paletteId = kNoNode;         // 팔레트 없음
-        source.jointIndex = kNoNode;
+        MeshSource source;
+        source.paletteId = kInvalidIndex;         // 팔레트 없음
+        source.jointIndex = kInvalidIndex;
         std::unordered_map<uint32_t, uint32_t> remap;     // 원본 정점 -> 복사 정점
 
         for (uint32_t drawIdx = 0; drawIdx < srcMesh.numDraws; ++drawIdx)
@@ -178,21 +178,22 @@ namespace MeshCutting
                     DecodeStatic(vb + size_t(vertex) * layout.stride, layout, localPosition, localNormal, uv);
 
                     // world 위치는 Skinning::Apply의 강체 정점과 같은 계산이라 첫 갱신과 비트 단위로 맞는다
-                    ProceduralVertex out;
+                    MeshRenderVertex out;
                     XMStoreFloat3(&out.position, Skinning::RigidPoint(world, localPosition));
                     const Vector3 worldNormal = Normalize(worldIT * Vector3(localNormal.x, localNormal.y, localNormal.z));
                     out.normal = { float(worldNormal.GetX()), float(worldNormal.GetY()), float(worldNormal.GetZ()) };
                     out.uv = uv;
                     out.color = { 0.8f, 0.8f, 0.8f, 1.0f };     // 회색 (웨이트 색이 없다)
 
-                    BonePatchVertex rigid = {};
+                    SourceVertex rigid = {};
                     rigid.meshSlot = 0;
                     rigid.sourceVertex = vertex;
-                    rigid.position = localPosition;
-                    rigid.normal = localNormal;
 
                     const uint32_t patchIndex = uint32_t(mesh.vertices.size());
                     mesh.vertices.push_back(out);
+                    MeshVertexBinding binding;
+                    binding.bindPosition = localPosition;
+                    mesh.bindings.push_back(binding);
                     source.vertices.push_back(rigid);
                     remap.emplace(vertex, patchIndex);
                     mesh.indices.push_back(patchIndex);
@@ -203,7 +204,7 @@ namespace MeshCutting
         if (mesh.indices.empty())
             return Fail(error, "Mesh has no triangles");
 
-        source.meshes.push_back({ meshIndex, srcMesh.meshCBV, kNoNode });     // 팔레트가 없어 startJoint는 kNoNode
+        source.meshes.push_back({ meshIndex, srcMesh.meshCBV, kInvalidIndex });     // 팔레트가 없어 startJoint는 kInvalidIndex
         mesh.sections.push_back({ 0, uint32_t(mesh.indices.size()), 0 });
         outMesh = std::move(mesh);
         outSource = std::move(source);
@@ -212,7 +213,21 @@ namespace MeshCutting
         return true;
     }
 
-    bool BuildRigidMatrices(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
+    SliceStatus CopyProceduralMeshFromStaticMesh(const Model& model, const ModelInstance& instance, uint32_t meshIndex,
+        ProceduralMesh& outMesh, MeshSource& outSource, WeldStats& stats, std::string* error)
+    {
+        stats = WeldStats();
+        ProceduralMeshData data;
+        MeshSource source;
+        if (!ReadStaticMesh(model, instance, meshIndex, data, source, error))
+            return SliceStatus::InvalidInput;
+        const SliceStatus status = outMesh.Build(data, stats, error);
+        if (status == SliceStatus::Ok)
+            outSource = std::move(source);
+        return status;
+    }
+
+    bool BuildRigidMatrices(const Model& model, const ModelInstance& instance, const MeshSource& source,
         std::vector<std::vector<XMFLOAT4X4>>& slotMatrices, std::string* error)
     {
         const Matrix4* nodeWorld = instance.GetNodeWorldMatrices();
@@ -225,7 +240,7 @@ namespace MeshCutting
         std::vector<std::vector<XMFLOAT4X4>> matrices(source.meshes.size());
         for (size_t slot = 0; slot < source.meshes.size(); ++slot)
         {
-            const BonePatchMesh& mesh = source.meshes[slot];
+            const SourceMesh& mesh = source.meshes[slot];
             if (mesh.worldMatrixIndex >= model.m_NumNodes)
                 return Fail(error, "Mesh world matrix index out of range");
             matrices[slot].resize(1);

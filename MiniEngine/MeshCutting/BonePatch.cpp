@@ -102,6 +102,21 @@ namespace MeshCutting
         }
     }
 
+    SliceStatus ExtractBonePatch(const Model& model, const ModelInstance& instance,
+        uint32_t paletteId, uint32_t jointIndex, float minWeight,
+        ProceduralMesh& outMesh, MeshSource& outSource, WeldStats& stats, std::string* error)
+    {
+        stats = WeldStats();
+        ProceduralMeshData data;
+        MeshSource source;
+        if (!ReadBonePatch(model, instance, paletteId, jointIndex, minWeight, data, source, error))
+            return SliceStatus::InvalidInput;
+        const SliceStatus status = outMesh.Build(data, stats, error);
+        if (status == SliceStatus::Ok)
+            outSource = std::move(source);
+        return status;
+    }
+
     void MakeSlotMatrices(const Matrix4& meshWorld, const Joint* paletteJoints, uint32_t jointCount,
         std::vector<XMFLOAT4X4>& out)
     {
@@ -112,7 +127,7 @@ namespace MeshCutting
             XMStoreFloat4x4(&out[j], XMMATRIX(meshWorld * paletteJoints[j].posXform));
     }
 
-    bool BuildSkinMatrices(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
+    bool BuildSkinMatrices(const Model& model, const ModelInstance& instance, const MeshSource& source,
         std::vector<std::vector<XMFLOAT4X4>>& slotMatrices, std::string* error)
     {
         // 모델, 자세, 팔레트 유효성 검사
@@ -128,7 +143,7 @@ namespace MeshCutting
         slotMatrices.resize(source.meshes.size());
         for (size_t slot = 0; slot < source.meshes.size(); ++slot)
         {
-            const BonePatchMesh& mesh = source.meshes[slot];
+            const SourceMesh& mesh = source.meshes[slot];
             if (mesh.worldMatrixIndex >= model.m_NumNodes || mesh.startJoint != palette.startJoint)
                 return Fail(error, "Patch mesh does not match the skin palette");
             MakeSlotMatrices(nodeWorld[mesh.worldMatrixIndex], skeleton + palette.startJoint, palette.numJoints, slotMatrices[slot]);
@@ -136,7 +151,7 @@ namespace MeshCutting
         return true;
     }
 
-    bool ComputePoseJointWorld(const Model& model, const ModelInstance& instance, const BonePatchSource& source,
+    bool ComputePoseJointWorld(const Model& model, const ModelInstance& instance, const MeshSource& source,
         std::vector<Matrix4>& out, std::string* error)
     {
         // 패치의 팔레트와 기준 메시 검사
@@ -162,11 +177,11 @@ namespace MeshCutting
         return true;
     }
 
-    bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
+    bool ReadBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, uint32_t jointIndex, float minWeight,
-        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
+        ProceduralMeshData& outMesh, MeshSource& outSource, std::string* error)
     {
-        return ExtractBonePatch(model, instance, paletteId, std::vector<uint32_t>{ jointIndex }, minWeight,
+        return ReadBonePatch(model, instance, paletteId, std::vector<uint32_t>{ jointIndex }, minWeight,
             outMesh, outSource, error);
     }
 
@@ -371,7 +386,7 @@ namespace MeshCutting
 
         // 정점 하나를 패치에 추가하고 패치 정점 번호를 반환한다. 이미 복사한 정점이면 기존 번호를 돌려준다.
         uint32_t CopyVertex(MeshCopyState& copy, uint32_t vertex, const std::vector<uint32_t>& joints,
-            ProceduralMeshData& mesh, BonePatchSource& source)
+            ProceduralMeshData& mesh, MeshSource& source)
         {
             const auto found = copy.remap.find(vertex);
             if (found != copy.remap.end())
@@ -395,23 +410,26 @@ namespace MeshCutting
             const Vector3 posedNormal = Normalize(copy.worldIT * Vector3(nrm));
 
             const float influence = Skinning::SetInfluence(v.joints, v.weights, joints);
-            ProceduralVertex out;
+            MeshRenderVertex out;
             out.position = posed;
             out.normal = { float(posedNormal.GetX()), float(posedNormal.GetY()), float(posedNormal.GetZ()) };
             out.uv = v.uv;
             // Blue at no influence to red at full influence, like the H weight view.
             out.color = { 0.15f + 0.85f * influence, 0.25f * (1.0f - influence), 1.0f - influence, 1.0f };
 
-            BonePatchVertex skin;
+            SourceVertex skin;
             skin.meshSlot = copy.meshSlot;
             skin.sourceVertex = vertex;
-            skin.position = v.position;
-            skin.normal = v.normal;
-            std::memcpy(skin.joints, v.joints, sizeof(skin.joints));
-            std::memcpy(skin.weights, v.weights, sizeof(skin.weights));
+            skin.selected = Skinning::InJointSet(v.joints, v.weights, joints, source.minWeight);
 
             const uint32_t patchIndex = uint32_t(mesh.vertices.size());
             mesh.vertices.push_back(out);
+            MeshVertexBinding binding;
+            binding.meshSlot = skin.meshSlot;
+            binding.bindPosition = v.position;
+            std::memcpy(binding.joints, v.joints, sizeof(binding.joints));
+            std::memcpy(binding.weights, v.weights, sizeof(binding.weights));
+            mesh.bindings.push_back(binding);
             source.vertices.push_back(skin);
             copy.remap.emplace(vertex, patchIndex);
             return patchIndex;
@@ -421,9 +439,9 @@ namespace MeshCutting
     // 추출삼각형의 정점 중 하나라도 선택 관절의 가중치가 minWeight를 넘으면 삼각형을 복사한다.
     // 자손 관절에만 영향을 받는 삼각형은 원본에 남긴다. 실제 분리 기능이 이 함수에 있는건 아니다.
     // 인스턴스의 마지막 Update()에서 계산한 행렬로 자세를 적용, 결과 위치는 월드 좌표이므로, 그릴 때 주의해야 한다.
-    bool ExtractBonePatch(const Model& model, const ModelInstance& instance,
+    bool ReadBonePatch(const Model& model, const ModelInstance& instance,
         uint32_t paletteId, const std::vector<uint32_t>& joints, float minWeight,
-        ProceduralMeshData& outMesh, BonePatchSource& outSource, std::string* error)
+        ProceduralMeshData& outMesh, MeshSource& outSource, std::string* error)
     {
         // 입력 모델, 팔레트, 조인트 목록 검사
         if (!ValidateExtractInput(model, instance, paletteId, joints, error))
@@ -436,7 +454,7 @@ namespace MeshCutting
 
         // 출력 형식
         ProceduralMeshData mesh;
-        BonePatchSource source;
+        MeshSource source;
         source.paletteId = paletteId;
         source.jointIndex = joints.front();
         source.joints = joints;
@@ -560,7 +578,7 @@ namespace MeshCutting
         // 각 joint 마다 위치와 부모 joint를 저장합니다.
         SkeletonPose pose;
         pose.jointPositions.resize(palette.numJoints); // 조인트 수만큼 할당
-        pose.parents.assign(palette.numJoints, kNoNode); // 조인트 수만큼 부모 칸 할당
+        pose.parents.assign(palette.numJoints, kInvalidIndex); // 조인트 수만큼 부모 칸 할당
         for (uint32_t j = 0; j < palette.numJoints; ++j)
         {
             // 조인트 번호
@@ -590,37 +608,4 @@ namespace MeshCutting
         return true;
     }
 
-    bool MakeWeldInput(const ProceduralMeshData& mesh, const BonePatchSource& source,
-        WeldInput& out, std::string* error)
-    {
-        if (mesh.vertices.size() != source.vertices.size())
-            return Fail(error, "Mesh and source disagree on the vertex count");
-        if (mesh.indices.size() != source.triangles.size() * 3)
-            return Fail(error, "Mesh and source disagree on the triangle count");
-
-        WeldInput in;
-        in.vertices.resize(mesh.vertices.size());
-        for (size_t i = 0; i < mesh.vertices.size(); ++i)
-        {
-            const ProceduralVertex& rendered = mesh.vertices[i];
-            const BonePatchVertex& skin = source.vertices[i];
-            WeldInputVertex& v = in.vertices[i];
-            v.meshSlot = skin.meshSlot;
-            v.bindPosition = skin.position;
-            v.position = rendered.position;
-            v.normal = rendered.normal;
-            v.uv = rendered.uv;
-            v.color = rendered.color;
-            for (int k = 0; k < 4; ++k)
-            {
-                v.joints[k] = skin.joints[k];
-                v.weights[k] = skin.weights[k];
-            }
-        }
-        in.indices = mesh.indices;
-        out = std::move(in);
-        if (error)
-            error->clear();
-        return true;
-    }
 }

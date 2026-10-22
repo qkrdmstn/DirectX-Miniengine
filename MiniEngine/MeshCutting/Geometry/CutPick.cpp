@@ -19,7 +19,7 @@ namespace MeshCutting
             {
                 if (at >= parents.size() || depth > int(parents.size()))
                     return -1;
-                if (parents[at] == kNoNode)
+                if (parents[at] == kInvalidIndex)
                     return depth;
                 at = parents[at];
                 ++depth;
@@ -104,14 +104,14 @@ namespace MeshCutting
 
         struct Candidate
         {
-            uint32_t joint = kNoNode;
+            uint32_t joint = kInvalidIndex;
             float weightSum = 0.0f;     // 세 정점의 이 joint 가중치 합
             float perVertex[3] = {};    // 정점마다의 이 joint 가중치 합 (같은 joint가 여러 칸에 있으면 더한다)
             bool above = false;         // 어느 한 정점에서 minWeight를 넘는가
             int depth = 0;
         };
 
-        // 삼각형 세 정점에서 후보 joint를 모아 절단 joint를 고른다. 후보가 없으면 kNoNode.
+        // 삼각형 세 정점에서 후보 joint를 모아 절단 joint를 고른다. 후보가 없으면 kInvalidIndex.
         uint32_t ChooseJoint(const CutPickMesh& mesh, const uint32_t index[3], const std::vector<uint32_t>& parents, float minWeight)
         {
             Candidate candidates[12];
@@ -153,7 +153,7 @@ namespace MeshCutting
                             || (candidates[c].weightSum == candidates[best].weightSum && candidates[c].joint < candidates[best].joint))))
                     best = c;
             }
-            return best < 0 ? kNoNode : candidates[best].joint;
+            return best < 0 ? kInvalidIndex : candidates[best].joint;
         }
     }
 
@@ -199,7 +199,7 @@ namespace MeshCutting
                 continue;       // 절단선이 사각형과 만나야 한다
 
             const uint32_t joint = ChooseJoint(mesh, index, jointParents, minWeight);
-            if (joint != kNoNode)
+            if (joint != kInvalidIndex)
             {
                 ++counts[joint];
                 if (stats)

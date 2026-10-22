@@ -105,7 +105,7 @@ namespace MeshCutting
 
     // 슬라이스 결과의 모든 루프 점이 사각형 안(margin 포함)인지 검사한다. loops는 positive 조각의 노드 번호다.
     // 하나라도 밖이면 false이고 error에 어느 루프의 몇 번째 점인지 적는다.
-    bool CutPlane::ContainsLoops(const PatchPiece& positive, const std::vector<std::vector<uint32_t>>& loops,
+    bool CutPlane::ContainsLoops(const MeshGeometry& positive, const std::vector<std::vector<uint32_t>>& loops,
         float margin, std::string* error) const
     {
         const Frame frame = GetFrame();
@@ -113,12 +113,12 @@ namespace MeshCutting
         {
             for (size_t i = 0; i < loops[l].size(); ++i)
             {
-                const uint32_t node = loops[l][i];
-                if (node >= positive.nodes.size() || !FrameContains(frame, positive.nodes[node].position, margin))
+                const uint32_t vertex = loops[l][i];
+                if (vertex >= positive.vertices.size() || !FrameContains(frame, positive.vertices[vertex].position, margin))
                 {
                     if (error)
-                        *error = "loop " + std::to_string(l) + " point " + std::to_string(i) + " (node "
-                            + std::to_string(node) + ") is outside the cut plane rectangle";
+                        *error = "loop " + std::to_string(l) + " point " + std::to_string(i) + " (vertex "
+                            + std::to_string(vertex) + ") is outside the cut plane rectangle";
                     return false;
                 }
             }
@@ -207,7 +207,7 @@ namespace MeshCutting
         for (uint32_t child = 0; child < count; ++child)
         {
             const uint32_t parent = pose.parents[child];
-            if (parent == kNoNode || parent >= count || parent == child)
+            if (parent == kInvalidIndex || parent >= count || parent == child)
                 continue;
             const DirectX::XMFLOAT3& a = pose.jointPositions[parent];
             const DirectX::XMFLOAT3& b = pose.jointPositions[child];

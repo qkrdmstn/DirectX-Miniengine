@@ -1,5 +1,7 @@
 ﻿#include "pch.h"
 #include "ProceduralMesh.h"
+#include "Geometry/Skinning.h"
+#include "Rendering/RenderBake.h"
 
 #include <algorithm>
 #include <atomic>
@@ -25,28 +27,28 @@ namespace MeshCutting
             return false;
         }
 
-        bool Finite(const DirectX::XMFLOAT3& value)
+        bool IsFinite(const DirectX::XMFLOAT3& value)
         {
             return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
         }
 
-        bool Finite(const DirectX::XMFLOAT2& value)
+        bool IsFinite(const DirectX::XMFLOAT2& value)
         {
             return std::isfinite(value.x) && std::isfinite(value.y);
         }
 
-        bool Finite(const DirectX::XMFLOAT4& value)
+        bool IsFinite(const DirectX::XMFLOAT4& value)
         {
             return std::isfinite(value.x) && std::isfinite(value.y) &&
                 std::isfinite(value.z) && std::isfinite(value.w);
         }
 
         // 모든 정점을 순회하며 유효성 검사를 수행하는 함수
-        bool ValidateVertices(const std::vector<ProceduralVertex>& vertices,
+        bool ValidateVertices(const std::vector<MeshRenderVertex>& vertices,
             ProceduralMeshBounds& bounds, std::string* error)
         {
             if (vertices.size() > std::numeric_limits<uint32_t>::max() ||
-                vertices.size() > std::numeric_limits<uint32_t>::max() / sizeof(ProceduralVertex))
+                vertices.size() > std::numeric_limits<uint32_t>::max() / sizeof(MeshRenderVertex))
                 return Fail(error, "Vertex buffer exceeds D3D12 byte-size limit");
 
             if (vertices.empty())
@@ -57,10 +59,10 @@ namespace MeshCutting
 
             
             // 정점 위치 유효성 검사
-            for (const ProceduralVertex& vertex : vertices)
+            for (const MeshRenderVertex& vertex : vertices)
             {
-                if (!Finite(vertex.position) || !Finite(vertex.normal) ||
-                    !Finite(vertex.uv) || !Finite(vertex.color))
+                if (!IsFinite(vertex.position) || !IsFinite(vertex.normal) ||
+                    !IsFinite(vertex.uv) || !IsFinite(vertex.color))
                     return Fail(error, "Vertex contains a non-finite attribute");
             }
 
@@ -68,7 +70,7 @@ namespace MeshCutting
             bounds.valid = true;
             bounds.min = vertices[0].position;
             bounds.max = vertices[0].position;
-            for (const ProceduralVertex& vertex : vertices)
+            for (const MeshRenderVertex& vertex : vertices)
             {
                 bounds.min.x = std::min(bounds.min.x, vertex.position.x);
                 bounds.min.y = std::min(bounds.min.y, vertex.position.y);
@@ -84,7 +86,7 @@ namespace MeshCutting
             const double cz = (double(bounds.min.z) + bounds.max.z) * 0.5;
             bounds.center = { float(cx), float(cy), float(cz) };
             double radiusSquared = 0.0;
-            for (const ProceduralVertex& vertex : vertices)
+            for (const MeshRenderVertex& vertex : vertices)
             {
                 const double dx = double(vertex.position.x) - bounds.center.x;
                 const double dy = double(vertex.position.y) - bounds.center.y;
@@ -144,8 +146,28 @@ namespace MeshCutting
         }
     }
 
+    SliceStatus ProceduralMesh::Build(const ProceduralMeshData& data, WeldStats& stats, std::string* error)
+    {
+        MeshGeometry geometry;
+        const SliceStatus status = BuildMeshGeometry(data, kDefaultEpsilonScale, geometry, stats, error);
+        if (status != SliceStatus::Ok)
+            return status;
+        return SetTopology(std::move(geometry), error) ? SliceStatus::Ok : SliceStatus::InvalidInput;
+    }
+
     bool ProceduralMesh::SetMesh(ProceduralMeshData data, std::string* error)
     {
+        if (!SetRenderData(std::move(data), error))
+            return false;
+        m_Geometry.Clear();
+        m_SectionSplit = false;
+        return true;
+    }
+
+    bool ProceduralMesh::SetRenderData(ProceduralMeshData data, std::string* error)
+    {
+        if (!data.bindings.empty() && data.bindings.size() != data.vertices.size())
+            return Fail(error, "Vertex bindings must be empty or match the vertex count");
         ProceduralMeshBounds bounds;
         if (!ValidateVertices(data.vertices, bounds, error) || !ValidateTopology(data, error))
             return false;
@@ -159,8 +181,10 @@ namespace MeshCutting
         return true;
     }
 
-    bool ProceduralMesh::UpdateVertices(const std::vector<ProceduralVertex>& vertices, std::string* error)
+    bool ProceduralMesh::UpdateVertices(const std::vector<MeshRenderVertex>& vertices, std::string* error)
     {
+        if (!m_Geometry.Empty())
+            return Fail(error, "Use UpdatePose for a mesh with cutting geometry");
         // 이전 정점과 개수가 다르면 실패 (SetMesh로 초기화를 진행하라)
         if (vertices.size() != m_Data.vertices.size())
             return Fail(error, "UpdateVertices requires the existing vertex count");
@@ -171,7 +195,7 @@ namespace MeshCutting
             return false;
 
         // 실제 데이터 업데이트
-        std::vector<ProceduralVertex> replacement = vertices;
+        std::vector<MeshRenderVertex> replacement = vertices;
         m_Data.vertices.swap(replacement);
         m_Bounds = bounds;
         m_VertexVersion = NextVersion();
@@ -180,10 +204,68 @@ namespace MeshCutting
         return true;
     }
 
+    bool ProceduralMesh::SetTopology(MeshGeometry geometry, std::string* error)
+    {
+        if (ValidateMeshGeometry(geometry, kDefaultEpsilonScale, error) != SliceStatus::Ok)
+            return false;
+        ProceduralMeshData data;
+        BuildRenderMesh(geometry, data);
+        if (!SetRenderData(std::move(data), error))
+            return false;
+        m_Geometry = std::move(geometry);
+        m_SectionSplit = false;
+        return true;
+    }
+
+    bool ProceduralMesh::SetSectionSplit(bool splitByOrigin, std::string* error)
+    {
+        if (m_Geometry.Empty() || m_SectionSplit == splitByOrigin)
+        {
+            if (error) error->clear();
+            return true;
+        }
+        ProceduralMeshData data;
+        RenderBakeOptions options;
+        options.splitByOrigin = splitByOrigin;
+        BuildRenderMesh(m_Geometry, data, options);
+        if (!SetRenderData(std::move(data), error))
+            return false;
+        m_SectionSplit = splitByOrigin;
+        return true;
+    }
+
+    bool ProceduralMesh::UpdatePose(const std::vector<std::vector<DirectX::XMFLOAT4X4>>& matrices, std::string* error)
+    {
+        if (m_Geometry.Empty() || !m_Geometry.skin)
+            return Fail(error, "Mesh has no cutting geometry or skin");
+        // Skinning needs only vertices and the shared source table. Keep topology in place.
+        // Commit geometry, render positions and bounds together after all checks succeed.
+        MeshGeometry posed;
+        posed.vertices = m_Geometry.vertices;
+        posed.skin = m_Geometry.skin;
+        posed.skinStateId = m_Geometry.skinStateId;
+        if (!posed.skin->Apply(posed, matrices, nullptr, error))
+            return false;
+        std::vector<MeshRenderVertex> vertices = m_Data.vertices;
+        for (size_t i = 0; i < vertices.size(); ++i)
+            vertices[i].position = posed.vertices[m_Geometry.corners[i].vertex].position;
+        ProceduralMeshBounds bounds;
+        if (!ValidateVertices(vertices, bounds, error))
+            return false;
+        m_Geometry.vertices.swap(posed.vertices);
+        m_Data.vertices.swap(vertices);
+        m_Bounds = bounds;
+        m_VertexVersion = NextVersion();
+        if (error) error->clear();
+        return true;
+    }
+
     void ProceduralMesh::Clear()
     {
         ProceduralMeshData empty;
         std::swap(m_Data, empty);
+        m_Geometry.Clear();
+        m_SectionSplit = false;
         m_Bounds = {};
         m_VertexVersion = NextVersion();
         m_TopologyVersion = NextVersion();

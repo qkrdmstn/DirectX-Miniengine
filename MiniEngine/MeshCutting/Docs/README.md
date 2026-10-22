@@ -7,15 +7,16 @@
 
 | 문서 | 용도 | 상태 | 언제 읽나 |
 | --- | --- | --- | --- |
-| `NDC25Reference.md` | 원본 기법(NDC25) 정리, 항목별 근거 수준, 코드 대응표(8절) | 기준 문서 (8절은 `762538f` 기준) | 설계·구현·리뷰 판단 전 |
-| `UnrealAlignmentDesign.md` | Unreal(ProceduralMesh, SliceProceduralMesh, BreakConstraint) 정렬 로드맵 U-1~U-5 | U-1~U-3b `ccf0349`, U-3c `762538f`. U-1·U-2·U-3b·U-3c 화면 확인 대기. U-4~U-5 설계안 | 절단 시점·API 모양·스태틱·숨김·분리 작업 전 |
-| `CodeMap.md` | 계층, 프레임 흐름, 상태의 주인 (함수 이름으로 인용, 줄 번호 없음) | 기준 문서 (`762538f`) | 코드를 처음 열 때, 수정 위치를 찾을 때 |
+| `NDC25Reference.md` | NDC25 근거와 프로젝트 대응 | 8절은 현재 통합 작업 트리 기준 | 설계·구현 판단 전 |
+| `UnrealAlignmentDesign.md` | Unreal 정렬 로드맵의 이력 | U-1~U-5b 코드 구현. 분리는 디버그 방식이며 물리는 미구현 | 과거 설계 배경 확인 |
+| `CodeMap.md` | 현재 실행·데이터 흐름과 파일별 역할 | ProceduralMesh 통합·CPU·Debug/Release 빌드 검증 완료 (`d418fcd` 이후) | 코드를 처음 열 때 |
 
 ## 진행·예정 설계
 
 | 문서 | 용도 | 상태 | 언제 읽나 |
 | --- | --- | --- | --- |
-| `ClassLayoutDesign.md` | 기능을 클래스 6개로 묶는 계획 (K-0~K-6), 이름 규칙(7.2절) | 설계안 | 클래스 정리 작업 전 |
+| `ClassLayoutDesign.md` | 이전 클래스 배치·이름 스케치 | 참고 설계. 현재 통합은 아래 문서 기준 | 과거 결정 확인 |
+| `ProceduralMeshSimplification.md` | 공통 메시 통합, 중간 변환·중복 제거 | 구현·CPU·Debug/Release 빌드 검증 완료 (`d418fcd` 이후 작업 트리) | 현재 구조와 검증 확인 |
 | `RegionCutDesign.md` | 영역 작업, 걸친 joint 합친 뒤 자르기 (NDC 한계 돌파) | 설계안, 보류 (JointCutDesign 다음 단계) | 한계 돌파 작업 전 |
 | `PickPerformanceDesign.md` | 절단 후보 선택(pick·추출) 성능 측정과 BVH 없는 개선 방향 | 안 A는 U-1로 구현 (`ccf0349`), 안 B 설계안. U-1 이후 실측 포함 | 편집 중·Enter 프레임 비용을 줄일 때 |
 

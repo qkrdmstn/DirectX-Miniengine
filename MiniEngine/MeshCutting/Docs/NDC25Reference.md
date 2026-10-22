@@ -80,19 +80,21 @@
 - **[추론, 소스 미확인]** 섹션 바운딩 박스로 평면 한쪽에 있는 섹션은 통째로 보내고, 걸친 섹션만 삼각형 단위로 분할한다. 잘린 에지를 2D로 투영해 다각형으로 이은 뒤 삼각분할해서 cap을 만든다.
 - **뼈·웨이트 개념이 없다.** "어느 Bone을 자를지"는 발표자가 직접 만든 로직이다. 언리얼에서는 보통 충돌 결과(`FHitResult.BoneName`)로 Bone을 얻는데, NDC가 그렇게 했는지는 확인되지 않았다.
 
-## 8. 이 프로젝트 코드와의 대응 (커밋 `762538f` 기준)
+## 8. 현재 프로젝트 대응 (`d418fcd` 이후 통합 작업 트리)
 
-| NDC 단계 | 코드 | 상태 |
+| NDC 단계 | 현재 코드 | 상태 |
 | --- | --- | --- |
-| 절단 위치의 Bone 선택 | `CutPick::PickJoints` (Geometry/CutPick, 평면과 교차하는 삼각형마다 절단 joint 하나). 스킨 없는 메시는 `CutPick::SphereMayCross` → `CountCrossedTriangles`. 뼈 선분 표시는 `CutPlane::PickSegments` | 구현 (단일 joint 작업, `JointCutDesign.md`) |
-| 영향 범위 복사 | Enter 순간 `CutController::ExtractJob`: `ExtractBonePatch` (BonePatch.cpp, joint 웨이트 > minWeight인 삼각형) → `MakeWeldInput` → `BuildPatchPiece`. 스킨 없는 메시는 `CopyProceduralMeshFromStaticMesh` (StaticMeshCopy) | 구현 |
-| 복사본 절단 + cap | `CutController::SliceWithPlane` → `SliceProceduralMesh` (Unreal 모양 진입점, `SlicePatch`를 감쌈) → `ExtractCutLoops`, `BuildCap` (Geometry/Slice.cpp, SliceCap.cpp). 유한 평면 검사는 `CutPlane::ContainsLoops` | 구현 |
-| 수동 스키닝 | `CutController::SkinPatch`: `BuildSkinMatrices` → `Skinning::Apply` (Geometry/Skinning). 스킨 없는 메시는 `BuildRigidMatrices` | 구현 |
-| BreakConstraint | 없음 (MiniEngine에 물리 없음. 디버그 분리 → 물리 라이브러리 후보 Jolt) | 미구현 |
-| 원본 숨김 | 없음 (mask + discard, color/depth/shadow 모두) | 미구현 |
-| 남는 쪽 조각의 기여 교체 | `PatchPiece::skinStateId` 자리만 있음 | 미구현 |
-| cap 본 부착 | `PatchCap`에 기록만 있음 (지금 cap은 rim 정점을 공유해 표면을 따라감) | 미구현 |
-| 합친 뒤 자르기 / 아일랜드 / 각도 보정 | 없음 (합친 뒤 자르기는 `RegionCutDesign.md`, 보류) | 확장 범위 |
+| Bone 선택 | CutPick::PickJoints. 스태틱은 SphereMayCross → CountCrossedTriangles | 실제 메시 교차 기반 구현 |
+| 영향 범위 복사 | ExtractBonePatch / CopyProceduralMeshFromStaticMesh → ProceduralMesh::Build | 공통 ProceduralMesh 생성 구현 |
+| 복사본 절단 + cap | SliceProceduralMesh(ProceduralMesh) → 내부 SliceGeometry / ExtractCutLoops / BuildCap | 구현. ContainsLoops로 유한 사각형 범위 승인 |
+| 수동 스키닝 | BuildPieceMatrices → ProceduralMesh::UpdatePose → Skinning::Apply | 스킨/강체 갱신 구현 |
+| BreakConstraint | CutController::UpdateBrokenJoints → ModelInstance::BreakConstraint | 디버그 world 고정·이동 구현. 실제 물리 아님 |
+| 원본 숨김 | SetMeshVisibility / UpdateSkinMask → SetVertexColorOverride → color/depth 셰이더 discard | 구현 |
+| 남는 쪽 기여 교체 | SetBreakOf / BuildPieceMatrices의 절단 순간 행렬과 자손 집합 | 구현 |
+| cap 본 부착 | rim Vertex를 공유하여 표면을 따라감 | 독립 cap 본 부착은 미구현 |
+| 병합 후 절단 / 아일랜드 / 각도 보정 | RegionCutDesign 등 | 미구현·보류 범위 |
+
+이 표의 구현은 코드 확인 기준이다. 이번 구조 정리의 GPU 화면 검증을 뜻하지 않는다.
 
 ## 9. CesiumMan 리그에서 확인한 사실 (CesiumMan.glb, bind 자세, Z가 위)
 

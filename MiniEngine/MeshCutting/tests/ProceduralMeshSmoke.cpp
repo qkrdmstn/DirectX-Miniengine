@@ -29,6 +29,20 @@ int main()
     const uint64_t vertexVersion = a.GetVertexVersion();
     const uint64_t topologyVersion = a.GetTopologyVersion();
 
+    ProceduralMesh boundMesh;
+    auto bound = Triangle();
+    bound.bindings.resize(bound.vertices.size());
+    bound.bindings[0].bindPosition = { 2, 3, 4 };
+    assert(boundMesh.SetMesh(bound));
+    assert(boundMesh.UpdateVertices(bound.vertices));
+    assert(boundMesh.GetData().bindings[0].bindPosition.x == 2);
+    bound.bindings.pop_back();
+    const uint64_t boundVersion = boundMesh.GetVertexVersion();
+    assert(!boundMesh.SetMesh(bound));
+    assert(boundMesh.GetVertexVersion() == boundVersion && boundMesh.GetData().bindings.size() == 3);
+    boundMesh.Clear();
+    assert(boundMesh.GetData().bindings.empty());
+
     auto badIndex = Triangle();
     badIndex.indices[2] = 3;
     assert(!a.SetMesh(badIndex));

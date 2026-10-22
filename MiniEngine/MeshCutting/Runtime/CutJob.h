@@ -1,11 +1,12 @@
 ﻿#pragma once
 
-// 절단 작업(선분 하나 = 독립 패치 하나)의 식별자, 상태, 목록 비교. Model, Core에 의존하지 않는다 (설계: Docs/PerSegmentCutDesign.md 4절).
+// joint 또는 스태틱 메시별 절단 작업의 식별자, 상태, 목록 비교. Model, Core에 의존하지 않는다.
 
 #include "../Geometry/CutPick.h"
 #include "../Geometry/CutPlane.h"
-#include "../Geometry/Patch.h"
+#include "../Geometry/MeshGeometry.h"
 #include "../Geometry/Slice.h"
+#include "../ProceduralMesh.h"
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -18,7 +19,7 @@ class ModelInstance;
 
 namespace MeshCutting
 {
-    struct BonePatchSource;
+    struct MeshSource;
 
     using CutTargetId = uint32_t;
 
@@ -34,9 +35,9 @@ namespace MeshCutting
     {
         CutTargetId target = 0;
         CutJobKind kind = CutJobKind::SkeletalSegment;
-        uint32_t a = kNoNode;   // SkeletalSegment: 팔레트, StaticMesh: Model 메시 번호
-        uint32_t b = kNoNode;   // SkeletalSegment: 부모 joint
-        uint32_t c = kNoNode;   // SkeletalSegment: 자식 joint
+        uint32_t a = kInvalidIndex;   // SkeletalSegment: 팔레트, StaticMesh: Model 메시 번호
+        uint32_t b = kInvalidIndex;   // SkeletalSegment: 부모 joint
+        uint32_t c = kInvalidIndex;   // SkeletalSegment: 자식 joint
 
         bool operator<(const CutJobKey& other) const
         {
@@ -82,24 +83,15 @@ namespace MeshCutting
         return key;
     }
 
-    // 작업이 어떤 원본에서 왔는가. bone은 같은 부모 joint의 형제 작업끼리 공유한다.
-    struct CutJobSource
-    {
-        CutJobKind kind = CutJobKind::SkeletalSegment;
-        std::shared_ptr<const BonePatchSource> bone;
-        uint32_t extractJoint = kNoNode;    // 추출에 쓴 joint (부모 joint)
-    };
-
     struct CutJob
     {
         CutJobKey key;
-        CutJobSource source;
+        std::shared_ptr<const MeshSource> source;
         uint32_t colorIndex = 0;            // 생성 순서로 정한 고정 색 번호 (GetJobColor)
 
         bool candidate = false;             // 이번 프레임에 평면이 이 작업을 지나는가
         uint32_t pickTriangles = 0;         // 이 joint를 고른 교차 삼각형 수
 
-        PatchPiece patch;                   // 미절단 패치: Enter 중에만 만들고 절단이 끝나면 버린다
         uint32_t patchTriangles = 0;        // 마지막 Enter에서 추출한 패치의 삼각형 수
         WeldStats weld;
         SliceStatus patchStatus = SliceStatus::InvalidInput;        // 마지막 Enter의 추출 결과
@@ -109,17 +101,18 @@ namespace MeshCutting
         std::string skinError;
 
         bool haveConfirmed = false;         // 확정 결과 (후보가 사라져도 유지, Ctrl+Z나 다음 Enter에서 지워진다)
-        PatchPiece positive, negative;
+        // The view retains these same objects until GPU registrations are released.
+        std::shared_ptr<ProceduralMesh> positive, negative;
         DirectX::XMFLOAT3 confirmedNormal = { 0.0f, 1.0f, 0.0f };
         uint64_t confirmedGeneration = 0;
-        uint32_t breakNode = kNoNode;       // 확정 때 끊을 joint의 장면 그래프 노드 (스켈레탈 joint 작업만, U-5a)
+        uint32_t breakNode = kInvalidIndex;       // 확정 때 끊을 joint의 장면 그래프 노드 (스켈레탈 joint 작업만, U-5a)
         DirectX::XMFLOAT3 breakOffset = { 0.0f, 0.0f, 0.0f };     // 끊은 노드를 옮길 world 이동량 (떨어지는 쪽 판정용)
         DirectX::XMFLOAT3 breakOffsetNode = { 0.0f, 0.0f, 0.0f };     // 같은 이동량을 노드 행렬(m_NodeWorld) 공간으로 바꾼 값 (BreakConstraint 입력)
         // 끊긴 joint의 절단 순간 값 (U-5b, breakNode가 있을 때만): 조각이 양쪽을 따라가게 joint 행렬을 교체하는 데 쓴다.
         std::vector<std::vector<DirectX::XMFLOAT4X4>> breakCutMatrices;     // 메시 world를 뺀 slot 행렬 (inverse(meshWorld) * slot)
         DirectX::XMFLOAT4X4 breakNodeWorld, breakParentWorld;       // 절단 순간 끊긴 노드와 그 부모의 world
         bool breakHasParent = false;
-        uint32_t breakParent = kNoNode;
+        uint32_t breakParent = kInvalidIndex;
         std::vector<uint8_t> breakDetached;     // 팔레트 joint가 끊긴 노드이거나 그 자손인가
         bool positiveFalls = false;             // positive 조각이 떨어지는 쪽인가
         bool cutAttempted = false;          // Ctrl+Z 뒤 Enter를 처리했는가
@@ -135,7 +128,7 @@ namespace MeshCutting
     // 대상의 팔레트 하나의 원본 캐시: 등록 때 팔레트의 모든 joint로 추출한 스킨 메시와, 이번 프레임의 교차 결과
     struct CutTargetSource
     {
-        std::shared_ptr<const BonePatchSource> source;      // 전체 추출의 출처 (vertices, meshes)
+        std::shared_ptr<const MeshSource> source;      // 전체 추출의 출처 (vertices, meshes)
         CutPickMesh pose;                                   // 정점의 현재 위치 (skins는 등록 때 채운다)
         std::vector<std::vector<DirectX::XMFLOAT4X4>> matrices;     // pose를 계산한 스킨 행렬 (자세 변화 감지)
         std::vector<CutPickJoint> picked;                   // 마지막 교차 결과

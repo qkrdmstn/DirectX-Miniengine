@@ -52,12 +52,12 @@ namespace MeshCutting
 
         static const D3D12_INPUT_ELEMENT_DESC layout[] =
         {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(ProceduralVertex, position), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(ProceduralVertex, normal), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(ProceduralVertex, uv), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(ProceduralVertex, color), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(MeshRenderVertex, position), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(MeshRenderVertex, normal), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(MeshRenderVertex, uv), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(MeshRenderVertex, color), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         };
-        static_assert(sizeof(ProceduralVertex) == 48, "Procedural vertex layout changed");
+        static_assert(sizeof(MeshRenderVertex) == 48, "Procedural vertex layout changed");
 
         m_Pso.SetRootSignature(m_RootSignature);
         m_Pso.SetRasterizerState(RasterizerTwoSided);
@@ -189,7 +189,7 @@ namespace MeshCutting
             return;
         }
 
-        const uint32_t vertexBytes = uint32_t(data.vertices.size() * sizeof(ProceduralVertex));
+        const uint32_t vertexBytes = uint32_t(data.vertices.size() * sizeof(MeshRenderVertex));
         const uint32_t indexBytes = uint32_t(data.indices.size() * sizeof(uint32_t));
         if (!gpu.vertices || gpu.vertexVersion != mesh.GetVertexVersion())
         {
@@ -233,7 +233,7 @@ namespace MeshCutting
         struct alignas(16) Transforms { Math::Matrix4 world; Math::Matrix4 viewProj; };
         const Transforms transforms{ world, viewProj };
         context.SetDynamicConstantBufferView(0, sizeof(transforms), &transforms);
-        context.SetVertexBuffer(0, gpu.vertices->resource.VertexBufferView(0, vertexBytes, sizeof(ProceduralVertex)));
+        context.SetVertexBuffer(0, gpu.vertices->resource.VertexBufferView(0, vertexBytes, sizeof(MeshRenderVertex)));
         context.SetIndexBuffer(gpu.indices->resource.IndexBufferView(0, indexBytes, true));
         // Pixel constants: color, a mode and the section index (ProceduralMeshPS.hlsl).
         //   0 vertex color   1 solid section color   2 one wire color   3 wire palette by section

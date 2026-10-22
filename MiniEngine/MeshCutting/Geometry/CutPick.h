@@ -19,7 +19,7 @@ namespace MeshCutting
 
     struct CutPickJoint
     {
-        uint32_t joint = kNoNode;           // 팔레트 안 joint 번호
+        uint32_t joint = kInvalidIndex;           // 팔레트 안 joint 번호
         uint32_t triangleCount = 0;         // 이 joint를 고른 교차 삼각형 수
     };
 
@@ -35,7 +35,7 @@ namespace MeshCutting
     {
     public:
         // 교차 삼각형마다 절단 joint를 골라, joint별 교차 삼각형 수를 joint 오름차순으로 돌려준다.
-        // jointParents[joint]는 팔레트 안 부모 joint (루트는 kNoNode). minWeight를 넘는 가중치의 joint만 후보다.
+        // jointParents[joint]는 팔레트 안 부모 joint (루트는 kInvalidIndex). minWeight를 넘는 가중치의 joint만 후보다.
         // epsilon 안의 정점은 평면 위로 본다. 평면이 올바르지 않거나 mesh의 크기가 맞지 않으면 out은 비어 있다.
         static void PickJoints(const CutPickMesh& mesh, const std::vector<uint32_t>& jointParents,
             const CutPlane& plane, float minWeight, float epsilon, std::vector<CutPickJoint>& out, CutPickStats* stats = nullptr);

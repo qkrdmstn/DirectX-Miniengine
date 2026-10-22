@@ -129,8 +129,8 @@ namespace MeshCutting
                 ++it;
                 continue;
             }
-            renderer.ReleaseMesh(it->second.positive);
-            renderer.ReleaseMesh(it->second.negative);
+            if (it->second.positive) renderer.ReleaseMesh(*it->second.positive);
+            if (it->second.negative) renderer.ReleaseMesh(*it->second.negative);
             renderer.ReleaseMesh(it->second.boundaryPositive);
             renderer.ReleaseMesh(it->second.boundaryNegative);
             it = m_JobMeshes.erase(it);
@@ -143,63 +143,58 @@ namespace MeshCutting
             const CutTarget* jobTarget = cut.FindTarget(job.key.target);
             const float targetRadius = jobTarget != nullptr ? jobTarget->radius : cut.GetModelRadius();
 
-            // 조각이 바뀌었거나(새 절단, 삭제) 렌더링 모드가 구역 분리를 바꿨으면 다시 굽는다.
+            // 새 조각은 같은 객체를 참조하고, 표시 옵션과 경계 튜브만 맞춘다.
             const bool piecesChanged = job.confirmedGeneration != meshes.pieceGeneration
                 || (job.haveConfirmed && meshes.bakedSectionSplit != SectionSplit());
             if (piecesChanged)
             {
                 meshes.pieceGeneration = job.confirmedGeneration;
                 meshes.bakedSectionSplit = SectionSplit();
+                const auto retain = [&](std::shared_ptr<ProceduralMesh>& mesh, const std::shared_ptr<ProceduralMesh>& next)
+                {
+                    if (mesh != next && mesh) renderer.ReleaseMesh(*mesh);
+                    mesh = next;
+                };
+                retain(meshes.positive, job.positive);
+                retain(meshes.negative, job.negative);
                 if (!job.haveConfirmed)
                 {
-                    meshes.positive.Clear();
-                    meshes.negative.Clear();
                     meshes.boundaryPositive.Clear();
                     meshes.boundaryNegative.Clear();
                 }
                 else
                 {
                     const float tubeRadius = targetRadius * 0.008f;
-                    const auto bake = [&](const PatchPiece& piece, ProceduralMesh& mesh, ProceduralMesh& boundary)
+                    meshes.positive->SetSectionSplit(SectionSplit(), &error);
+                    meshes.negative->SetSectionSplit(SectionSplit(), &error);
+                    const auto bake = [&](const MeshGeometry& piece, ProceduralMesh& boundary)
                     {
-                        ProceduralMeshData data, tubes;
-                        RenderBakeOptions bakeOptions;
-                        bakeOptions.splitByOrigin = SectionSplit();
-                        BuildRenderMesh(piece, data, bakeOptions);
-                        mesh.SetMesh(std::move(data), &error);
+                        ProceduralMeshData tubes;
                         BakeBoundaryDebug(piece, tubeRadius, tubes);
                         if (tubes.indices.empty())
                             boundary.Clear();
                         else
                             boundary.SetMesh(std::move(tubes), &error);
                     };
-                    bake(job.positive, meshes.positive, meshes.boundaryPositive);
-                    bake(job.negative, meshes.negative, meshes.boundaryNegative);
+                    bake(meshes.positive->GetGeometry(), meshes.boundaryPositive);
+                    bake(meshes.negative->GetGeometry(), meshes.boundaryNegative);
                 }
             }
 
-            // 매 프레임 조각 위치만 갱신한다 (이번 프레임 스키닝이 끝난 작업만).
+            // 표면 위치는 메시가 갱신했다. 여기서는 디버그 경계 튜브만 갱신한다.
             if (!job.poseValid || !job.haveConfirmed || piecesChanged)
                 continue;
             const float tubeRadius = targetRadius * 0.008f;
-            const auto refreshTubes = [&](const PatchPiece& piece, ProceduralMesh& mesh)
+            const auto refreshTubes = [&](const MeshGeometry& piece, ProceduralMesh& mesh)
             {
                 ProceduralMeshData tubes;
                 BakeBoundaryDebug(piece, tubeRadius, tubes);
                 ReplaceOrUpdate(mesh, std::move(tubes));
             };
-            const auto refreshSurface = [&](const PatchPiece& piece, ProceduralMesh& mesh)
-            {
-                std::vector<ProceduralVertex> vertices = mesh.GetData().vertices;
-                if (UpdateRenderPositions(piece, vertices))
-                    mesh.UpdateVertices(vertices, &error);
-            };
-            refreshSurface(job.positive, meshes.positive);
-            refreshSurface(job.negative, meshes.negative);
             if (m_RenderMode == RenderMode::Debug)
             {
-                refreshTubes(job.positive, meshes.boundaryPositive);
-                refreshTubes(job.negative, meshes.boundaryNegative);
+                refreshTubes(meshes.positive->GetGeometry(), meshes.boundaryPositive);
+                refreshTubes(meshes.negative->GetGeometry(), meshes.boundaryNegative);
             }
         }
 
@@ -300,12 +295,12 @@ namespace MeshCutting
             const CutTarget* target = cut.FindTarget(job.key.target);
             const float radius = target != nullptr ? target->radius : cut.GetModelRadius();
             const DirectX::XMFLOAT4 color = GetJobColor(job.colorIndex);
-            if (job.breakNode != kNoNode)
+            if (job.breakNode != kInvalidIndex)
             {
                 // 끊긴 작업의 조각은 스키닝된 자리에 그대로 그린다 (남는 조각은 몸에, 떨어지는 조각은 떨어진 팔에 붙는다)
                 const Matrix4 worldIdentity(kIdentity);
-                drawSurface(meshes.positive, worldIdentity, pieceOptions, color);
-                drawSurface(meshes.negative, worldIdentity, pieceOptions, color);
+                drawSurface(*meshes.positive, worldIdentity, pieceOptions, color);
+                drawSurface(*meshes.negative, worldIdentity, pieceOptions, color);
                 if (m_RenderMode == RenderMode::Debug)
                 {
                     draw(meshes.boundaryPositive, worldIdentity);
@@ -317,8 +312,8 @@ namespace MeshCutting
             const DirectX::XMFLOAT3& n = job.confirmedNormal;
             const Vector3 shift = Vector3(n.x, n.y, n.z) * gap;
             // 두 조각 경계의 중심으로 가로 위치를 정한다: 중심의 x를 슬롯 중앙에 맞추고, y와 z는 원래 높이를 유지한다.
-            const ProceduralMeshBounds& positiveBounds = meshes.positive.GetBounds();
-            const ProceduralMeshBounds& negativeBounds = meshes.negative.GetBounds();
+            const ProceduralMeshBounds& positiveBounds = meshes.positive->GetBounds();
+            const ProceduralMeshBounds& negativeBounds = meshes.negative->GetBounds();
             const float centerX = positiveBounds.valid && negativeBounds.valid ? (positiveBounds.center.x + negativeBounds.center.x) * 0.5f
                 : (positiveBounds.valid ? positiveBounds.center.x : negativeBounds.center.x);
             const float halfWidth = radius * 1.15f;
@@ -328,8 +323,8 @@ namespace MeshCutting
             const Vector3 offset(slotCenter - centerX, 0.0f, 0.0f);
             const Matrix4 positiveWorld(AffineTransform::MakeTranslation(offset + shift));
             const Matrix4 negativeWorld(AffineTransform::MakeTranslation(offset - shift));
-            drawSurface(meshes.positive, positiveWorld, pieceOptions, color);
-            drawSurface(meshes.negative, negativeWorld, pieceOptions, color);
+            drawSurface(*meshes.positive, positiveWorld, pieceOptions, color);
+            drawSurface(*meshes.negative, negativeWorld, pieceOptions, color);
             if (m_RenderMode == RenderMode::Debug)
             {
                 draw(meshes.boundaryPositive, positiveWorld);
@@ -436,8 +431,8 @@ namespace MeshCutting
     {
         for (auto& entry : m_JobMeshes)
         {
-            renderer.ReleaseMesh(entry.second.positive);
-            renderer.ReleaseMesh(entry.second.negative);
+            if (entry.second.positive) renderer.ReleaseMesh(*entry.second.positive);
+            if (entry.second.negative) renderer.ReleaseMesh(*entry.second.negative);
             renderer.ReleaseMesh(entry.second.boundaryPositive);
             renderer.ReleaseMesh(entry.second.boundaryNegative);
         }

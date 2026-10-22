@@ -2,14 +2,14 @@
 // (Geometry/CutPlaneGizmo.cpp). No D3D12 device is needed.
 //
 // Build and run from a Visual Studio developer prompt in MiniEngine/MeshCutting:
-//   cl /nologo /EHsc /std:c++14 /W4 /MDd /Fo<outdir>\ /Fe<outdir>\PlaneSlicerTests.exe
+//   cl /nologo /utf-8 /EHsc /std:c++14 /W4 /MDd /Fo<outdir>\ /Fe<outdir>\PlaneSlicerTests.exe
 //      tests\PlaneSlicerTests.cpp Geometry\*.cpp Rendering\RenderBake.cpp ProceduralMesh.cpp
 //   <outdir>\PlaneSlicerTests.exe
 // Keep <outdir> outside the repository. The exit code is the number of failed checks.
 
 #include "../Geometry/CutPlane.h"
 #include "../Geometry/CutPick.h"
-#include "../Geometry/Patch.h"
+#include "../Geometry/MeshGeometry.h"
 #include "../Geometry/Skinning.h"
 #include "../Geometry/Slice.h"
 #include "../Rendering/RenderBake.h"
@@ -68,20 +68,20 @@ static Tri OutwardTri(const std::vector<XMFLOAT3>& p, Tri t, const XMFLOAT3& cen
 }
 
 // piece의 스킨 정점 표를 바꾼다 (Skinning은 읽기 전용이라 새로 만들어 끼운다).
-static void SetSkinVertices(PatchPiece& piece, std::vector<SkinVertex> vertices)
+static void SetSkinVertices(MeshGeometry& piece, std::vector<SkinVertex> vertices)
 {
     piece.skin = std::make_shared<const Skinning>(std::move(vertices));
 }
 
-static std::vector<SkinVertex> GetSkinVertices(const PatchPiece& piece)
+static std::vector<SkinVertex> GetSkinVertices(const MeshGeometry& piece)
 {
     return piece.skin ? piece.skin->GetVertices() : std::vector<SkinVertex>();
 }
 
-// One node and one render corner per position, identity skin.
-static PatchPiece MakePiece(const std::vector<XMFLOAT3>& positions, const std::vector<Tri>& tris)
+// One vertex and one render corner per position, identity skin.
+static MeshGeometry MakePiece(const std::vector<XMFLOAT3>& positions, const std::vector<Tri>& tris)
 {
-    PatchPiece piece;
+    MeshGeometry piece;
     std::vector<SkinVertex> skinVertices;
     for (size_t i = 0; i < positions.size(); ++i)
     {
@@ -92,21 +92,21 @@ static PatchPiece MakePiece(const std::vector<XMFLOAT3>& positions, const std::v
         skin.weights[0] = 1.0f;
         skinVertices.push_back(skin);
 
-        PatchNode node;
-        node.origin.skinVertex[0] = uint32_t(i);
-        node.origin.bary[0] = 1.0f;
-        node.position = positions[i];
-        piece.nodes.push_back(node);
+        MeshVertex vertex;
+        vertex.origin.skinVertex[0] = uint32_t(i);
+        vertex.origin.bary[0] = 1.0f;
+        vertex.position = positions[i];
+        piece.vertices.push_back(vertex);
 
-        PatchCorner corner;
-        corner.node = uint32_t(i);
+        MeshCorner corner;
+        corner.vertex = uint32_t(i);
         corner.uv = { positions[i].x, positions[i].z };
         piece.corners.push_back(corner);
     }
     SetSkinVertices(piece, skinVertices);
     for (size_t i = 0; i < tris.size(); ++i)
     {
-        PatchFace face;
+        MeshFace face;
         for (int k = 0; k < 3; ++k)
             face.corner[k] = tris[i][k];
         face.sourceTriangle = uint32_t(i);
@@ -116,16 +116,16 @@ static PatchPiece MakePiece(const std::vector<XMFLOAT3>& positions, const std::v
 }
 
 // Tags every boundary edge of a hand-built piece the way the weld step does for open patches.
-static void TagOpenEdges(PatchPiece& piece, PatchEdgeKind kind)
+static void TagOpenEdges(MeshGeometry& piece, MeshEdgeTag kind)
 {
-    PatchEdgeUsageMap usage;
+    MeshEdgeUsageMap usage;
     CollectEdgeUsage(piece, usage);
     for (const auto& entry : usage)
         if (entry.second.count == 1)
-            piece.boundary[entry.first] = kind;
+            piece.edgeTags[entry.first] = kind;
 }
 
-static PatchPiece MakeBox()
+static MeshGeometry MakeBox()
 {
     const std::vector<XMFLOAT3> p = {
         { -1, 0, -1 }, { 1, 0, -1 }, { 1, 0, 1 }, { -1, 0, 1 },
@@ -140,10 +140,10 @@ static PatchPiece MakeBox()
 
 // Tube around the Y axis with columns 0..n (column n repeats column 0 for the UV seam).
 // seamJoint is the joint of the duplicated seam column.
-static WeldInput MakeTubeWeldInput(int n, bool seamDuplicate, uint16_t seamJoint)
+static ProceduralMeshData MakeTubeMeshData(int n, bool seamDuplicate, uint16_t seamJoint)
 {
     const double kTwoPi = 6.283185307179586;
-    WeldInput in;
+    ProceduralMeshData in;
     const int columns = seamDuplicate ? n + 1 : n;
     for (int ring = 0; ring < 2; ++ring)
     {
@@ -151,13 +151,17 @@ static WeldInput MakeTubeWeldInput(int n, bool seamDuplicate, uint16_t seamJoint
         {
             const bool dup = seamDuplicate && c == n;
             const double angle = kTwoPi * double(dup ? 0 : c) / double(n);
-            WeldInputVertex v;
-            v.bindPosition = { float(std::cos(angle)), float(ring * 2), float(std::sin(angle)) };
-            v.position = v.bindPosition;
+            MeshVertexBinding binding;
+            MeshRenderVertex v = {};
+            v.normal = { 0.0f, 1.0f, 0.0f };
+            v.color = { 1.0f, 1.0f, 1.0f, 1.0f };
+            binding.bindPosition = { float(std::cos(angle)), float(ring * 2), float(std::sin(angle)) };
+            v.position = binding.bindPosition;
             v.uv = { float(c) / float(n), float(ring) };
-            v.joints[0] = dup ? seamJoint : 0;
-            v.weights[0] = 1.0f;
+            binding.joints[0] = dup ? seamJoint : 0;
+            binding.weights[0] = 1.0f;
             in.vertices.push_back(v);
+            in.bindings.push_back(binding);
         }
     }
     const auto add = [&](uint32_t a, uint32_t b, uint32_t c)
@@ -181,28 +185,31 @@ static WeldInput MakeTubeWeldInput(int n, bool seamDuplicate, uint16_t seamJoint
     return in;
 }
 
-static WeldInput MakeBoxWeldInput()
+static ProceduralMeshData MakeBoxMeshData()
 {
-    const PatchPiece box = MakeBox();
-    WeldInput in;
-    for (size_t i = 0; i < box.nodes.size(); ++i)
+    const MeshGeometry box = MakeBox();
+    ProceduralMeshData in;
+    for (size_t i = 0; i < box.vertices.size(); ++i)
     {
-        WeldInputVertex v;
-        v.bindPosition = box.nodes[i].position;
-        v.position = box.nodes[i].position;
-        v.joints[0] = 0;
-        v.weights[0] = 1.0f;
+        MeshRenderVertex v = {};
+        v.position = box.vertices[i].position;
+        v.normal = { 0.0f, 1.0f, 0.0f };
+        v.color = { 1.0f, 1.0f, 1.0f, 1.0f };
+        MeshVertexBinding binding;
+        binding.bindPosition = v.position;
+        binding.weights[0] = 1.0f;
         in.vertices.push_back(v);
+        in.bindings.push_back(binding);
     }
-    for (const PatchFace& f : box.faces)
+    for (const MeshFace& f : box.faces)
         in.indices.insert(in.indices.end(), { f.corner[0], f.corner[1], f.corner[2] });
     return in;
 }
 
-static uint32_t CountKind(const PatchPiece& piece, PatchEdgeKind kind)
+static uint32_t CountKind(const MeshGeometry& piece, MeshEdgeTag kind)
 {
     uint32_t n = 0;
-    for (const auto& entry : piece.boundary)
+    for (const auto& entry : piece.edgeTags)
         if (entry.second == kind)
             ++n;
     return n;
@@ -212,160 +219,170 @@ static uint32_t CountKind(const PatchPiece& piece, PatchEdgeKind kind)
 
 static void TestWeldBox()
 {
-    PatchPiece piece;
+    MeshGeometry piece;
     WeldStats stats;
     std::string detail;
-    const SliceStatus status = BuildPatchPiece(MakeBoxWeldInput(), kDefaultEpsilonScale, piece, stats, &detail);
+    const SliceStatus status = BuildMeshGeometry(MakeBoxMeshData(), kDefaultEpsilonScale, piece, stats, &detail);
     CHECK_STATUS(status, SliceStatus::Ok, detail);
-    CHECK(stats.corners == 8 && stats.nodes == 8 && stats.faces == 12);
-    CHECK(stats.boundaryEdges == 0 && piece.boundary.empty());
-    CHECK(piece.skin->GetVertices().size() == 8 && piece.nodes[3].origin.skinVertex[0] == 3 && piece.nodes[3].origin.bary[0] == 1.0f);
+    CHECK(stats.corners == 8 && stats.vertices == 8 && stats.faces == 12);
+    CHECK(stats.boundaryEdges == 0 && piece.edgeTags.empty());
+    CHECK(piece.skin->GetVertices().size() == 8 && piece.vertices[3].origin.skinVertex[0] == 3 && piece.vertices[3].origin.bary[0] == 1.0f);
     CHECK(piece.faces[5].sourceTriangle == 5);
 }
 
 static void TestWeldUvSeamTube()
 {
-    // Same position and skin on both sides of the UV seam: welded into one node per column.
-    PatchPiece piece;
+    // Same position and skin on both sides of the UV seam: welded into one vertex per column.
+    MeshGeometry piece;
     WeldStats stats;
     std::string detail;
-    const SliceStatus status = BuildPatchPiece(MakeTubeWeldInput(8, true, 0), kDefaultEpsilonScale, piece, stats, &detail);
+    const SliceStatus status = BuildMeshGeometry(MakeTubeMeshData(8, true, 0), kDefaultEpsilonScale, piece, stats, &detail);
     CHECK_STATUS(status, SliceStatus::Ok, detail);
-    CHECK(stats.corners == 18 && stats.nodes == 16);
-    CHECK(stats.positionNodes == 16 && stats.skinSplitPositions == 0);
+    CHECK(stats.corners == 18 && stats.vertices == 16);
+    CHECK(stats.positionVertices == 16 && stats.skinSplitPositions == 0);
     CHECK(stats.unweldedSeamEdges == 0);
     CHECK(stats.replacementEdges == 16);        // 8 bottom + 8 top rim edges
-    CHECK(CountKind(piece, PatchEdgeKind::Replacement) == 16);
-    // The two seam corners keep their own UVs but share one node (and so one position).
-    CHECK(piece.corners[0].node == piece.corners[8].node);
+    CHECK(CountKind(piece, MeshEdgeTag::Replacement) == 16);
+    // The two seam corners keep their own UVs but share one vertex (and so one position).
+    CHECK(piece.corners[0].vertex == piece.corners[8].vertex);
     CHECK(piece.corners[0].uv.x == 0.0f && piece.corners[8].uv.x == 1.0f);
 }
 
 static void TestWeldSkinSplitSeam()
 {
     // Seam duplicates with a different joint are not welded; the seam stays open and is tagged.
-    PatchPiece piece;
+    MeshGeometry piece;
     WeldStats stats;
     std::string detail;
-    const SliceStatus status = BuildPatchPiece(MakeTubeWeldInput(8, true, 1), kDefaultEpsilonScale, piece, stats, &detail);
+    const SliceStatus status = BuildMeshGeometry(MakeTubeMeshData(8, true, 1), kDefaultEpsilonScale, piece, stats, &detail);
     CHECK_STATUS(status, SliceStatus::Ok, detail);
-    CHECK(stats.corners == 18 && stats.nodes == 18);
-    CHECK(stats.positionNodes == 16 && stats.skinSplitPositions == 2);
+    CHECK(stats.corners == 18 && stats.vertices == 18);
+    CHECK(stats.positionVertices == 16 && stats.skinSplitPositions == 2);
     CHECK(stats.unweldedSeamEdges == 2);        // the vertical edge on each side of the seam
-    CHECK(CountKind(piece, PatchEdgeKind::UnweldedSeam) == 2);
+    CHECK(CountKind(piece, MeshEdgeTag::UnweldedSeam) == 2);
     CHECK(stats.replacementEdges == 16);
 }
 
 static void TestWeldNegativeZero()
 {
-    WeldInput in = MakeBoxWeldInput();
-    for (WeldInputVertex& v : in.vertices)
+    ProceduralMeshData in = MakeBoxMeshData();
+    for (MeshVertexBinding& v : in.bindings)
         if (v.bindPosition.x == -1.0f && v.bindPosition.y == 0.0f && v.bindPosition.z == -1.0f)
             v.bindPosition.y = -0.0f;
-    in.vertices.push_back(in.vertices[0]);           // duplicate of node 0
-    in.vertices.back().bindPosition.y = 0.0f;        // +0 against -0
+    in.vertices.push_back(in.vertices[0]);           // duplicate of vertex 0
+    in.bindings.push_back(in.bindings[0]);
+    in.bindings.back().bindPosition.y = 0.0f;        // +0 against -0
     in.indices.insert(in.indices.end(), { 8, 1, 2 });  // makes the duplicate used (shares edge 1-2 reversed)
-    PatchPiece piece;
+    MeshGeometry piece;
     WeldStats stats;
     std::string detail;
-    BuildPatchPiece(in, kDefaultEpsilonScale, piece, stats, &detail);
-    CHECK(stats.corners == 9 && stats.nodes == 8);   // -0 and +0 weld together
+    BuildMeshGeometry(in, kDefaultEpsilonScale, piece, stats, &detail);
+    CHECK(stats.corners == 9 && stats.vertices == 8);   // -0 and +0 weld together
 }
 
 static void TestInputRejects()
 {
-    PatchPiece piece;
+    MeshGeometry piece;
     WeldStats stats;
     std::string detail;
 
-    WeldInput nanPosition = MakeBoxWeldInput();
+    ProceduralMeshData nanPosition = MakeBoxMeshData();
     nanPosition.vertices[2].position.x = std::numeric_limits<float>::quiet_NaN();
-    CHECK_STATUS(BuildPatchPiece(nanPosition, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
+    CHECK_STATUS(BuildMeshGeometry(nanPosition, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
     CHECK(piece.Empty());
 
-    WeldInput badIndex = MakeBoxWeldInput();
+    ProceduralMeshData badIndex = MakeBoxMeshData();
     badIndex.indices[4] = 99;
-    CHECK_STATUS(BuildPatchPiece(badIndex, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
+    CHECK_STATUS(BuildMeshGeometry(badIndex, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
 
-    WeldInput noWeight = MakeBoxWeldInput();
-    noWeight.vertices[1].weights[0] = 0.0f;
-    CHECK_STATUS(BuildPatchPiece(noWeight, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
+    ProceduralMeshData noWeight = MakeBoxMeshData();
+    noWeight.bindings[1].weights[0] = 0.0f;
+    CHECK_STATUS(BuildMeshGeometry(noWeight, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
 
-    WeldInput badCount = MakeBoxWeldInput();
+    ProceduralMeshData badCount = MakeBoxMeshData();
     badCount.indices.pop_back();
-    CHECK_STATUS(BuildPatchPiece(badCount, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
+    CHECK_STATUS(BuildMeshGeometry(badCount, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
+
+    ProceduralMeshData missingBindings = MakeBoxMeshData();
+    missingBindings.bindings.clear();
+    CHECK_STATUS(BuildMeshGeometry(missingBindings, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
+    CHECK(piece.Empty());
+
+    ProceduralMeshData shortBindings = MakeBoxMeshData();
+    shortBindings.bindings.pop_back();
+    CHECK_STATUS(BuildMeshGeometry(shortBindings, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::InvalidInput, detail);
 
     // Hand-edited pieces for the structural checks.
-    const PatchPiece good = MakeBox();
-    CHECK_STATUS(ValidatePatchPiece(good, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    const MeshGeometry good = MakeBox();
+    CHECK_STATUS(ValidateMeshGeometry(good, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
 
-    PatchPiece badOrigin = good;
-    badOrigin.nodes[3].origin.bary[0] = 0.5f;
-    CHECK_STATUS(ValidatePatchPiece(badOrigin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
+    MeshGeometry badOrigin = good;
+    badOrigin.vertices[3].origin.bary[0] = 0.5f;
+    CHECK_STATUS(ValidateMeshGeometry(badOrigin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
 
-    PatchPiece badSkinVertex = good;
-    badSkinVertex.nodes[3].origin.skinVertex[0] = 99;
-    CHECK_STATUS(ValidatePatchPiece(badSkinVertex, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
+    MeshGeometry badSkinVertex = good;
+    badSkinVertex.vertices[3].origin.skinVertex[0] = 99;
+    CHECK_STATUS(ValidateMeshGeometry(badSkinVertex, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
 
-    PatchPiece unsortedOrigin = good;
-    unsortedOrigin.nodes[3].origin.skinVertex[0] = 5;
-    unsortedOrigin.nodes[3].origin.skinVertex[1] = 3;
-    unsortedOrigin.nodes[3].origin.bary[0] = 0.5f;
-    unsortedOrigin.nodes[3].origin.bary[1] = 0.5f;
-    CHECK_STATUS(ValidatePatchPiece(unsortedOrigin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
+    MeshGeometry unsortedOrigin = good;
+    unsortedOrigin.vertices[3].origin.skinVertex[0] = 5;
+    unsortedOrigin.vertices[3].origin.skinVertex[1] = 3;
+    unsortedOrigin.vertices[3].origin.bary[0] = 0.5f;
+    unsortedOrigin.vertices[3].origin.bary[1] = 0.5f;
+    CHECK_STATUS(ValidateMeshGeometry(unsortedOrigin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
 
-    PatchPiece badCorner = good;
-    badCorner.corners[2].node = 99;
-    CHECK_STATUS(ValidatePatchPiece(badCorner, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
+    MeshGeometry badCorner = good;
+    badCorner.corners[2].vertex = 99;
+    CHECK_STATUS(ValidateMeshGeometry(badCorner, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
 
-    PatchPiece badFace = good;
+    MeshGeometry badFace = good;
     badFace.faces[0].corner[1] = 99;
-    CHECK_STATUS(ValidatePatchPiece(badFace, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
+    CHECK_STATUS(ValidateMeshGeometry(badFace, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
 
-    PatchPiece repeated = good;
+    MeshGeometry repeated = good;
     repeated.faces[0].corner[1] = repeated.faces[0].corner[0];
-    CHECK_STATUS(ValidatePatchPiece(repeated, kDefaultEpsilonScale, &detail), SliceStatus::DegenerateInput, detail);
+    CHECK_STATUS(ValidateMeshGeometry(repeated, kDefaultEpsilonScale, &detail), SliceStatus::DegenerateInput, detail);
 
-    PatchPiece flat = good;
-    flat.nodes[1].position = flat.nodes[0].position;   // collapses faces that use the edge 0-1
-    flat.nodes[1].position.x += 1e-9f;
-    CHECK_STATUS(ValidatePatchPiece(flat, kDefaultEpsilonScale, &detail), SliceStatus::DegenerateInput, detail);
+    MeshGeometry flat = good;
+    flat.vertices[1].position = flat.vertices[0].position;   // collapses faces that use the edge 0-1
+    flat.vertices[1].position.x += 1e-9f;
+    CHECK_STATUS(ValidateMeshGeometry(flat, kDefaultEpsilonScale, &detail), SliceStatus::DegenerateInput, detail);
 
     // Three faces on one edge.
-    PatchPiece fin = good;
-    fin.nodes.push_back(fin.nodes[0]);
-    fin.nodes.back().position = { 0.0f, 1.0f, -3.0f };
-    fin.nodes.back().origin.skinVertex[0] = 8;
+    MeshGeometry fin = good;
+    fin.vertices.push_back(fin.vertices[0]);
+    fin.vertices.back().position = { 0.0f, 1.0f, -3.0f };
+    fin.vertices.back().origin.skinVertex[0] = 8;
     std::vector<SkinVertex> finSkin = GetSkinVertices(fin);
     finSkin.push_back(finSkin[0]);
     SetSkinVertices(fin, finSkin);
-    PatchCorner extra;
-    extra.node = 8;
+    MeshCorner extra;
+    extra.vertex = 8;
     fin.corners.push_back(extra);
-    PatchFace fan;
+    MeshFace fan;
     fan.corner[0] = 0; fan.corner[1] = 1; fan.corner[2] = 8;   // edge 0-1 already has two faces
     fin.faces.push_back(fan);
-    CHECK_STATUS(ValidatePatchPiece(fin, kDefaultEpsilonScale, &detail), SliceStatus::NonManifoldInput, detail);
+    CHECK_STATUS(ValidateMeshGeometry(fin, kDefaultEpsilonScale, &detail), SliceStatus::NonManifoldInput, detail);
 
     // Two faces use an interior edge in the same direction (one face flipped).
-    PatchPiece flipped = good;
+    MeshGeometry flipped = good;
     std::swap(flipped.faces[0].corner[1], flipped.faces[0].corner[2]);
-    CHECK_STATUS(ValidatePatchPiece(flipped, kDefaultEpsilonScale, &detail), SliceStatus::NonManifoldInput, detail);
+    CHECK_STATUS(ValidateMeshGeometry(flipped, kDefaultEpsilonScale, &detail), SliceStatus::NonManifoldInput, detail);
 
     // A non-finite or negative epsilon scale is rejected as well.
-    CHECK_STATUS(ValidatePatchPiece(good, -1.0f, &detail), SliceStatus::InvalidInput, detail);
+    CHECK_STATUS(ValidateMeshGeometry(good, -1.0f, &detail), SliceStatus::InvalidInput, detail);
 }
 
 // An open edge without a kind (or tagged Interior/CapSeam) is rejected up front.
 static void TestUntaggedBoundaryIsRejected()
 {
-    PatchPiece sheet = MakePiece({ { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } }, { { 0, 1, 2 } });
+    MeshGeometry sheet = MakePiece({ { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } }, { { 0, 1, 2 } });
     std::string detail;
-    CHECK_STATUS(ValidatePatchPiece(sheet, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
-    TagOpenEdges(sheet, PatchEdgeKind::Replacement);
-    CHECK_STATUS(ValidatePatchPiece(sheet, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    sheet.boundary[MakeEdgeKey(0, 1)] = PatchEdgeKind::CapSeam;
-    CHECK_STATUS(ValidatePatchPiece(sheet, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
+    CHECK_STATUS(ValidateMeshGeometry(sheet, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
+    TagOpenEdges(sheet, MeshEdgeTag::Replacement);
+    CHECK_STATUS(ValidateMeshGeometry(sheet, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    sheet.edgeTags[MakeEdgeKey(0, 1)] = MeshEdgeTag::CapSeam;
+    CHECK_STATUS(ValidateMeshGeometry(sheet, kDefaultEpsilonScale, &detail), SliceStatus::InvalidInput, detail);
 }
 
 static void TestValidatePlane()
@@ -395,19 +412,19 @@ static void TestOpenGridBoundaryKinds()
             t.push_back({ a, a + 1, a + 5 });
             t.push_back({ a, a + 5, a + 4 });
         }
-    PatchPiece grid = MakePiece(p, t);
-    TagOpenEdges(grid, PatchEdgeKind::Replacement);
+    MeshGeometry grid = MakePiece(p, t);
+    TagOpenEdges(grid, MeshEdgeTag::Replacement);
     std::string detail;
-    CHECK_STATUS(ValidatePatchPiece(grid, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    CHECK(CountKind(grid, PatchEdgeKind::Replacement) == 12);   // perimeter of a 3x3 sheet
+    CHECK_STATUS(ValidateMeshGeometry(grid, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    CHECK(CountKind(grid, MeshEdgeTag::Replacement) == 12);   // perimeter of a 3x3 sheet
 }
 
 static void TestBoundaryDebugBake()
 {
-    PatchPiece piece;
+    MeshGeometry piece;
     WeldStats stats;
     std::string detail;
-    BuildPatchPiece(MakeTubeWeldInput(8, true, 1), kDefaultEpsilonScale, piece, stats, &detail);
+    BuildMeshGeometry(MakeTubeMeshData(8, true, 1), kDefaultEpsilonScale, piece, stats, &detail);
     ProceduralMeshData data;
     BakeBoundaryDebug(piece, 0.02f, data);
     CHECK(data.vertices.size() == 6u * 18u);           // 16 rim + 2 seam edges, 6 vertices each
@@ -434,22 +451,22 @@ static SliceOptions NoCapOptions()
     return options;
 }
 
-static uint32_t CountCutNodes(const PatchPiece& piece, uint32_t cutId)
+static uint32_t CountCutNodes(const MeshGeometry& piece, uint32_t cutId)
 {
     uint32_t n = 0;
-    for (const PatchNode& node : piece.nodes)
-        if (node.cutId == cutId)
+    for (const MeshVertex& vertex : piece.vertices)
+        if (vertex.cutId == cutId)
             ++n;
     return n;
 }
 
-static double TotalSurfaceArea(const PatchPiece& piece) { return TotalArea(piece, PatchFaceKind::Surface); }
+static double TotalSurfaceArea(const MeshGeometry& piece) { return TotalArea(piece, MeshFaceKind::Surface); }
 
 // Both output pieces must pass the same validation as an input piece.
-static void CheckPieceValid(const PatchPiece& piece, const char* label)
+static void CheckPieceValid(const MeshGeometry& piece, const char* label)
 {
     std::string detail;
-    const SliceStatus status = ValidatePatchPiece(piece, kDefaultEpsilonScale, &detail);
+    const SliceStatus status = ValidateMeshGeometry(piece, kDefaultEpsilonScale, &detail);
     ++g_checks;
     if (status != SliceStatus::Ok)
     {
@@ -458,7 +475,7 @@ static void CheckPieceValid(const PatchPiece& piece, const char* label)
     }
 }
 
-static PatchPiece MakeOctahedron()
+static MeshGeometry MakeOctahedron()
 {
     const std::vector<XMFLOAT3> p = {
         { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 }, { 0, -1, 0 } };
@@ -472,16 +489,16 @@ static PatchPiece MakeOctahedron()
 }
 
 // Case 1: closed box, every side face split by a diagonal, horizontal cut through the middle.
-// The plane crosses 4 vertical edges and the 4 diagonals (0-5, 1-6, 2-7, 3-4) = 8 cut nodes.
+// The plane crosses 4 vertical edges and the 4 diagonals (0-5, 1-6, 2-7, 3-4) = 8 cut vertices.
 static void TestBoxCenterCut()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    const SliceStatus status = SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    const SliceStatus status = SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result);
     CHECK_STATUS(status, SliceStatus::Ok, result.detail);
-    CHECK(result.positive.nodes.size() == 12 && result.negative.nodes.size() == 12);   // 4 box nodes + 8 cut nodes
+    CHECK(result.positive.vertices.size() == 12 && result.negative.vertices.size() == 12);   // 4 box vertices + 8 cut vertices
     CHECK(CountCutNodes(result.positive, 1) == 8 && CountCutNodes(result.negative, 1) == 8);
-    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 8 && CountKind(result.negative, PatchEdgeKind::Cut) == 8);
+    CHECK(CountKind(result.positive, MeshEdgeTag::Cut) == 8 && CountKind(result.negative, MeshEdgeTag::Cut) == 8);
     CHECK(result.positive.faces.size() + result.negative.faces.size() > box.faces.size());
     CheckPieceValid(result.positive, "box +");
     CheckPieceValid(result.negative, "box -");
@@ -491,70 +508,70 @@ static void TestBoxCenterCut()
     const double sum = TotalSurfaceArea(result.positive) + TotalSurfaceArea(result.negative);
     CHECK(std::fabs(sum - original) < original * 1e-5);
 
-    // Cut nodes lie on the plane and are shared by both pieces (same position bits).
-    for (const PatchNode& node : result.positive.nodes)
-        if (node.cutId == 1)
-            CHECK(std::fabs(node.position.y - 1.0f) < 1e-6f);
-    for (const PatchNode& a : result.positive.nodes)
+    // Cut vertices lie on the plane and are shared by both pieces (same position bits).
+    for (const MeshVertex& vertex : result.positive.vertices)
+        if (vertex.cutId == 1)
+            CHECK(std::fabs(vertex.position.y - 1.0f) < 1e-6f);
+    for (const MeshVertex& a : result.positive.vertices)
     {
         if (a.cutId != 1)
             continue;
         bool matched = false;
-        for (const PatchNode& b : result.negative.nodes)
+        for (const MeshVertex& b : result.negative.vertices)
             matched = matched || (b.cutId == 1 && b.position.x == a.position.x && b.position.y == a.position.y
                 && b.position.z == a.position.z);
         CHECK(matched);
     }
-    // Positive side keeps the top: its original nodes are the four at y = 2.
+    // Positive side keeps the top: its original vertices are the four at y = 2.
     uint32_t top = 0;
-    for (const PatchNode& node : result.positive.nodes)
-        if (node.cutId == 0)
+    for (const MeshVertex& vertex : result.positive.vertices)
+        if (vertex.cutId == 0)
         {
             ++top;
-            CHECK(node.position.y == 2.0f);
+            CHECK(vertex.position.y == 2.0f);
         }
     CHECK(top == 4);
-    // One outer loop of 8 nodes around a 2 x 2 square, counter-clockwise in the plane basis for
+    // One outer loop of 8 vertices around a 2 x 2 square, counter-clockwise in the plane basis for
     // the positive piece.
     CHECK(result.loops.size() == 1 && result.loops[0].size() == 8);
     CHECK(result.loopDepth.size() == 1 && result.loopDepth[0] == 0);
     CHECK(result.loopArea.size() == 1 && std::fabs(result.loopArea[0] - 4.0) < 1e-5);
     // The input is untouched.
-    CHECK(box.nodes.size() == 8 && box.faces.size() == 12);
+    CHECK(box.vertices.size() == 8 && box.faces.size() == 12);
 }
 
-// Case 2: the plane passes through nodes (the octahedron equator). No new nodes, no zero-area
+// Case 2: the plane passes through vertices (the octahedron equator). No new vertices, no zero-area
 // faces, and the four equator edges become the boundary of both pieces.
 static void TestPlaneThroughNodes()
 {
-    const PatchPiece octa = MakeOctahedron();
-    SliceResult result;
-    const SliceStatus status = SlicePatch(octa, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result);
+    const MeshGeometry octa = MakeOctahedron();
+    GeometrySliceResult result;
+    const SliceStatus status = SliceGeometry(octa, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result);
     CHECK_STATUS(status, SliceStatus::Ok, result.detail);
-    CHECK(result.positive.nodes.size() == 5 && result.negative.nodes.size() == 5);
+    CHECK(result.positive.vertices.size() == 5 && result.negative.vertices.size() == 5);
     CHECK(CountCutNodes(result.positive, 1) == 0 && CountCutNodes(result.negative, 1) == 0);
     CHECK(result.positive.faces.size() == 4 && result.negative.faces.size() == 4);
-    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 4 && CountKind(result.negative, PatchEdgeKind::Cut) == 4);
+    CHECK(CountKind(result.positive, MeshEdgeTag::Cut) == 4 && CountKind(result.negative, MeshEdgeTag::Cut) == 4);
     CheckPieceValid(result.positive, "octahedron +");
     CheckPieceValid(result.negative, "octahedron -");
-    // The loop is the equator diamond: 4 existing nodes, area 2.
+    // The loop is the equator diamond: 4 existing vertices, area 2.
     CHECK(result.loops.size() == 1 && result.loops[0].size() == 4);
     CHECK(result.loopArea.size() == 1 && std::fabs(result.loopArea[0] - 2.0) < 1e-6);
 }
 
-// A plane through exactly one node: the faces around it split the opposite edge ((0, +, -) faces)
-// or keep a lone corner ((+, -, -) faces), and the cut loop passes through the existing node.
+// A plane through exactly one vertex: the faces around it split the opposite edge ((0, +, -) faces)
+// or keep a lone corner ((+, -, -) faces), and the cut loop passes through the existing vertex.
 static void TestOneNodeOnPlane()
 {
-    const PatchPiece octa = MakeOctahedron();
-    SliceResult result;
-    const SliceStatus status = SlicePatch(octa, MakePlane(1, 0, 0, 1, 2, 0), 1, NoCapOptions(), result);
+    const MeshGeometry octa = MakeOctahedron();
+    GeometrySliceResult result;
+    const SliceStatus status = SliceGeometry(octa, MakePlane(1, 0, 0, 1, 2, 0), 1, NoCapOptions(), result);
     CHECK_STATUS(status, SliceStatus::Ok, result.detail);
     CHECK(CountCutNodes(result.positive, 1) == 3);      // edges apex-e1, apex-e2, apex-e3
-    CHECK(result.loops.size() == 1 && result.loops[0].size() == 4);     // those 3 + the node on the plane
-    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 4 && CountKind(result.negative, PatchEdgeKind::Cut) == 4);
-    CheckPieceValid(result.positive, "one node +");
-    CheckPieceValid(result.negative, "one node -");
+    CHECK(result.loops.size() == 1 && result.loops[0].size() == 4);     // those 3 + the vertex on the plane
+    CHECK(CountKind(result.positive, MeshEdgeTag::Cut) == 4 && CountKind(result.negative, MeshEdgeTag::Cut) == 4);
+    CheckPieceValid(result.positive, "one vertex +");
+    CheckPieceValid(result.negative, "one vertex -");
     const double original = TotalSurfaceArea(octa);
     CHECK(std::fabs(TotalSurfaceArea(result.positive) + TotalSurfaceArea(result.negative) - original) < original * 1e-5);
 }
@@ -575,17 +592,17 @@ static void TestOpenSheetIsOpenLoop()
             t.push_back({ a, a + 1, a + 5 });
             t.push_back({ a, a + 5, a + 4 });
         }
-    PatchPiece grid = MakePiece(p, t);
-    TagOpenEdges(grid, PatchEdgeKind::Replacement);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(grid, MakePlane(1.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
+    MeshGeometry grid = MakePiece(p, t);
+    TagOpenEdges(grid, MeshEdgeTag::Replacement);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(grid, MakePlane(1.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
     CHECK(result.detail.find("Replacement") != std::string::npos);
     CHECK(result.positive.Empty() && result.negative.Empty() && result.loops.empty());
 
     // A single triangle cut through one corner is open as well.
-    PatchPiece tri = MakePiece({ { 0, 0, 0 }, { 1, 1, 0 }, { 1, -1, 0 } }, { { 0, 1, 2 } });
-    TagOpenEdges(tri, PatchEdgeKind::Replacement);
-    CHECK_STATUS(SlicePatch(tri, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
+    MeshGeometry tri = MakePiece({ { 0, 0, 0 }, { 1, 1, 0 }, { 1, -1, 0 } }, { { 0, 1, 2 } });
+    TagOpenEdges(tri, MeshEdgeTag::Replacement);
+    CHECK_STATUS(SliceGeometry(tri, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
 }
 
 // Case 3: an edge lies on the plane and both faces around it are on the same side (touching).
@@ -595,9 +612,9 @@ static void TestTouchingIsNoCut()
     const XMFLOAT3 center = { 0.5f, 0.5f, 0.0f };
     const std::vector<Tri> t = { OutwardTri(p, { 0, 1, 2 }, center), OutwardTri(p, { 0, 3, 1 }, center),
         OutwardTri(p, { 0, 2, 3 }, center), OutwardTri(p, { 1, 3, 2 }, center) };
-    const PatchPiece tet = MakePiece(p, t);
-    SliceResult result;
-    const SliceStatus status = SlicePatch(tet, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result);
+    const MeshGeometry tet = MakePiece(p, t);
+    GeometrySliceResult result;
+    const SliceStatus status = SliceGeometry(tet, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result);
     CHECK_STATUS(status, SliceStatus::NoCut, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty());
 }
@@ -609,9 +626,9 @@ static void TestCoplanarFace()
     const XMFLOAT3 center = { 0.3f, 0.25f, 0.3f };
     const std::vector<Tri> t = { OutwardTri(p, { 0, 1, 2 }, center), OutwardTri(p, { 0, 3, 1 }, center),
         OutwardTri(p, { 1, 3, 2 }, center), OutwardTri(p, { 2, 3, 0 }, center) };
-    const PatchPiece tet = MakePiece(p, t);
-    SliceResult result;
-    const SliceStatus status = SlicePatch(tet, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result);
+    const MeshGeometry tet = MakePiece(p, t);
+    GeometrySliceResult result;
+    const SliceStatus status = SliceGeometry(tet, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result);
     CHECK_STATUS(status, SliceStatus::CoplanarFace, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty());
 }
@@ -619,42 +636,42 @@ static void TestCoplanarFace()
 // Case 5: the plane misses the piece.
 static void TestMissIsNoCut()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 10, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::NoCut, result.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 10, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::NoCut, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty() && result.loops.empty());
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, -1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::NoCut, result.detail);
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, -1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::NoCut, result.detail);
 }
 
 // Case 12: failures leave nothing but status and detail, even when out held a previous result.
 static void TestFailureClearsOut()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
     CHECK(!result.positive.Empty() && !result.negative.Empty());
 
     result.loops.push_back({ 1, 2, 3 });
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 10, 0, 0, 1, 0), 2, NoCapOptions(), result), SliceStatus::NoCut, result.detail);
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 10, 0, 0, 1, 0), 2, NoCapOptions(), result), SliceStatus::NoCut, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty() && result.loops.empty());
-    CHECK(result.positive.nodes.empty() && result.negative.corners.empty());
+    CHECK(result.positive.vertices.empty() && result.negative.corners.empty());
     CHECK(!result.detail.empty());
 
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 0, 0), 1, NoCapOptions(), result), SliceStatus::InvalidInput, result.detail);
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 0, 0), 1, NoCapOptions(), result), SliceStatus::InvalidInput, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty());
 
-    PatchPiece broken = box;
+    MeshGeometry broken = box;
     broken.faces[3].corner[0] = 99;
-    CHECK_STATUS(SlicePatch(broken, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidInput, result.detail);
+    CHECK_STATUS(SliceGeometry(broken, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidInput, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty());
 }
 
-// Position bits come from the node: every corner of one node bakes to the same position.
+// Position bits come from the vertex: every corner of one vertex bakes to the same position.
 static void TestBakeSharesNodePositions()
 {
-    PatchPiece strip = MakePiece({ { 0, 0, 0 }, { 0, 2, 0 }, { 1, 1, 0 }, { -1, 1, 0 } }, { { 0, 1, 2 }, { 1, 0, 3 } });
-    PatchCorner a2 = strip.corners[0];
+    MeshGeometry strip = MakePiece({ { 0, 0, 0 }, { 0, 2, 0 }, { 1, 1, 0 }, { -1, 1, 0 } }, { { 0, 1, 2 }, { 1, 0, 3 } });
+    MeshCorner a2 = strip.corners[0];
     a2.uv = { 5.0f, 5.0f };
     strip.corners.push_back(a2);
     strip.faces[1].corner[1] = 4;
@@ -666,7 +683,7 @@ static void TestBakeSharesNodePositions()
     CHECK(baked.vertices[4].uv.x == 5.0f);
 
     // A cap face moves to its own section; empty sections are never created.
-    strip.faces[1].kind = PatchFaceKind::Cap;
+    strip.faces[1].kind = MeshFaceKind::Cap;
     BuildRenderMesh(strip, baked);
     CHECK(baked.sections.size() == 2 && baked.sections[0].indexCount == 3 && baked.sections[1].firstIndex == 3
         && baked.sections[1].indexCount == 3 && baked.sections[1].materialSlot == 1);
@@ -675,38 +692,38 @@ static void TestBakeSharesNodePositions()
     CHECK(mesh.SetMesh(baked, &error));
 }
 
-// A cut node may depend on at most three original nodes.
+// A cut vertex may depend on at most three original vertices.
 static void TestOriginLimit()
 {
-    PatchPiece box = MakeBox();
+    MeshGeometry box = MakeBox();
     for (int i = 0; i < 3; ++i)
     {
-        box.nodes[0].origin.skinVertex[i] = uint32_t(i);
-        box.nodes[0].origin.bary[i] = 1.0f / 3.0f;
+        box.vertices[0].origin.skinVertex[i] = uint32_t(i);
+        box.vertices[0].origin.bary[i] = 1.0f / 3.0f;
     }
-    box.nodes[4].origin.skinVertex[0] = 3;
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidOrigin, result.detail);
+    box.vertices[4].origin.skinVertex[0] = 3;
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidOrigin, result.detail);
     CHECK(result.positive.Empty());
 }
 
 // The plane may never split a cap face.
 static void TestCapFaceIsNotCrossed()
 {
-    PatchPiece box = MakeBox();
-    box.faces[4].kind = PatchFaceKind::Cap;
+    MeshGeometry box = MakeBox();
+    box.faces[4].kind = MeshFaceKind::Cap;
     box.faces[4].cutId = 7;
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::CrossesCap, result.detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::CrossesCap, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty());
 }
 
 // A tilted plane splits the box into two non-empty pieces whose areas still add up.
 static void TestTiltedCutKeepsArea()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    const SliceStatus status = SlicePatch(box, MakePlane(0.1f, 0.9f, -0.2f, 0.3f, 1.0f, 0.2f), 1, NoCapOptions(), result);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    const SliceStatus status = SliceGeometry(box, MakePlane(0.1f, 0.9f, -0.2f, 0.3f, 1.0f, 0.2f), 1, NoCapOptions(), result);
     CHECK_STATUS(status, SliceStatus::Ok, result.detail);
     CheckPieceValid(result.positive, "tilted +");
     CheckPieceValid(result.negative, "tilted -");
@@ -726,67 +743,67 @@ static void TestSliverOutputIsRejected()
     p.push_back({ 21, 0, 0 });
     p.push_back({ 21, thin, 0 });
     t.push_back({ 4, 5, 6 });
-    PatchPiece piece = MakePiece(p, t);
-    TagOpenEdges(piece, PatchEdgeKind::Replacement);
+    MeshGeometry piece = MakePiece(p, t);
+    TagOpenEdges(piece, MeshEdgeTag::Replacement);
     std::string detail;
-    CHECK_STATUS(ValidatePatchPiece(piece, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    CHECK_STATUS(ValidateMeshGeometry(piece, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
 
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(piece, MakePlane(20.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result),
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(piece, MakePlane(20.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result),
         SliceStatus::DegenerateInput, result.detail);
     CHECK(result.positive.Empty() && result.negative.Empty());
     CHECK(result.detail.find("output") == 0);
 
     // The same cut on a triangle that is not marginal is fine.
-    piece.nodes[6].position.y = 1e-3f;
+    piece.vertices[6].position.y = 1e-3f;
     // The sheet is open, so the cut ends as OpenLoop: reaching the loop stage shows the output
     // pieces passed validation (a sliver would have stopped earlier with DegenerateInput).
-    CHECK_STATUS(SlicePatch(piece, MakePlane(20.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
+    CHECK_STATUS(SliceGeometry(piece, MakePlane(20.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
 }
 
 // ---------------------------------------------------------------- 2-3 tests
 
 // src를 dst 뒤에 붙인다 (정점, corner, 면, 스킨 정점, 에지 태그 번호를 다시 매긴다).
-static void AppendPiece(PatchPiece& dst, const PatchPiece& src)
+static void AppendPiece(MeshGeometry& dst, const MeshGeometry& src)
 {
-    const uint32_t nodeBase = uint32_t(dst.nodes.size());
+    const uint32_t nodeBase = uint32_t(dst.vertices.size());
     const uint32_t cornerBase = uint32_t(dst.corners.size());
     std::vector<SkinVertex> skinVertices = GetSkinVertices(dst);
     const uint32_t originBase = uint32_t(skinVertices.size());
     for (const SkinVertex& skin : GetSkinVertices(src))
         skinVertices.push_back(skin);
     SetSkinVertices(dst, skinVertices);
-    for (PatchNode node : src.nodes)
+    for (MeshVertex vertex : src.vertices)
     {
         for (int i = 0; i < 3; ++i)
-            if (node.origin.skinVertex[i] != kNoNode)
-                node.origin.skinVertex[i] += originBase;
-        dst.nodes.push_back(node);
+            if (vertex.origin.skinVertex[i] != kInvalidIndex)
+                vertex.origin.skinVertex[i] += originBase;
+        dst.vertices.push_back(vertex);
     }
-    for (PatchCorner corner : src.corners)
+    for (MeshCorner corner : src.corners)
     {
-        corner.node += nodeBase;
+        corner.vertex += nodeBase;
         dst.corners.push_back(corner);
     }
-    for (PatchFace face : src.faces)
+    for (MeshFace face : src.faces)
     {
         for (int k = 0; k < 3; ++k)
             face.corner[k] += cornerBase;
         dst.faces.push_back(face);
     }
-    for (const auto& entry : src.boundary)
-        dst.boundary[MakeEdgeKey(EdgeKeyLow(entry.first) + nodeBase, EdgeKeyHigh(entry.first) + nodeBase)] = entry.second;
+    for (const auto& entry : src.edgeTags)
+        dst.edgeTags[MakeEdgeKey(EdgeKeyLow(entry.first) + nodeBase, EdgeKeyHigh(entry.first) + nodeBase)] = entry.second;
 }
 
 // The box scaled to a square of half-size `half` around (cx, cz) with the given top height.
-static PatchPiece MakeBoxAt(float cx, float cz, float half, float height)
+static MeshGeometry MakeBoxAt(float cx, float cz, float half, float height)
 {
-    PatchPiece box = MakeBox();
-    for (PatchNode& node : box.nodes)
+    MeshGeometry box = MakeBox();
+    for (MeshVertex& vertex : box.vertices)
     {
-        node.position.x = cx + node.position.x * half;
-        node.position.z = cz + node.position.z * half;
-        node.position.y = node.position.y * 0.5f * height;
+        vertex.position.x = cx + vertex.position.x * half;
+        vertex.position.z = cz + vertex.position.z * half;
+        vertex.position.y = vertex.position.y * 0.5f * height;
     }
     return box;
 }
@@ -803,7 +820,7 @@ static Tri OrientToward(const std::vector<XMFLOAT3>& p, Tri t, double dx, double
 }
 
 // Closed thick tube around the Y axis (outer radius R, inner radius r, height 2) with n columns.
-static PatchPiece MakeThickTube(int n, float outer, float inner)
+static MeshGeometry MakeThickTube(int n, float outer, float inner)
 {
     const double kTwoPi = 6.283185307179586;
     std::vector<XMFLOAT3> p;
@@ -833,44 +850,44 @@ static PatchPiece MakeThickTube(int n, float outer, float inner)
     return MakePiece(p, t);
 }
 
-// Case 7: a UV seam (separate corners, one node per column after welding) is cut without a
-// break. Seam corners keep their UVs and share the node's position bits.
-// Cut attributes run from the lower node to the higher one whichever way a face walks the edge:
+// Case 7: a UV seam (separate corners, one vertex per column after welding) is cut without a
+// break. Seam corners keep their UVs and share the vertex's position bits.
+// Cut attributes run from the lower vertex to the higher one whichever way a face walks the edge:
 // at y = 0.5 (t = 0.25 up the wall) every cut corner has v = 0.25.
 static void TestUvSeamTubeCut()
 {
-    PatchPiece tube;
+    MeshGeometry tube;
     WeldStats stats;
     std::string detail;
-    CHECK_STATUS(BuildPatchPiece(MakeTubeWeldInput(8, true, 0), kDefaultEpsilonScale, tube, stats, &detail), SliceStatus::Ok, detail);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(tube, MakePlane(0, 0.5f, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK_STATUS(BuildMeshGeometry(MakeTubeMeshData(8, true, 0), kDefaultEpsilonScale, tube, stats, &detail), SliceStatus::Ok, detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(tube, MakePlane(0, 0.5f, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
     CHECK(result.loops.size() == 1 && result.loops[0].size() == 16);       // 8 vertical edges + 8 diagonals
     CHECK(result.loopDepth.size() == 1 && result.loopDepth[0] == 0);
     CheckPieceValid(result.positive, "tube +");
     CheckPieceValid(result.negative, "tube -");
 
     int seamLow = 0, seamHigh = 0;
-    for (const PatchCorner& corner : result.positive.corners)
+    for (const MeshCorner& corner : result.positive.corners)
     {
-        if (result.positive.nodes[corner.node].cutId != 1)
+        if (result.positive.vertices[corner.vertex].cutId != 1)
             continue;
         CHECK(std::fabs(corner.uv.y - 0.25f) < 1e-5f);
-        const XMFLOAT3& pos = result.positive.nodes[corner.node].position;
+        const XMFLOAT3& pos = result.positive.vertices[corner.vertex].position;
         if (std::fabs(pos.x - 1.0f) < 1e-6f && std::fabs(pos.z) < 1e-6f)
         {
             seamLow += std::fabs(corner.uv.x) < 1e-6f;
             seamHigh += std::fabs(corner.uv.x - 1.0f) < 1e-6f;
         }
     }
-    CHECK(seamLow == 1 && seamHigh == 1);    // one corner per side of the seam, both on one node
+    CHECK(seamLow == 1 && seamHigh == 1);    // one corner per side of the seam, both on one vertex
 
     ProceduralMeshData baked;
     BuildRenderMesh(result.positive, baked);
     bool bitEqual = false;
     for (size_t i = 0; i < baked.vertices.size(); ++i)
         for (size_t j = i + 1; j < baked.vertices.size(); ++j)
-            if (result.positive.corners[i].node == result.positive.corners[j].node
+            if (result.positive.corners[i].vertex == result.positive.corners[j].vertex
                 && result.positive.corners[i].uv.x != result.positive.corners[j].uv.x)
                 bitEqual = baked.vertices[i].position.x == baked.vertices[j].position.x
                     && baked.vertices[i].position.y == baked.vertices[j].position.y
@@ -882,12 +899,12 @@ static void TestUvSeamTubeCut()
 // across it is an OpenLoop.
 static void TestSkinSplitSeamIsOpenLoop()
 {
-    PatchPiece tube;
+    MeshGeometry tube;
     WeldStats stats;
     std::string detail;
-    CHECK_STATUS(BuildPatchPiece(MakeTubeWeldInput(8, true, 1), kDefaultEpsilonScale, tube, stats, &detail), SliceStatus::Ok, detail);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
+    CHECK_STATUS(BuildMeshGeometry(MakeTubeMeshData(8, true, 1), kDefaultEpsilonScale, tube, stats, &detail), SliceStatus::Ok, detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
     CHECK(result.detail.find("UnweldedSeam") != std::string::npos);
 }
 
@@ -895,11 +912,11 @@ static void TestSkinSplitSeamIsOpenLoop()
 // winding and sits inside the outer loop.
 static void TestThickTubeHoleLoops()
 {
-    const PatchPiece tube = MakeThickTube(8, 2.0f, 1.0f);
+    const MeshGeometry tube = MakeThickTube(8, 2.0f, 1.0f);
     std::string detail;
-    CHECK_STATUS(ValidatePatchPiece(tube, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK_STATUS(ValidateMeshGeometry(tube, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
     CHECK(result.loops.size() == 2);
     if (result.loops.size() == 2)
     {
@@ -913,7 +930,7 @@ static void TestThickTubeHoleLoops()
     CheckPieceValid(result.negative, "thick tube -");
 }
 
-// Two solids that touch at one node: that node has two outgoing and two incoming cut edges.
+// Two solids that touch at one vertex: that vertex has two outgoing and two incoming cut edges.
 static void TestSharedNodeIsNonManifoldLoop()
 {
     std::vector<XMFLOAT3> p = { { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 }, { 0, -1, 0 } };
@@ -923,7 +940,7 @@ static void TestSharedNodeIsNonManifoldLoop()
         t.push_back(OutwardTri(p, { 4, i, (i + 1) % 4 }, { 0, 0, 0 }));
         t.push_back(OutwardTri(p, { 5, i, (i + 1) % 4 }, { 0, 0, 0 }));
     }
-    // Second octahedron centered at (2,0,0): its node at (1,0,0) is node 0 of the first.
+    // Second octahedron centered at (2,0,0): its vertex at (1,0,0) is vertex 0 of the first.
     const uint32_t b[6] = { 6, 7, 0, 8, 9, 10 };        // local 0..5 -> global
     const XMFLOAT3 local[6] = { { 3, 0, 0 }, { 2, 0, 1 }, { 1, 0, 0 }, { 2, 0, -1 }, { 2, 1, 0 }, { 2, -1, 0 } };
     p.push_back(local[0]); p.push_back(local[1]); p.push_back(local[3]); p.push_back(local[4]); p.push_back(local[5]);
@@ -932,33 +949,33 @@ static void TestSharedNodeIsNonManifoldLoop()
         t.push_back(OutwardTri(p, { b[4], b[i], b[(i + 1) % 4] }, { 2, 0, 0 }));
         t.push_back(OutwardTri(p, { b[5], b[i], b[(i + 1) % 4] }, { 2, 0, 0 }));
     }
-    const PatchPiece pair = MakePiece(p, t);
+    const MeshGeometry pair = MakePiece(p, t);
     std::string detail;
-    CHECK_STATUS(ValidatePatchPiece(pair, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(pair, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::NonManifoldLoop, result.detail);
+    CHECK_STATUS(ValidateMeshGeometry(pair, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(pair, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::NonManifoldLoop, result.detail);
 }
 
 // Loops that cross, nest with the wrong winding, or nest too deep are InvalidLoop.
 static void TestInvalidLoops()
 {
-    SliceResult result;
+    GeometrySliceResult result;
 
-    PatchPiece crossing = MakeBoxAt(0, 0, 1, 2);
+    MeshGeometry crossing = MakeBoxAt(0, 0, 1, 2);
     AppendPiece(crossing, MakeBoxAt(1, 1, 1, 2));
-    CHECK_STATUS(SlicePatch(crossing, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
+    CHECK_STATUS(SliceGeometry(crossing, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
     CHECK(result.detail.find("cross") != std::string::npos);
 
     // A box inside a box with the same orientation: the inner loop is not a hole.
-    PatchPiece nested = MakeBoxAt(0, 0, 3, 2);
+    MeshGeometry nested = MakeBoxAt(0, 0, 3, 2);
     AppendPiece(nested, MakeBoxAt(0, 0, 1, 2));
-    CHECK_STATUS(SlicePatch(nested, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
+    CHECK_STATUS(SliceGeometry(nested, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
     CHECK(result.detail.find("wrong way") != std::string::npos);
 
     // An island inside the hole of a thick tube is nested two deep.
-    PatchPiece island = MakeThickTube(8, 3.0f, 2.0f);
+    MeshGeometry island = MakeThickTube(8, 3.0f, 2.0f);
     AppendPiece(island, MakeBoxAt(0, 0, 0.5f, 2));
-    CHECK_STATUS(SlicePatch(island, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
+    CHECK_STATUS(SliceGeometry(island, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
     CHECK(result.detail.find("nested") != std::string::npos);
 
     // A prism with a bow-tie cross section: the cut loop touches itself in the middle.
@@ -973,10 +990,10 @@ static void TestInvalidLoops()
         t.push_back({ 9, 4 + i, 4 + j });
         t.push_back({ 8, j, i });
     }
-    const PatchPiece bowtie = MakePiece(p, t);
+    const MeshGeometry bowtie = MakePiece(p, t);
     std::string detail;
-    CHECK_STATUS(ValidatePatchPiece(bowtie, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    CHECK_STATUS(SlicePatch(bowtie, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
+    CHECK_STATUS(ValidateMeshGeometry(bowtie, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    CHECK_STATUS(SliceGeometry(bowtie, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
     CHECK(result.detail.find("itself") != std::string::npos);
 }
 
@@ -989,9 +1006,9 @@ static SliceOptions CapOptions()
     return options;
 }
 
-static uint32_t CountOpenEdges(const PatchPiece& piece)
+static uint32_t CountOpenEdges(const MeshGeometry& piece)
 {
-    PatchEdgeUsageMap usage;
+    MeshEdgeUsageMap usage;
     CollectEdgeUsage(piece, usage);
     uint32_t n = 0;
     for (const auto& entry : usage)
@@ -999,24 +1016,24 @@ static uint32_t CountOpenEdges(const PatchPiece& piece)
     return n;
 }
 
-static uint32_t CountCapFaces(const PatchPiece& piece)
+static uint32_t CountCapFaces(const MeshGeometry& piece)
 {
     uint32_t n = 0;
-    for (const PatchFace& face : piece.faces)
-        n += face.kind == PatchFaceKind::Cap;
+    for (const MeshFace& face : piece.faces)
+        n += face.kind == MeshFaceKind::Cap;
     return n;
 }
 
 // Dot of a cap face's geometric normal with a direction.
-static double CapFacing(const PatchPiece& piece, double dx, double dy, double dz)
+static double CapFacing(const MeshGeometry& piece, double dx, double dy, double dz)
 {
-    for (const PatchFace& face : piece.faces)
+    for (const MeshFace& face : piece.faces)
     {
-        if (face.kind != PatchFaceKind::Cap)
+        if (face.kind != MeshFaceKind::Cap)
             continue;
-        const XMFLOAT3 &a = piece.nodes[piece.corners[face.corner[0]].node].position;
-        const XMFLOAT3 &b = piece.nodes[piece.corners[face.corner[1]].node].position;
-        const XMFLOAT3 &c = piece.nodes[piece.corners[face.corner[2]].node].position;
+        const XMFLOAT3 &a = piece.vertices[piece.corners[face.corner[0]].vertex].position;
+        const XMFLOAT3 &b = piece.vertices[piece.corners[face.corner[1]].vertex].position;
+        const XMFLOAT3 &c = piece.vertices[piece.corners[face.corner[2]].vertex].position;
         const double e1[3] = { double(b.x) - a.x, double(b.y) - a.y, double(b.z) - a.z };
         const double e2[3] = { double(c.x) - a.x, double(c.y) - a.y, double(c.z) - a.z };
         return (e1[1] * e2[2] - e1[2] * e2[1]) * dx + (e1[2] * e2[0] - e1[0] * e2[2]) * dy + (e1[0] * e2[1] - e1[1] * e2[0]) * dz;
@@ -1024,24 +1041,24 @@ static double CapFacing(const PatchPiece& piece, double dx, double dy, double dz
     return 0.0;
 }
 
-// Case 10: the cap is watertight. The rim has collinear nodes (the diagonal crossings sit in the
+// Case 10: the cap is watertight. The rim has collinear vertices (the diagonal crossings sit in the
 // middle of each square side), which an ear clipper that drops straight points would turn into
 // T-junctions; here every cut edge is shared with exactly one cap face.
 static void TestCapIsWatertight()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
     CheckPieceValid(result.positive, "capped box +");
     CheckPieceValid(result.negative, "capped box -");
     CHECK(CountCapFaces(result.positive) == 6 && CountCapFaces(result.negative) == 6);   // 8-gon rim
-    CHECK(CountKind(result.positive, PatchEdgeKind::Cut) == 0 && CountKind(result.negative, PatchEdgeKind::Cut) == 0);
-    CHECK(CountKind(result.positive, PatchEdgeKind::CapSeam) == 8 && CountKind(result.negative, PatchEdgeKind::CapSeam) == 8);
+    CHECK(CountKind(result.positive, MeshEdgeTag::Cut) == 0 && CountKind(result.negative, MeshEdgeTag::Cut) == 0);
+    CHECK(CountKind(result.positive, MeshEdgeTag::CapSeam) == 8 && CountKind(result.negative, MeshEdgeTag::CapSeam) == 8);
     CHECK(CountOpenEdges(result.positive) == 0 && CountOpenEdges(result.negative) == 0);   // closed solids
-    CHECK(std::fabs(TotalArea(result.positive, PatchFaceKind::Cap) - 4.0) < 1e-5);
+    CHECK(std::fabs(TotalArea(result.positive, MeshFaceKind::Cap) - 4.0) < 1e-5);
     // The cap faces away from the kept side.
     CHECK(CapFacing(result.positive, 0, -1, 0) > 0.0 && CapFacing(result.negative, 0, 1, 0) > 0.0);
-    CHECK(result.positive.caps.size() == 1 && result.positive.caps[0].rimNodes.size() == 8 && result.positive.caps[0].cutId == 1);
+    CHECK(result.positive.caps.size() == 1 && result.positive.caps[0].rimVertices.size() == 8 && result.positive.caps[0].cutId == 1);
     CHECK(result.positive.caps[0].planeNormal.y == -1.0f && result.negative.caps[0].planeNormal.y == 1.0f);
     // Surface plus cap still covers the box once, plus two caps.
     const double original = TotalSurfaceArea(box);
@@ -1055,8 +1072,8 @@ static void TestCapIsWatertight()
     std::string error;
     CHECK(mesh.SetMesh(baked, &error));
     // Cap corners carry the planar UV and the outward normal.
-    for (const PatchFace& face : result.positive.faces)
-        if (face.kind == PatchFaceKind::Cap)
+    for (const MeshFace& face : result.positive.faces)
+        if (face.kind == MeshFaceKind::Cap)
             for (int k = 0; k < 3; ++k)
                 CHECK(result.positive.corners[face.corner[k]].normal.y == -1.0f);
 }
@@ -1064,9 +1081,9 @@ static void TestCapIsWatertight()
 // A tube with a hole: the cap is the outer polygon minus the hole, joined by bridge edges.
 static void TestCapWithHole()
 {
-    const PatchPiece tube = MakeThickTube(8, 2.0f, 1.0f);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    const MeshGeometry tube = MakeThickTube(8, 2.0f, 1.0f);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
     CHECK(result.loops.size() == 2);
     CheckPieceValid(result.positive, "capped tube +");
     CheckPieceValid(result.negative, "capped tube -");
@@ -1075,7 +1092,7 @@ static void TestCapWithHole()
     if (result.loopArea.size() == 2)
     {
         const double expected = std::fabs(result.loopArea[0]) - std::fabs(result.loopArea[1]);
-        CHECK(std::fabs(std::fabs(TotalArea(result.positive, PatchFaceKind::Cap)) - std::fabs(expected)) < 1e-4 * std::fabs(expected));
+        CHECK(std::fabs(std::fabs(TotalArea(result.positive, MeshFaceKind::Cap)) - std::fabs(expected)) < 1e-4 * std::fabs(expected));
     }
     CHECK(result.positive.caps.size() == 1 && result.positive.caps[0].loopSizes.size() == 2);
 }
@@ -1102,14 +1119,14 @@ static void TestCapOfConcaveLoop()
         t.push_back(OrientToward(p, { i, j, 6 + j }, dz, 0, -dx));
         t.push_back(OrientToward(p, { i, 6 + j, 6 + i }, dz, 0, -dx));
     }
-    const PatchPiece prism = MakePiece(p, t);
+    const MeshGeometry prism = MakePiece(p, t);
     std::string detail;
-    CHECK_STATUS(ValidatePatchPiece(prism, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(prism, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK_STATUS(ValidateMeshGeometry(prism, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(prism, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
     CheckPieceValid(result.positive, "L prism +");
     CheckPieceValid(result.negative, "L prism -");
-    CHECK(std::fabs(TotalArea(result.positive, PatchFaceKind::Cap) - 3.0) < 1e-5);        // the L covers 3 unit squares
+    CHECK(std::fabs(TotalArea(result.positive, MeshFaceKind::Cap) - 3.0) < 1e-5);        // the L covers 3 unit squares
     CHECK(CountOpenEdges(result.positive) == 0 && CountOpenEdges(result.negative) == 0);
 }
 
@@ -1117,13 +1134,13 @@ static void TestCapOfConcaveLoop()
 // old cap and its seam tags stay with the piece that keeps them; a cut through the cap is rejected.
 static void TestRecut()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult first;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
-    const PatchPiece upper = first.positive;       // y in [1, 2], cap at y = 1
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult first;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
+    const MeshGeometry upper = first.positive;       // y in [1, 2], cap at y = 1
 
-    SliceResult second;
-    CHECK_STATUS(SlicePatch(upper, MakePlane(0, 1.5f, 0, 0, 1, 0), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
+    GeometrySliceResult second;
+    CHECK_STATUS(SliceGeometry(upper, MakePlane(0, 1.5f, 0, 0, 1, 0), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
     CheckPieceValid(second.positive, "recut +");
     CheckPieceValid(second.negative, "recut -");
     // The slab between the two cuts keeps the first cap; the top part has none of it.
@@ -1131,47 +1148,47 @@ static void TestRecut()
     CHECK(second.positive.caps[0].cutId == 2 && second.negative.caps[0].cutId == 1);
     CHECK(second.loops.size() == 1);
     const size_t newSeam = second.loops.empty() ? 0 : second.loops[0].size();
-    CHECK(CountKind(second.negative, PatchEdgeKind::CapSeam) == 8 + newSeam);    // inherited old seam + new seam
-    CHECK(CountKind(second.positive, PatchEdgeKind::CapSeam) == newSeam);
+    CHECK(CountKind(second.negative, MeshEdgeTag::CapSeam) == 8 + newSeam);    // inherited old seam + new seam
+    CHECK(CountKind(second.positive, MeshEdgeTag::CapSeam) == newSeam);
     CHECK(CountOpenEdges(second.negative) == 0 && CountOpenEdges(second.positive) == 0);
-    for (const PatchNode& node : second.negative.nodes)
+    for (const MeshVertex& vertex : second.negative.vertices)
     {
         int used = 0;
         double sum = 0.0;
         for (int i = 0; i < 3; ++i)
-            if (node.origin.skinVertex[i] != kNoNode)
+            if (vertex.origin.skinVertex[i] != kInvalidIndex)
             {
                 ++used;
-                sum += node.origin.bary[i];
+                sum += vertex.origin.bary[i];
             }
         CHECK(used >= 1 && used <= 3 && std::fabs(sum - 1.0) < 1e-4);
     }
 
     // A plane that misses the piece, and one that cuts through the cap.
-    SliceResult miss;
-    CHECK_STATUS(SlicePatch(upper, MakePlane(0, 0.5f, 0, 0, 1, 0), 2, CapOptions(), miss), SliceStatus::NoCut, miss.detail);
-    SliceResult through;
-    CHECK_STATUS(SlicePatch(upper, MakePlane(0, 1.5f, 0, 1, 0, 0), 2, CapOptions(), through), SliceStatus::CrossesCap, through.detail);
+    GeometrySliceResult miss;
+    CHECK_STATUS(SliceGeometry(upper, MakePlane(0, 0.5f, 0, 0, 1, 0), 2, CapOptions(), miss), SliceStatus::NoCut, miss.detail);
+    GeometrySliceResult through;
+    CHECK_STATUS(SliceGeometry(upper, MakePlane(0, 1.5f, 0, 1, 0, 0), 2, CapOptions(), through), SliceStatus::CrossesCap, through.detail);
     CHECK(through.positive.Empty() && through.negative.Empty());
     // The input piece is untouched by all of this.
-    CHECK(upper.caps.size() == 1 && CountKind(upper, PatchEdgeKind::CapSeam) == 8);
+    CHECK(upper.caps.size() == 1 && CountKind(upper, MeshEdgeTag::CapSeam) == 8);
 }
 
 // ---------------------------------------------------------------- debug tests (face origin)
 
 // A surface face carries the cut that divided it; a face moved over whole keeps its old value.
-// The octahedron cut through one node has (0, +, -) faces, whose opposite edge is divided.
-static void CheckDividedFacesHaveCutId(const SliceResult& result, const PatchPiece& input, uint32_t cutId, const char* label)
+// The octahedron cut through one vertex has (0, +, -) faces, whose opposite edge is divided.
+static void CheckDividedFacesHaveCutId(const GeometrySliceResult& result, const MeshGeometry& input, uint32_t cutId, const char* label)
 {
     // Per source triangle: faces going in, faces coming out (both pieces). More faces out than in
     // means this cut divided one of them; otherwise every face keeps a cutId it already had.
     std::vector<uint32_t> in(input.faces.size() + 64, 0), out(in.size(), 0);
-    for (const PatchFace& face : input.faces)
-        if (face.kind == PatchFaceKind::Surface)
+    for (const MeshFace& face : input.faces)
+        if (face.kind == MeshFaceKind::Surface)
             ++in[face.sourceTriangle];
-    for (const PatchPiece* piece : { &result.positive, &result.negative })
-        for (const PatchFace& face : piece->faces)
-            if (face.kind == PatchFaceKind::Surface)
+    for (const MeshGeometry* piece : { &result.positive, &result.negative })
+        for (const MeshFace& face : piece->faces)
+            if (face.kind == MeshFaceKind::Surface)
                 ++out[face.sourceTriangle];
     uint32_t divided = 0;
     for (uint32_t t = 0; t < in.size(); ++t)
@@ -1180,15 +1197,15 @@ static void CheckDividedFacesHaveCutId(const SliceResult& result, const PatchPie
             continue;
         const bool wasDivided = out[t] > in[t];
         bool marked = false;
-        for (const PatchPiece* piece : { &result.positive, &result.negative })
-            for (const PatchFace& face : piece->faces)
+        for (const MeshGeometry* piece : { &result.positive, &result.negative })
+            for (const MeshFace& face : piece->faces)
             {
-                if (face.kind != PatchFaceKind::Surface || face.sourceTriangle != t)
+                if (face.kind != MeshFaceKind::Surface || face.sourceTriangle != t)
                     continue;
                 marked = marked || face.cutId == cutId;
                 bool known = face.cutId == cutId && wasDivided;
-                for (const PatchFace& old : input.faces)
-                    known = known || (old.kind == PatchFaceKind::Surface && old.sourceTriangle == t && old.cutId == face.cutId);
+                for (const MeshFace& old : input.faces)
+                    known = known || (old.kind == MeshFaceKind::Surface && old.sourceTriangle == t && old.cutId == face.cutId);
                 if (!known)
                 {
                     std::printf("  %s: face of triangle %u has cutId %u\n", label, t, face.cutId);
@@ -1208,48 +1225,48 @@ static uint32_t CountSectionFaces(const ProceduralMeshData& baked, uint32_t sect
 
 static void TestSplitFacesRecordCutId()
 {
-    // Plane through one node: (0, +, -) faces and lone-corner faces.
-    const PatchPiece octa = MakeOctahedron();
-    SliceResult oneNode;
-    CHECK_STATUS(SlicePatch(octa, MakePlane(1, 0, 0, 1, 2, 0), 1, NoCapOptions(), oneNode), SliceStatus::Ok, oneNode.detail);
+    // Plane through one vertex: (0, +, -) faces and lone-corner faces.
+    const MeshGeometry octa = MakeOctahedron();
+    GeometrySliceResult oneNode;
+    CHECK_STATUS(SliceGeometry(octa, MakePlane(1, 0, 0, 1, 2, 0), 1, NoCapOptions(), oneNode), SliceStatus::Ok, oneNode.detail);
     CheckDividedFacesHaveCutId(oneNode, octa, 1, "octahedron");
 
     // Nothing was cut before, so every face is either undivided (0) or divided by cut 1.
-    for (const PatchPiece* piece : { &oneNode.positive, &oneNode.negative })
-        for (const PatchFace& face : piece->faces)
+    for (const MeshGeometry* piece : { &oneNode.positive, &oneNode.negative })
+        for (const MeshFace& face : piece->faces)
             CHECK(face.cutId == 0 || face.cutId == 1);
 
     // Second cut: cut 2 marks the faces it divides.
-    const PatchPiece box = MakeBox();
-    SliceResult first, second;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 0.5f, 0, 0.3f, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult first, second;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 0.5f, 0, 0.3f, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
     CheckDividedFacesHaveCutId(first, box, 1, "box cut 1");
-    CHECK_STATUS(SlicePatch(first.positive, MakePlane(0, 1.5f, 0, 0, 1, 0.2f), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
+    CHECK_STATUS(SliceGeometry(first.positive, MakePlane(0, 1.5f, 0, 0, 1, 0.2f), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
     CheckDividedFacesHaveCutId(second, first.positive, 2, "box cut 2");
     // A face moved over whole keeps the value it had (top face triangle 2 is untouched by a cut at y = 1).
-    PatchPiece marked = MakeBox();
+    MeshGeometry marked = MakeBox();
     marked.faces[2].cutId = 7;
-    SliceResult keep;
-    CHECK_STATUS(SlicePatch(marked, MakePlane(0, 1, 0, 0, 1, 0), 8, NoCapOptions(), keep), SliceStatus::Ok, keep.detail);
+    GeometrySliceResult keep;
+    CHECK_STATUS(SliceGeometry(marked, MakePlane(0, 1, 0, 0, 1, 0), 8, NoCapOptions(), keep), SliceStatus::Ok, keep.detail);
     uint32_t sevens = 0;
-    for (const PatchFace& face : keep.positive.faces)
-        sevens += face.kind == PatchFaceKind::Surface && face.sourceTriangle == 2 && face.cutId == 7;
+    for (const MeshFace& face : keep.positive.faces)
+        sevens += face.kind == MeshFaceKind::Surface && face.sourceTriangle == 2 && face.cutId == 7;
     CHECK(sevens == 1);
     // Cap faces keep meaning "the cut that made the cap".
-    for (const PatchFace& face : second.negative.faces)
-        if (face.kind == PatchFaceKind::Cap)
+    for (const MeshFace& face : second.negative.faces)
+        if (face.kind == MeshFaceKind::Cap)
             CHECK(face.cutId == 1 || face.cutId == 2);
 }
 
 static void TestSplitByOriginBake()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 0.5f, 0, 0.3f, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 0.5f, 0, 0.3f, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
 
     RenderBakeOptions split;
     split.splitByOrigin = true;
-    for (const PatchPiece* piece : { &result.positive, &result.negative })
+    for (const MeshGeometry* piece : { &result.positive, &result.negative })
     {
         ProceduralMeshData plain, tinted, defaulted;
         BuildRenderMesh(*piece, plain);
@@ -1271,8 +1288,8 @@ static void TestSplitByOriginBake()
 
         // Each section holds the faces it names.
         uint32_t divided = 0, whole = 0;
-        for (const PatchFace& face : piece->faces)
-            if (face.kind == PatchFaceKind::Surface)
+        for (const MeshFace& face : piece->faces)
+            if (face.kind == MeshFaceKind::Surface)
                 (face.cutId != 0 ? divided : whole) += 1;
         CHECK(CountSectionFaces(tinted, 0) == whole && CountSectionFaces(tinted, 1) == divided);
 
@@ -1302,23 +1319,23 @@ static void TestSplitByOriginBake()
 // The preview loops: one closed ring of tubes per cut loop (6 vertices, 18 indices per edge).
 static void TestLoopDebugBake()
 {
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
     CHECK(result.loops.size() == 1);
     ProceduralMeshData tubes;
     BakeLoopDebug(result.positive, result.loops, 0.02f, { 1.0f, 0.2f, 1.0f, 1.0f }, tubes);
     const size_t edges = result.loops.empty() ? 0 : result.loops[0].size();
     CHECK(edges == 8 && tubes.vertices.size() == edges * 6 && tubes.indices.size() == edges * 18);
     CHECK(tubes.sections.size() == 1 && tubes.sections[0].indexCount == tubes.indices.size());
-    // The tubes sit on the cut plane (y = 1), around the cut loop nodes.
-    for (const ProceduralVertex& vertex : tubes.vertices)
+    // The tubes sit on the cut plane (y = 1), around the cut loop vertices.
+    for (const MeshRenderVertex& vertex : tubes.vertices)
         CHECK(std::fabs(vertex.position.y - 1.0f) <= 0.02f + 1e-5f);
     ProceduralMesh mesh;
     std::string error;
     CHECK(mesh.SetMesh(tubes, &error));
 
-    // No loops, or loops that name missing nodes: nothing to draw.
+    // No loops, or loops that name missing vertices: nothing to draw.
     BakeLoopDebug(result.positive, {}, 0.02f, { 1.0f, 1.0f, 1.0f, 1.0f }, tubes);
     CHECK(tubes.vertices.empty() && tubes.sections.empty());
     BakeLoopDebug(result.positive, { { 0, 9999 } }, 0.02f, { 1.0f, 1.0f, 1.0f, 1.0f }, tubes);
@@ -1511,12 +1528,12 @@ static void TestCutPlaneFactories()
 static void TestCutPlaneToSlicePlane()
 {
     // The rectangle turns into the same infinite plane as the hand-made one: the same cut comes out.
-    const PatchPiece box = MakeBox();
-    SliceResult expected, actual;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), expected), SliceStatus::Ok, expected.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult expected, actual;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), expected), SliceStatus::Ok, expected.detail);
     const SlicePlane converted = HorizontalPlane(0, 1, 0, 5.0f).ToSlicePlane();
     CHECK(std::fabs(converted.normal.y - 1.0f) < 1e-6f && std::fabs(converted.point.y - 1.0f) < 1e-6f);
-    CHECK_STATUS(SlicePatch(box, converted, 1, CapOptions(), actual), SliceStatus::Ok, actual.detail);
+    CHECK_STATUS(SliceGeometry(box, converted, 1, CapOptions(), actual), SliceStatus::Ok, actual.detail);
     CHECK(actual.positive.faces.size() == expected.positive.faces.size() && actual.negative.faces.size() == expected.negative.faces.size());
     CHECK(std::fabs(TotalSurfaceArea(actual.positive) - TotalSurfaceArea(expected.positive)) < 1e-4);
 
@@ -1525,8 +1542,8 @@ static void TestCutPlaneToSlicePlane()
     over.RotateAroundLocalAxis(0, XM_PI);
     const SlicePlane flipped = over.ToSlicePlane();
     CHECK(flipped.normal.y < -0.99f);
-    SliceResult flippedResult;
-    CHECK_STATUS(SlicePatch(box, flipped, 1, CapOptions(), flippedResult), SliceStatus::Ok, flippedResult.detail);
+    GeometrySliceResult flippedResult;
+    CHECK_STATUS(SliceGeometry(box, flipped, 1, CapOptions(), flippedResult), SliceStatus::Ok, flippedResult.detail);
     CHECK(std::fabs(TotalSurfaceArea(flippedResult.positive) - TotalSurfaceArea(expected.negative)) < 1e-4);
 }
 
@@ -1534,9 +1551,9 @@ static void TestLoopsInsidePlane()
 {
     // The box (x, z in [-1, 1], y in [0, 2]) cut at y = 1 has a square loop with corners at +-1 and
     // collinear points in the middle of each side.
-    const PatchPiece box = MakeBox();
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    const MeshGeometry box = MakeBox();
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
     CHECK(result.loops.size() == 1);
 
     std::string detail;
@@ -1558,7 +1575,7 @@ static void TestLoopsInsidePlane()
     const CutPlane bigger(turned.GetCenter(), turned.GetRotation(), { 1.5f, 1.5f });
     CHECK(bigger.ContainsLoops(result.positive, result.loops, 0.0f, nullptr));
 
-    // No loops (nothing to check) passes; a loop that names a missing node fails.
+    // No loops (nothing to check) passes; a loop that names a missing vertex fails.
     const std::vector<std::vector<uint32_t>> none;
     CHECK(CutPlane().ContainsLoops(result.positive, none, 0.0f, nullptr));
     const std::vector<std::vector<uint32_t>> missing = { { 0, 9999 } };
@@ -1574,7 +1591,7 @@ static SkeletonPose MakeChainPose(uint32_t count)
     for (uint32_t i = 0; i < count; ++i)
     {
         pose.jointPositions.push_back({ 0.0f, float(i), 0.0f });
-        pose.parents.push_back(i == 0 ? kNoNode : i - 1);
+        pose.parents.push_back(i == 0 ? kInvalidIndex : i - 1);
     }
     return pose;
 }
@@ -1584,7 +1601,7 @@ static SkeletonPose MakeLegsPose()
 {
     SkeletonPose pose;
     pose.jointPositions = { { 0.0f, 2.0f, 0.0f }, { -0.5f, 1.8f, 0.0f }, { -0.5f, 1.0f, 0.0f }, { 0.5f, 1.8f, 0.0f }, { 0.5f, 1.0f, 0.0f } };
-    pose.parents = { kNoNode, 0, 1, 0, 3 };
+    pose.parents = { kInvalidIndex, 0, 1, 0, 3 };
     return pose;
 }
 
@@ -1677,7 +1694,7 @@ static void TestPickSharedParent()
     // Joint 1 has two children (2 and 3): a plane across both bones gives two hits and one cut joint.
     SkeletonPose pose;
     pose.jointPositions = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { -1.0f, 2.0f, 0.0f }, { 1.0f, 2.0f, 0.0f } };
-    pose.parents = { kNoNode, 0, 1, 1 };
+    pose.parents = { kInvalidIndex, 0, 1, 1 };
     std::vector<SegmentHit> hits;
     HorizontalPlane(0, 1.5f, 0, 2.0f).PickSegments(pose, hits);
     CHECK(hits.size() == 2 && hits[0].parentJoint == 1 && hits[1].parentJoint == 1);
@@ -2180,7 +2197,7 @@ static void TestGizmoBake()
         CHECK(mesh.SetMesh(data, &error));
         // Nothing is yellow unless a handle is hovered or dragged.
         bool yellow = false;
-        for (const ProceduralVertex& v : data.vertices)
+        for (const MeshRenderVertex& v : data.vertices)
             yellow = yellow || (v.color.x == 1.0f && v.color.y == 0.9f && v.color.z == 0.1f);
         CHECK(!yellow);
     }
@@ -2208,7 +2225,7 @@ static void TestGizmoBake()
     const auto yellowCount = [](const ProceduralMeshData& d)
     {
         size_t count = 0;
-        for (const ProceduralVertex& v : d.vertices)
+        for (const MeshRenderVertex& v : d.vertices)
             count += (v.color.x == 1.0f && v.color.y == 0.9f && v.color.z == 0.1f);
         return count;
     };
@@ -2234,7 +2251,7 @@ static SlotMatrices IdentitySlots(size_t joints)
     return slots;
 }
 
-// Two moderate, different rigid motions: skinning a node between them shears the box a little.
+// Two moderate, different rigid motions: skinning a vertex between them shears the box a little.
 static SlotMatrices PoseA()
 {
     SlotMatrices slots(1);
@@ -2251,20 +2268,20 @@ static SlotMatrices PoseB()
     return slots;
 }
 
-// A closed box skinned by joints 0 and 1: weight of joint 1 grows with height. The nodes are
+// A closed box skinned by joints 0 and 1: weight of joint 1 grows with height. The vertices are
 // posed with `slots`, so the piece is consistent with that pose.
-static PatchPiece MakeSkinnedBox(const SlotMatrices& slots)
+static MeshGeometry MakeSkinnedBox(const SlotMatrices& slots)
 {
-    PatchPiece box = MakeBox();
+    MeshGeometry box = MakeBox();
     std::vector<SkinVertex> skinVertices = GetSkinVertices(box);
-    for (size_t i = 0; i < box.nodes.size(); ++i)
+    for (size_t i = 0; i < box.vertices.size(); ++i)
     {
         SkinVertex& skin = skinVertices[i];
-        skin.bindPosition = box.nodes[i].position;
+        skin.bindPosition = box.vertices[i].position;
         skin.jointCount = 2;
         skin.joints[0] = 0;
         skin.joints[1] = 1;
-        const float w1 = box.nodes[i].position.y * 0.5f * 0.8f + 0.1f;      // 0.1 .. 0.9
+        const float w1 = box.vertices[i].position.y * 0.5f * 0.8f + 0.1f;      // 0.1 .. 0.9
         skin.weights[0] = 1.0f - w1;
         skin.weights[1] = w1;
     }
@@ -2281,16 +2298,16 @@ static PatchPiece MakeSkinnedBox(const SlotMatrices& slots)
     return box;
 }
 
-static double MaxNodeDelta(const PatchPiece& a, const PatchPiece& b)
+static double MaxNodeDelta(const MeshGeometry& a, const MeshGeometry& b)
 {
     double worst = 0.0;
-    if (a.nodes.size() != b.nodes.size())
+    if (a.vertices.size() != b.vertices.size())
         return 1e30;
-    for (size_t i = 0; i < a.nodes.size(); ++i)
+    for (size_t i = 0; i < a.vertices.size(); ++i)
     {
-        const double dx = double(a.nodes[i].position.x) - b.nodes[i].position.x;
-        const double dy = double(a.nodes[i].position.y) - b.nodes[i].position.y;
-        const double dz = double(a.nodes[i].position.z) - b.nodes[i].position.z;
+        const double dx = double(a.vertices[i].position.x) - b.vertices[i].position.x;
+        const double dy = double(a.vertices[i].position.y) - b.vertices[i].position.y;
+        const double dz = double(a.vertices[i].position.z) - b.vertices[i].position.z;
         worst = std::max(worst, std::sqrt(dx * dx + dy * dy + dz * dz));
     }
     return worst;
@@ -2301,13 +2318,13 @@ static bool SamePosition(const XMFLOAT3& a, const XMFLOAT3& b)
     return a.x == b.x && a.y == b.y && a.z == b.z;
 }
 
-// 1. Identity matrices put every original node at its bind position, whatever it held before.
+// 1. Identity matrices put every original vertex at its bind position, whatever it held before.
 static void TestSkinIdentity()
 {
-    PatchPiece box = MakeBox();
-    const PatchPiece reference = box;
-    for (PatchNode& node : box.nodes)
-        node.position = { node.position.x + 100.0f, -7.0f, 3.0f };
+    MeshGeometry box = MakeBox();
+    const MeshGeometry reference = box;
+    for (MeshVertex& vertex : box.vertices)
+        vertex.position = { vertex.position.x + 100.0f, -7.0f, 3.0f };
     SkinStats stats;
     std::string detail;
     CHECK(box.skin->Apply(box, IdentitySlots(1), &stats, &detail));
@@ -2318,7 +2335,7 @@ static void TestSkinIdentity()
 // 2. One joint with a rotation and a translation: bind * R * T, row-vector convention.
 static void TestSkinSingleJoint()
 {
-    PatchPiece tri = MakePiece({ { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, { { 0, 1, 2 } });
+    MeshGeometry tri = MakePiece({ { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, { { 0, 1, 2 } });
     std::vector<SkinVertex> triSkin = GetSkinVertices(tri);
     for (SkinVertex& skin : triSkin)
         skin.joints[0] = 1;
@@ -2329,15 +2346,15 @@ static void TestSkinSingleJoint()
     CHECK(tri.skin->Apply(tri, slots, nullptr, &detail));
     const XMFLOAT3 expected[3] = { { 5, 1, 0 }, { 4, 0, 0 }, { 5, 0, 1 } };    // (1,0,0)->(0,1,0)+5x, ...
     for (int i = 0; i < 3; ++i)
-        CHECK(std::fabs(tri.nodes[i].position.x - expected[i].x) < 1e-5f && std::fabs(tri.nodes[i].position.y - expected[i].y) < 1e-5f
-            && std::fabs(tri.nodes[i].position.z - expected[i].z) < 1e-5f);
+        CHECK(std::fabs(tri.vertices[i].position.x - expected[i].x) < 1e-5f && std::fabs(tri.vertices[i].position.y - expected[i].y) < 1e-5f
+            && std::fabs(tri.vertices[i].position.z - expected[i].z) < 1e-5f);
 }
 
 // 3. Two joints with weights 0.25 / 0.75, computed by hand:
 //    0.25 * (5,1,1) + 0.75 * (1,9,1) = (2,7,1).
 static void TestSkinTwoJointBlend()
 {
-    PatchPiece tri = MakePiece({ { 1, 1, 1 }, { 2, 2, 2 }, { 3, 3, 3 } }, { { 0, 1, 2 } });
+    MeshGeometry tri = MakePiece({ { 1, 1, 1 }, { 2, 2, 2 }, { 3, 3, 3 } }, { { 0, 1, 2 } });
     std::vector<SkinVertex> triSkin = GetSkinVertices(tri);
     SkinVertex& skin = triSkin[0];
     skin.jointCount = 2;
@@ -2350,27 +2367,27 @@ static void TestSkinTwoJointBlend()
     slots[0].push_back(ToFloat4x4(DirectX::XMMatrixTranslation(4.0f, 0.0f, 0.0f)));
     slots[0].push_back(ToFloat4x4(DirectX::XMMatrixTranslation(0.0f, 8.0f, 0.0f)));
     CHECK(tri.skin->Apply(tri, slots));
-    CHECK(std::fabs(tri.nodes[0].position.x - 2.0f) < 1e-6f && std::fabs(tri.nodes[0].position.y - 7.0f) < 1e-6f
-        && std::fabs(tri.nodes[0].position.z - 1.0f) < 1e-6f);
+    CHECK(std::fabs(tri.vertices[0].position.x - 2.0f) < 1e-6f && std::fabs(tri.vertices[0].position.y - 7.0f) < 1e-6f
+        && std::fabs(tri.vertices[0].position.z - 1.0f) < 1e-6f);
     // The same blend straight from SkinPoint.
     XMFLOAT3 point;
     DirectX::XMStoreFloat3(&point, Skinning::SkinPoint(slots[0].data(), 2, skin.joints, skin.weights, 2, skin.bindPosition));
-    CHECK(point.x == tri.nodes[0].position.x && point.y == tri.nodes[0].position.y && point.z == tri.nodes[0].position.z);
+    CHECK(point.x == tri.vertices[0].position.x && point.y == tri.vertices[0].position.y && point.z == tri.vertices[0].position.z);
 }
 
 // 4. A piece cut in a pose and skinned with the same matrices again lands on the cut positions:
-//    cut nodes are driven by their PatchOrigin, with no joint or weight of their own.
+//    cut vertices are driven by their MeshVertexOrigin, with no joint or weight of their own.
 static void TestSkinMatchesSliceNodes()
 {
     const SlotMatrices pose = PoseA();
-    const PatchPiece box = MakeSkinnedBox(pose);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 2.0f, 0, 0.3f, 1.0f, 0.2f), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
-    for (PatchPiece* piece : { &result.positive, &result.negative })
+    const MeshGeometry box = MakeSkinnedBox(pose);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 2.0f, 0, 0.3f, 1.0f, 0.2f), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    for (MeshGeometry* piece : { &result.positive, &result.negative })
     {
-        PatchPiece skinned = *piece;
-        for (PatchNode& node : skinned.nodes)
-            node.position = { 0.0f, 0.0f, 0.0f };
+        MeshGeometry skinned = *piece;
+        for (MeshVertex& vertex : skinned.vertices)
+            vertex.position = { 0.0f, 0.0f, 0.0f };
         SkinStats stats;
         std::string detail;
         CHECK(skinned.skin->Apply(skinned, pose, &stats, &detail));
@@ -2381,21 +2398,21 @@ static void TestSkinMatchesSliceNodes()
     }
 }
 
-// 5. Seam corners and cap rim corners follow their node: after a pose change every corner of a node
-//    bakes to the same bits. Cap faces use no nodes of their own.
+// 5. Seam corners and cap rim corners follow their vertex: after a pose change every corner of a vertex
+//    bakes to the same bits. Cap faces use no vertices of their own.
 static void TestSkinKeepsSeamsAndCapsTogether()
 {
-    PatchPiece tube;
+    MeshGeometry tube;
     WeldStats stats;
     std::string detail;
-    CHECK_STATUS(BuildPatchPiece(MakeTubeWeldInput(8, true, 0), kDefaultEpsilonScale, tube, stats, &detail), SliceStatus::Ok, detail);
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK_STATUS(BuildMeshGeometry(MakeTubeMeshData(8, true, 0), kDefaultEpsilonScale, tube, stats, &detail), SliceStatus::Ok, detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(tube, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
 
-    for (PatchPiece* piece : { &result.positive, &result.negative })
+    for (MeshGeometry* piece : { &result.positive, &result.negative })
     {
-        for (const PatchNode& node : piece->nodes)
-            CHECK(node.kind == PatchNodeKind::Surface);          // no cap-only nodes exist
+        for (const MeshVertex& vertex : piece->vertices)
+            CHECK(vertex.kind == MeshVertexKind::Surface);          // no cap-only vertices exist
         ProceduralMeshData baked;
         BuildRenderMesh(*piece, baked);
         const SlotMatrices pose = PoseA();
@@ -2404,22 +2421,22 @@ static void TestSkinKeepsSeamsAndCapsTogether()
         CHECK(skinStats.capVerticesSkipped == 0);
         CHECK(UpdateRenderPositions(*piece, baked.vertices));
 
-        std::vector<int> firstCorner(piece->nodes.size(), -1);
+        std::vector<int> firstCorner(piece->vertices.size(), -1);
         bool seamSeen = false, capSeen = false;
         for (size_t c = 0; c < piece->corners.size(); ++c)
         {
-            const uint32_t node = piece->corners[c].node;
-            if (firstCorner[node] < 0)
+            const uint32_t vertex = piece->corners[c].vertex;
+            if (firstCorner[vertex] < 0)
             {
-                firstCorner[node] = int(c);
+                firstCorner[vertex] = int(c);
                 continue;
             }
-            seamSeen = true;                                // a node with more than one corner (UV seam or cap)
-            CHECK(SamePosition(baked.vertices[c].position, baked.vertices[firstCorner[node]].position));
-            CHECK(SamePosition(baked.vertices[c].position, piece->nodes[node].position));
+            seamSeen = true;                                // a vertex with more than one corner (UV seam or cap)
+            CHECK(SamePosition(baked.vertices[c].position, baked.vertices[firstCorner[vertex]].position));
+            CHECK(SamePosition(baked.vertices[c].position, piece->vertices[vertex].position));
         }
-        for (const PatchFace& face : piece->faces)
-            capSeen = capSeen || face.kind == PatchFaceKind::Cap;
+        for (const MeshFace& face : piece->faces)
+            capSeen = capSeen || face.kind == MeshFaceKind::Cap;
         CHECK(seamSeen && capSeen);
     }
 }
@@ -2427,9 +2444,9 @@ static void TestSkinKeepsSeamsAndCapsTogether()
 // 6. A piece with its own skin state (separated bones) is refused and left alone.
 static void TestSkinRefusesSkinState()
 {
-    PatchPiece box = MakeBox();
+    MeshGeometry box = MakeBox();
     box.skinStateId = 3;
-    const PatchPiece before = box;
+    const MeshGeometry before = box;
     std::string detail;
     CHECK(!box.skin->Apply(box, IdentitySlots(1), nullptr, &detail));
     CHECK(detail.find("skin state") != std::string::npos);
@@ -2440,39 +2457,39 @@ static void TestSkinRefusesSkinState()
 static void TestSkinAfterTwoCuts()
 {
     const SlotMatrices pose = PoseA();
-    const PatchPiece box = MakeSkinnedBox(pose);
+    const MeshGeometry box = MakeSkinnedBox(pose);
     double yLow = 1e30, yHigh = -1e30;
-    for (const PatchNode& node : box.nodes)
+    for (const MeshVertex& vertex : box.vertices)
     {
-        yLow = std::min<double>(yLow, node.position.y);
-        yHigh = std::max<double>(yHigh, node.position.y);
+        yLow = std::min<double>(yLow, vertex.position.y);
+        yHigh = std::max<double>(yHigh, vertex.position.y);
     }
-    SliceResult first, second;
+    GeometrySliceResult first, second;
     const float yMid = float((yLow + yHigh) * 0.5);
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, yMid, 0, 0, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, yMid, 0, 0, 1, 0), 1, CapOptions(), first), SliceStatus::Ok, first.detail);
     // Cut the upper half again, a quarter of the way up. Only the surface is crossed.
     double upLow = 1e30, upHigh = -1e30;
-    for (const PatchNode& node : first.positive.nodes)
+    for (const MeshVertex& vertex : first.positive.vertices)
     {
-        upLow = std::min<double>(upLow, node.position.y);
-        upHigh = std::max<double>(upHigh, node.position.y);
+        upLow = std::min<double>(upLow, vertex.position.y);
+        upHigh = std::max<double>(upHigh, vertex.position.y);
     }
     const float yQuarter = float(upLow + (upHigh - upLow) * 0.4);
-    CHECK_STATUS(SlicePatch(first.positive, MakePlane(0, yQuarter, 0, 0, 1, 0), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
-    for (PatchPiece* piece : { &second.positive, &second.negative })
+    CHECK_STATUS(SliceGeometry(first.positive, MakePlane(0, yQuarter, 0, 0, 1, 0), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
+    for (MeshGeometry* piece : { &second.positive, &second.negative })
     {
-        PatchPiece skinned = *piece;
-        for (PatchNode& node : skinned.nodes)
-            node.position = { 9.0f, 9.0f, 9.0f };
+        MeshGeometry skinned = *piece;
+        for (MeshVertex& vertex : skinned.vertices)
+            vertex.position = { 9.0f, 9.0f, 9.0f };
         std::string detail;
         CHECK(skinned.skin->Apply(skinned, pose, nullptr, &detail));
         CHECK(MaxNodeDelta(skinned, *piece) <= 1e-5 * ComputePieceRadius(*piece));
     }
     // 두 번째 세대의 절단 정점은 스킨 정점 최대 3개에 의존한다.
-    for (const PatchNode& node : second.positive.nodes)
-        CHECK(node.origin.skinVertex[0] != kNoNode);
+    for (const MeshVertex& vertex : second.positive.vertices)
+        CHECK(vertex.origin.skinVertex[0] != kInvalidIndex);
     // New pose: the second-generation piece moves with the same matrices.
-    PatchPiece moved = second.positive;
+    MeshGeometry moved = second.positive;
     CHECK(moved.skin->Apply(moved, PoseB()));
     CHECK(MaxNodeDelta(moved, second.positive) > 0.1);
 }
@@ -2481,28 +2498,28 @@ static void TestSkinAfterTwoCuts()
 // 용접이 만든 skin은 자른 두 piece가 같은 객체로 공유하고, skin이 없는 piece는 스킨 정점이 없는 표로 검증한다.
 static void TestSkinningShared()
 {
-    PatchPiece box;
+    MeshGeometry box;
     WeldStats stats;
     std::string detail;
-    CHECK_STATUS(BuildPatchPiece(MakeBoxWeldInput(), kDefaultEpsilonScale, box, stats, &detail), SliceStatus::Ok, detail);
+    CHECK_STATUS(BuildMeshGeometry(MakeBoxMeshData(), kDefaultEpsilonScale, box, stats, &detail), SliceStatus::Ok, detail);
     CHECK(box.skin != nullptr && box.skin->GetVertices().size() == 8);
 
-    SliceResult result;
-    CHECK_STATUS(SlicePatch(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
     CHECK(result.positive.skin == box.skin && result.negative.skin == box.skin);
     CHECK(box.skin.use_count() >= 3);
 
     // skin이 없으면 Surface 정점의 origin이 범위 밖이라 InvalidOrigin이다.
-    PatchPiece noSkin = box;
+    MeshGeometry noSkin = box;
     noSkin.skin.reset();
-    CHECK_STATUS(ValidatePatchPiece(noSkin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
+    CHECK_STATUS(ValidateMeshGeometry(noSkin, kDefaultEpsilonScale, &detail), SliceStatus::InvalidOrigin, detail);
     CHECK(box.skin != nullptr);
 }
 
 static void TestSkinRefusesBadInput()
 {
-    PatchPiece box = MakeSkinnedBox(PoseA());
-    const PatchPiece before = box;
+    MeshGeometry box = MakeSkinnedBox(PoseA());
+    const MeshGeometry before = box;
     std::string detail;
     CHECK(!box.skin->Apply(box, IdentitySlots(1), nullptr, &detail));           // joint 1 has no matrix
     CHECK(detail.find("joint") != std::string::npos && MaxNodeDelta(box, before) == 0.0);
@@ -2510,8 +2527,8 @@ static void TestSkinRefusesBadInput()
     CHECK(!box.skin->Apply(box, SlotMatrices(), nullptr, &detail));             // no slots at all
     CHECK(detail.find("slot") != std::string::npos && MaxNodeDelta(box, before) == 0.0);
 
-    PatchPiece badOrigin = before;
-    badOrigin.nodes[2].origin.skinVertex[0] = 99;
+    MeshGeometry badOrigin = before;
+    badOrigin.vertices[2].origin.skinVertex[0] = 99;
     CHECK(!badOrigin.skin->Apply(badOrigin, PoseA(), nullptr, &detail));
     CHECK(detail.find("skin vertex") != std::string::npos && MaxNodeDelta(badOrigin, before) == 0.0);
 }
@@ -2519,17 +2536,18 @@ static void TestSkinRefusesBadInput()
 // ---------------------------------------------------------------- rigid (static mesh) input (U-3a)
 
 // 스킨 없는 메시 복사본처럼: 가중치 0, 바인드 = 로컬 위치, 위치 = world × 로컬. 정점 0을 UV만 다르게 한 번 더 넣는다.
-static WeldInput MakeRigidBoxWeldInput(const DirectX::XMFLOAT4X4& world)
+static ProceduralMeshData MakeRigidBoxMeshData(const DirectX::XMFLOAT4X4& world)
 {
-    WeldInput in = MakeBoxWeldInput();
-    for (WeldInputVertex& v : in.vertices)
+    ProceduralMeshData in = MakeBoxMeshData();
+    for (size_t i = 0; i < in.vertices.size(); ++i)
     {
-        v.weights[0] = 0.0f;
-        DirectX::XMStoreFloat3(&v.position, Skinning::RigidPoint(world, v.bindPosition));
+        in.bindings[i].weights[0] = 0.0f;
+        DirectX::XMStoreFloat3(&in.vertices[i].position, Skinning::RigidPoint(world, in.bindings[i].bindPosition));
     }
-    WeldInputVertex twin = in.vertices[0];
+    MeshRenderVertex twin = in.vertices[0];
     twin.uv = { 0.5f, 0.5f };
     in.vertices.push_back(twin);
+    in.bindings.push_back(in.bindings[0]);
     in.indices[0] = uint32_t(in.vertices.size() - 1);      // 면 0이 쌍둥이 정점을 쓴다
     return in;
 }
@@ -2537,24 +2555,24 @@ static WeldInput MakeRigidBoxWeldInput(const DirectX::XMFLOAT4X4& world)
 static void TestRigidWeldAndSkin()
 {
     const DirectX::XMFLOAT4X4 world = ToFloat4x4(DirectX::XMMatrixRotationY(0.4f) * DirectX::XMMatrixTranslation(3.0f, 1.0f, -2.0f));
-    const WeldInput in = MakeRigidBoxWeldInput(world);
+    const ProceduralMeshData in = MakeRigidBoxMeshData(world);
 
     // 가중치 0만 있는 입력이 용접을 통과하고, 같은 위치의 두 정점은 노드 하나가 된다
-    PatchPiece piece;
+    MeshGeometry piece;
     WeldStats stats;
     std::string detail;
-    CHECK_STATUS(BuildPatchPiece(in, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::Ok, detail);
-    CHECK(piece.nodes.size() == 8 && piece.corners.size() == 9 && stats.boundaryEdges == 0);
-    CHECK(piece.corners[8].node == piece.corners[0].node);
+    CHECK_STATUS(BuildMeshGeometry(in, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::Ok, detail);
+    CHECK(piece.vertices.size() == 8 && piece.corners.size() == 9 && stats.boundaryEdges == 0);
+    CHECK(piece.corners[8].vertex == piece.corners[0].vertex);
     for (const SkinVertex& skin : GetSkinVertices(piece))
         CHECK(skin.jointCount == 0);
     CheckPieceValid(piece, "rigid box");
 
     // 가중치 0이 일부만 섞인 입력은 지금처럼 거절한다
-    WeldInput mixed = MakeBoxWeldInput();
-    mixed.vertices[3].weights[0] = 0.0f;
-    PatchPiece rejected;
-    CHECK_STATUS(BuildPatchPiece(mixed, kDefaultEpsilonScale, rejected, stats, &detail), SliceStatus::InvalidInput, detail);
+    ProceduralMeshData mixed = MakeBoxMeshData();
+    mixed.bindings[3].weights[0] = 0.0f;
+    MeshGeometry rejected;
+    CHECK_STATUS(BuildMeshGeometry(mixed, kDefaultEpsilonScale, rejected, stats, &detail), SliceStatus::InvalidInput, detail);
     CHECK(detail.find("vertex 3") != std::string::npos);
 
     // 강체 정점은 행렬 하나 × 바인드 위치로 옮겨진다
@@ -2565,45 +2583,63 @@ static void TestRigidWeldAndSkin()
     CHECK(skinStats.skinVerticesEvaluated == 8);
     const DirectX::XMMATRIX m = DirectX::XMLoadFloat4x4(&moved);
     const std::vector<SkinVertex> rigidSkin = GetSkinVertices(piece);
-    for (size_t n = 0; n < piece.nodes.size(); ++n)
+    for (size_t n = 0; n < piece.vertices.size(); ++n)
     {
         const XMFLOAT3& bind = rigidSkin[n].bindPosition;
         XMFLOAT3 expected;
         DirectX::XMStoreFloat3(&expected, DirectX::XMVector3TransformCoord(DirectX::XMLoadFloat3(&bind), m));
-        CHECK(std::fabs(piece.nodes[n].position.x - expected.x) < 1e-5f && std::fabs(piece.nodes[n].position.y - expected.y) < 1e-5f
-            && std::fabs(piece.nodes[n].position.z - expected.z) < 1e-5f);
+        CHECK(std::fabs(piece.vertices[n].position.x - expected.x) < 1e-5f && std::fabs(piece.vertices[n].position.y - expected.y) < 1e-5f
+            && std::fabs(piece.vertices[n].position.z - expected.z) < 1e-5f);
     }
 
     // 행렬이 없는 슬롯은 실패하고 piece를 바꾸지 않는다
-    const PatchPiece before = piece;
+    const MeshGeometry before = piece;
     SlotMatrices empty(1);
     CHECK(!piece.skin->Apply(piece, empty, nullptr, &detail));
     CHECK(detail.find("rigid") != std::string::npos && MaxNodeDelta(piece, before) == 0.0);
 
     // 기존 스킨 piece는 SkinPoint 그대로다 (비트 단위)
-    const PatchPiece skinned = MakeSkinnedBox(PoseA());
+    const MeshGeometry skinned = MakeSkinnedBox(PoseA());
     const SlotMatrices pose = PoseA();
     const std::vector<SkinVertex> skinnedSkin = GetSkinVertices(skinned);
-    for (size_t n = 0; n < skinned.nodes.size(); ++n)
+    for (size_t n = 0; n < skinned.vertices.size(); ++n)
     {
         const SkinVertex& skin = skinnedSkin[n];
         XMFLOAT3 expected;
         DirectX::XMStoreFloat3(&expected, Skinning::SkinPoint(pose[0].data(), uint32_t(pose[0].size()), skin.joints, skin.weights,
             skin.jointCount, skin.bindPosition));
-        CHECK(SamePosition(skinned.nodes[n].position, expected));
+        CHECK(SamePosition(skinned.vertices[n].position, expected));
     }
 }
 
 // 강체 piece를 SliceProceduralMesh로 자르고, 두 조각을 행렬 하나로 함께 옮긴다
+// Exercise the public mesh API while keeping geometry fixtures convenient for algorithm tests.
+static bool SliceTestGeometry(MeshGeometry& geometry, const XMFLOAT3& point, const XMFLOAT3& normal,
+    bool createOther, MeshGeometry* other, SliceCapOption cap, uint32_t material,
+    SliceStatus* status = nullptr, std::string* error = nullptr, std::vector<std::vector<uint32_t>>* loops = nullptr)
+{
+    ProceduralMesh mesh, half;
+    if (!mesh.SetTopology(geometry, error))
+    {
+        if (status) *status = SliceStatus::InvalidInput;
+        return false;
+    }
+    if (!SliceProceduralMesh(mesh, point, normal, createOther, other ? &half : nullptr, cap, material, status, error, loops))
+        return false;
+    geometry = mesh.GetGeometry();
+    if (other) *other = half.GetGeometry();
+    return true;
+}
+
 static void TestRigidSlice()
 {
     const DirectX::XMFLOAT4X4 identity = ToFloat4x4(DirectX::XMMatrixIdentity());
-    PatchPiece piece, other;
+    MeshGeometry piece, other;
     WeldStats stats;
     std::string detail;
-    CHECK_STATUS(BuildPatchPiece(MakeRigidBoxWeldInput(identity), kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::Ok, detail);
+    CHECK_STATUS(BuildMeshGeometry(MakeRigidBoxMeshData(identity), kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::Ok, detail);
     SliceStatus status = SliceStatus::InvalidInput;
-    CHECK(SliceProceduralMesh(piece, { 0, 0.7f, 0 }, { 0.2f, 1, 0.1f }, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
+    CHECK(SliceTestGeometry(piece, { 0, 0.7f, 0 }, { 0.2f, 1, 0.1f }, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
         &status, &detail));
     CHECK(status == SliceStatus::Ok);
     CheckPieceValid(piece, "rigid +");
@@ -2612,15 +2648,15 @@ static void TestRigidSlice()
 
     // 표면 노드(절단 노드 포함)는 정확히 이동량만큼 움직이고, cap 노드는 Apply가 건드리지 않는다
     const SlotMatrices slots(1, std::vector<DirectX::XMFLOAT4X4>(1, ToFloat4x4(DirectX::XMMatrixTranslation(2.0f, -1.0f, 0.5f))));
-    for (PatchPiece* half : { &piece, &other })
+    for (MeshGeometry* half : { &piece, &other })
     {
-        const PatchPiece before = *half;
+        const MeshGeometry before = *half;
         CHECK(half->skin->Apply(*half, slots, nullptr, &detail));
-        for (size_t n = 0; n < half->nodes.size(); ++n)
+        for (size_t n = 0; n < half->vertices.size(); ++n)
         {
-            if (half->nodes[n].kind != PatchNodeKind::Surface)
+            if (half->vertices[n].kind != MeshVertexKind::Surface)
                 continue;
-            const XMFLOAT3 &a = before.nodes[n].position, &b = half->nodes[n].position;
+            const XMFLOAT3 &a = before.vertices[n].position, &b = half->vertices[n].position;
             CHECK(std::fabs(b.x - a.x - 2.0f) < 1e-5f && std::fabs(b.y - a.y + 1.0f) < 1e-5f && std::fabs(b.z - a.z - 0.5f) < 1e-5f);
         }
     }
@@ -2653,6 +2689,100 @@ static std::map<CutJobKey, CutJob> MakeJobs(const std::vector<CutJobKey>& candid
     return jobs;
 }
 
+static void TestProceduralMeshOwnsGeometry()
+{
+    MeshGeometry box;
+    WeldStats stats;
+    std::string error;
+    CHECK_STATUS(BuildMeshGeometry(MakeBoxMeshData(), kDefaultEpsilonScale, box, stats, &error), SliceStatus::Ok, error);
+    GeometrySliceResult cut;
+    CHECK_STATUS(SliceGeometry(box, MakePlane(0, 0.5f, 0, 0, 1, 0), 1, CapOptions(), cut), SliceStatus::Ok, cut.detail);
+    ProceduralMesh mesh;
+    CHECK(mesh.SetTopology(std::move(cut.positive), &error));
+    MeshGeometry expected = mesh.GetGeometry();
+    const auto sharedSkin = expected.skin;
+    const uint64_t topology = mesh.GetTopologyVersion();
+    const uint64_t beforePose = mesh.GetVertexVersion();
+    SlotMatrices slots(1, std::vector<XMFLOAT4X4>(1, ToFloat4x4(XMMatrixTranslation(3, 1, -2))));
+    CHECK(expected.skin->Apply(expected, slots, nullptr, &error));
+    CHECK(mesh.UpdatePose(slots, &error));
+    CHECK(mesh.GetGeometry().vertices[0].position.x == expected.vertices[0].position.x);
+    CHECK(mesh.GetVertexVersion() > beforePose && mesh.GetTopologyVersion() == topology);
+    CHECK(mesh.GetGeometry().skin == sharedSkin);
+    for (size_t i = 0; i < expected.corners.size(); ++i)
+    {
+        const XMFLOAT3& p = expected.vertices[expected.corners[i].vertex].position;
+        const XMFLOAT3& actual = mesh.GetData().vertices[i].position;
+        CHECK(actual.x == p.x && actual.y == p.y && actual.z == p.z);
+    }
+    const uint64_t version = mesh.GetVertexVersion();
+    const float x = mesh.GetGeometry().vertices[0].position.x;
+    CHECK(!mesh.UpdatePose({}, &error));
+    const float largest = std::numeric_limits<float>::max();
+    SlotMatrices huge(1, std::vector<XMFLOAT4X4>(1, ToFloat4x4(XMMatrixScaling(largest, 1, largest))));
+    CHECK(!mesh.UpdatePose(huge, &error));   // finite points, but an unrepresentable render bounds radius
+    CHECK(!mesh.UpdateVertices(mesh.GetData().vertices, &error));
+    MeshGeometry invalid = mesh.GetGeometry();
+    invalid.faces[0].corner[0] = kInvalidIndex;
+    CHECK(!mesh.SetTopology(std::move(invalid), &error));
+    CHECK(mesh.GetVertexVersion() == version && mesh.GetGeometry().vertices[0].position.x == x);
+    CHECK(mesh.SetSectionSplit(true, &error));
+    RenderBakeOptions options;
+    options.splitByOrigin = true;
+    ProceduralMeshData baked;
+    BuildRenderMesh(expected, baked, options);
+    CHECK(mesh.GetData().indices == baked.indices && mesh.GetData().sections.size() == baked.sections.size());
+    const uint64_t splitTopology = mesh.GetTopologyVersion();
+    CHECK(splitTopology > topology && mesh.SetSectionSplit(true, &error));
+    CHECK(mesh.GetTopologyVersion() == splitTopology);
+    CHECK(mesh.SetSectionSplit(false, &error));
+    BuildRenderMesh(expected, baked);
+    CHECK(mesh.GetData().indices == baked.indices && mesh.GetData().sections.size() == baked.sections.size());
+    mesh.Clear();
+    CHECK(mesh.GetGeometry().Empty() && mesh.GetData().vertices.empty());
+    CHECK(!mesh.UpdatePose(slots, &error));
+    CHECK(mesh.SetTopology(std::move(expected), &error));
+    CHECK(mesh.SetMesh(std::move(baked), &error));
+    CHECK(mesh.GetGeometry().Empty());
+}
+
+static void TestPublicProceduralMeshPipeline()
+{
+    ProceduralMesh mesh, other;
+    WeldStats stats;
+    std::string error;
+    CHECK_STATUS(mesh.Build(MakeBoxMeshData(), stats, &error), SliceStatus::Ok, error);
+    const auto skin = mesh.GetGeometry().skin;
+    const SlotMatrices identity(1, std::vector<XMFLOAT4X4>(1, ToFloat4x4(XMMatrixIdentity())));
+    CHECK(mesh.UpdatePose(identity, &error));
+    const double originalArea = TotalArea(mesh.GetGeometry(), MeshFaceKind::Surface);
+    SliceStatus status;
+    std::vector<std::vector<uint32_t>> loops;
+    CHECK(SliceProceduralMesh(mesh, { 0, 0.5f, 0 }, { 0, 1, 0 }, true, &other,
+        SliceCapOption::CreateNewSectionForCap, 7, &status, &error, &loops));
+    CHECK(status == SliceStatus::Ok && !loops.empty());
+    CHECK(mesh.GetGeometry().skin == skin && other.GetGeometry().skin == skin);
+    CHECK(std::fabs(TotalArea(mesh.GetGeometry(), MeshFaceKind::Surface)
+        + TotalArea(other.GetGeometry(), MeshFaceKind::Surface) - originalArea) < 1e-5);
+    for (ProceduralMesh* half : { &mesh, &other })
+    {
+        CHECK(!half->GetData().indices.empty() && half->GetBounds().valid);
+        CHECK(half->GetGeometry().caps.back().materialSlot == 7);
+        CHECK(half->UpdatePose(identity, &error));
+    }
+    const uint64_t version = mesh.GetVertexVersion(), otherVersion = other.GetVertexVersion();
+    CHECK(!SliceProceduralMesh(mesh, { 0, 0, 0 }, { 0, 0, 0 }, true, &other,
+        SliceCapOption::NoCap, 1, &status, &error, &loops));
+    CHECK(status == SliceStatus::InvalidInput && mesh.GetVertexVersion() == version
+        && other.GetVertexVersion() == otherVersion && !loops.empty());
+    CHECK(!SliceProceduralMesh(mesh, { 0, 0.75f, 0 }, { 0, 1, 0 }, true, &mesh,
+        SliceCapOption::NoCap, 1, &status, &error));
+    ProceduralMeshData bad = MakeBoxMeshData();
+    bad.bindings.clear();
+    CHECK_STATUS(mesh.Build(bad, stats, &error), SliceStatus::InvalidInput, error);
+    CHECK(mesh.GetVertexVersion() == version);
+}
+
 static void TestCutJobKey()
 {
     // 같은 부모의 형제 선분은 자식 joint로 구분된다.
@@ -2672,8 +2802,8 @@ static void TestCutJobKey()
 
     // 종류가 다르면 다른 작업이고, 스태틱 메시 key는 메시 번호만 쓴다.
     const CutJobKey mesh = MakeStaticMeshKey(1, 4);
-    CHECK(mesh.kind == CutJobKind::StaticMesh && mesh.a == 4 && mesh.b == kNoNode && mesh.c == kNoNode);
-    CHECK(!(mesh == MakeSegmentKey(1, 4, kNoNode, kNoNode)));
+    CHECK(mesh.kind == CutJobKind::StaticMesh && mesh.a == 4 && mesh.b == kInvalidIndex && mesh.c == kInvalidIndex);
+    CHECK(!(mesh == MakeSegmentKey(1, 4, kInvalidIndex, kInvalidIndex)));
     CHECK(MakeSegmentKey(1, 9, 9, 9) < mesh);
     CHECK(mesh == MakeStaticMeshKey(1, 4) && !(mesh == MakeStaticMeshKey(1, 5)) && !(mesh == MakeStaticMeshKey(2, 4)));
 
@@ -2688,9 +2818,9 @@ static void TestCutJobKey()
 
     // joint key: 팔레트와 joint만 쓰고, 선분 key와 종류로 구분되며, 같은 joint의 형제 선분은 하나로 합쳐진다.
     const CutJobKey torso = MakeJointKey(1, 0, 2);
-    CHECK(torso.kind == CutJobKind::SkeletalJoint && torso.a == 0 && torso.b == 2 && torso.c == kNoNode);
+    CHECK(torso.kind == CutJobKind::SkeletalJoint && torso.a == 0 && torso.b == 2 && torso.c == kInvalidIndex);
     CHECK(torso == MakeJointKey(1, 0, 2) && !(torso == MakeJointKey(1, 0, 3)) && !(torso == MakeJointKey(1, 1, 2)) && !(torso == MakeJointKey(2, 0, 2)));
-    CHECK(!(torso == MakeSegmentKey(1, 0, 2, kNoNode)) && torso < MakeJointKey(1, 0, 3) && torso < mesh && MakeSegmentKey(1, 9, 9, 9) < torso);
+    CHECK(!(torso == MakeSegmentKey(1, 0, 2, kInvalidIndex)) && torso < MakeJointKey(1, 0, 3) && torso < mesh && MakeSegmentKey(1, 9, 9, 9) < torso);
 }
 
 static void TestDiffJobs()
@@ -2741,8 +2871,8 @@ static void TestJobColors()
             CHECK(p.x != q.x || p.y != q.y || p.z != q.z);
         }
     // 작업이 만들어질 때 기본 상태.
-    const CutJob job;
-    CHECK(!job.candidate && !job.haveConfirmed && job.colorIndex == 0 && job.source.bone == nullptr);
+    const CutJob job{};
+    CHECK(!job.candidate && !job.haveConfirmed && job.colorIndex == 0 && job.source == nullptr);
 }
 
 
@@ -2789,42 +2919,42 @@ static void TestPickJointsSingleJoint()
 {
     // 한 joint로만 스키닝된 기둥을 가로로 자르면 절단 joint 하나에 옆면 삼각형 8개가 모두 모인다.
     const CutPickMesh prism = MakePrismMesh(1, 1);
-    const std::vector<CutPickJoint> picked = Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 1, 0, 5.0f));
+    const std::vector<CutPickJoint> picked = Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 1, 0, 5.0f));
     CHECK(picked.size() == 1 && picked[0].joint == 1 && picked[0].triangleCount == 8);
 
     // 계측 개수: 옆면 삼각형 8개를 모두 훑고, 모두 평면 양쪽에 걸쳤고, 모두 교차로 셌다. 사각형이 일부만 덮으면 교차만 줄어든다.
     CutPickStats stats;
     std::vector<CutPickJoint> counted;
-    CutPick::PickJoints(prism, { kNoNode, 0 }, HorizontalPlane(0, 1, 0, 5.0f), 0.05f, 0.0f, counted, &stats);
+    CutPick::PickJoints(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 1, 0, 5.0f), 0.05f, 0.0f, counted, &stats);
     CHECK(stats.checkedTriangles == 8 && stats.mixedTriangles == 8 && stats.crossedTriangles == 8);
-    CutPick::PickJoints(prism, { kNoNode, 0 }, HorizontalPlane(1, 1, 0, 0.3f), 0.05f, 0.0f, counted, &stats);
+    CutPick::PickJoints(prism, { kInvalidIndex, 0 }, HorizontalPlane(1, 1, 0, 0.3f), 0.05f, 0.0f, counted, &stats);
     CHECK(stats.checkedTriangles == 8 && stats.mixedTriangles == 8 && stats.crossedTriangles == 2);
-    CutPick::PickJoints(prism, { kNoNode, 0 }, HorizontalPlane(0, 3, 0, 5.0f), 0.05f, 0.0f, counted, &stats);
+    CutPick::PickJoints(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 3, 0, 5.0f), 0.05f, 0.0f, counted, &stats);
     CHECK(stats.checkedTriangles == 8 && stats.mixedTriangles == 0 && stats.crossedTriangles == 0);
 
     // 법선이 반대여도 같은 삼각형이다.
     CutPlane flipped = HorizontalPlane(0, 1, 0, 5.0f);
     flipped.RotateAroundLocalAxis(0, XM_PI);
-    const std::vector<CutPickJoint> flippedPicked = Pick(prism, { kNoNode, 0 }, flipped);
+    const std::vector<CutPickJoint> flippedPicked = Pick(prism, { kInvalidIndex, 0 }, flipped);
     CHECK(flippedPicked.size() == 1 && flippedPicked[0].triangleCount == 8);
 
     // 기둥을 비껴가는 평면은 교차 삼각형이 없다.
-    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 3, 0, 5.0f)).empty());
-    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, -1, 0, 5.0f)).empty());
+    CHECK(Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 3, 0, 5.0f)).empty());
+    CHECK(Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, -1, 0, 5.0f)).empty());
 }
 
 static void TestPickJointsRootSide()
 {
     // 아래 고리는 joint 1, 위 고리는 joint 2 (2의 부모가 1). 모든 옆면 삼각형이 두 joint를 섞으므로 루트 쪽 joint 1을 고른다.
-    const std::vector<CutPickJoint> mixed = Pick(MakePrismMesh(1, 2), { kNoNode, 0, 1 }, HorizontalPlane(0, 1, 0, 5.0f));
+    const std::vector<CutPickJoint> mixed = Pick(MakePrismMesh(1, 2), { kInvalidIndex, 0, 1 }, HorizontalPlane(0, 1, 0, 5.0f));
     CHECK(mixed.size() == 1 && mixed[0].joint == 1 && mixed[0].triangleCount == 8);
 
     // 부모와 자식이 바뀌어도 (아래가 자식) 루트에 가까운 joint를 고른다.
-    const std::vector<CutPickJoint> swapped = Pick(MakePrismMesh(2, 1), { kNoNode, 0, 1 }, HorizontalPlane(0, 1, 0, 5.0f));
+    const std::vector<CutPickJoint> swapped = Pick(MakePrismMesh(2, 1), { kInvalidIndex, 0, 1 }, HorizontalPlane(0, 1, 0, 5.0f));
     CHECK(swapped.size() == 1 && swapped[0].joint == 1 && swapped[0].triangleCount == 8);
 
     // 깊이는 부모를 따라 센다: 0(루트) - 3 - 1, 번호가 아니라 계층이 기준이다.
-    const std::vector<CutPickJoint> chain = Pick(MakePrismMesh(1, 3), { kNoNode, 3, 0, 0 }, HorizontalPlane(0, 1, 0, 5.0f));
+    const std::vector<CutPickJoint> chain = Pick(MakePrismMesh(1, 3), { kInvalidIndex, 3, 0, 0 }, HorizontalPlane(0, 1, 0, 5.0f));
     CHECK(chain.size() == 1 && chain[0].joint == 3);
 }
 
@@ -2841,7 +2971,7 @@ static void TestPickJointsSiblingTie()
     half.weights[1] = 0.5f;
     mesh.skins = { MakeRigidSkin(1), MakeRigidSkin(2), MakeRigidSkin(2), MakeRigidSkin(1), MakeRigidSkin(2), half };
     mesh.indices = { 0, 1, 2, 3, 4, 5 };
-    const std::vector<CutPickJoint> picked = Pick(mesh, { kNoNode, 0, 0 }, HorizontalPlane(3, 0, 0, 10.0f));
+    const std::vector<CutPickJoint> picked = Pick(mesh, { kInvalidIndex, 0, 0 }, HorizontalPlane(3, 0, 0, 10.0f));
     CHECK(picked.size() == 2 && picked[0].joint == 1 && picked[0].triangleCount == 1 && picked[1].joint == 2 && picked[1].triangleCount == 1);
 }
 
@@ -2850,18 +2980,18 @@ static void TestPickJointsTouchAndRectangle()
     const CutPickMesh prism = MakePrismMesh(1, 1);
 
     // 정점이나 에지만 평면에 닿으면 교차가 아니다 (평면 y = 0은 아래 고리 에지 네 개를 지난다). 평면 법선의 float 오차를 epsilon이 흡수한다.
-    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 0, 0, 5.0f), 0.05f, 1e-4f).empty());
-    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 2, 0, 5.0f), 0.05f, 1e-4f).empty());
+    CHECK(Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 0, 0, 5.0f), 0.05f, 1e-4f).empty());
+    CHECK(Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 2, 0, 5.0f), 0.05f, 1e-4f).empty());
 
     // epsilon 안의 정점은 평면 위로 본다: 위 고리(y = 2)에서 0.001 아래의 평면은 epsilon 0.01이면 닿기만 한 것이다.
-    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.05f, 0.0f).size() == 1);
-    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.05f, 0.01f).empty());
+    CHECK(Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.05f, 0.0f).size() == 1);
+    CHECK(Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.05f, 0.01f).empty());
 
     // 사각형 밖: 절단선이 사각형에 닿지 않으면 제외된다.
-    CHECK(Pick(prism, { kNoNode, 0 }, HorizontalPlane(5, 1, 0, 0.5f)).empty());
+    CHECK(Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(5, 1, 0, 0.5f)).empty());
 
     // 사각형이 +x 면의 절단선 일부만 덮으면 그 면의 삼각형 둘만 교차 삼각형이다.
-    const std::vector<CutPickJoint> partial = Pick(prism, { kNoNode, 0 }, HorizontalPlane(1, 1, 0, 0.3f));
+    const std::vector<CutPickJoint> partial = Pick(prism, { kInvalidIndex, 0 }, HorizontalPlane(1, 1, 0, 0.3f));
     CHECK(partial.size() == 1 && partial[0].triangleCount == 2);
 
     // 절단선 선분이 사각형을 가로지르면 양 끝점이 사각형 밖이어도 교차 삼각형이다: 선분 (-1,0,0)-(1,0,0)과 반 크기 0.5의 사각형.
@@ -2869,11 +2999,11 @@ static void TestPickJointsTouchAndRectangle()
     wide.positions = { { -2.0f, -1.0f, 0.0f }, { 2.0f, -1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f } };
     wide.skins = { MakeRigidSkin(1), MakeRigidSkin(1), MakeRigidSkin(1) };
     wide.indices = { 0, 1, 2 };
-    const std::vector<CutPickJoint> crossing = Pick(wide, { kNoNode, 0 }, HorizontalPlane(0, 0, 0, 0.5f), 0.05f, 1e-4f);
+    const std::vector<CutPickJoint> crossing = Pick(wide, { kInvalidIndex, 0 }, HorizontalPlane(0, 0, 0, 0.5f), 0.05f, 1e-4f);
     CHECK(crossing.size() == 1 && crossing[0].triangleCount == 1);
-    CHECK(Pick(wide, { kNoNode, 0 }, HorizontalPlane(0, 0, 3, 0.5f), 0.05f, 1e-4f).empty());        // 같은 평면 위지만 선분에서 멀다
-    CHECK(Pick(wide, { kNoNode, 0 }, HorizontalPlane(0, 0, 0.7f, 0.5f), 0.05f, 1e-4f).empty());     // 사각형이 선분 옆을 지난다
-    CHECK(Pick(wide, { kNoNode, 0 }, HorizontalPlane(1.4f, 0, 0, 0.5f), 0.05f, 1e-4f).size() == 1);  // 한 끝점 근처만 덮어도 만난다
+    CHECK(Pick(wide, { kInvalidIndex, 0 }, HorizontalPlane(0, 0, 3, 0.5f), 0.05f, 1e-4f).empty());        // 같은 평면 위지만 선분에서 멀다
+    CHECK(Pick(wide, { kInvalidIndex, 0 }, HorizontalPlane(0, 0, 0.7f, 0.5f), 0.05f, 1e-4f).empty());     // 사각형이 선분 옆을 지난다
+    CHECK(Pick(wide, { kInvalidIndex, 0 }, HorizontalPlane(1.4f, 0, 0, 0.5f), 0.05f, 1e-4f).size() == 1);  // 한 끝점 근처만 덮어도 만난다
 }
 
 static void TestPickJointsWeights()
@@ -2888,7 +3018,7 @@ static void TestPickJointsWeights()
         skin.weights[0] = 0.03f;
         skin.weights[1] = 0.97f;
     }
-    const std::vector<uint32_t> parents = { kNoNode, 0 };
+    const std::vector<uint32_t> parents = { kInvalidIndex, 0 };
     const std::vector<CutPickJoint> filtered = Pick(prism, parents, HorizontalPlane(0, 1, 0, 5.0f), 0.05f);
     CHECK(filtered.size() == 1 && filtered[0].joint == 1);
     const std::vector<CutPickJoint> unfiltered = Pick(prism, parents, HorizontalPlane(0, 1, 0, 5.0f), 0.0f);
@@ -2912,7 +3042,7 @@ static void TestPickJointsWeights()
 static void TestPickJointsBadInput()
 {
     const CutPickMesh prism = MakePrismMesh(1, 1);
-    const std::vector<uint32_t> parents = { kNoNode, 0 };
+    const std::vector<uint32_t> parents = { kInvalidIndex, 0 };
     std::vector<CutPickJoint> out;
     out.push_back(CutPickJoint());
 
@@ -3006,7 +3136,7 @@ static void TestCountCrossedMatchesPickJoints()
         {
             std::vector<CutPickJoint> picked;
             CutPickStats pickStats, countStats;
-            CutPick::PickJoints(prism, { kNoNode, 0 }, plane, 0.05f, epsilon, picked, &pickStats);
+            CutPick::PickJoints(prism, { kInvalidIndex, 0 }, plane, 0.05f, epsilon, picked, &pickStats);
             const uint32_t crossed = CutPick::CountCrossedTriangles(prism.positions, prism.indices, identity, plane, epsilon, &countStats);
             CHECK(crossed == TotalPicked(picked) && crossed == pickStats.crossedTriangles);
             CHECK(countStats.checkedTriangles == pickStats.checkedTriangles && countStats.mixedTriangles == pickStats.mixedTriangles
@@ -3034,7 +3164,7 @@ static void TestCountCrossedLocalPlane()
         {
             std::vector<CutPickJoint> picked;
             CutPickStats pickStats, countStats;
-            CutPick::PickJoints(worldPrism, { kNoNode, 0 }, plane, 0.05f, 1e-4f, picked, &pickStats);
+            CutPick::PickJoints(worldPrism, { kInvalidIndex, 0 }, plane, 0.05f, 1e-4f, picked, &pickStats);
             const uint32_t crossed = CutPick::CountCrossedTriangles(prism.positions, prism.indices, world, plane, 1e-4f, &countStats);
             CHECK(crossed == TotalPicked(picked));
             CHECK(countStats.mixedTriangles == pickStats.mixedTriangles);
@@ -3079,107 +3209,107 @@ static void TestSphereMayCross()
 // ---------------------------------------------------------------- SliceProceduralMesh (U-2)
 
 // 두 조각의 노드, 코너, 면, 경계, cap 기록이 같은가
-static bool SamePiece(const PatchPiece& a, const PatchPiece& b)
+static bool SamePiece(const MeshGeometry& a, const MeshGeometry& b)
 {
-    if (a.nodes.size() != b.nodes.size() || a.corners.size() != b.corners.size() || a.faces.size() != b.faces.size()
-        || a.boundary != b.boundary || a.caps.size() != b.caps.size() || a.skin != b.skin)
+    if (a.vertices.size() != b.vertices.size() || a.corners.size() != b.corners.size() || a.faces.size() != b.faces.size()
+        || a.edgeTags != b.edgeTags || a.caps.size() != b.caps.size() || a.skin != b.skin)
         return false;
-    for (size_t i = 0; i < a.nodes.size(); ++i)
-        if (!SamePosition(a.nodes[i].position, b.nodes[i].position) || a.nodes[i].kind != b.nodes[i].kind || a.nodes[i].cutId != b.nodes[i].cutId)
+    for (size_t i = 0; i < a.vertices.size(); ++i)
+        if (!SamePosition(a.vertices[i].position, b.vertices[i].position) || a.vertices[i].kind != b.vertices[i].kind || a.vertices[i].cutId != b.vertices[i].cutId)
             return false;
     for (size_t i = 0; i < a.corners.size(); ++i)
-        if (a.corners[i].node != b.corners[i].node || !SamePosition(a.corners[i].normal, b.corners[i].normal))
+        if (a.corners[i].vertex != b.corners[i].vertex || !SamePosition(a.corners[i].normal, b.corners[i].normal))
             return false;
     for (size_t i = 0; i < a.faces.size(); ++i)
     {
-        const PatchFace &fa = a.faces[i], &fb = b.faces[i];
+        const MeshFace &fa = a.faces[i], &fb = b.faces[i];
         if (fa.kind != fb.kind || fa.cutId != fb.cutId || fa.sourceTriangle != fb.sourceTriangle
             || fa.corner[0] != fb.corner[0] || fa.corner[1] != fb.corner[1] || fa.corner[2] != fb.corner[2])
             return false;
     }
     for (size_t i = 0; i < a.caps.size(); ++i)
-        if (a.caps[i].cutId != b.caps[i].cutId || a.caps[i].rimNodes != b.caps[i].rimNodes || a.caps[i].loopSizes != b.caps[i].loopSizes
+        if (a.caps[i].cutId != b.caps[i].cutId || a.caps[i].rimVertices != b.caps[i].rimVertices || a.caps[i].loopSizes != b.caps[i].loopSizes
             || a.caps[i].materialSlot != b.caps[i].materialSlot || a.caps[i].inLastSection != b.caps[i].inLastSection)
             return false;
     return true;
 }
 
-// 같은 입력에서 SlicePatch(cutId 1, cap 생성)와 같은 조각을 낸다. 실패하면 입력이 그대로다.
-static void TestSliceProceduralMeshMatchesSlicePatch()
+// 같은 입력에서 SliceGeometry(cutId 1, cap 생성)와 같은 조각을 낸다. 실패하면 입력이 그대로다.
+static void TestSliceProceduralMeshMatchesSliceGeometry()
 {
-    const PatchPiece box = MakeBox();
+    const MeshGeometry box = MakeBox();
     const SlicePlane plane = MakePlane(0, 0.5f, 0, 0.3f, 1, 0);
-    SliceResult reference;
-    CHECK_STATUS(SlicePatch(box, plane, 1, CapOptions(), reference), SliceStatus::Ok, reference.detail);
+    GeometrySliceResult reference;
+    CHECK_STATUS(SliceGeometry(box, plane, 1, CapOptions(), reference), SliceStatus::Ok, reference.detail);
 
-    PatchPiece mesh = box, other;
+    MeshGeometry mesh = box, other;
     SliceStatus status = SliceStatus::InvalidInput;
     std::string error = "stale";
     std::vector<std::vector<uint32_t>> loops;
-    CHECK(SliceProceduralMesh(mesh, plane.point, plane.normal, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
+    CHECK(SliceTestGeometry(mesh, plane.point, plane.normal, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
         &status, &error, &loops));
     CHECK(status == SliceStatus::Ok && error.empty());
     CHECK(SamePiece(mesh, reference.positive) && SamePiece(other, reference.negative));
     CHECK(loops == reference.loops);
 
-    // 기본 동작(새 section, 슬롯 1)의 렌더 출력은 SlicePatch 결과와 바이트 단위로 같다
+    // 기본 동작(새 section, 슬롯 1)의 렌더 출력은 SliceGeometry 결과와 바이트 단위로 같다
     ProceduralMeshData mine, theirs;
     BuildRenderMesh(mesh, mine);
     BuildRenderMesh(reference.positive, theirs);
     CHECK(mine.indices == theirs.indices && mine.vertices.size() == theirs.vertices.size()
-        && std::memcmp(mine.vertices.data(), theirs.vertices.data(), mine.vertices.size() * sizeof(ProceduralVertex)) == 0);
+        && std::memcmp(mine.vertices.data(), theirs.vertices.data(), mine.vertices.size() * sizeof(MeshRenderVertex)) == 0);
     CHECK(mine.sections.size() == theirs.sections.size());
     for (size_t i = 0; i < mine.sections.size() && i < theirs.sections.size(); ++i)
         CHECK(mine.sections[i].firstIndex == theirs.sections[i].firstIndex && mine.sections[i].indexCount == theirs.sections[i].indexCount
             && mine.sections[i].materialSlot == theirs.sections[i].materialSlot);
 
     // 두 번째 절단은 다음 cutId(2)를 쓴다
-    PatchPiece again = mesh;
-    SliceResult second;
-    CHECK_STATUS(SlicePatch(mesh, MakePlane(0, 1.5f, 0, 0, 1, 0.2f), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
-    CHECK(SliceProceduralMesh(again, { 0, 1.5f, 0 }, { 0, 1, 0.2f }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
+    MeshGeometry again = mesh;
+    GeometrySliceResult second;
+    CHECK_STATUS(SliceGeometry(mesh, MakePlane(0, 1.5f, 0, 0, 1, 0.2f), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
+    CHECK(SliceTestGeometry(again, { 0, 1.5f, 0 }, { 0, 1, 0.2f }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
     CHECK(SamePiece(again, second.positive));
 
     // 실패(빗나감): 입력, 다른 쪽, 루프가 그대로다
-    PatchPiece missed = box, untouched = reference.negative;
+    MeshGeometry missed = box, untouched = reference.negative;
     std::vector<std::vector<uint32_t>> keptLoops = reference.loops;
-    CHECK(!SliceProceduralMesh(missed, { 0, 5, 0 }, { 0, 1, 0 }, true, &untouched, SliceCapOption::CreateNewSectionForCap, 1,
+    CHECK(!SliceTestGeometry(missed, { 0, 5, 0 }, { 0, 1, 0 }, true, &untouched, SliceCapOption::CreateNewSectionForCap, 1,
         &status, &error, &keptLoops));
     CHECK(status == SliceStatus::NoCut && !error.empty());
     CHECK(SamePiece(missed, box) && SamePiece(untouched, reference.negative) && keptLoops == reference.loops);
     // 실패(잘못된 법선)
-    CHECK(!SliceProceduralMesh(missed, { 0, 1, 0 }, { 0, 0, 0 }, true, &untouched, SliceCapOption::NoCap, 1, &status));
+    CHECK(!SliceTestGeometry(missed, { 0, 1, 0 }, { 0, 0, 0 }, true, &untouched, SliceCapOption::NoCap, 1, &status));
     CHECK(status == SliceStatus::InvalidInput && SamePiece(missed, box) && SamePiece(untouched, reference.negative));
 
-    // 법선 길이는 결과를 바꾸지 않는다 (SlicePatch와 같은 규칙)
-    PatchPiece scaled = box;
-    CHECK(SliceProceduralMesh(scaled, plane.point, { 3.0f, 10.0f, 0 }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
-    CHECK(scaled.faces.size() == reference.positive.faces.size() && scaled.nodes.size() == reference.positive.nodes.size());
+    // 법선 길이는 결과를 바꾸지 않는다 (SliceGeometry와 같은 규칙)
+    MeshGeometry scaled = box;
+    CHECK(SliceTestGeometry(scaled, plane.point, { 3.0f, 10.0f, 0 }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
+    CHECK(scaled.faces.size() == reference.positive.faces.size() && scaled.vertices.size() == reference.positive.vertices.size());
 
     // createOtherHalf = false: 다른 쪽은 빈 조각이다
-    PatchPiece half = box, empty = reference.negative;
-    CHECK(SliceProceduralMesh(half, plane.point, plane.normal, false, &empty, SliceCapOption::CreateNewSectionForCap, 1));
-    CHECK(SamePiece(half, reference.positive) && empty.Empty() && empty.nodes.empty() && empty.caps.empty());
+    MeshGeometry half = box, empty = reference.negative;
+    CHECK(SliceTestGeometry(half, plane.point, plane.normal, false, &empty, SliceCapOption::CreateNewSectionForCap, 1));
+    CHECK(SamePiece(half, reference.positive) && empty.Empty() && empty.vertices.empty() && empty.caps.empty());
 }
 
 // 세 cap option의 section 구성
 static void TestSliceCapOptions()
 {
-    const PatchPiece box = MakeBox();
+    const MeshGeometry box = MakeBox();
     const XMFLOAT3 point = { 0, 1, 0 }, normal = { 0, 1, 0 };
 
     // NoCap: cap 면과 cap 기록이 없고, 표면 section 하나뿐이다
-    PatchPiece open = box, openOther;
-    CHECK(SliceProceduralMesh(open, point, normal, true, &openOther, SliceCapOption::NoCap, 3));
+    MeshGeometry open = box, openOther;
+    CHECK(SliceTestGeometry(open, point, normal, true, &openOther, SliceCapOption::NoCap, 3));
     CHECK(CountCapFaces(open) == 0 && open.caps.empty() && CountCapFaces(openOther) == 0);
     ProceduralMeshData baked;
     BuildRenderMesh(open, baked);
     CHECK(baked.sections.size() == 1 && baked.sections[0].materialSlot == 0);
 
     // CreateNewSectionForCap: [표면 0][cap capMaterialSlot], 양쪽 조각 모두
-    PatchPiece created = box, createdOther;
-    CHECK(SliceProceduralMesh(created, point, normal, true, &createdOther, SliceCapOption::CreateNewSectionForCap, 3));
-    for (const PatchPiece* piece : { &created, &createdOther })
+    MeshGeometry created = box, createdOther;
+    CHECK(SliceTestGeometry(created, point, normal, true, &createdOther, SliceCapOption::CreateNewSectionForCap, 3));
+    for (const MeshGeometry* piece : { &created, &createdOther })
     {
         CHECK(piece->caps.size() == 1 && piece->caps[0].materialSlot == 3 && !piece->caps[0].inLastSection);
         BuildRenderMesh(*piece, baked);
@@ -3188,17 +3318,17 @@ static void TestSliceCapOptions()
     }
 
     // UseLastSectionForCap: cap 면이 표면 section 하나에 합쳐진다 (표면 면 뒤에)
-    PatchPiece merged = box, mergedOther;
-    CHECK(SliceProceduralMesh(merged, point, normal, true, &mergedOther, SliceCapOption::UseLastSectionForCap, 3));
-    for (const PatchPiece* piece : { &merged, &mergedOther })
+    MeshGeometry merged = box, mergedOther;
+    CHECK(SliceTestGeometry(merged, point, normal, true, &mergedOther, SliceCapOption::UseLastSectionForCap, 3));
+    for (const MeshGeometry* piece : { &merged, &mergedOther })
     {
         CHECK(piece->caps.size() == 1 && piece->caps[0].inLastSection);
         BuildRenderMesh(*piece, baked);
         CHECK(baked.sections.size() == 1 && baked.sections[0].materialSlot == 0);
         CHECK(CountSectionFaces(baked, 0) == piece->faces.size());
         const size_t surfaceIndices = (piece->faces.size() - CountCapFaces(*piece)) * 3;
-        const PatchFace& lastFace = piece->faces.back();
-        CHECK(lastFace.kind == PatchFaceKind::Cap && baked.indices[baked.indices.size() - 1] == lastFace.corner[2]);
+        const MeshFace& lastFace = piece->faces.back();
+        CHECK(lastFace.kind == MeshFaceKind::Cap && baked.indices[baked.indices.size() - 1] == lastFace.corner[2]);
         CHECK(baked.indices.size() > surfaceIndices);
     }
     // splitByOrigin이면 마지막 표면 section은 "나뉜 면" section이다
@@ -3207,19 +3337,19 @@ static void TestSliceCapOptions()
     BuildRenderMesh(merged, baked, split);
     CHECK(baked.sections.size() == 2 && baked.sections[1].materialSlot == 0);
     uint32_t divided = 0;
-    for (const PatchFace& face : merged.faces)
-        divided += face.kind == PatchFaceKind::Surface && face.cutId != 0;
+    for (const MeshFace& face : merged.faces)
+        divided += face.kind == MeshFaceKind::Surface && face.cutId != 0;
     CHECK(CountSectionFaces(baked, 1) == divided + CountCapFaces(merged));
 
     // 섞인 두 절단: cut 1은 슬롯 1의 새 section, cut 2는 마지막 표면 section
-    PatchPiece mixed = box;
-    CHECK(SliceProceduralMesh(mixed, { 0, 0.5f, 0 }, { 0.3f, 1, 0 }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
-    CHECK(SliceProceduralMesh(mixed, { 0, 1.5f, 0 }, { 0, -1, 0.2f }, false, nullptr, SliceCapOption::UseLastSectionForCap, 2));
+    MeshGeometry mixed = box;
+    CHECK(SliceTestGeometry(mixed, { 0, 0.5f, 0 }, { 0.3f, 1, 0 }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
+    CHECK(SliceTestGeometry(mixed, { 0, 1.5f, 0 }, { 0, -1, 0.2f }, false, nullptr, SliceCapOption::UseLastSectionForCap, 2));
     CHECK(mixed.caps.size() == 2);
     BuildRenderMesh(mixed, baked);
     uint32_t firstCap = 0, secondCap = 0;
-    for (const PatchFace& face : mixed.faces)
-        if (face.kind == PatchFaceKind::Cap)
+    for (const MeshFace& face : mixed.faces)
+        if (face.kind == MeshFaceKind::Cap)
             (face.cutId == 1 ? firstCap : secondCap) += 1;
     CHECK(firstCap > 0 && secondCap > 0);
     CHECK(baked.sections.size() == 2 && baked.sections[1].materialSlot == 1 && CountSectionFaces(baked, 1) == firstCap);
@@ -3265,7 +3395,7 @@ int main()
     TestRecut();
     TestSplitFacesRecordCutId();
     TestSplitByOriginBake();
-    TestSliceProceduralMeshMatchesSlicePatch();
+    TestSliceProceduralMeshMatchesSliceGeometry();
     TestSliceCapOptions();
     TestLoopDebugBake();
     TestCutPlaneFrame();
@@ -3300,6 +3430,8 @@ int main()
     TestSkinRefusesBadInput();
     TestRigidWeldAndSkin();
     TestRigidSlice();
+    TestProceduralMeshOwnsGeometry();
+    TestPublicProceduralMeshPipeline();
 
     TestCutJobKey();
     TestDiffJobs();

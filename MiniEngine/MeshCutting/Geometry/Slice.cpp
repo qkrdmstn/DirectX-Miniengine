@@ -1,4 +1,4 @@
-﻿// 이 파일은 평면 하나로 패치 조각을 두 조각으로 자르는 슬라이서(SlicePatch)를 구현한다.
+﻿// 이 파일은 평면 하나로 패치 조각을 두 조각으로 자르는 슬라이서(SliceGeometry)를 구현한다.
 #include "../pch.h"
 #include "Slice.h"
 
@@ -10,19 +10,19 @@ namespace MeshCutting
 {
     namespace
     {
-        struct CutNodeInfo
+        struct CutVertexInfo
         {
-            uint32_t low;       // original nodes of the cut edge, low < high
+            uint32_t low;       // original vertices of the cut edge, low < high
             uint32_t high;
             double t;           // position = low + t * (high - low)
         };
 
-        // One output piece while the slice is running. Corner nodes are global node ids
-        // (original nodes first, cut nodes after) until the piece is compacted.
+        // One output piece while the slice is running. Corner vertices are global vertex ids
+        // (original vertices first, cut vertices after) until the piece is compacted.
         struct SideBuild
         {
-            std::vector<PatchCorner> corners;
-            std::vector<PatchFace> faces;
+            std::vector<MeshCorner> corners;
+            std::vector<MeshFace> faces;
             std::unordered_map<uint32_t, uint32_t> wholeCorner;     // input corner -> corner
             std::unordered_map<uint64_t, uint32_t> cutCorner;       // sorted input corner pair -> corner
         };
@@ -30,12 +30,12 @@ namespace MeshCutting
         class Slicer
         {
         public:
-            Slicer(const PatchPiece& in, const SlicePlane& plane, uint32_t cutId, const SliceOptions& options)
+            Slicer(const MeshGeometry& in, const SlicePlane& plane, uint32_t cutId, const SliceOptions& options)
                 : m_In(in), m_Plane(plane), m_CutId(cutId), m_Options(options)
             {
             }
 
-            SliceStatus Run(SliceResult& out);
+            SliceStatus Run(GeometrySliceResult& out);
 
         private:
             bool Fail(SliceStatus status, const std::string& message)
@@ -45,48 +45,48 @@ namespace MeshCutting
                 return false;
             }
 
-            bool ClassifyNodes();
+            bool ClassifyVertices();
             bool ProcessFace(uint32_t faceIndex);
-            uint32_t CutNodeOf(uint32_t nodeA, uint32_t nodeB);
+            uint32_t CutVertexOf(uint32_t vertexA, uint32_t vertexB);
             uint32_t WholeCorner(int side, uint32_t inputCorner);
             uint32_t CutCorner(int side, uint32_t cornerA, uint32_t cornerB, uint32_t cutNode, uint32_t faceIndex);
-            void AddFace(int side, const PatchFace& source, bool split, uint32_t c0, uint32_t c1, uint32_t c2);
-            bool BuildPiece(int side, PatchPiece& piece);
-            bool InheritedKind(uint32_t globalA, uint32_t globalB, PatchEdgeKind& kind) const;
-            bool IsCutNode(uint32_t global) const { return global >= m_In.nodes.size(); }
+            void AddFace(int side, const MeshFace& source, bool split, uint32_t c0, uint32_t c1, uint32_t c2);
+            bool BuildPiece(int side, MeshGeometry& piece);
+            bool InheritedKind(uint32_t globalA, uint32_t globalB, MeshEdgeTag& kind) const;
+            bool IsCutVertex(uint32_t global) const { return global >= m_In.vertices.size(); }
 
-            const PatchPiece& m_In;
+            const MeshGeometry& m_In;
             const SlicePlane& m_Plane;
             uint32_t m_CutId;
             SliceOptions m_Options;
 
             SlicePlaneBasis m_Basis;
             double m_Epsilon = 0.0;
-            std::vector<PatchNode> m_Nodes;          // original nodes, then cut nodes
-            std::vector<double> m_Distance;         // signed plane distance of original nodes
-            std::vector<int8_t> m_Sign;             // +1, 0, -1; cut nodes are 0
-            std::vector<CutNodeInfo> m_CutNodes;
-            std::unordered_map<uint64_t, uint32_t> m_EdgeNode;      // geometric edge -> cut node
+            std::vector<MeshVertex> m_Vertices;          // original vertices, then cut vertices
+            std::vector<double> m_Distance;         // signed plane distance of original vertices
+            std::vector<int8_t> m_Sign;             // +1, 0, -1; cut vertices are 0
+            std::vector<CutVertexInfo> m_CutVertices;
+            std::unordered_map<uint64_t, uint32_t> m_EdgeCutVertex;      // geometric edge -> cut vertex
             SideBuild m_Side[2];                    // 0 = positive, 1 = negative
-            std::vector<uint8_t> m_OnPlane[2];      // per output piece node: lies on the plane
+            std::vector<uint8_t> m_OnPlane[2];      // per output piece vertex: lies on the plane
             std::unordered_map<uint32_t, int> m_CapSides;   // cap cut id -> bit mask of sides
             SliceStatus m_Status = SliceStatus::InvalidInput;
             std::string m_Detail;
         };
 
-        bool MergeOrigin(const PatchOrigin& low, const PatchOrigin& high, double t, PatchOrigin& out)
+        bool MergeOrigin(const MeshVertexOrigin& low, const MeshVertexOrigin& high, double t, MeshVertexOrigin& out)
         {
             uint32_t id[6];
             double weight[6];
             int count = 0;
             for (int i = 0; i < 3; ++i)
-                if (low.skinVertex[i] != kNoNode)
+                if (low.skinVertex[i] != kInvalidIndex)
                 {
                     id[count] = low.skinVertex[i];
                     weight[count++] = (1.0 - t) * low.bary[i];
                 }
             for (int i = 0; i < 3; ++i)
-                if (high.skinVertex[i] != kNoNode)
+                if (high.skinVertex[i] != kInvalidIndex)
                 {
                     id[count] = high.skinVertex[i];
                     weight[count++] = t * high.bary[i];
@@ -115,7 +115,7 @@ namespace MeshCutting
             double sum = 0.0;
             for (int i = 0; i < merged; ++i)
                 sum += mergedWeight[i];
-            out = PatchOrigin();
+            out = MeshVertexOrigin();
             for (int i = 0; i < merged; ++i)
             {
                 out.skinVertex[i] = mergedId[i];
@@ -139,14 +139,14 @@ namespace MeshCutting
             }
         }
 
-        bool Slicer::ClassifyNodes()
+        bool Slicer::ClassifyVertices()
         {
-            m_Nodes = m_In.nodes;
-            m_Distance.resize(m_In.nodes.size());
-            m_Sign.resize(m_In.nodes.size());
-            for (size_t i = 0; i < m_In.nodes.size(); ++i)
+            m_Vertices = m_In.vertices;
+            m_Distance.resize(m_In.vertices.size());
+            m_Sign.resize(m_In.vertices.size());
+            for (size_t i = 0; i < m_In.vertices.size(); ++i)
             {
-                const DirectX::XMFLOAT3& p = m_In.nodes[i].position;
+                const DirectX::XMFLOAT3& p = m_In.vertices[i].position;
                 const double d = (double(p.x) - m_Basis.origin[0]) * m_Basis.n[0]
                     + (double(p.y) - m_Basis.origin[1]) * m_Basis.n[1]
                     + (double(p.z) - m_Basis.origin[2]) * m_Basis.n[2];
@@ -156,43 +156,43 @@ namespace MeshCutting
             return true;
         }
 
-        // The node where the plane crosses the geometric edge (nodeA, nodeB). The ends must lie
-        // strictly on opposite sides, so t is inside (0, 1) and the node is never an end point.
-        uint32_t Slicer::CutNodeOf(uint32_t nodeA, uint32_t nodeB)
+        // The vertex where the plane crosses the geometric edge (vertexA, vertexB). The ends must lie
+        // strictly on opposite sides, so t is inside (0, 1) and the vertex is never an end point.
+        uint32_t Slicer::CutVertexOf(uint32_t vertexA, uint32_t vertexB)
         {
-            const uint64_t key = MakeEdgeKey(nodeA, nodeB);
-            const auto found = m_EdgeNode.find(key);
-            if (found != m_EdgeNode.end())
+            const uint64_t key = MakeEdgeKey(vertexA, vertexB);
+            const auto found = m_EdgeCutVertex.find(key);
+            if (found != m_EdgeCutVertex.end())
                 return found->second;
 
             const uint32_t low = EdgeKeyLow(key), high = EdgeKeyHigh(key);
-            if (m_In.nodes[low].kind != PatchNodeKind::Surface || m_In.nodes[high].kind != PatchNodeKind::Surface)
+            if (m_In.vertices[low].kind != MeshVertexKind::Surface || m_In.vertices[high].kind != MeshVertexKind::Surface)
             {
-                Fail(SliceStatus::CrossesCap, "edge (" + Num(low) + ", " + Num(high) + ") touches a cap node");
-                return kNoNode;
+                Fail(SliceStatus::CrossesCap, "edge (" + Num(low) + ", " + Num(high) + ") touches a cap vertex");
+                return kInvalidIndex;
             }
             const double dl = m_Distance[low], dh = m_Distance[high];
             const double t = dl / (dl - dh);
 
-            PatchNode node;
-            node.kind = PatchNodeKind::Surface;
-            node.cutId = m_CutId;
-            if (!MergeOrigin(m_In.nodes[low].origin, m_In.nodes[high].origin, t, node.origin))
+            MeshVertex vertex;
+            vertex.kind = MeshVertexKind::Surface;
+            vertex.cutId = m_CutId;
+            if (!MergeOrigin(m_In.vertices[low].origin, m_In.vertices[high].origin, t, vertex.origin))
             {
-                Fail(SliceStatus::InvalidOrigin, "cut node on edge (" + Num(low) + ", " + Num(high)
-                    + ") would depend on more than three original nodes");
-                return kNoNode;
+                Fail(SliceStatus::InvalidOrigin, "cut vertex on edge (" + Num(low) + ", " + Num(high)
+                    + ") would depend on more than three original vertices");
+                return kInvalidIndex;
             }
-            const DirectX::XMFLOAT3& a = m_In.nodes[low].position;
-            const DirectX::XMFLOAT3& b = m_In.nodes[high].position;
-            node.position = { float(a.x + t * (double(b.x) - a.x)), float(a.y + t * (double(b.y) - a.y)),
+            const DirectX::XMFLOAT3& a = m_In.vertices[low].position;
+            const DirectX::XMFLOAT3& b = m_In.vertices[high].position;
+            vertex.position = { float(a.x + t * (double(b.x) - a.x)), float(a.y + t * (double(b.y) - a.y)),
                 float(a.z + t * (double(b.z) - a.z)) };
 
-            const uint32_t id = uint32_t(m_Nodes.size());
-            m_Nodes.push_back(node);
+            const uint32_t id = uint32_t(m_Vertices.size());
+            m_Vertices.push_back(vertex);
             m_Sign.push_back(0);
-            m_CutNodes.push_back({ low, high, t });
-            m_EdgeNode.emplace(key, id);
+            m_CutVertices.push_back({ low, high, t });
+            m_EdgeCutVertex.emplace(key, id);
             return id;
         }
 
@@ -208,8 +208,8 @@ namespace MeshCutting
             return id;
         }
 
-        // Attributes are interpolated along the render edge from the corner with the lower node
-        // to the one with the higher node, using the same t as the shared cut node.
+        // Attributes are interpolated along the render edge from the corner with the lower vertex
+        // to the one with the higher vertex, using the same t as the shared cut vertex.
         uint32_t Slicer::CutCorner(int side, uint32_t cornerA, uint32_t cornerB, uint32_t cutNode, uint32_t faceIndex)
         {
             SideBuild& build = m_Side[side];
@@ -218,13 +218,13 @@ namespace MeshCutting
             if (found != build.cutCorner.end())
                 return found->second;
 
-            const bool aIsLow = m_In.corners[cornerA].node < m_In.corners[cornerB].node;
-            const PatchCorner& low = m_In.corners[aIsLow ? cornerA : cornerB];
-            const PatchCorner& high = m_In.corners[aIsLow ? cornerB : cornerA];
-            const double t = m_CutNodes[cutNode - m_In.nodes.size()].t;
+            const bool aIsLow = m_In.corners[cornerA].vertex < m_In.corners[cornerB].vertex;
+            const MeshCorner& low = m_In.corners[aIsLow ? cornerA : cornerB];
+            const MeshCorner& high = m_In.corners[aIsLow ? cornerB : cornerA];
+            const double t = m_CutVertices[cutNode - m_In.vertices.size()].t;
 
-            PatchCorner corner;
-            corner.node = cutNode;
+            MeshCorner corner;
+            corner.vertex = cutNode;
             corner.uv = { float(low.uv.x + t * (double(high.uv.x) - low.uv.x)), float(low.uv.y + t * (double(high.uv.y) - low.uv.y)) };
             corner.color = { float(low.color.x + t * (double(high.color.x) - low.color.x)),
                 float(low.color.y + t * (double(high.color.y) - low.color.y)),
@@ -236,10 +236,10 @@ namespace MeshCutting
             if (std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) <= 1e-6)
             {
                 // Opposite normals cancel; fall back to the face normal.
-                const PatchFace& face = m_In.faces[faceIndex];
-                const DirectX::XMFLOAT3& p0 = m_In.nodes[m_In.corners[face.corner[0]].node].position;
-                const DirectX::XMFLOAT3& p1 = m_In.nodes[m_In.corners[face.corner[1]].node].position;
-                const DirectX::XMFLOAT3& p2 = m_In.nodes[m_In.corners[face.corner[2]].node].position;
+                const MeshFace& face = m_In.faces[faceIndex];
+                const DirectX::XMFLOAT3& p0 = m_In.vertices[m_In.corners[face.corner[0]].vertex].position;
+                const DirectX::XMFLOAT3& p1 = m_In.vertices[m_In.corners[face.corner[1]].vertex].position;
+                const DirectX::XMFLOAT3& p2 = m_In.vertices[m_In.corners[face.corner[2]].vertex].position;
                 const double e1[3] = { double(p1.x) - p0.x, double(p1.y) - p0.y, double(p1.z) - p0.z };
                 const double e2[3] = { double(p2.x) - p0.x, double(p2.y) - p0.y, double(p2.z) - p0.z };
                 n[0] = e1[1] * e2[2] - e1[2] * e2[1];
@@ -256,29 +256,29 @@ namespace MeshCutting
             return id;
         }
 
-        void Slicer::AddFace(int side, const PatchFace& source, bool split, uint32_t c0, uint32_t c1, uint32_t c2)
+        void Slicer::AddFace(int side, const MeshFace& source, bool split, uint32_t c0, uint32_t c1, uint32_t c2)
         {
-            PatchFace face = source;
+            MeshFace face = source;
             if (split)
                 face.cutId = m_CutId;           // a surface face this cut divided (cap faces are never split)
             face.corner[0] = c0;
             face.corner[1] = c1;
             face.corner[2] = c2;
             m_Side[side].faces.push_back(face);
-            if (source.kind == PatchFaceKind::Cap)
+            if (source.kind == MeshFaceKind::Cap)
                 m_CapSides[source.cutId] |= 1 << side;
         }
 
         bool Slicer::ProcessFace(uint32_t faceIndex)
         {
-            const PatchFace& face = m_In.faces[faceIndex];
+            const MeshFace& face = m_In.faces[faceIndex];
             uint32_t c[3], n[3];
             int8_t s[3];
             int positive = 0, negative = 0, zero = 0;
             for (int k = 0; k < 3; ++k)
             {
                 c[k] = face.corner[k];
-                n[k] = m_In.corners[c[k]].node;
+                n[k] = m_In.corners[c[k]].vertex;
                 s[k] = m_Sign[n[k]];
                 positive += s[k] > 0;
                 negative += s[k] < 0;
@@ -302,7 +302,7 @@ namespace MeshCutting
                 whole(1);
                 return true;
             }
-            if (face.kind == PatchFaceKind::Cap)
+            if (face.kind == MeshFaceKind::Cap)
                 return Fail(SliceStatus::CrossesCap, "the plane cuts cap face " + Num(faceIndex) + " of cut " + Num(face.cutId));
 
             if (zero == 1)
@@ -312,8 +312,8 @@ namespace MeshCutting
                 while (s[z] != 0)
                     ++z;
                 const int a = (z + 1) % 3, b = (z + 2) % 3;
-                const uint32_t p = CutNodeOf(n[a], n[b]);
-                if (p == kNoNode)
+                const uint32_t p = CutVertexOf(n[a], n[b]);
+                if (p == kInvalidIndex)
                     return false;
                 const int sideA = s[a] > 0 ? 0 : 1, sideB = 1 - sideA;
                 const uint32_t cornerP[2] = { CutCorner(0, c[a], c[b], p, faceIndex), CutCorner(1, c[a], c[b], p, faceIndex) };
@@ -326,11 +326,11 @@ namespace MeshCutting
             // the other side gets the quad (P1, X, Y, P2) as two triangles. Winding is preserved.
             const int lone = s[0] == s[1] ? 2 : (s[0] == s[2] ? 1 : 0);
             const int x = (lone + 1) % 3, y = (lone + 2) % 3;
-            const uint32_t p1 = CutNodeOf(n[lone], n[x]);
-            if (p1 == kNoNode)
+            const uint32_t p1 = CutVertexOf(n[lone], n[x]);
+            if (p1 == kInvalidIndex)
                 return false;
-            const uint32_t p2 = CutNodeOf(n[y], n[lone]);
-            if (p2 == kNoNode)
+            const uint32_t p2 = CutVertexOf(n[y], n[lone]);
+            if (p2 == kInvalidIndex)
                 return false;
             const int loneSide = s[lone] > 0 ? 0 : 1, otherSide = 1 - loneSide;
             const uint32_t corner1[2] = { CutCorner(0, c[lone], c[x], p1, faceIndex), CutCorner(1, c[lone], c[x], p1, faceIndex) };
@@ -343,59 +343,59 @@ namespace MeshCutting
 
         // The kind an edge of the output inherits from the input piece. A half of a split edge
         // carries the kind of the whole edge; edges created by this cut have none.
-        bool Slicer::InheritedKind(uint32_t globalA, uint32_t globalB, PatchEdgeKind& kind) const
+        bool Slicer::InheritedKind(uint32_t globalA, uint32_t globalB, MeshEdgeTag& kind) const
         {
             uint32_t a = globalA, b = globalB;
-            const bool newA = IsCutNode(globalA), newB = IsCutNode(globalB);
+            const bool newA = IsCutVertex(globalA), newB = IsCutVertex(globalB);
             if (newA && newB)
                 return false;
             if (newA || newB)
             {
                 const uint32_t cut = newA ? globalA : globalB;
                 const uint32_t old = newA ? globalB : globalA;
-                const CutNodeInfo& info = m_CutNodes[cut - m_In.nodes.size()];
+                const CutVertexInfo& info = m_CutVertices[cut - m_In.vertices.size()];
                 if (old != info.low && old != info.high)
                     return false;
                 a = info.low;
                 b = info.high;
             }
-            const auto found = m_In.boundary.find(MakeEdgeKey(a, b));
-            if (found == m_In.boundary.end())
+            const auto found = m_In.edgeTags.find(MakeEdgeKey(a, b));
+            if (found == m_In.edgeTags.end())
                 return false;
             kind = found->second;
             return true;
         }
 
-        bool Slicer::BuildPiece(int side, PatchPiece& piece)
+        bool Slicer::BuildPiece(int side, MeshGeometry& piece)
         {
             SideBuild& build = m_Side[side];
-            piece = PatchPiece();
+            piece = MeshGeometry();
             piece.skin = m_In.skin;
             piece.skinStateId = m_In.skinStateId;
 
-            // Keep the nodes the faces use, in ascending global order.
-            std::vector<uint8_t> used(m_Nodes.size(), 0);
-            for (const PatchCorner& corner : build.corners)
-                used[corner.node] = 1;
-            std::vector<uint32_t> remap(m_Nodes.size(), kNoNode);
+            // Keep the vertices the faces use, in ascending global order.
+            std::vector<uint8_t> used(m_Vertices.size(), 0);
+            for (const MeshCorner& corner : build.corners)
+                used[corner.vertex] = 1;
+            std::vector<uint32_t> remap(m_Vertices.size(), kInvalidIndex);
             std::vector<uint32_t> globalOf;
-            for (uint32_t g = 0; g < m_Nodes.size(); ++g)
+            for (uint32_t g = 0; g < m_Vertices.size(); ++g)
                 if (used[g])
                 {
-                    remap[g] = uint32_t(piece.nodes.size());
-                    piece.nodes.push_back(m_Nodes[g]);
+                    remap[g] = uint32_t(piece.vertices.size());
+                    piece.vertices.push_back(m_Vertices[g]);
                     globalOf.push_back(g);
                 }
             piece.corners = build.corners;
-            for (PatchCorner& corner : piece.corners)
-                corner.node = remap[corner.node];
+            for (MeshCorner& corner : piece.corners)
+                corner.vertex = remap[corner.vertex];
             piece.faces = build.faces;
-            m_OnPlane[side].assign(piece.nodes.size(), 0);
+            m_OnPlane[side].assign(piece.vertices.size(), 0);
             for (size_t i = 0; i < globalOf.size(); ++i)
                 m_OnPlane[side][i] = m_Sign[globalOf[i]] == 0 ? 1 : 0;
 
             // Edge kinds are rebuilt from this piece's adjacency (design 1.7).
-            PatchEdgeUsageMap usage;
+            MeshEdgeUsageMap usage;
             CollectEdgeUsage(piece, usage);
             std::vector<uint64_t> keys;
             keys.reserve(usage.size());
@@ -404,44 +404,44 @@ namespace MeshCutting
             std::sort(keys.begin(), keys.end());
             for (uint64_t key : keys)
             {
-                const PatchEdgeUsage& use = usage[key];
+                const MeshEdgeUsage& use = usage[key];
                 const uint32_t ga = globalOf[EdgeKeyLow(key)], gb = globalOf[EdgeKeyHigh(key)];
-                PatchEdgeKind inherited = PatchEdgeKind::Interior;
+                MeshEdgeTag inherited = MeshEdgeTag::Interior;
                 const bool has = InheritedKind(ga, gb, inherited);
                 if (use.count == 1)
                 {
-                    if (has && inherited != PatchEdgeKind::CapSeam)
-                        piece.boundary[key] = inherited;
+                    if (has && inherited != MeshEdgeTag::CapSeam)
+                        piece.edgeTags[key] = inherited;
                     else
                     {
                         // A new boundary can only lie in the plane; anything else is a bug here.
                         if (m_Sign[ga] != 0 || m_Sign[gb] != 0)
                             return Fail(SliceStatus::InvalidInput, "internal: new boundary edge (" + Num(ga) + ", "
                                 + Num(gb) + ") is off the plane");
-                        piece.boundary[key] = PatchEdgeKind::Cut;
+                        piece.edgeTags[key] = MeshEdgeTag::Cut;
                     }
                 }
-                else if (use.count == 2 && has && inherited == PatchEdgeKind::CapSeam)
-                    piece.boundary[key] = PatchEdgeKind::CapSeam;
+                else if (use.count == 2 && has && inherited == MeshEdgeTag::CapSeam)
+                    piece.edgeTags[key] = MeshEdgeTag::CapSeam;
             }
 
             // Cap records follow their cap faces.
-            for (const PatchCap& cap : m_In.caps)
+            for (const MeshCutRecord& cap : m_In.caps)
             {
                 bool present = false;
-                for (const PatchFace& face : piece.faces)
-                    if (face.kind == PatchFaceKind::Cap && face.cutId == cap.cutId)
+                for (const MeshFace& face : piece.faces)
+                    if (face.kind == MeshFaceKind::Cap && face.cutId == cap.cutId)
                     {
                         present = true;
                         break;
                     }
                 if (!present)
                     continue;
-                PatchCap moved = cap;
-                for (uint32_t& rim : moved.rimNodes)
+                MeshCutRecord moved = cap;
+                for (uint32_t& rim : moved.rimVertices)
                 {
-                    if (rim >= remap.size() || remap[rim] == kNoNode)
-                        return Fail(SliceStatus::InvalidInput, "internal: rim node " + Num(rim) + " of cut " + Num(cap.cutId) + " was dropped");
+                    if (rim >= remap.size() || remap[rim] == kInvalidIndex)
+                        return Fail(SliceStatus::InvalidInput, "internal: rim vertex " + Num(rim) + " of cut " + Num(cap.cutId) + " was dropped");
                     rim = remap[rim];
                 }
                 piece.caps.push_back(moved);
@@ -449,12 +449,12 @@ namespace MeshCutting
             return true;
         }
 
-        SliceStatus Slicer::Run(SliceResult& out)
+        SliceStatus Slicer::Run(GeometrySliceResult& out)
         {
             std::string why;
             SliceStatus status = ValidatePlane(m_Plane, &why);
             if (status == SliceStatus::Ok)
-                status = ValidatePatchPiece(m_In, m_Options.epsilonScale, &why);
+                status = ValidateMeshGeometry(m_In, m_Options.epsilonScale, &why);
             if (status != SliceStatus::Ok)
             {
                 out.status = status;
@@ -463,7 +463,7 @@ namespace MeshCutting
             }
             MakePlaneBasis(m_Plane, m_Basis);
             m_Epsilon = ComputePieceRadius(m_In) * double(m_Options.epsilonScale);
-            ClassifyNodes();
+            ClassifyVertices();
 
             for (uint32_t f = 0; f < m_In.faces.size(); ++f)
                 if (!ProcessFace(f))
@@ -486,7 +486,7 @@ namespace MeshCutting
                 return out.status;
             }
 
-            PatchPiece pieces[2];
+            MeshGeometry pieces[2];
             for (int side = 0; side < 2; ++side)
             {
                 if (!BuildPiece(side, pieces[side]))
@@ -499,7 +499,7 @@ namespace MeshCutting
                 // below the degeneracy threshold of the piece (for example a face that was just
                 // above it), and those are rejected instead of published.
                 std::string outputWhy;
-                const SliceStatus outputStatus = ValidatePatchPiece(pieces[side], m_Options.epsilonScale, &outputWhy);
+                const SliceStatus outputStatus = ValidateMeshGeometry(pieces[side], m_Options.epsilonScale, &outputWhy);
                 if (outputStatus != SliceStatus::Ok)
                 {
                     out.status = outputStatus;
@@ -526,7 +526,7 @@ namespace MeshCutting
             for (int side = 0; side < 2; ++side)
             {
                 for (const SliceLoop& loop : loops[side])
-                    sizes[side].push_back(loop.nodes.size());
+                    sizes[side].push_back(loop.vertices.size());
                 std::sort(sizes[side].begin(), sizes[side].end());
             }
             if (sizes[0] != sizes[1])
@@ -557,7 +557,7 @@ namespace MeshCutting
             out.negative = std::move(pieces[1]);
             for (const SliceLoop& loop : loops[0])
             {
-                out.loops.push_back(loop.nodes);
+                out.loops.push_back(loop.vertices);
                 out.loopDepth.push_back(loop.depth);
                 out.loopArea.push_back(loop.signedArea);
             }
@@ -567,10 +567,10 @@ namespace MeshCutting
         }
     }
 
-    SliceStatus SlicePatch(const PatchPiece& in, const SlicePlane& plane, uint32_t cutId,
-        const SliceOptions& options, SliceResult& out)
+    SliceStatus SliceGeometry(const MeshGeometry& in, const SlicePlane& plane, uint32_t cutId,
+        const SliceOptions& options, GeometrySliceResult& out)
     {
-        out = SliceResult();
+        out = GeometrySliceResult();
         Slicer slicer(in, plane, cutId, options);
         const SliceStatus status = slicer.Run(out);
         if (status != SliceStatus::Ok)
@@ -585,25 +585,32 @@ namespace MeshCutting
         return status;
     }
 
-    bool SliceProceduralMesh(PatchPiece& inOutMesh, const DirectX::XMFLOAT3& planePosition,
-        const DirectX::XMFLOAT3& planeNormal, bool createOtherHalf, PatchPiece* outOtherHalf,
+    bool SliceProceduralMesh(ProceduralMesh& inOutMesh, const DirectX::XMFLOAT3& planePosition,
+        const DirectX::XMFLOAT3& planeNormal, bool createOtherHalf, ProceduralMesh* outOtherHalf,
         SliceCapOption capOption, uint32_t capMaterialSlot, SliceStatus* outStatus,
         std::string* error, std::vector<std::vector<uint32_t>>* outLoops)
     {
+        if (outOtherHalf == &inOutMesh)
+        {
+            if (outStatus) *outStatus = SliceStatus::InvalidInput;
+            if (error) *error = "The other half must be a different mesh";
+            return false;
+        }
+        const MeshGeometry& geometry = inOutMesh.GetGeometry();
         // 새 절단 번호: 이미 쓴 가장 큰 cutId 다음
         uint32_t cutId = 0;
-        for (const PatchNode& node : inOutMesh.nodes)
-            cutId = std::max(cutId, node.cutId);
-        for (const PatchFace& face : inOutMesh.faces)
+        for (const MeshVertex& vertex : geometry.vertices)
+            cutId = std::max(cutId, vertex.cutId);
+        for (const MeshFace& face : geometry.faces)
             cutId = std::max(cutId, face.cutId);
-        for (const PatchCap& cap : inOutMesh.caps)
+        for (const MeshCutRecord& cap : geometry.caps)
             cutId = std::max(cutId, cap.cutId);
         ++cutId;
 
         SliceOptions options;
         options.cap = capOption == SliceCapOption::NoCap ? CapMode::None : CapMode::Create;
-        SliceResult result;
-        const SliceStatus status = SlicePatch(inOutMesh, { planePosition, planeNormal }, cutId, options, result);
+        GeometrySliceResult result;
+        const SliceStatus status = SliceGeometry(geometry, { planePosition, planeNormal }, cutId, options, result);
         if (outStatus)
             *outStatus = status;
         if (status != SliceStatus::Ok)
@@ -614,19 +621,26 @@ namespace MeshCutting
         }
 
         // 이번 절단의 cap 기록에 재질 규칙을 적는다 (BuildRenderMesh가 읽는다)
-        for (PatchPiece* piece : { &result.positive, &result.negative })
-            for (PatchCap& cap : piece->caps)
+        for (MeshGeometry* piece : { &result.positive, &result.negative })
+            for (MeshCutRecord& cap : piece->caps)
                 if (cap.cutId == cutId)
                 {
                     cap.materialSlot = capMaterialSlot;
                     cap.inLastSection = capOption == SliceCapOption::UseLastSectionForCap;
                 }
 
-        inOutMesh = std::move(result.positive);
+        ProceduralMesh positive, negative;
+        if (!positive.SetTopology(std::move(result.positive), error)
+            || (createOtherHalf && outOtherHalf && !negative.SetTopology(std::move(result.negative), error)))
+        {
+            if (outStatus) *outStatus = SliceStatus::InvalidInput;
+            return false;
+        }
+        inOutMesh = std::move(positive);
         if (outOtherHalf)
         {
             if (createOtherHalf)
-                *outOtherHalf = std::move(result.negative);
+                *outOtherHalf = std::move(negative);
             else
                 outOtherHalf->Clear();
         }
