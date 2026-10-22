@@ -38,7 +38,8 @@ namespace MeshCutting
         uint32_t targets = 0;
         uint32_t palettes = 0;
         uint32_t cacheVertices = 0;     // 캐시 정점의 현재 위치를 계산한 수
-        uint32_t jobVertices = 0;       // 작업의 패치·조각 정점을 스키닝한 수
+        uint32_t jobVertices = 0;       // 작업의 패치·조각 정점을 스키닝한 수 (실제로 갱신한 것만)
+        uint32_t jobSkipped = 0;        // 행렬이 지난 적용 때와 같아 UpdatePose를 건너뛴 조각 수
         uint32_t staticMeshes = 0;      // 스킨 없는 메시 수
         uint32_t staticCulled = 0;      // 이번 프레임 다시 계산한 메시 중 바운딩 구 조기 판정으로 건너뛴 수
         uint32_t staticTriangles = 0;   // 스킨 없는 메시에서 정밀 검사한 삼각형 수

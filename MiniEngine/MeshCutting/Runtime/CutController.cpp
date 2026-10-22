@@ -458,6 +458,8 @@ namespace MeshCutting
             job.cutInfo.clear();
             job.positive.reset();
             job.negative.reset();
+            job.appliedMatrices[0].clear();
+            job.appliedMatrices[1].clear();
             job.confirmedGeneration = ++m_Generation;
             if (!job.candidate)
             {
@@ -809,9 +811,22 @@ namespace MeshCutting
                 }
                 if (!matricesOk)
                     break;
+                // 행렬이 지난 적용 때와 같으면 갱신하지 않는다. 버전이 오르지 않아 렌더러도 다시 올리지 않는다.
+                // 끊긴 joint 작업도 BuildPieceMatrices가 조각의 행렬을 완성해 주므로 같은 규칙을 쓴다.
+                if (pieces[side] && !job.appliedMatrices[side].empty() && SameMatrices(job.appliedMatrices[side], job.skinMatrices))
+                {
+                    ++m_Frame.jobSkipped;
+                    continue;
+                }
                 PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
                 ok = pieces[side] && pieces[side]->UpdatePose(job.skinMatrices, &error);
-                m_Frame.jobVertices += ok ? uint32_t(pieces[side]->GetGeometry().vertices.size()) : 0;
+                if (ok)
+                {
+                    job.appliedMatrices[side] = job.skinMatrices;
+                    m_Frame.jobVertices += uint32_t(pieces[side]->GetGeometry().vertices.size());
+                }
+                else
+                    job.appliedMatrices[side].clear();
             }
             if (!matricesOk)
             {
@@ -920,6 +935,8 @@ namespace MeshCutting
         job.confirmedNormal = m_Plane.ToSlicePlane().normal;
         job.positive = std::move(positive);
         job.negative = std::move(negative);
+        job.appliedMatrices[0].clear();     // 새 조각은 첫 SkinJobs에서 반드시 갱신한다
+        job.appliedMatrices[1].clear();
         job.haveConfirmed = true;
         job.confirmedGeneration = ++m_Generation;
         SetOriginalVisible(job, false);

@@ -347,8 +347,8 @@ namespace MeshCutting
             text.DrawFormattedString(L"Count: targets %u pal %u  skinned verts cache %u job %u  tris checked %u mixed %u crossed %u\n",
                 stats.targets, stats.palettes, stats.cacheVertices, stats.jobVertices, stats.checkedTriangles, stats.mixedTriangles, stats.crossedTriangles);
             text.DrawFormattedString(L"Static: meshes %u culled %u (bounds)  tris checked %u\n", stats.staticMeshes, stats.staticCulled, stats.staticTriangles);
-            text.DrawFormattedString(L"Jobs +%u =%u -%u  extractions %u   pick refresh: pose %u plane %u both %u skipped %u\n",
-                stats.jobsAdded, stats.jobsKept, stats.jobsLost, stats.extractions, stats.refreshPose, stats.refreshPlane, stats.refreshBoth, stats.refreshSkipped);
+            text.DrawFormattedString(L"Jobs +%u =%u -%u  extractions %u  pieces skipped %u   pick refresh: pose %u plane %u both %u skipped %u\n",
+                stats.jobsAdded, stats.jobsKept, stats.jobsLost, stats.extractions, stats.jobSkipped, stats.refreshPose, stats.refreshPlane, stats.refreshBoth, stats.refreshSkipped);
             text.DrawFormattedString(L"ms now/avg: skeleton %.2f/%.2f  pickMat %.2f/%.2f  pickSkin %.2f/%.2f  pickTris %.2f/%.2f  segments %.2f/%.2f\n",
                 stats.skeleton.frame, stats.skeleton.average, stats.poseMatrices.frame, stats.poseMatrices.average, stats.cacheSkin.frame, stats.cacheSkin.average,
                 stats.pick.frame, stats.pick.average, stats.segments.frame, stats.segments.average);
