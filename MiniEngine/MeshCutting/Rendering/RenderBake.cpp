@@ -24,24 +24,68 @@ namespace MeshCutting
             vertex.color = corner.color;
             out.vertices.push_back(vertex);
         }
-        // Passes: surface (all, or never divided), divided surface (only with splitByOrigin), cap.
-        for (int pass = 0; pass < 3; ++pass)
+        // cap 면의 재질 규칙은 같은 cutId의 PatchCap에 있다 (기록이 없으면 새 section, 슬롯 1)
+        const auto capOf = [&](const PatchFace& face) -> const PatchCap*
         {
-            if (pass == 1 && !options.splitByOrigin)
+            for (const PatchCap& cap : piece.caps)
+                if (cap.cutId == face.cutId)
+                    return &cap;
+            return nullptr;
+        };
+        const auto inLastSection = [&](const PatchFace& face)
+        {
+            const PatchCap* cap = capOf(face);
+            return cap != nullptr && cap->inLastSection;
+        };
+        const auto capSlot = [&](const PatchFace& face)
+        {
+            const PatchCap* cap = capOf(face);
+            return cap != nullptr ? cap->materialSlot : 1u;
+        };
+        const auto add = [&](const PatchFace& face)
+        {
+            out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
+        };
+
+        // Surface passes: all (or never divided), then divided (only with splitByOrigin). The last
+        // surface pass also takes the cap faces of UseLastSectionForCap cuts.
+        const int lastSurfacePass = options.splitByOrigin ? 1 : 0;
+        for (int pass = 0; pass <= lastSurfacePass; ++pass)
+        {
+            const uint32_t first = uint32_t(out.indices.size());
+            for (const PatchFace& face : piece.faces)
+                if (face.kind == PatchFaceKind::Surface && (!options.splitByOrigin || (face.cutId != 0) == (pass == 1)))
+                    add(face);
+            if (pass == lastSurfacePass)
+                for (const PatchFace& face : piece.faces)
+                    if (face.kind == PatchFaceKind::Cap && inLastSection(face))
+                        add(face);
+            const uint32_t count = uint32_t(out.indices.size()) - first;
+            if (count > 0)
+                out.sections.push_back({ first, count, 0u });
+        }
+
+        // Cap sections: one per material slot, in the order the slots first appear in the faces.
+        std::vector<uint32_t> slots;
+        for (const PatchFace& face : piece.faces)
+        {
+            if (face.kind != PatchFaceKind::Cap || inLastSection(face))
                 continue;
-            const PatchFaceKind kind = pass == 2 ? PatchFaceKind::Cap : PatchFaceKind::Surface;
+            const uint32_t slot = capSlot(face);
+            if (std::find(slots.begin(), slots.end(), slot) == slots.end())
+                slots.push_back(slot);
+        }
+        for (uint32_t slot : slots)
+        {
             const uint32_t first = uint32_t(out.indices.size());
             for (const PatchFace& face : piece.faces)
             {
-                if (face.kind != kind)
+                if (face.kind != PatchFaceKind::Cap || inLastSection(face))
                     continue;
-                if (options.splitByOrigin && kind == PatchFaceKind::Surface && (face.cutId != 0) != (pass == 1))
-                    continue;
-                out.indices.insert(out.indices.end(), { face.corner[0], face.corner[1], face.corner[2] });
+                if (capSlot(face) == slot)
+                    add(face);
             }
-            const uint32_t count = uint32_t(out.indices.size()) - first;
-            if (count > 0)
-                out.sections.push_back({ first, count, pass == 2 ? 1u : 0u });
+            out.sections.push_back({ first, uint32_t(out.indices.size()) - first, slot });
         }
     }
 

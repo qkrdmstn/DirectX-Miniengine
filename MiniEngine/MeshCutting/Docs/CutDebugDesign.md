@@ -6,7 +6,7 @@
 
 ## 현재 동작: Enter에서만 절단
 
-- 아래 D-3 설계·구현 메모의 자동 미리보기는 제거했다. `CutController::Update`는 후보 선택과 스키닝을 유지하고, Enter 요청 때만 `ConfirmAll`로 후보별 절단을 한 번 수행한다.
+- 아래 D-3 설계·구현 메모의 자동 미리보기는 제거했다. `CutController::Update`는 편집 중 후보 key 선택만 하고, Enter 요청 때만 `ConfirmAll`로 후보별 추출·스키닝·절단을 한 번 수행한다 (`UnrealAlignmentDesign.md` U-1).
 - `RunPreview`, 작업별 미리보기 데이터·계측, 예상 절단 고리 표시는 없다. 평면 색은 후보가 있으면 하늘색, 없으면 회색이며 절단 성공을 예측하지 않는다.
 - 성공·실패와 오류 상세는 `CutDebugView::DrawUI`에서 마지막 Enter 결과로 표시한다. Enter는 이전 확정 결과를 먼저 지우므로, 실패한 작업에는 확정 조각이 없다. 다음 프레임에 자동 재시도하지 않는다.
 - 이후 절은 기존 설계 이력이다. 현재 호출·상태 구조는 `CodeMap.md`를 본다.

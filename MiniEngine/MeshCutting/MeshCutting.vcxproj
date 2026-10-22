@@ -145,6 +145,7 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="BonePatch.h" />
+    <ClInclude Include="StaticMeshCopy.h" />
     <ClInclude Include="ProceduralMesh.h" />
     <ClInclude Include="Debug\CutDebugView.h" />
     <ClInclude Include="Debug\SceneViewCamera.h" />
@@ -161,6 +162,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BonePatch.cpp" />
+    <ClCompile Include="StaticMeshCopy.cpp" />
     <ClCompile Include="ProceduralMesh.cpp" />
     <ClCompile Include="Debug\CutDebugView.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>

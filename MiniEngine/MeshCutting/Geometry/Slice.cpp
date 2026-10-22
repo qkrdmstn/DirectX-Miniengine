@@ -584,4 +584,56 @@ namespace MeshCutting
         }
         return status;
     }
+
+    bool SliceProceduralMesh(PatchPiece& inOutMesh, const DirectX::XMFLOAT3& planePosition,
+        const DirectX::XMFLOAT3& planeNormal, bool createOtherHalf, PatchPiece* outOtherHalf,
+        SliceCapOption capOption, uint32_t capMaterialSlot, SliceStatus* outStatus,
+        std::string* error, std::vector<std::vector<uint32_t>>* outLoops)
+    {
+        // 새 절단 번호: 이미 쓴 가장 큰 cutId 다음
+        uint32_t cutId = 0;
+        for (const PatchNode& node : inOutMesh.nodes)
+            cutId = std::max(cutId, node.cutId);
+        for (const PatchFace& face : inOutMesh.faces)
+            cutId = std::max(cutId, face.cutId);
+        for (const PatchCap& cap : inOutMesh.caps)
+            cutId = std::max(cutId, cap.cutId);
+        ++cutId;
+
+        SliceOptions options;
+        options.cap = capOption == SliceCapOption::NoCap ? CapMode::None : CapMode::Create;
+        SliceResult result;
+        const SliceStatus status = SlicePatch(inOutMesh, { planePosition, planeNormal }, cutId, options, result);
+        if (outStatus)
+            *outStatus = status;
+        if (status != SliceStatus::Ok)
+        {
+            if (error)
+                *error = result.detail;
+            return false;
+        }
+
+        // 이번 절단의 cap 기록에 재질 규칙을 적는다 (BuildRenderMesh가 읽는다)
+        for (PatchPiece* piece : { &result.positive, &result.negative })
+            for (PatchCap& cap : piece->caps)
+                if (cap.cutId == cutId)
+                {
+                    cap.materialSlot = capMaterialSlot;
+                    cap.inLastSection = capOption == SliceCapOption::UseLastSectionForCap;
+                }
+
+        inOutMesh = std::move(result.positive);
+        if (outOtherHalf)
+        {
+            if (createOtherHalf)
+                *outOtherHalf = std::move(result.negative);
+            else
+                outOtherHalf->Clear();
+        }
+        if (outLoops)
+            *outLoops = std::move(result.loops);
+        if (error)
+            error->clear();
+        return true;
+    }
 }

@@ -438,6 +438,7 @@ namespace MeshCutting
         if (in.indices.empty() || in.indices.size() % 3 != 0)
             return Fail(detail, SliceStatus::InvalidInput, "index count must be a positive multiple of three");
 
+        size_t rigidVertices = 0, firstRigid = 0;      // 가중치가 모두 0인 정점 (스킨 없는 메시의 강체 정점)
         for (size_t i = 0; i < in.vertices.size(); ++i)
         {
             const WeldInputVertex& v = in.vertices[i];
@@ -452,9 +453,12 @@ namespace MeshCutting
             }
             if (!finite)
                 return Fail(detail, SliceStatus::InvalidInput, "vertex " + Num(i) + " has a non-finite value or a negative weight");
-            if (!(weightSum > 0.0f))
-                return Fail(detail, SliceStatus::InvalidInput, "vertex " + Num(i) + " has no positive skin weight");
+            if (weightSum == 0.0f && rigidVertices++ == 0)
+                firstRigid = i;
         }
+        // 강체 입력은 모든 정점이 가중치 0이어야 한다. 스킨 입력에 섞인 가중치 0 정점은 지금처럼 거절한다
+        if (rigidVertices != 0 && rigidVertices != in.vertices.size())
+            return Fail(detail, SliceStatus::InvalidInput, "vertex " + Num(firstRigid) + " has no positive skin weight");
         for (size_t i = 0; i < in.indices.size(); ++i)
             if (in.indices[i] >= in.vertices.size())
                 return Fail(detail, SliceStatus::InvalidInput, "index " + Num(i) + " refers beyond the vertex array");

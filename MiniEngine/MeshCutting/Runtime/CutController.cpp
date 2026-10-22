@@ -1,6 +1,7 @@
 ﻿#include "../pch.h"
 #include "CutController.h"
 #include "../BonePatch.h"
+#include "../StaticMeshCopy.h"
 #include "../../Model/Model.h"
 #include "EngineProfiling.h"
 #include "SystemTime.h"
@@ -58,6 +59,24 @@ namespace MeshCutting
             phase.average = phase.average == 0.0f ? phase.frame : phase.average + (phase.frame - phase.average) * 0.1f;
         }
 
+        // 스킨 없는 메시의 현재 world 행렬 (BuildRigidMatrices와 같은 값). 자세가 없으면 false.
+        bool GetMeshWorld(const CutTarget& target, uint16_t meshCBV, DirectX::XMFLOAT4X4& world)
+        {
+            const Matrix4* nodeWorld = target.instance->GetNodeWorldMatrices();
+            if (nodeWorld == nullptr || target.model == nullptr || meshCBV >= target.model->m_NumNodes)
+                return false;
+            DirectX::XMStoreFloat4x4(&world, DirectX::XMMATRIX(nodeWorld[meshCBV]));
+            return true;
+        }
+
+        // 작업의 위치 갱신 행렬: 스킨 없는 메시는 world 행렬 하나(강체), 스켈레탈은 joint 행렬
+        bool BuildJobMatrices(const CutTarget& target, const CutJob& job, std::vector<std::vector<DirectX::XMFLOAT4X4>>& out, std::string* error)
+        {
+            if (job.key.kind == CutJobKind::StaticMesh)
+                return BuildRigidMatrices(*target.model, *target.instance, *job.source.bone, out, error);
+            return BuildSkinMatrices(*target.model, *target.instance, *job.source.bone, out, error);
+        }
+
     }
 
     CutTargetId CutController::RegisterInstance(const ModelInstance& instance, std::wstring name)
@@ -87,6 +106,7 @@ namespace MeshCutting
     {
         target.palettes.clear();
         target.skeletons.clear();
+        target.staticMeshes.clear();
         target.error.clear();
         target.radius = float(target.instance->GetRadius());
         if (!(target.radius > 0.0f))
@@ -96,6 +116,17 @@ namespace MeshCutting
         for (uint32_t paletteId = 0; paletteId < target.model->m_SkinPalettes.size(); ++paletteId)
             if (target.model->m_SkinPalettes[paletteId].numJoints > 0)
                 target.palettes.push_back(paletteId);
+        std::vector<StaticMeshInfo> infos;
+        ListStaticMeshes(*target.model, infos);
+        target.staticMeshes.clear();
+        for (const StaticMeshInfo& info : infos)
+        {
+            CutStaticMesh mesh;
+            mesh.meshIndex = info.meshIndex;
+            mesh.meshCBV = info.meshCBV;
+            mesh.bounds = info.bounds;
+            target.staticMeshes.push_back(std::move(mesh));     // 캐시는 첫 편집 프레임에 만든다
+        }
         target.skeletons.resize(target.palettes.size());
         target.segmentHits.assign(target.palettes.size(), std::vector<SegmentHit>());
         target.sources.assign(target.palettes.size(), CutTargetSource());      // 원본 캐시는 첫 편집 프레임에 만든다 (등록 때는 아직 자세가 없다)
@@ -174,8 +205,12 @@ namespace MeshCutting
         m_CutRequested = false;
         m_HavePickedFrame = false;      // 다음 Update에서 교차를 다시 찾는다
         for (CutTarget& target : m_Targets)
+        {
             for (CutTargetSource& cache : target.sources)
                 cache.attempted = cache.attempted && cache.source != nullptr;      // 실패한 캐시는 다시 시도한다
+            for (CutStaticMesh& mesh : target.staticMeshes)
+                mesh.attempted = mesh.attempted && !mesh.positions.empty();
+        }
         if (m_PlaneEditing && !m_PlaneValid && m_Targets.front().instance != nullptr)
             PlacePlane(*m_Targets.front().instance);
     }
@@ -191,7 +226,7 @@ namespace MeshCutting
         if (!m_PlaneEditing || !m_PlaneValid)
             return;
         for (const auto& entry : m_Jobs)
-            if (entry.second.candidate && !entry.second.patch.Empty())
+            if (entry.second.candidate)
             {
                 m_CutRequested = true;
                 return;
@@ -257,6 +292,70 @@ namespace MeshCutting
                     target.sources[i].attempted = true;
                     BuildSource(target, i);
                 }
+            }
+            for (CutStaticMesh& mesh : target.staticMeshes)
+                if (!mesh.attempted)
+                {
+                    mesh.attempted = true;
+                    BuildStaticCache(target, mesh);
+                }
+        }
+    }
+
+    // 스킨 없는 메시 하나를 복사해(CopyProceduralMeshFromStaticMesh) 로컬 위치와 인덱스만 pick용 캐시로 둔다.
+    void CutController::BuildStaticCache(const CutTarget& target, CutStaticMesh& mesh)
+    {
+        ProceduralMeshData copy;
+        BonePatchSource source;
+        std::string error;
+        mesh.positions.clear();
+        mesh.indices.clear();
+        mesh.havePicked = false;
+        if (!CopyProceduralMeshFromStaticMesh(*target.model, *target.instance, mesh.meshIndex, copy, source, &error))
+        {
+            mesh.error = Utility::UTF8ToWideString(error);
+            return;
+        }
+        mesh.error.clear();
+        mesh.positions.resize(source.vertices.size());
+        for (size_t i = 0; i < source.vertices.size(); ++i)
+            mesh.positions[i] = source.vertices[i].position;
+        mesh.indices = std::move(copy.indices);
+    }
+
+    // 스킨 없는 메시의 후보 찾기 (Unreal 섹션 박스 조기 판정과 같은 방식): 바운딩 구가 평면 사각형과 안 만나면 건너뛰고,
+    // 만나면 평면을 로컬로 옮겨 삼각형을 본다. 평면이나 메시 world 행렬이 바뀐 프레임에만 다시 계산한다.
+    void CutController::PickStaticMeshes(CutTarget& target, bool planeChanged, std::vector<CutJobKey>& current, std::map<CutJobKey, uint32_t>& triangles)
+    {
+        const float epsilon = target.radius * kDefaultEpsilonScale;
+        for (CutStaticMesh& mesh : target.staticMeshes)
+        {
+            ++m_Frame.staticMeshes;
+            DirectX::XMFLOAT4X4 world;
+            if (mesh.positions.empty() || !GetMeshWorld(target, mesh.meshCBV, world))
+                continue;
+            if (planeChanged || !mesh.havePicked || memcmp(&world, &mesh.world, sizeof(world)) != 0)
+            {
+                PhaseTimer timer(L"Pick static", m_Frame.pick);
+                mesh.world = world;
+                mesh.havePicked = true;
+                mesh.crossed = 0;
+                if (!CutPick::SphereMayCross(mesh.bounds, world, m_Plane, epsilon))
+                    ++m_Frame.staticCulled;
+                else
+                {
+                    CutPickStats pickStats;
+                    mesh.crossed = CutPick::CountCrossedTriangles(mesh.positions, mesh.indices, world, m_Plane, epsilon, &pickStats);
+                    m_Frame.staticTriangles += pickStats.checkedTriangles;
+                    m_Frame.mixedTriangles += pickStats.mixedTriangles;
+                    m_Frame.crossedTriangles += pickStats.crossedTriangles;
+                }
+            }
+            if (mesh.crossed > 0)
+            {
+                const CutJobKey key = MakeStaticMeshKey(target.id, mesh.meshIndex);
+                current.push_back(key);
+                triangles[key] = mesh.crossed;
             }
         }
     }
@@ -357,7 +456,7 @@ namespace MeshCutting
         m_PickMs = ElapsedMs(start);
     }
 
-    // 평면과 교차하는 삼각형이 고른 joint마다 작업을 만든다. 새 key만 추출하고, 사라진 key는 후보와 패치를 해제한다.
+    // 평면과 교차하는 삼각형이 고른 joint마다 작업 key를 만든다. 패치는 만들지 않고(Enter 때 만든다), 사라진 key는 후보에서 뺀다.
     // 평면이 지나는 뼈 선분은 작업과 무관하게 표시용으로만 찾는다.
     void CutController::UpdateCandidates()
     {
@@ -385,6 +484,7 @@ namespace MeshCutting
                     triangles[key] = picked.triangleCount;
                 }
             }
+            PickStaticMeshes(target, planeChanged, current, triangles);
         }
         m_PickedFrame = frame;
         m_HavePickedFrame = true;
@@ -409,7 +509,6 @@ namespace MeshCutting
             }
             job.candidate = true;
             job.pickTriangles = triangles.at(key);
-            ExtractJob(job);
         }
         for (const CutJobKey& key : diff.kept)
             m_Jobs.at(key).pickTriangles = triangles.at(key);
@@ -425,10 +524,9 @@ namespace MeshCutting
         }
     }
 
-    // 작업의 joint 하나(key.b)로 추출해 용접한다.
+    // 작업을 추출해 용접한다 (스켈레탈: joint 하나(key.b), 스태틱: 메시 하나를 복사). Enter 때만 부른다.
     void CutController::ExtractJob(CutJob& job)
     {
-        job.extracted = true;
         job.extractMs = 0.0f;
 
         const CutTarget* target = FindTarget(job.key.target);
@@ -450,38 +548,34 @@ namespace MeshCutting
         auto source = std::make_shared<BonePatchSource>();
         WeldInput weldInput;
         std::string error;
-        if (!ExtractBonePatch(*target->model, *target->instance, job.key.a, job.key.b, 0.0f, patch, *source, &error)
-            || !MakeWeldInput(patch, *source, weldInput, &error))
+        const bool isStatic = job.key.kind == CutJobKind::StaticMesh;
+        const bool extracted = isStatic ? CopyProceduralMeshFromStaticMesh(*target->model, *target->instance, job.key.a, patch, *source, &error)
+            : ExtractBonePatch(*target->model, *target->instance, job.key.a, job.key.b, 0.0f, patch, *source, &error);
+        if (!extracted || !MakeWeldInput(patch, *source, weldInput, &error))
             job.patchError = error;
         else
         {
             job.patchStatus = BuildPatchPiece(weldInput, kDefaultEpsilonScale, job.patch, job.weld, &job.patchError);
             if (job.patchStatus == SliceStatus::Ok)
             {
-                job.patchRadius = float(ComputePieceRadius(job.patch));
                 job.patchTriangles = uint32_t(patch.indices.size() / 3);
                 job.source.bone = source;
-                job.source.extractJoint = job.key.b;
+                job.source.kind = job.key.kind;
+                job.source.extractJoint = isStatic ? kNoNode : job.key.b;
             }
         }
         job.extractMs = ElapsedMs(start);
         ++m_ExtractCount;
     }
 
-    // 후보가 사라진 작업: 패치를 해제한다. 확정 결과와 출처는 남긴다.
+    // 후보가 사라진 작업: 후보 표시만 끈다. 확정 결과와 출처는 남긴다.
     void CutController::DropCandidate(CutJob& job)
     {
         job.candidate = false;
-        job.extracted = false;
-        job.patch.Clear();
-        job.weld = WeldStats();
-        job.patchStatus = SliceStatus::InvalidInput;
-        job.patchError.clear();
-        job.patchTriangles = 0;
-        job.poseValid = false;
+        job.pickTriangles = 0;
     }
 
-    // 후보 패치와 확정 조각을 이번 자세로 옮긴다. 절단 계산은 Enter 요청 때만 한다.
+    // 확정 조각을 이번 자세로 옮긴다. 후보 작업은 패치가 없으므로 옮기지 않는다.
     void CutController::SkinJobs()
     {
         for (auto& entry : m_Jobs)
@@ -489,8 +583,7 @@ namespace MeshCutting
             CutJob& job = entry.second;
             job.poseValid = false;
             job.skinError.clear();
-            const bool havePatch = job.candidate && job.patchStatus == SliceStatus::Ok && !job.patch.Empty() && job.source.bone;
-            if (!havePatch && !job.haveConfirmed)
+            if (!job.haveConfirmed)
                 continue;
             const CutTarget* target = FindTarget(job.key.target);
             if (target == nullptr || target->model == nullptr || !job.source.bone)
@@ -503,7 +596,7 @@ namespace MeshCutting
             bool matricesOk;
             {
                 PhaseTimer timer(L"Job matrices", m_Frame.jobMatrices);
-                matricesOk = BuildSkinMatrices(*target->model, *target->instance, *job.source.bone, job.skinMatrices, &error);
+                matricesOk = BuildJobMatrices(*target, job, job.skinMatrices, &error);
             }
             if (!matricesOk)
             {
@@ -514,19 +607,11 @@ namespace MeshCutting
             bool ok = true;
             {
                 PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
-                if (havePatch)
+                PatchPiece* pieces[2] = { &job.positive, &job.negative };
+                for (PatchPiece* piece : pieces)
                 {
-                    ok = job.patch.skin && job.patch.skin->Apply(job.patch, job.skinMatrices, nullptr, &error);
-                    m_Frame.jobVertices += ok ? uint32_t(job.patch.nodes.size()) : 0;
-                }
-                if (ok && job.haveConfirmed)
-                {
-                    PatchPiece* pieces[2] = { &job.positive, &job.negative };
-                    for (PatchPiece* piece : pieces)
-                    {
-                        ok = ok && piece->skin && piece->skin->Apply(*piece, job.skinMatrices, nullptr, &error);
-                        m_Frame.jobVertices += ok ? uint32_t(piece->nodes.size()) : 0;
-                    }
+                    ok = ok && piece->skin && piece->skin->Apply(*piece, job.skinMatrices, nullptr, &error);
+                    m_Frame.jobVertices += ok ? uint32_t(piece->nodes.size()) : 0;
                 }
             }
             Smooth(job.skinMs, ElapsedMs(start));
@@ -539,14 +624,22 @@ namespace MeshCutting
         }
     }
 
-    // 무한 평면으로 자른 뒤, 모든 루프 점이 유한 사각형 안에 있어야 받아들인다. 실패하면 status와 detail만 채운다.
+    // 무한 평면으로 자른 뒤(SliceProceduralMesh), 모든 루프 점이 유한 사각형 안에 있어야 받아들인다.
+    // result는 positive, negative, loops, status, detail만 채운다. 실패하면 status와 detail만 채운다.
     SliceStatus CutController::SliceWithPlane(const CutJob& job, SliceResult& result) const
     {
-        SliceOptions options;
-        options.cap = CapMode::Create;
-        const SliceStatus status = SlicePatch(job.patch, m_Plane.ToSlicePlane(), 1, options, result);
-        if (status != SliceStatus::Ok)
+        result = SliceResult();
+        const SlicePlane plane = m_Plane.ToSlicePlane();
+        PatchPiece mesh = job.patch;        // 제자리 절단용 사본 (job.patch는 면적 비교에 남긴다)
+        SliceStatus status = SliceStatus::InvalidInput;
+        if (!SliceProceduralMesh(mesh, plane.point, plane.normal, true, &result.negative,
+            SliceCapOption::CreateNewSectionForCap, 1, &status, &result.detail, &result.loops))
+        {
+            result.status = status;
             return status;
+        }
+        result.positive = std::move(mesh);
+        result.status = status;
 
         const CutTarget* target = FindTarget(job.key.target);
         const float margin = (target != nullptr ? target->radius : m_ModelRadius) * 0.01f;
@@ -561,7 +654,32 @@ namespace MeshCutting
         return SliceStatus::Ok;
     }
 
-    // 먼저 이전 확정 결과를 모두 지우고(Ctrl+Z와 같다), 후보 작업마다 독립으로 자른다. 실패한 작업은 결과가 없다.
+    // 미절단 패치를 지금 자세로 옮긴다. Enter 때만 부른다.
+    bool CutController::SkinPatch(CutJob& job, std::string& error)
+    {
+        const CutTarget* target = FindTarget(job.key.target);
+        if (target == nullptr || target->model == nullptr || !job.source.bone)
+        {
+            error = "no source";
+            return false;
+        }
+        {
+            PhaseTimer timer(L"Job matrices", m_Frame.jobMatrices);
+            if (!BuildJobMatrices(*target, job, job.skinMatrices, &error))
+                return false;
+        }
+        PhaseTimer timer(L"Job skinning", m_Frame.jobSkin);
+        if (!job.patch.skin || !job.patch.skin->Apply(job.patch, job.skinMatrices, nullptr, &error))
+        {
+            if (error.empty())
+                error = "patch has no skin";
+            return false;
+        }
+        m_Frame.jobVertices += uint32_t(job.patch.nodes.size());
+        return true;
+    }
+
+    // 먼저 이전 확정 결과를 모두 지우고(Ctrl+Z와 같다), 후보 작업마다 독립으로 자른다. 미절단 패치는 작업마다 버린다.
     void CutController::ConfirmAll()
     {
         DiscardCut();
@@ -570,38 +688,56 @@ namespace MeshCutting
             CutJob& job = entry.second;
             if (!job.candidate)
                 continue;
-            job.cutAttempted = true;
-            job.lastCutError.clear();
-            job.cutInfo.clear();
-            if (job.patchStatus != SliceStatus::Ok || !job.poseValid)
-            {
-                job.lastCutStatus = job.patchStatus != SliceStatus::Ok ? job.patchStatus : SliceStatus::InvalidInput;
-                job.lastCutError = job.patchStatus != SliceStatus::Ok ? job.patchError : job.skinError;
-                continue;
-            }
+            ConfirmJob(job);
+            job.patch.Clear();
+        }
+    }
 
-            SliceResult result;
+    // 후보 작업 하나를 지금 자세에서 추출하고 스키닝한 뒤 자른다. 실패한 작업은 결과가 없다.
+    void CutController::ConfirmJob(CutJob& job)
+    {
+        job.cutAttempted = true;
+        job.lastCutError.clear();
+        job.cutInfo.clear();
+        ExtractJob(job);
+        if (job.patchStatus != SliceStatus::Ok)
+        {
+            job.lastCutStatus = job.patchStatus;
+            job.lastCutError = job.patchError;
+            return;
+        }
+        std::string skinError;
+        if (!SkinPatch(job, skinError))
+        {
+            job.lastCutStatus = SliceStatus::InvalidInput;
+            job.lastCutError = skinError;
+            return;
+        }
+
+        SliceResult result;
+        {
+            PhaseTimer timer(L"Cut job", m_Frame.cut);
             const int64_t start = SystemTime::GetCurrentTick();
             job.lastCutStatus = SliceWithPlane(job, result);
             job.cutMs = ElapsedMs(start);
-            job.lastCutError = result.detail;
-            if (job.lastCutStatus != SliceStatus::Ok)
-                continue;
-
-            job.confirmedNormal = m_Plane.ToSlicePlane().normal;
-            job.positive = result.positive;
-            job.negative = result.negative;
-            job.haveConfirmed = true;
-            job.confirmedGeneration = ++m_Generation;
-
-            const double original = TotalArea(job.patch, PatchFaceKind::Surface);
-            const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
-            const double negative = TotalArea(result.negative, PatchFaceKind::Surface);
-            wchar_t info[200];
-            swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", result.loops.size(),
-                result.positive.faces.size(), result.negative.faces.size(), positive + negative - original);
-            job.cutInfo = info;
         }
+        job.lastCutError = result.detail;
+        if (job.lastCutStatus != SliceStatus::Ok)
+            return;
+
+        job.confirmedNormal = m_Plane.ToSlicePlane().normal;
+        job.positive = result.positive;
+        job.negative = result.negative;
+        job.haveConfirmed = true;
+        job.confirmedGeneration = ++m_Generation;
+
+        const double original = TotalArea(job.patch, PatchFaceKind::Surface);
+        const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
+        const double negative = TotalArea(result.negative, PatchFaceKind::Surface);
+        wchar_t info[200];
+        swprintf_s(info, L"loops %zu  + %zu faces  - %zu faces  area diff %.1e", result.loops.size(),
+            result.positive.faces.size(), result.negative.faces.size(), positive + negative - original);
+        job.cutInfo = info;
     }
 
     void CutController::Update()
@@ -612,9 +748,9 @@ namespace MeshCutting
         const CutFrameStats previous = m_Frame;
         m_Frame = CutFrameStats();
         CutPhaseTime* phases[] = { &m_Frame.skeleton, &m_Frame.poseMatrices, &m_Frame.cacheSkin, &m_Frame.pick, &m_Frame.segments,
-            &m_Frame.jobUpdate, &m_Frame.extract, &m_Frame.jobMatrices, &m_Frame.jobSkin, &m_Frame.confirm };
+            &m_Frame.jobUpdate, &m_Frame.extract, &m_Frame.jobMatrices, &m_Frame.jobSkin, &m_Frame.cut, &m_Frame.confirm };
         const CutPhaseTime* before[] = { &previous.skeleton, &previous.poseMatrices, &previous.cacheSkin, &previous.pick, &previous.segments,
-            &previous.jobUpdate, &previous.extract, &previous.jobMatrices, &previous.jobSkin, &previous.confirm };
+            &previous.jobUpdate, &previous.extract, &previous.jobMatrices, &previous.jobSkin, &previous.cut, &previous.confirm };
         for (size_t i = 0; i < sizeof(phases) / sizeof(phases[0]); ++i)
             phases[i]->average = before[i]->average;
         m_Frame.targets = uint32_t(m_Targets.size());
@@ -629,8 +765,8 @@ namespace MeshCutting
             PhaseTimer timer(L"Job update", m_Frame.jobUpdate);
             ApplyDiff(DiffJobs(m_Jobs, {}), {});
         }
-        SkinJobs();
 
+        // Enter: 확정 조각이 같은 프레임에 스키닝되도록 SkinJobs보다 먼저 한다.
         if (m_CutRequested)
         {
             m_CutRequested = false;
@@ -640,6 +776,7 @@ namespace MeshCutting
                 ConfirmAll();
             }
         }
+        SkinJobs();
 
         for (CutPhaseTime* phase : phases)
             UpdateAverage(*phase);

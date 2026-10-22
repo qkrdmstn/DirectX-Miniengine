@@ -118,7 +118,7 @@ public:
     Math::BoundingSphere m_BoundingSphere; // Object-space bounding sphere
     Math::AxisAlignedBox m_BoundingBox;
     ByteAddressBuffer m_DataBuffer;
-    std::vector<uint8_t> m_GeometryCPU; // CPU copy of m_DataBuffer; kept only for skinned models
+    std::vector<uint8_t> m_GeometryCPU; // CPU copy of m_DataBuffer; kept for every model (mesh cutting reads it)
     ByteAddressBuffer m_MaterialConstants;
     uint32_t m_NumNodes;
     uint32_t m_NumMeshes;

@@ -75,6 +75,8 @@ namespace MeshCutting
         DirectX::XMFLOAT3 planeNormal = { 0.0f, 1.0f, 0.0f };   // pointing out of the piece
         std::vector<uint32_t> rimNodes;    // all loops, outer loops first, each in loop order
         std::vector<uint32_t> loopSizes;    // node count of every loop in rimNodes
+        uint32_t materialSlot = 1;          // 렌더 section의 재질 번호 (cap 전용 section일 때)
+        bool inLastSection = false;         // 참이면 cap 면을 마지막 표면 section에 합쳐 굽는다 (UseLastSectionForCap)
     };
 
     struct PatchPiece
@@ -192,6 +194,7 @@ namespace MeshCutting
     // skin pairs sorted by joint); there is no epsilon welding. Boundary edges are tagged
     // Replacement, or UnweldedSeam when another boundary edge covers the same bind positions
     // (same slot) or the same posed positions (different slots).
+    // 모든 정점의 가중치가 0이면 강체 입력(스킨 없는 메시)으로 받는다. 일부만 0이면 InvalidInput이다.
     //
     // stats is filled as far as the build got, even on failure. On failure out is empty.
     SliceStatus BuildPatchPiece(const WeldInput& in, float epsilonScale, PatchPiece& out,

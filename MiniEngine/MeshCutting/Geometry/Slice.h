@@ -42,6 +42,25 @@ namespace MeshCutting
     SliceStatus SlicePatch(const PatchPiece& in, const SlicePlane& plane, uint32_t cutId,
         const SliceOptions& options, SliceResult& out);
 
+    // ---- Unreal 모양의 진입점 (UKismetProceduralMeshLibrary::SliceProceduralMesh 대응) ----
+
+    // Unreal EProcMeshSliceCapOption 대응
+    enum class SliceCapOption
+    {
+        NoCap,                      // cap 면을 만들지 않는다 (루프 검사는 한다)
+        CreateNewSectionForCap,     // cap 면을 capMaterialSlot 재질의 새 section에 굽는다
+        UseLastSectionForCap        // cap 면을 마지막 표면 section에 합쳐 굽는다
+    };
+
+    // SlicePatch를 Unreal 인자 순서로 감싼다. 성공하면 inOutMesh는 법선 쪽 조각이 되고, createOtherHalf이고
+    // outOtherHalf가 있으면 반대쪽 조각을 받는다(createOtherHalf가 거짓이면 빈 조각). 실패하면 inOutMesh, outOtherHalf, outLoops를 바꾸지 않는다.
+    // 평면은 패치와 같은 world 공간이다 (Unreal은 컴포넌트 로컬로 옮긴다고 추정되지만 패치가 이미 world라 옮기지 않는다).
+    // cutId는 inOutMesh에 있는 가장 큰 cutId + 1이다. outLoops는 이 프로젝트의 확장으로, 양의 쪽 번호의 절단 루프를 받는다.
+    bool SliceProceduralMesh(PatchPiece& inOutMesh, const DirectX::XMFLOAT3& planePosition,
+        const DirectX::XMFLOAT3& planeNormal, bool createOtherHalf, PatchPiece* outOtherHalf,
+        SliceCapOption capOption, uint32_t capMaterialSlot, SliceStatus* outStatus = nullptr,
+        std::string* error = nullptr, std::vector<std::vector<uint32_t>>* outLoops = nullptr);
+
     // ---- 내부용: Slice.cpp -> SliceCap.cpp (CutLoops, CapBuilder) ----
 
     struct SliceLoop

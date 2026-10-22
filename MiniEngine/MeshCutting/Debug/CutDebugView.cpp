@@ -140,6 +140,8 @@ namespace MeshCutting
         {
             const CutJob& job = entry.second;
             JobMeshes& meshes = m_JobMeshes[entry.first];
+            const CutTarget* jobTarget = cut.FindTarget(job.key.target);
+            const float targetRadius = jobTarget != nullptr ? jobTarget->radius : cut.GetModelRadius();
 
             // 조각이 바뀌었거나(새 절단, 삭제) 렌더링 모드가 구역 분리를 바꿨으면 다시 굽는다.
             const bool piecesChanged = job.confirmedGeneration != meshes.pieceGeneration
@@ -157,7 +159,7 @@ namespace MeshCutting
                 }
                 else
                 {
-                    const float tubeRadius = job.patchRadius * 0.008f;
+                    const float tubeRadius = targetRadius * 0.008f;
                     const auto bake = [&](const PatchPiece& piece, ProceduralMesh& mesh, ProceduralMesh& boundary)
                     {
                         ProceduralMeshData data, tubes;
@@ -179,7 +181,7 @@ namespace MeshCutting
             // 매 프레임 조각 위치만 갱신한다 (이번 프레임 스키닝이 끝난 작업만).
             if (!job.poseValid || !job.haveConfirmed || piecesChanged)
                 continue;
-            const float tubeRadius = job.patchRadius * 0.008f;
+            const float tubeRadius = targetRadius * 0.008f;
             const auto refreshTubes = [&](const PatchPiece& piece, ProceduralMesh& mesh)
             {
                 ProceduralMeshData tubes;
@@ -296,7 +298,8 @@ namespace MeshCutting
                 continue;
             const JobMeshes& meshes = found->second;
             const CutTarget* target = cut.FindTarget(job.key.target);
-            const float gap = job.patchRadius * 0.05f;
+            const float radius = target != nullptr ? target->radius : cut.GetModelRadius();
+            const float gap = radius * 0.05f;
             const DirectX::XMFLOAT3& n = job.confirmedNormal;
             const Vector3 shift = Vector3(n.x, n.y, n.z) * gap;
             // 두 조각 경계의 중심으로 가로 위치를 정한다: 중심의 x를 슬롯 중앙에 맞추고, y와 z는 원래 높이를 유지한다.
@@ -304,7 +307,7 @@ namespace MeshCutting
             const ProceduralMeshBounds& negativeBounds = meshes.negative.GetBounds();
             const float centerX = positiveBounds.valid && negativeBounds.valid ? (positiveBounds.center.x + negativeBounds.center.x) * 0.5f
                 : (positiveBounds.valid ? positiveBounds.center.x : negativeBounds.center.x);
-            const float halfWidth = job.patchRadius * 1.15f;
+            const float halfWidth = radius * 1.15f;
             const float slotCenter = firstPlaced ? rowEnd + halfWidth : centerX + (target != nullptr ? target->radius : 0.0f);
             rowEnd = slotCenter + halfWidth;
             firstPlaced = true;
@@ -346,14 +349,18 @@ namespace MeshCutting
             // 계측: 이번 프레임 개수와 단계별 시간 (이번 프레임 / 지수 평균, ms). 평균에는 건너뛴 프레임의 0이 들어간다.
             text.DrawFormattedString(L"Count: targets %u pal %u  skinned verts cache %u job %u  tris checked %u mixed %u crossed %u\n",
                 stats.targets, stats.palettes, stats.cacheVertices, stats.jobVertices, stats.checkedTriangles, stats.mixedTriangles, stats.crossedTriangles);
+            text.DrawFormattedString(L"Static: meshes %u culled %u (bounds)  tris checked %u\n", stats.staticMeshes, stats.staticCulled, stats.staticTriangles);
             text.DrawFormattedString(L"Jobs +%u =%u -%u  extractions %u   pick refresh: pose %u plane %u both %u skipped %u\n",
                 stats.jobsAdded, stats.jobsKept, stats.jobsLost, stats.extractions, stats.refreshPose, stats.refreshPlane, stats.refreshBoth, stats.refreshSkipped);
             text.DrawFormattedString(L"ms now/avg: skeleton %.2f/%.2f  pickMat %.2f/%.2f  pickSkin %.2f/%.2f  pickTris %.2f/%.2f  segments %.2f/%.2f\n",
                 stats.skeleton.frame, stats.skeleton.average, stats.poseMatrices.frame, stats.poseMatrices.average, stats.cacheSkin.frame, stats.cacheSkin.average,
                 stats.pick.frame, stats.pick.average, stats.segments.frame, stats.segments.average);
-            text.DrawFormattedString(L"            jobUpdate %.2f/%.2f (extract %.2f/%.2f)  jobMat %.2f/%.2f  jobSkin %.2f/%.2f  confirm %.2f/%.2f\n",
-                stats.jobUpdate.frame, stats.jobUpdate.average, stats.extract.frame, stats.extract.average, stats.jobMatrices.frame, stats.jobMatrices.average,
-                stats.jobSkin.frame, stats.jobSkin.average, stats.confirm.frame, stats.confirm.average);
+            text.DrawFormattedString(L"            jobUpdate %.2f/%.2f  jobMat %.2f/%.2f  jobSkin %.2f/%.2f\n",
+                stats.jobUpdate.frame, stats.jobUpdate.average, stats.jobMatrices.frame, stats.jobMatrices.average,
+                stats.jobSkin.frame, stats.jobSkin.average);
+            text.DrawFormattedString(L"Enter ms now/avg: extract %.2f/%.2f  skin %.2f/%.2f  cut %.2f/%.2f  confirm total %.2f/%.2f\n",
+                stats.extract.frame, stats.extract.average, stats.jobSkin.frame, stats.jobSkin.average, stats.cut.frame, stats.cut.average,
+                stats.confirm.frame, stats.confirm.average);
             for (const CutTarget& target : cut.GetTargets())
             {
                 if (!target.error.empty())
@@ -361,6 +368,9 @@ namespace MeshCutting
                 for (size_t slot = 0; slot < target.sources.size(); ++slot)
                     if (!target.sources[slot].error.empty())
                         text.DrawFormattedString(L"[%ls] pal %u source: %ls\n", target.name.c_str(), target.palettes[slot], target.sources[slot].error.c_str());
+                for (const CutStaticMesh& mesh : target.staticMeshes)
+                    if (!mesh.error.empty())
+                        text.DrawFormattedString(L"[%ls] mesh %u source: %ls\n", target.name.c_str(), mesh.meshIndex, mesh.error.c_str());
             }
             if (stats.candidates == 0)
                 text.DrawFormattedString(L"No triangle crosses the plane\n");
@@ -373,12 +383,18 @@ namespace MeshCutting
                 continue;
             const CutTarget* target = cut.FindTarget(job.key.target);
             const std::wstring targetName = target != nullptr ? target->name : L"?";
-            std::wstring line = L"#" + std::to_wstring(job.colorIndex + 1) + L" [" + targetName + L"] pal " + std::to_wstring(job.key.a)
-                + L"  joint " + std::to_wstring(job.key.b) + L"(" + jointName(job.key.target, job.key.a, job.key.b) + L")";
+            std::wstring line = L"#" + std::to_wstring(job.colorIndex + 1) + L" [" + targetName + L"]";
+            if (job.key.kind == CutJobKind::StaticMesh)
+                line += L" mesh " + std::to_wstring(job.key.a);
+            else
+                line += L" pal " + std::to_wstring(job.key.a) + L"  joint " + std::to_wstring(job.key.b)
+                    + L"(" + jointName(job.key.target, job.key.a, job.key.b) + L")";
             if (job.candidate)
             {
-                line += L"  crossed " + std::to_wstring(job.pickTriangles) + L" tris  patch " + std::to_wstring(job.patchTriangles) + L" tris";
+                line += L"  crossed " + std::to_wstring(job.pickTriangles) + L" tris";
             }
+            if (job.haveConfirmed)
+                line += L"  patch " + std::to_wstring(job.patchTriangles) + L" tris";
             if (job.cutAttempted)
                 line += L"  cut " + Utility::UTF8ToWideString(SliceStatusName(job.lastCutStatus));
             else if (job.haveConfirmed)
@@ -392,8 +408,6 @@ namespace MeshCutting
                 if (!message.empty())
                     text.DrawFormattedString(L"    %ls\n", Utility::UTF8ToWideString(message.substr(0, 110)).c_str());
             };
-            if (job.candidate && job.patchStatus != SliceStatus::Ok)
-                detail(job.patchError);
             detail(job.skinError);
             if (job.cutAttempted && job.lastCutStatus != SliceStatus::Ok)
                 detail(job.lastCutError);

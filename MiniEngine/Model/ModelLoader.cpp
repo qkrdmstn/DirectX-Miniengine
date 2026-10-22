@@ -241,17 +241,8 @@ std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool fo
     inFile.read((char*)model->m_SceneGraph.get(), header.numNodes * sizeof(GraphNode));
     inFile.read((char*)model->m_MeshData.get(), header.meshDataSize);
 
-    // Only skinned models need CPU geometry (bone patch extraction); drop it for static scenes.
-    bool hasSkinnedMesh = false;
-    const uint8_t* skinScanPtr = model->m_MeshData.get();
-    for (uint32_t i = 0; i < header.numMeshes; ++i)
-    {
-        const Mesh& mesh = *(const Mesh*)skinScanPtr;
-        hasSkinnedMesh |= (mesh.psoFlags & PSOFlags::kHasSkin) != 0;
-        skinScanPtr += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
-    }
-    if (!hasSkinnedMesh)
-        std::vector<uint8_t>().swap(model->m_GeometryCPU);
+    // m_GeometryCPU is kept for every model: skinned meshes need it for bone patch extraction and
+    // static meshes for MeshCutting::CopyProceduralMeshFromStaticMesh (Unreal bAllowCPUAccess).
 
 	if (header.numMaterials > 0)
 	{

@@ -33,6 +33,13 @@ namespace MeshCutting
         return sum;
     }
 
+    XMVECTOR Skinning::RigidPoint(const XMFLOAT4X4& matrix, const XMFLOAT3& bindPosition)
+    {
+        const uint16_t joint = 0;
+        const float weight = 1.0f;
+        return SkinPoint(&matrix, 1, &joint, &weight, 1, bindPosition);
+    }
+
     bool Skinning::Apply(PatchPiece& piece, const std::vector<std::vector<XMFLOAT4X4>>& slotMatrices,
         SkinStats* stats, std::string* error) const
     {
@@ -71,15 +78,25 @@ namespace MeshCutting
             if (skin.meshSlot >= slotMatrices.size())
                 return Fail(error, "skin vertex " + Num(o) + " uses mesh slot " + Num(skin.meshSlot)
                     + " but only " + Num(slotMatrices.size()) + " slots have matrices");
-            if (skin.jointCount == 0 || skin.jointCount > 4)
+            if (skin.jointCount > 4)
                 return Fail(error, "skin vertex " + Num(o) + " has " + Num(skin.jointCount) + " joints");
             const std::vector<XMFLOAT4X4>& matrices = slotMatrices[skin.meshSlot];
-            for (uint32_t j = 0; j < skin.jointCount; ++j)
-                if (skin.joints[j] >= matrices.size())
-                    return Fail(error, "skin vertex " + Num(o) + " uses joint " + Num(skin.joints[j])
-                        + " but slot " + Num(skin.meshSlot) + " has " + Num(matrices.size()) + " matrices");
-            XMStoreFloat3(&blend[o], SkinPoint(matrices.data(), uint32_t(matrices.size()), skin.joints, skin.weights,
-                skin.jointCount, skin.bindPosition));
+            if (skin.jointCount == 0)
+            {
+                // 강체 정점: 슬롯의 행렬 하나(메시 world)로 옮긴다
+                if (matrices.empty())
+                    return Fail(error, "rigid skin vertex " + Num(o) + " but slot " + Num(skin.meshSlot) + " has no matrix");
+                XMStoreFloat3(&blend[o], RigidPoint(matrices[0], skin.bindPosition));
+            }
+            else
+            {
+                for (uint32_t j = 0; j < skin.jointCount; ++j)
+                    if (skin.joints[j] >= matrices.size())
+                        return Fail(error, "skin vertex " + Num(o) + " uses joint " + Num(skin.joints[j])
+                            + " but slot " + Num(skin.meshSlot) + " has " + Num(matrices.size()) + " matrices");
+                XMStoreFloat3(&blend[o], SkinPoint(matrices.data(), uint32_t(matrices.size()), skin.joints, skin.weights,
+                    skin.jointCount, skin.bindPosition));
+            }
             if (!std::isfinite(blend[o].x) || !std::isfinite(blend[o].y) || !std::isfinite(blend[o].z))
                 return Fail(error, "skin vertex " + Num(o) + " blends to a non-finite position");
             ++evaluated;

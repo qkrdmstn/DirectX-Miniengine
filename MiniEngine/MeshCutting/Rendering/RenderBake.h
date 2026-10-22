@@ -12,13 +12,14 @@ namespace MeshCutting
     struct RenderBakeOptions
     {
         // Debug: split the surface faces into [never divided][divided by a cut] sections. Both keep
-        // materialSlot 0; the cap section stays last with materialSlot 1.
+        // materialSlot 0; the cap sections stay last.
         bool splitByOrigin = false;
     };
 
-    // Piece -> render mesh. Vertex i is corner i with its node's position. Section 0 holds the
-    // surface faces and section 1 the cap faces; an empty section is not created. out is
-    // cleared first.
+    // Piece -> render mesh. Vertex i is corner i with its node's position. The surface section(s)
+    // come first with materialSlot 0, then one cap section per PatchCap::materialSlot (default 1).
+    // Cap faces of a cap with inLastSection go into the last surface section instead. An empty
+    // section is not created. out is cleared first.
     void BuildRenderMesh(const PatchPiece& piece, ProceduralMeshData& out, const RenderBakeOptions& options = {});
 
     // Copies the node position of every corner into vertices[corner]. This is the per-frame update

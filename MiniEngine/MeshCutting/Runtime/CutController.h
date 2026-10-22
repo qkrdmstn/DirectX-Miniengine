@@ -39,6 +39,9 @@ namespace MeshCutting
         uint32_t palettes = 0;
         uint32_t cacheVertices = 0;     // 캐시 정점의 현재 위치를 계산한 수
         uint32_t jobVertices = 0;       // 작업의 패치·조각 정점을 스키닝한 수
+        uint32_t staticMeshes = 0;      // 스킨 없는 메시 수
+        uint32_t staticCulled = 0;      // 이번 프레임 다시 계산한 메시 중 바운딩 구 조기 판정으로 건너뛴 수
+        uint32_t staticTriangles = 0;   // 스킨 없는 메시에서 정밀 검사한 삼각형 수
         uint32_t checkedTriangles = 0;
         uint32_t mixedTriangles = 0;    // 평면 양쪽에 걸친 삼각형
         uint32_t crossedTriangles = 0;  // 절단 joint를 고른 교차 삼각형
@@ -52,10 +55,11 @@ namespace MeshCutting
         CutPhaseTime cacheSkin;         // 캐시 정점 스키닝
         CutPhaseTime pick;              // PickJoints
         CutPhaseTime segments;          // 뼈 선분 표시용 PickSegments
-        CutPhaseTime jobUpdate;         // key 만들기 + DiffJobs + ApplyDiff (추출 포함)
-        CutPhaseTime extract;           // 새 작업의 추출·용접 (jobUpdate 안)
+        CutPhaseTime jobUpdate;         // key 만들기 + DiffJobs + ApplyDiff
+        CutPhaseTime extract;           // Enter 때 작업의 추출·용접
         CutPhaseTime jobMatrices;       // 작업의 스킨 행렬
-        CutPhaseTime jobSkin;           // 작업의 패치·조각 스키닝
+        CutPhaseTime jobSkin;           // 작업의 확정 조각 스키닝 + Enter 때 패치 스키닝
+        CutPhaseTime cut;               // Enter의 절단 (SliceWithPlane)
         CutPhaseTime confirm;           // Enter의 ConfirmAll
     };
 
@@ -95,6 +99,8 @@ namespace MeshCutting
         void ReloadPalettes(CutTarget& target);
         void BuildSource(CutTarget& target, size_t slot);
         void RefreshPick(CutTarget& target, size_t slot, bool planeChanged);
+        void BuildStaticCache(const CutTarget& target, CutStaticMesh& mesh);
+        void PickStaticMeshes(CutTarget& target, bool planeChanged, std::vector<CutJobKey>& current, std::map<CutJobKey, uint32_t>& triangles);
         void RemoveJobsOf(CutTargetId id);
         void UpdateTargets();
         void UpdateCandidates();
@@ -103,6 +109,8 @@ namespace MeshCutting
         void DropCandidate(CutJob& job);
         void SkinJobs();
         void ConfirmAll();
+        void ConfirmJob(CutJob& job);
+        bool SkinPatch(CutJob& job, std::string& error);
         SliceStatus SliceWithPlane(const CutJob& job, SliceResult& result) const;
         void PlacePlane(const ModelInstance& instance);
 

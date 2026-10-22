@@ -8,8 +8,9 @@
 ```
 ModelViewer.cpp        입력을 읽어 컨트롤러에 전달하고, 프레임 갱신과 그리기를 호출한다
    │
-   ├─ Runtime/CutController      후보 패치, Enter 확정 절단, 스키닝을 조율한다 (그리기 없음)
+   ├─ Runtime/CutController      후보 key 목록, Enter 확정 절단(그때 패치 추출), 확정 조각 스키닝을 조율한다 (그리기 없음)
    │     ├─ BonePatch            Model에서 패치/뼈대를 읽는다 (Model 의존은 여기까지)
+   │     ├─ StaticMeshCopy       스킨 없는 메시 하나를 절단 입력으로 복사하고, 강체 위치 갱신 행렬을 만든다 (U-3a), 스킨 없는 메시 목록(ListStaticMeshes)도 준다 (U-3b에서 CutController에 연결)
    │     └─ Geometry/*           Model, D3D12를 모르는 순수 계산
    │
    └─ Debug/CutDebugView         컨트롤러의 결과를 읽어 ProceduralMesh로 굽고 그린다 (상태를 바꾸지 않는다)
@@ -38,14 +39,15 @@ UpdateTargets: 모델 교체 확인, 편집 중 현재 뼈대 읽기와 최초 �
 절단 모드(T)이면 UpdateCandidates
     RefreshPick: 자세 변경 시 전체 캐시 정점 스키닝, 자세/평면 변경 시 CutPick::PickJoints
     PickSegments는 뼈 선분 tube 표시용
-    ApplyDiff: 새 후보 joint마다 ExtractJob(ExtractBonePatch → MakeWeldInput → BuildPatchPiece)
-    사라진 후보는 패치 해제, 확정 결과가 없으면 작업 삭제
+    PickStaticMeshes: 스킨 없는 메시마다 CutPick::SphereMayCross(조기 판정) -> CutPick::CountCrossedTriangles (평면/world 행렬이 바뀔 때만). 교차가 있으면 StaticMesh 후보 key
+    ApplyDiff: 후보 key 목록만 갱신한다 (패치 추출 없음). 사라진 후보는 후보 표시만 끄고, 확정 결과가 없으면 작업 삭제
 편집 모드가 아니면 모든 후보 해제 (확정 결과는 유지)
-SkinJobs: 후보 패치와 확정 조각을 BuildSkinMatrices → Skinning::Apply로 이번 포즈에 맞춤
-Enter 요청이 있으면 ConfirmAll
-    이전 확정 결과를 모두 지운 뒤 후보마다 SliceWithPlane을 한 번 수행
-    SliceWithPlane = SlicePatch(무한 평면, 단면 생성) + CutPlane::ContainsLoops(사각형 검사)
+Enter 요청이 있으면 ConfirmAll (SkinJobs보다 먼저)
+    이전 확정 결과를 모두 지운 뒤 후보마다 ConfirmJob을 수행하고 미절단 패치는 버림
+    ConfirmJob = ExtractJob(ExtractBonePatch → MakeWeldInput → BuildPatchPiece) → SkinPatch(BuildSkinMatrices → Skinning::Apply, 현재 자세) → SliceWithPlane
+    SliceWithPlane = SliceProceduralMesh(무한 평면, 단면 생성, SlicePatch를 감쌈) + CutPlane::ContainsLoops(사각형 검사)
     성공한 조각만 저장, 실패한 작업은 status/detail로 표시하고 자동 재시도하지 않음
+SkinJobs: 확정 조각만 BuildSkinMatrices → Skinning::Apply로 이번 포즈에 맞춤 (후보 작업은 패치가 없다)
 ```
 
 자동 시험 절단과 예상 고리 표시는 없다. 후보가 사라져도 확정 조각은 남고, Ctrl+Z나 다음 Enter에서 지운다.
@@ -56,7 +58,7 @@ Enter 요청이 있으면 ConfirmAll
 | --- | --- | --- | --- |
 | `CutTarget` | 등록 인스턴스, 팔레트, 현재 뼈대, 표시용 선분 교차 | `UpdateTargets`, `UpdateCandidates` | 대상 선택, 선분 표시 |
 | `CutTargetSource` | 전체 메시 원본 캐시, 현재 정점 위치, 마지막 선택 결과 | `BuildSource`, `RefreshPick` | 삼각형 교차와 joint 선택 |
-| `CutJob` | joint별 후보 패치, 확정 조각 둘, 마지막 절단 상태와 시간 | `ApplyDiff`, `SkinJobs`, `ConfirmAll`, `DiscardCut` | 슬라이스 입력, 결과 표시, UI |
+| `CutJob` | joint별 후보 key, Enter 중에만 있는 미절단 패치, 확정 조각 둘, 마지막 절단 상태와 시간 | `ApplyDiff`, `ConfirmJob`, `SkinJobs`, `DiscardCut` | 슬라이스 입력, 결과 표시, UI |
 
 그 밖에 평면과 편집 여부, Enter 요청, 원본 캐시의 평면 변경 감지 상태는 컨트롤러가 보관한다.
 
@@ -66,10 +68,10 @@ Enter 요청이 있으면 ConfirmAll
 
 ```
 Geometry/Patch      패치 조각 자료구조(PatchPiece 등)와 검증, 정점 -> 노드/코너 용접 (BuildPatchPiece)
-Geometry/Slice      평면으로 자르기 (SlicePatch). 내부에서 SliceCap.cpp의 루프 추출·검증과 cap 생성을 부른다
+Geometry/Slice      평면으로 자르기 (SlicePatch, Unreal 모양의 SliceProceduralMesh). 내부에서 SliceCap.cpp의 루프 추출·검증과 cap 생성을 부른다
 Geometry/Skinning   스킨 정점 표(Skinning)와 piece 스키닝(Apply), joint 집합 선택 규칙. piece들이 shared_ptr<const Skinning>으로 공유한다
 Geometry/CutPlane   world 유한 사각 평면, 조작, 루프 사각형 검사, 평면이 지나는 뼈 선분 찾기
-Geometry/CutPick    평면과 교차하는 삼각형을 찾아 삼각형마다 절단 joint 하나를 고른다 (CutPick::PickJoints)
+Geometry/CutPick    평면과 교차하는 삼각형을 찾아 삼각형마다 절단 joint 하나를 고른다 (CutPick::PickJoints). 스킨 없는 메시용 CountCrossedTriangles(평면을 로컬로 옮겨 교차 삼각형 수만)와 SphereMayCross(바운딩 구 조기 판정)
 Rendering/RenderBake  piece -> ProceduralMesh 변환(BuildRenderMesh, UpdateRenderPositions)과 디버그 튜브
 ```
 
@@ -82,8 +84,10 @@ Rendering/RenderBake  piece -> ProceduralMesh 변환(BuildRenderMesh, UpdateRend
 | 알고 싶은 것 | 시작할 함수 |
 | --- | --- |
 | 키가 어떤 동작이 되는가 | `ModelViewer::Update`의 `m_Cut.*` 호출 |
-| 절단 모드에서 패치가 어떻게 정해지는가 | `CutController::UpdateCandidates`, `ExtractJob` |
+| 절단 모드에서 무엇을 자를지(후보 key)가 어떻게 정해지는가 | `CutController::UpdateCandidates`, `CutPick::PickJoints` |
+| 패치가 언제 어떻게 만들어지는가 (Enter) | `CutController::ConfirmJob`, `ExtractJob`, `SkinPatch` |
 | Enter에서 절단하는 과정 | `CutController::ConfirmAll` → `SliceWithPlane` |
 | 화면에 무엇이 그려지는가 | `CutDebugView::Sync`, `Draw` |
-| 절단 알고리즘 | `SlicePatch` (`Geometry/Slice.cpp`) |
+| 절단 알고리즘 | `SliceProceduralMesh` → `SlicePatch` (`Geometry/Slice.cpp`) |
+| cap이 어느 section·재질로 구워지는가 | `PatchCap::materialSlot`·`inLastSection`, `BuildRenderMesh` |
 | 프레임마다 piece가 움직이는 방식 | `CutController::Update`, `Skinning::Apply` |

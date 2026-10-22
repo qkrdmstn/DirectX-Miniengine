@@ -25,7 +25,7 @@ namespace MeshCutting
     {
         SkeletalSegment,    // 스킨 팔레트의 부모 -> 자식 뼈 선분 (예전 방식, key 모양만 남아 있다)
         SkeletalJoint,      // 스킨 팔레트의 joint 하나 (평면과 교차하는 삼각형이 고른 절단 joint)
-        StaticMesh          // 스킨 없는 메시 하나 (구조만)
+        StaticMesh          // 스킨 없는 메시 하나 (a = Model 메시 번호)
     };
 
     // 작업 식별자. 사전식 비교로 std::map의 key가 된다.
@@ -98,15 +98,13 @@ namespace MeshCutting
         bool candidate = false;             // 이번 프레임에 평면이 이 작업을 지나는가
         uint32_t pickTriangles = 0;         // 이 joint를 고른 교차 삼각형 수
 
-        bool extracted = false;             // 후보가 되어 추출을 마쳤는가 (실패 포함)
-        PatchPiece patch;                   // 미절단 패치 (후보일 때만 유지)
-        uint32_t patchTriangles = 0;
+        PatchPiece patch;                   // 미절단 패치: Enter 중에만 만들고 절단이 끝나면 버린다
+        uint32_t patchTriangles = 0;        // 마지막 Enter에서 추출한 패치의 삼각형 수
         WeldStats weld;
-        SliceStatus patchStatus = SliceStatus::InvalidInput;
+        SliceStatus patchStatus = SliceStatus::InvalidInput;        // 마지막 Enter의 추출 결과
         std::string patchError;
-        float patchRadius = 0.0f;
         std::vector<std::vector<DirectX::XMFLOAT4X4>> skinMatrices;     // 이번 프레임의 스킨 행렬
-        bool poseValid = false;             // 이번 프레임 스키닝이 끝났는가
+        bool poseValid = false;             // 이번 프레임 조각 스키닝이 끝났는가
         std::string skinError;
 
         bool haveConfirmed = false;         // 확정 결과 (후보가 사라져도 유지, Ctrl+Z나 다음 Enter에서 지워진다)
@@ -134,6 +132,21 @@ namespace MeshCutting
         std::wstring error;
     };
 
+    // 대상의 스킨 없는 메시 하나: 후보 찾기용 로컬 캐시 (편집을 처음 시작할 때 한 번 만든다)
+    struct CutStaticMesh
+    {
+        uint32_t meshIndex = 0;                         // Model 메시 번호
+        uint16_t meshCBV = 0;                           // world 행렬 번호
+        DirectX::XMFLOAT4 bounds = { 0.0f, 0.0f, 0.0f, 0.0f };     // 로컬 바운딩 구 (x, y, z, 반지름)
+        std::vector<DirectX::XMFLOAT3> positions;       // 로컬 위치 (CopyProceduralMeshFromStaticMesh의 정점)
+        std::vector<uint32_t> indices;                  // 삼각형 3개씩
+        bool attempted = false;                         // 캐시를 만들어 보았는가
+        DirectX::XMFLOAT4X4 world;                      // 마지막으로 교차를 찾은 world 행렬
+        bool havePicked = false;
+        uint32_t crossed = 0;                           // 마지막 교차 삼각형 수
+        std::wstring error;
+    };
+
     // 등록된 모델 인스턴스. instance는 UnregisterInstance 전까지 유효해야 한다.
     struct CutTarget
     {
@@ -145,13 +158,14 @@ namespace MeshCutting
         std::vector<SkeletonPose> skeletons;        // palettes와 같은 순서, 이번 프레임 자세
         std::vector<CutTargetSource> sources;       // palettes와 같은 순서
         std::vector<std::vector<SegmentHit>> segmentHits;       // palettes와 같은 순서, 평면이 지나는 뼈 선분 (표시용)
+        std::vector<CutStaticMesh> staticMeshes;    // 스킨 없는 메시 전부
         std::wstring error;                         // 마지막 자세 읽기 오류
         float radius = 0.0f;                        // 표시 오프셋과 tube 크기
     };
 
     struct CutJobDiff
     {
-        std::vector<CutJobKey> added;       // 새로 추출할 작업 (없거나 후보가 아니던 작업)
+        std::vector<CutJobKey> added;       // 새 후보 작업 (없거나 후보가 아니던 작업)
         std::vector<CutJobKey> lost;        // 후보였다가 사라진 작업
         std::vector<CutJobKey> kept;        // 계속 후보인 작업
     };

@@ -20,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -2515,6 +2516,116 @@ static void TestSkinRefusesBadInput()
     CHECK(detail.find("skin vertex") != std::string::npos && MaxNodeDelta(badOrigin, before) == 0.0);
 }
 
+// ---------------------------------------------------------------- rigid (static mesh) input (U-3a)
+
+// 스킨 없는 메시 복사본처럼: 가중치 0, 바인드 = 로컬 위치, 위치 = world × 로컬. 정점 0을 UV만 다르게 한 번 더 넣는다.
+static WeldInput MakeRigidBoxWeldInput(const DirectX::XMFLOAT4X4& world)
+{
+    WeldInput in = MakeBoxWeldInput();
+    for (WeldInputVertex& v : in.vertices)
+    {
+        v.weights[0] = 0.0f;
+        DirectX::XMStoreFloat3(&v.position, Skinning::RigidPoint(world, v.bindPosition));
+    }
+    WeldInputVertex twin = in.vertices[0];
+    twin.uv = { 0.5f, 0.5f };
+    in.vertices.push_back(twin);
+    in.indices[0] = uint32_t(in.vertices.size() - 1);      // 면 0이 쌍둥이 정점을 쓴다
+    return in;
+}
+
+static void TestRigidWeldAndSkin()
+{
+    const DirectX::XMFLOAT4X4 world = ToFloat4x4(DirectX::XMMatrixRotationY(0.4f) * DirectX::XMMatrixTranslation(3.0f, 1.0f, -2.0f));
+    const WeldInput in = MakeRigidBoxWeldInput(world);
+
+    // 가중치 0만 있는 입력이 용접을 통과하고, 같은 위치의 두 정점은 노드 하나가 된다
+    PatchPiece piece;
+    WeldStats stats;
+    std::string detail;
+    CHECK_STATUS(BuildPatchPiece(in, kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::Ok, detail);
+    CHECK(piece.nodes.size() == 8 && piece.corners.size() == 9 && stats.boundaryEdges == 0);
+    CHECK(piece.corners[8].node == piece.corners[0].node);
+    for (const SkinVertex& skin : GetSkinVertices(piece))
+        CHECK(skin.jointCount == 0);
+    CheckPieceValid(piece, "rigid box");
+
+    // 가중치 0이 일부만 섞인 입력은 지금처럼 거절한다
+    WeldInput mixed = MakeBoxWeldInput();
+    mixed.vertices[3].weights[0] = 0.0f;
+    PatchPiece rejected;
+    CHECK_STATUS(BuildPatchPiece(mixed, kDefaultEpsilonScale, rejected, stats, &detail), SliceStatus::InvalidInput, detail);
+    CHECK(detail.find("vertex 3") != std::string::npos);
+
+    // 강체 정점은 행렬 하나 × 바인드 위치로 옮겨진다
+    const DirectX::XMFLOAT4X4 moved = ToFloat4x4(DirectX::XMMatrixRotationX(-0.3f) * DirectX::XMMatrixTranslation(-1.0f, 0.5f, 4.0f));
+    SlotMatrices slots(1, std::vector<DirectX::XMFLOAT4X4>(1, moved));
+    SkinStats skinStats;
+    CHECK(piece.skin->Apply(piece, slots, &skinStats, &detail));
+    CHECK(skinStats.skinVerticesEvaluated == 8);
+    const DirectX::XMMATRIX m = DirectX::XMLoadFloat4x4(&moved);
+    const std::vector<SkinVertex> rigidSkin = GetSkinVertices(piece);
+    for (size_t n = 0; n < piece.nodes.size(); ++n)
+    {
+        const XMFLOAT3& bind = rigidSkin[n].bindPosition;
+        XMFLOAT3 expected;
+        DirectX::XMStoreFloat3(&expected, DirectX::XMVector3TransformCoord(DirectX::XMLoadFloat3(&bind), m));
+        CHECK(std::fabs(piece.nodes[n].position.x - expected.x) < 1e-5f && std::fabs(piece.nodes[n].position.y - expected.y) < 1e-5f
+            && std::fabs(piece.nodes[n].position.z - expected.z) < 1e-5f);
+    }
+
+    // 행렬이 없는 슬롯은 실패하고 piece를 바꾸지 않는다
+    const PatchPiece before = piece;
+    SlotMatrices empty(1);
+    CHECK(!piece.skin->Apply(piece, empty, nullptr, &detail));
+    CHECK(detail.find("rigid") != std::string::npos && MaxNodeDelta(piece, before) == 0.0);
+
+    // 기존 스킨 piece는 SkinPoint 그대로다 (비트 단위)
+    const PatchPiece skinned = MakeSkinnedBox(PoseA());
+    const SlotMatrices pose = PoseA();
+    const std::vector<SkinVertex> skinnedSkin = GetSkinVertices(skinned);
+    for (size_t n = 0; n < skinned.nodes.size(); ++n)
+    {
+        const SkinVertex& skin = skinnedSkin[n];
+        XMFLOAT3 expected;
+        DirectX::XMStoreFloat3(&expected, Skinning::SkinPoint(pose[0].data(), uint32_t(pose[0].size()), skin.joints, skin.weights,
+            skin.jointCount, skin.bindPosition));
+        CHECK(SamePosition(skinned.nodes[n].position, expected));
+    }
+}
+
+// 강체 piece를 SliceProceduralMesh로 자르고, 두 조각을 행렬 하나로 함께 옮긴다
+static void TestRigidSlice()
+{
+    const DirectX::XMFLOAT4X4 identity = ToFloat4x4(DirectX::XMMatrixIdentity());
+    PatchPiece piece, other;
+    WeldStats stats;
+    std::string detail;
+    CHECK_STATUS(BuildPatchPiece(MakeRigidBoxWeldInput(identity), kDefaultEpsilonScale, piece, stats, &detail), SliceStatus::Ok, detail);
+    SliceStatus status = SliceStatus::InvalidInput;
+    CHECK(SliceProceduralMesh(piece, { 0, 0.7f, 0 }, { 0.2f, 1, 0.1f }, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
+        &status, &detail));
+    CHECK(status == SliceStatus::Ok);
+    CheckPieceValid(piece, "rigid +");
+    CheckPieceValid(other, "rigid -");
+    CHECK(CountCapFaces(piece) > 0 && CountCapFaces(other) > 0);
+
+    // 표면 노드(절단 노드 포함)는 정확히 이동량만큼 움직이고, cap 노드는 Apply가 건드리지 않는다
+    const SlotMatrices slots(1, std::vector<DirectX::XMFLOAT4X4>(1, ToFloat4x4(DirectX::XMMatrixTranslation(2.0f, -1.0f, 0.5f))));
+    for (PatchPiece* half : { &piece, &other })
+    {
+        const PatchPiece before = *half;
+        CHECK(half->skin->Apply(*half, slots, nullptr, &detail));
+        for (size_t n = 0; n < half->nodes.size(); ++n)
+        {
+            if (half->nodes[n].kind != PatchNodeKind::Surface)
+                continue;
+            const XMFLOAT3 &a = before.nodes[n].position, &b = half->nodes[n].position;
+            CHECK(std::fabs(b.x - a.x - 2.0f) < 1e-5f && std::fabs(b.y - a.y + 1.0f) < 1e-5f && std::fabs(b.z - a.z - 0.5f) < 1e-5f);
+        }
+    }
+}
+
 // ---------------------------------------------------------------- main
 
 // ---------------------------------------------------------------- cut job tests (Runtime/CutJob.h)
@@ -2836,6 +2947,284 @@ static void TestPickJointsBadInput()
     CHECK(Pick(CutPickMesh(), parents, HorizontalPlane(0, 1, 0, 5.0f)).empty());
 }
 
+// 스킨 없는 메시용 교차 판정 (CountCrossedTriangles, SphereMayCross): 시험할 평면 모음. 가장자리에 걸치지 않는 값만 쓴다.
+static std::vector<CutPlane> MakeStaticTestPlanes()
+{
+    std::vector<CutPlane> planes;
+    planes.push_back(HorizontalPlane(0, 1, 0, 5.0f));
+    planes.push_back(HorizontalPlane(1, 1, 0, 0.3f));
+    planes.push_back(HorizontalPlane(5, 1, 0, 0.5f));
+    planes.push_back(HorizontalPlane(0, 3, 0, 5.0f));
+    planes.push_back(HorizontalPlane(0, 0.5f, 0, 5.0f));
+    for (int i = 0; i < 8; ++i)
+    {
+        XMFLOAT4 rotation;
+        XMStoreFloat4(&rotation, XMQuaternionRotationRollPitchYaw(0.3f + 0.4f * i, 0.5f * i - 0.7f, 0.9f - 0.2f * i));
+        planes.push_back(CutPlane({ 0.1f * i - 0.3f, 0.6f + 0.15f * i, 0.2f - 0.05f * i }, rotation, { 0.4f + 0.3f * i, 1.5f - 0.1f * i }));
+    }
+    return planes;
+}
+
+static XMFLOAT4X4 MakeStaticTestWorld(int variant)
+{
+    XMMATRIX m = XMMatrixIdentity();
+    if (variant == 1)
+        m = XMMatrixTranslation(0.5f, -0.2f, 1.0f);
+    else if (variant == 2)
+        m = XMMatrixRotationRollPitchYaw(0.3f, 0.7f, -0.4f) * XMMatrixTranslation(-0.5f, 0.4f, 0.2f);
+    else if (variant == 3)
+        m = XMMatrixScaling(1.0f, 2.0f, 0.5f) * XMMatrixRotationRollPitchYaw(0.3f, 0.7f, 0.1f) * XMMatrixTranslation(0.5f, -0.2f, 1.0f);
+    XMFLOAT4X4 world;
+    XMStoreFloat4x4(&world, m);
+    return world;
+}
+
+// 로컬 기둥 정점을 world로 옮긴 CutPickMesh
+static CutPickMesh MakeWorldPrism(const CutPickMesh& local, const XMFLOAT4X4& world)
+{
+    CutPickMesh mesh = local;
+    for (XMFLOAT3& p : mesh.positions)
+        XMStoreFloat3(&p, XMVector3TransformCoord(XMLoadFloat3(&p), XMLoadFloat4x4(&world)));
+    return mesh;
+}
+
+static uint32_t TotalPicked(const std::vector<CutPickJoint>& picked)
+{
+    uint32_t total = 0;
+    for (const CutPickJoint& joint : picked)
+        total += joint.triangleCount;
+    return total;
+}
+
+static void TestCountCrossedMatchesPickJoints()
+{
+    // 같은 입력(단위 행렬)에서 교차 수와 계측 개수가 PickJoints와 같다: 여러 평면, epsilon 0과 1e-3
+    const CutPickMesh prism = MakePrismMesh(1, 1);
+    const XMFLOAT4X4 identity = MakeStaticTestWorld(0);
+    for (const CutPlane& plane : MakeStaticTestPlanes())
+        for (float epsilon : { 0.0f, 1e-3f })
+        {
+            std::vector<CutPickJoint> picked;
+            CutPickStats pickStats, countStats;
+            CutPick::PickJoints(prism, { kNoNode, 0 }, plane, 0.05f, epsilon, picked, &pickStats);
+            const uint32_t crossed = CutPick::CountCrossedTriangles(prism.positions, prism.indices, identity, plane, epsilon, &countStats);
+            CHECK(crossed == TotalPicked(picked) && crossed == pickStats.crossedTriangles);
+            CHECK(countStats.checkedTriangles == pickStats.checkedTriangles && countStats.mixedTriangles == pickStats.mixedTriangles
+                && countStats.crossedTriangles == pickStats.crossedTriangles);
+        }
+
+    // 정점이나 에지만 닿는 평면, epsilon 안의 평면은 PickJoints처럼 교차가 아니다. 올바르지 않은 평면은 0.
+    CHECK(CutPick::CountCrossedTriangles(prism.positions, prism.indices, identity, HorizontalPlane(0, 0, 0, 5.0f), 1e-4f) == 0);
+    CHECK(CutPick::CountCrossedTriangles(prism.positions, prism.indices, identity, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.01f) == 0);
+    CHECK(CutPick::CountCrossedTriangles(prism.positions, prism.indices, identity, HorizontalPlane(0, 1.999f, 0, 5.0f), 0.0f) == 8);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK(CutPick::CountCrossedTriangles(prism.positions, prism.indices, identity,
+        CutPlane({ nan, 1.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f }), 0.0f) == 0);
+}
+
+static void TestCountCrossedLocalPlane()
+{
+    // 평면을 로컬로 옮긴 판정(정점은 그대로)이 정점을 world로 옮긴 PickJoints와 같다: 이동, 회전, 비균등 크기
+    const CutPickMesh prism = MakePrismMesh(1, 1);
+    for (int variant = 0; variant < 4; ++variant)
+    {
+        const XMFLOAT4X4 world = MakeStaticTestWorld(variant);
+        const CutPickMesh worldPrism = MakeWorldPrism(prism, world);
+        for (const CutPlane& plane : MakeStaticTestPlanes())
+        {
+            std::vector<CutPickJoint> picked;
+            CutPickStats pickStats, countStats;
+            CutPick::PickJoints(worldPrism, { kNoNode, 0 }, plane, 0.05f, 1e-4f, picked, &pickStats);
+            const uint32_t crossed = CutPick::CountCrossedTriangles(prism.positions, prism.indices, world, plane, 1e-4f, &countStats);
+            CHECK(crossed == TotalPicked(picked));
+            CHECK(countStats.mixedTriangles == pickStats.mixedTriangles);
+        }
+    }
+}
+
+static void TestSphereMayCross()
+{
+    // 보수적 판정: 실제로 교차 삼각형이 있으면 항상 true (여러 행렬, 평면). 기둥의 바운딩 구는 중심 (0, 1, 0), 반지름 sqrt(3).
+    const CutPickMesh prism = MakePrismMesh(1, 1);
+    const XMFLOAT4 sphere = { 0.0f, 1.0f, 0.0f, std::sqrt(3.0f) };
+    for (int variant = 0; variant < 4; ++variant)
+    {
+        const XMFLOAT4X4 world = MakeStaticTestWorld(variant);
+        for (const CutPlane& plane : MakeStaticTestPlanes())
+            if (CutPick::CountCrossedTriangles(prism.positions, prism.indices, world, plane, 0.0f) > 0)
+                CHECK(CutPick::SphereMayCross(sphere, world, plane, 0.0f));
+    }
+
+    // 경계: 구 위쪽 끝(y = 1 + sqrt(3))을 조금 지난 평면은 false, 조금 못 미친 평면은 true. 사각형 쪽 경계도 같다.
+    const XMFLOAT4X4 identity = MakeStaticTestWorld(0);
+    const float top = 1.0f + std::sqrt(3.0f);
+    CHECK(!CutPick::SphereMayCross(sphere, identity, HorizontalPlane(0, top + 0.01f, 0, 5.0f), 0.0f));
+    CHECK(CutPick::SphereMayCross(sphere, identity, HorizontalPlane(0, top - 0.01f, 0, 5.0f), 0.0f));
+    CHECK(CutPick::SphereMayCross(sphere, identity, HorizontalPlane(0, top + 0.01f, 0, 5.0f), 0.05f));       // epsilon만큼 넓힌다
+    const float side = 0.5f + std::sqrt(3.0f);      // 반 크기 0.5인 사각형이 구와 만나는 x 거리
+    CHECK(!CutPick::SphereMayCross(sphere, identity, HorizontalPlane(side + 0.01f, 1, 0, 0.5f), 0.0f));
+    CHECK(CutPick::SphereMayCross(sphere, identity, HorizontalPlane(side - 0.01f, 1, 0, 0.5f), 0.0f));
+
+    // 크기가 반지름에 반영된다: 2배 확대하면 같은 평면(y = top + 0.5)이 이제 구와 만난다 (구 중심도 2배 위로 간다).
+    XMFLOAT4X4 scaled;
+    XMStoreFloat4x4(&scaled, XMMatrixScaling(2.0f, 2.0f, 2.0f));
+    CHECK(CutPick::SphereMayCross(sphere, scaled, HorizontalPlane(0, 2.0f * top - 0.01f, 0, 5.0f), 0.0f));
+    CHECK(!CutPick::SphereMayCross(sphere, scaled, HorizontalPlane(0, 2.0f * top + 0.01f, 0, 5.0f), 0.0f));
+
+    // 믿을 수 없는 구(반지름 0)는 건너뛰지 않는다.
+    CHECK(CutPick::SphereMayCross({ 0.0f, 0.0f, 0.0f, 0.0f }, identity, HorizontalPlane(0, 100.0f, 0, 1.0f), 0.0f));
+}
+
+
+// ---------------------------------------------------------------- SliceProceduralMesh (U-2)
+
+// 두 조각의 노드, 코너, 면, 경계, cap 기록이 같은가
+static bool SamePiece(const PatchPiece& a, const PatchPiece& b)
+{
+    if (a.nodes.size() != b.nodes.size() || a.corners.size() != b.corners.size() || a.faces.size() != b.faces.size()
+        || a.boundary != b.boundary || a.caps.size() != b.caps.size() || a.skin != b.skin)
+        return false;
+    for (size_t i = 0; i < a.nodes.size(); ++i)
+        if (!SamePosition(a.nodes[i].position, b.nodes[i].position) || a.nodes[i].kind != b.nodes[i].kind || a.nodes[i].cutId != b.nodes[i].cutId)
+            return false;
+    for (size_t i = 0; i < a.corners.size(); ++i)
+        if (a.corners[i].node != b.corners[i].node || !SamePosition(a.corners[i].normal, b.corners[i].normal))
+            return false;
+    for (size_t i = 0; i < a.faces.size(); ++i)
+    {
+        const PatchFace &fa = a.faces[i], &fb = b.faces[i];
+        if (fa.kind != fb.kind || fa.cutId != fb.cutId || fa.sourceTriangle != fb.sourceTriangle
+            || fa.corner[0] != fb.corner[0] || fa.corner[1] != fb.corner[1] || fa.corner[2] != fb.corner[2])
+            return false;
+    }
+    for (size_t i = 0; i < a.caps.size(); ++i)
+        if (a.caps[i].cutId != b.caps[i].cutId || a.caps[i].rimNodes != b.caps[i].rimNodes || a.caps[i].loopSizes != b.caps[i].loopSizes
+            || a.caps[i].materialSlot != b.caps[i].materialSlot || a.caps[i].inLastSection != b.caps[i].inLastSection)
+            return false;
+    return true;
+}
+
+// 같은 입력에서 SlicePatch(cutId 1, cap 생성)와 같은 조각을 낸다. 실패하면 입력이 그대로다.
+static void TestSliceProceduralMeshMatchesSlicePatch()
+{
+    const PatchPiece box = MakeBox();
+    const SlicePlane plane = MakePlane(0, 0.5f, 0, 0.3f, 1, 0);
+    SliceResult reference;
+    CHECK_STATUS(SlicePatch(box, plane, 1, CapOptions(), reference), SliceStatus::Ok, reference.detail);
+
+    PatchPiece mesh = box, other;
+    SliceStatus status = SliceStatus::InvalidInput;
+    std::string error = "stale";
+    std::vector<std::vector<uint32_t>> loops;
+    CHECK(SliceProceduralMesh(mesh, plane.point, plane.normal, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
+        &status, &error, &loops));
+    CHECK(status == SliceStatus::Ok && error.empty());
+    CHECK(SamePiece(mesh, reference.positive) && SamePiece(other, reference.negative));
+    CHECK(loops == reference.loops);
+
+    // 기본 동작(새 section, 슬롯 1)의 렌더 출력은 SlicePatch 결과와 바이트 단위로 같다
+    ProceduralMeshData mine, theirs;
+    BuildRenderMesh(mesh, mine);
+    BuildRenderMesh(reference.positive, theirs);
+    CHECK(mine.indices == theirs.indices && mine.vertices.size() == theirs.vertices.size()
+        && std::memcmp(mine.vertices.data(), theirs.vertices.data(), mine.vertices.size() * sizeof(ProceduralVertex)) == 0);
+    CHECK(mine.sections.size() == theirs.sections.size());
+    for (size_t i = 0; i < mine.sections.size() && i < theirs.sections.size(); ++i)
+        CHECK(mine.sections[i].firstIndex == theirs.sections[i].firstIndex && mine.sections[i].indexCount == theirs.sections[i].indexCount
+            && mine.sections[i].materialSlot == theirs.sections[i].materialSlot);
+
+    // 두 번째 절단은 다음 cutId(2)를 쓴다
+    PatchPiece again = mesh;
+    SliceResult second;
+    CHECK_STATUS(SlicePatch(mesh, MakePlane(0, 1.5f, 0, 0, 1, 0.2f), 2, CapOptions(), second), SliceStatus::Ok, second.detail);
+    CHECK(SliceProceduralMesh(again, { 0, 1.5f, 0 }, { 0, 1, 0.2f }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
+    CHECK(SamePiece(again, second.positive));
+
+    // 실패(빗나감): 입력, 다른 쪽, 루프가 그대로다
+    PatchPiece missed = box, untouched = reference.negative;
+    std::vector<std::vector<uint32_t>> keptLoops = reference.loops;
+    CHECK(!SliceProceduralMesh(missed, { 0, 5, 0 }, { 0, 1, 0 }, true, &untouched, SliceCapOption::CreateNewSectionForCap, 1,
+        &status, &error, &keptLoops));
+    CHECK(status == SliceStatus::NoCut && !error.empty());
+    CHECK(SamePiece(missed, box) && SamePiece(untouched, reference.negative) && keptLoops == reference.loops);
+    // 실패(잘못된 법선)
+    CHECK(!SliceProceduralMesh(missed, { 0, 1, 0 }, { 0, 0, 0 }, true, &untouched, SliceCapOption::NoCap, 1, &status));
+    CHECK(status == SliceStatus::InvalidInput && SamePiece(missed, box) && SamePiece(untouched, reference.negative));
+
+    // 법선 길이는 결과를 바꾸지 않는다 (SlicePatch와 같은 규칙)
+    PatchPiece scaled = box;
+    CHECK(SliceProceduralMesh(scaled, plane.point, { 3.0f, 10.0f, 0 }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
+    CHECK(scaled.faces.size() == reference.positive.faces.size() && scaled.nodes.size() == reference.positive.nodes.size());
+
+    // createOtherHalf = false: 다른 쪽은 빈 조각이다
+    PatchPiece half = box, empty = reference.negative;
+    CHECK(SliceProceduralMesh(half, plane.point, plane.normal, false, &empty, SliceCapOption::CreateNewSectionForCap, 1));
+    CHECK(SamePiece(half, reference.positive) && empty.Empty() && empty.nodes.empty() && empty.caps.empty());
+}
+
+// 세 cap option의 section 구성
+static void TestSliceCapOptions()
+{
+    const PatchPiece box = MakeBox();
+    const XMFLOAT3 point = { 0, 1, 0 }, normal = { 0, 1, 0 };
+
+    // NoCap: cap 면과 cap 기록이 없고, 표면 section 하나뿐이다
+    PatchPiece open = box, openOther;
+    CHECK(SliceProceduralMesh(open, point, normal, true, &openOther, SliceCapOption::NoCap, 3));
+    CHECK(CountCapFaces(open) == 0 && open.caps.empty() && CountCapFaces(openOther) == 0);
+    ProceduralMeshData baked;
+    BuildRenderMesh(open, baked);
+    CHECK(baked.sections.size() == 1 && baked.sections[0].materialSlot == 0);
+
+    // CreateNewSectionForCap: [표면 0][cap capMaterialSlot], 양쪽 조각 모두
+    PatchPiece created = box, createdOther;
+    CHECK(SliceProceduralMesh(created, point, normal, true, &createdOther, SliceCapOption::CreateNewSectionForCap, 3));
+    for (const PatchPiece* piece : { &created, &createdOther })
+    {
+        CHECK(piece->caps.size() == 1 && piece->caps[0].materialSlot == 3 && !piece->caps[0].inLastSection);
+        BuildRenderMesh(*piece, baked);
+        CHECK(baked.sections.size() == 2 && baked.sections[0].materialSlot == 0 && baked.sections[1].materialSlot == 3);
+        CHECK(CountSectionFaces(baked, 1) == CountCapFaces(*piece));
+    }
+
+    // UseLastSectionForCap: cap 면이 표면 section 하나에 합쳐진다 (표면 면 뒤에)
+    PatchPiece merged = box, mergedOther;
+    CHECK(SliceProceduralMesh(merged, point, normal, true, &mergedOther, SliceCapOption::UseLastSectionForCap, 3));
+    for (const PatchPiece* piece : { &merged, &mergedOther })
+    {
+        CHECK(piece->caps.size() == 1 && piece->caps[0].inLastSection);
+        BuildRenderMesh(*piece, baked);
+        CHECK(baked.sections.size() == 1 && baked.sections[0].materialSlot == 0);
+        CHECK(CountSectionFaces(baked, 0) == piece->faces.size());
+        const size_t surfaceIndices = (piece->faces.size() - CountCapFaces(*piece)) * 3;
+        const PatchFace& lastFace = piece->faces.back();
+        CHECK(lastFace.kind == PatchFaceKind::Cap && baked.indices[baked.indices.size() - 1] == lastFace.corner[2]);
+        CHECK(baked.indices.size() > surfaceIndices);
+    }
+    // splitByOrigin이면 마지막 표면 section은 "나뉜 면" section이다
+    RenderBakeOptions split;
+    split.splitByOrigin = true;
+    BuildRenderMesh(merged, baked, split);
+    CHECK(baked.sections.size() == 2 && baked.sections[1].materialSlot == 0);
+    uint32_t divided = 0;
+    for (const PatchFace& face : merged.faces)
+        divided += face.kind == PatchFaceKind::Surface && face.cutId != 0;
+    CHECK(CountSectionFaces(baked, 1) == divided + CountCapFaces(merged));
+
+    // 섞인 두 절단: cut 1은 슬롯 1의 새 section, cut 2는 마지막 표면 section
+    PatchPiece mixed = box;
+    CHECK(SliceProceduralMesh(mixed, { 0, 0.5f, 0 }, { 0.3f, 1, 0 }, false, nullptr, SliceCapOption::CreateNewSectionForCap, 1));
+    CHECK(SliceProceduralMesh(mixed, { 0, 1.5f, 0 }, { 0, -1, 0.2f }, false, nullptr, SliceCapOption::UseLastSectionForCap, 2));
+    CHECK(mixed.caps.size() == 2);
+    BuildRenderMesh(mixed, baked);
+    uint32_t firstCap = 0, secondCap = 0;
+    for (const PatchFace& face : mixed.faces)
+        if (face.kind == PatchFaceKind::Cap)
+            (face.cutId == 1 ? firstCap : secondCap) += 1;
+    CHECK(firstCap > 0 && secondCap > 0);
+    CHECK(baked.sections.size() == 2 && baked.sections[1].materialSlot == 1 && CountSectionFaces(baked, 1) == firstCap);
+    CHECK(CountSectionFaces(baked, 0) == mixed.faces.size() - firstCap);
+}
 
 int main()
 {
@@ -2876,6 +3265,8 @@ int main()
     TestRecut();
     TestSplitFacesRecordCutId();
     TestSplitByOriginBake();
+    TestSliceProceduralMeshMatchesSlicePatch();
+    TestSliceCapOptions();
     TestLoopDebugBake();
     TestCutPlaneFrame();
     TestCutPlaneAccumulatedRotation();
@@ -2907,6 +3298,8 @@ int main()
     TestSkinAfterTwoCuts();
     TestSkinningShared();
     TestSkinRefusesBadInput();
+    TestRigidWeldAndSkin();
+    TestRigidSlice();
 
     TestCutJobKey();
     TestDiffJobs();
@@ -2918,6 +3311,9 @@ int main()
     TestPickJointsTouchAndRectangle();
     TestPickJointsWeights();
     TestPickJointsBadInput();
+    TestCountCrossedMatchesPickJoints();
+    TestCountCrossedLocalPlane();
+    TestSphereMayCross();
 
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures;
