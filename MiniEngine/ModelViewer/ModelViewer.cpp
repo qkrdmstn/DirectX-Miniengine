@@ -38,6 +38,7 @@
 #include "../MeshCutting/Debug/SceneViewCamera.h"
 #include "../MeshCutting/Rendering/ProceduralMeshRenderer.h"
 #include "../MeshCutting/Runtime/CutController.h"
+#include <deque>
 
 #define LEGACY_RENDERER
 
@@ -71,6 +72,13 @@ private:
 
     ModelInstance m_ModelInst;
     MeshCutting::CutTargetId m_CutTarget = 0;   // m_ModelInst를 CutController에 등록한 번호 (0 = 등록 안 함)
+    // 절단 확인용 정적 모델. deque는 추가해도 기존 원소의 주소가 바뀌지 않는다 (CutController가 주소를 들고 있다).
+    struct StaticTestInstance
+    {
+        ModelInstance instance;
+        MeshCutting::CutTargetId target = 0;
+    };
+    std::deque<StaticTestInstance> m_StaticInsts;
     bool m_AnimationsPaused = false;
     vector<AnimationState::eMode> m_ResumeModes;
     MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
@@ -81,7 +89,14 @@ private:
     void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
         const D3D12_RECT& scissor, uint32_t frameIndex);
     bool SetWeightView(MeshSorter& sorter, bool alwaysOn);      // 웨이트 뷰의 joint 색 표를 정렬기에 넘긴다 (켰으면 true)
+    void AddStaticInstance(const std::wstring& fileName, float sizeRatio, float offsetRatio, bool forceRebuild);
 };
+
+// 정적 테스트 모델의 크기와 위치는 캐릭터 반지름의 배수다. 위치는 캐릭터 중심에서 +X로 떨어진 거리다.
+// 절단 조각이 대상 옆 +X에 놓이므로 간격을 넉넉히 둔다 (조각 폭은 대상 반지름의 약 2.3배).
+static const float kStaticSizeRatio = 0.6f;
+static const float kCubeOffsetRatio = 4.0f;
+static const float kBunnyOffsetRatio = 8.0f;
 
 CREATE_APPLICATION(ModelViewer)
 
@@ -181,8 +196,8 @@ void ModelViewer::Startup(void)
     GameInput::SetMouseExclusive(false);
 
     // MotionBlur::Enable = true;      // off: motion blur (the engine default is already false)
-    TemporalEffects::EnableTAA = true;
-    FXAA::Enable = false;
+    TemporalEffects::EnableTAA = false; // 끔: 속도 버퍼가 카메라만 반영해 움직이는 메시에 잔상이 남음
+    FXAA::Enable = true;
     PostEffects::EnableHDR = true;
     // PostEffects::EnableAdaptation = true;
     PostEffects::EnableAdaptation = false;  // adaptive exposure made the screen brighten and darken slightly
@@ -237,6 +252,8 @@ void ModelViewer::Startup(void)
                 }
             }
             m_CutTarget = m_Cut.RegisterInstance(m_ModelInst, gltfFileName);     // 해제는 Cleanup에서 (인스턴스보다 먼저)
+            AddStaticInstance(L"Models/cube.glb", kStaticSizeRatio, kCubeOffsetRatio, forceRebuild);
+            AddStaticInstance(L"Models/bunny.glb", kStaticSizeRatio, kBunnyOffsetRatio, forceRebuild);
         }
 
         MotionBlur::Enable = false;
@@ -249,8 +266,32 @@ void ModelViewer::Startup(void)
     m_SceneCamera.reset(new MeshCutting::SceneViewCamera(m_Camera, focus, Vector3(kYUnitVector)));
 }
 
+// 정적 모델을 불러와 캐릭터 옆에 놓고 절단 대상으로 등록한다. 파일이 없거나 실패하면 건너뛴다.
+// 크기와 위치를 정한 뒤에 등록해야 한다 (대상 반지름을 등록 때 읽는다).
+void ModelViewer::AddStaticInstance(const std::wstring& fileName, float sizeRatio, float offsetRatio, bool forceRebuild)
+{
+    std::shared_ptr<Model> model = Renderer::LoadModel(fileName, forceRebuild);
+    if (model == nullptr)
+        return;
+
+    m_StaticInsts.emplace_back();
+    StaticTestInstance& entry = m_StaticInsts.back();
+    entry.instance = model;
+
+    const float characterRadius = float(m_ModelInst.GetRadius());
+    entry.instance.Resize(characterRadius * sizeRatio);
+    entry.instance.SetPosition(Vector3(kZero));
+    const Vector3 wanted = m_ModelInst.GetCenter() + Vector3(characterRadius * offsetRatio, 0.0f, 0.0f);
+    entry.instance.SetPosition(wanted - entry.instance.GetCenter());       // 모델 원점이 아니라 중심을 목표 위치에 맞춘다
+
+    entry.target = m_Cut.RegisterInstance(entry.instance, fileName);
+}
+
 void ModelViewer::Cleanup(void)
 {
+    for (StaticTestInstance& entry : m_StaticInsts)
+        m_Cut.UnregisterInstance(entry.target);
+    m_StaticInsts.clear();
     m_Cut.UnregisterInstance(m_CutTarget);
     m_CutView.Release(m_ProceduralRenderer);
     m_ProceduralRenderer.Shutdown();
@@ -384,6 +425,8 @@ void ModelViewer::Update(float deltaT)
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 
     m_ModelInst.Update(gfxContext, deltaT);
+    for (StaticTestInstance& entry : m_StaticInsts)
+        entry.instance.Update(gfxContext, deltaT);
 
     gfxContext.Finish();
 
@@ -467,6 +510,8 @@ void ModelViewer::RenderScene(void)
         sorter.AddRenderTarget(g_SceneColorBuffer);
 
         m_ModelInst.Render(sorter);
+        for (const StaticTestInstance& entry : m_StaticInsts)
+            entry.instance.Render(sorter);
 
         sorter.Sort();
 
@@ -489,6 +534,8 @@ void ModelViewer::RenderScene(void)
                 shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
 
                 m_ModelInst.Render(shadowSorter);
+                for (const StaticTestInstance& entry : m_StaticInsts)
+                    entry.instance.Render(shadowSorter);
 
                 shadowSorter.Sort();
                 shadowSorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
@@ -520,6 +567,8 @@ void ModelViewer::RenderScene(void)
                     wireSorter.SetDepthStencilTarget(g_SceneDepthBuffer);
                     wireSorter.AddRenderTarget(g_SceneColorBuffer);
                     m_ModelInst.Render(wireSorter);
+                    for (const StaticTestInstance& entry : m_StaticInsts)
+                        entry.instance.Render(wireSorter);
                     wireSorter.Sort();
                     wireSorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
                 }

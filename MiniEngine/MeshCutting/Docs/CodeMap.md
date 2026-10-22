@@ -7,6 +7,7 @@
 
 ```
 ModelViewer.cpp        입력을 읽어 컨트롤러에 전달하고, 프레임 갱신과 그리기를 호출한다
+                       └ 정적 테스트 인스턴스: cube.glb, bunny.glb를 `m_StaticInsts`(deque)에 담아 캐릭터 옆에 놓고 `RegisterInstance`로 등록한다 (`AddStaticInstance`, 크기·간격 상수는 파일 위쪽 `kStaticSizeRatio` 등). Update·RenderScene의 세 sorter에서 캐릭터와 같이 갱신·그린다
    │
    ├─ Runtime/CutController      후보 key 목록, Enter 확정 절단(그때 패치 추출), 확정 조각 스키닝을 조율한다 (그리기 없음)
    │     ├─ BonePatch            Model에서 패치/뼈대를 읽는다 (Model 의존은 여기까지)

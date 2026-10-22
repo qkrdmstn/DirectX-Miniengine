@@ -12,7 +12,7 @@
 | `PerSegmentCutDesign.md` | 선분별·인스턴스별 절단 작업 | 구현 (`b606ba4`). 작업 식별은 JointCutDesign으로 대체됨 (선분 key는 모양만 남김) | 작업 목록·등록·Enter/Ctrl+Z·표시를 고칠 때 |
 | `JointCutDesign.md` | 메시 교차 기반 단일 joint 작업 (NDC 초기 단계, 한계 체험) | 구현 완료 (J-1~J-3, 커밋 전). 화면 확인 대기 | 무엇을 자를지(작업·패치 joint) 바꿀 때 |
 | `PickPerformanceDesign.md` | 절단 후보 선택(pick·추출) 성능 측정과 BVH 없는 개선 방향 | 안 A는 U-1로 구현 완료 (커밋 전), 안 B 설계안. U-1 이후 실측 포함 | 편집 중·Enter 프레임 비용을 줄일 때 |
-| `UnrealAlignmentDesign.md` | Unreal(ProceduralMesh, SliceProceduralMesh, BreakConstraint) 정렬 로드맵 U-1~U-5 | U-1, U-2, U-3a, U-3b 구현 완료 (커밋 전, U-1·U-2 화면 확인 대기, U-3b는 U-3c 이후 화면 확인). U-3c~U-5 설계안 | 절단 시점·API 모양·스태틱·숨김·분리 작업 전 |
+| `UnrealAlignmentDesign.md` | Unreal(ProceduralMesh, SliceProceduralMesh, BreakConstraint) 정렬 로드맵 U-1~U-5 | U-1~U-3c 구현 완료 (U-1~U-3b는 `ccf0349`, U-3c는 커밋 전). U-1·U-2·U-3b·U-3c 화면 확인 대기. U-4~U-5 설계안 | 절단 시점·API 모양·스태틱·숨김·분리 작업 전 |
 | `RegionCutDesign.md` | 영역 작업, 걸친 joint 합친 뒤 자르기 (NDC 한계 돌파) | 설계안, JointCutDesign 다음 단계 | 한계 돌파 작업 전 |
 | `PlaneFirstCutDesign.md` | world 유한 평면, 후보 패치 (P-1, P-2) | P-1·P-2 완료, P-3 폐기 | 평면·후보 패치 코드를 고칠 때 |
 | `SceneViewControlsDesign.md` | 마우스 카메라, 평면 기즈모, 키 (S-1~S-4) | 완료 (`0fc39fe`), 현재 조작의 기준 | 입력·기즈모를 고칠 때 |

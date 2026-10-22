@@ -159,6 +159,7 @@ public:
     void Render(Renderer::MeshSorter& sorter) const;
 
     void Resize(float newRadius);
+    void SetPosition(const Math::Vector3& position);    // world position of the model origin (scale is kept)
     Math::Vector3 GetCenter() const;
     Math::Scalar GetRadius() const;
     Math::BoundingSphere GetBoundingSphere() const;
