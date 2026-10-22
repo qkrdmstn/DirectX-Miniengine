@@ -19,7 +19,7 @@ WeldInput과 PatchPiece라는 별도 작업 메시 타입은 없다.
 | 절단 | SliceWithPlane → SliceProceduralMesh | ProceduralMesh 하나 → 같은 타입의 양·음쪽 메시 |
 | 범위 승인 | CutPlane::ContainsLoops | 내부 평면 분할 후 루프 전체가 사각형 안인지 검사. 밖이면 확정하지 않음 |
 | 확정 | ConfirmJob → UpdateSkinMask, UpdateBrokenJoints | 원본 숨김·디버그 분리, 성공한 두 메시만 저장 |
-| 후속 프레임 | SkinJobs → BuildPieceMatrices → ProceduralMesh::UpdatePose | 양쪽에 맞는 행렬로 기하·렌더 위치·bounds 함께 갱신 |
+| 후속 프레임 | SkinJobs → BuildPieceMatrices → ProceduralMesh::UpdatePose | 양쪽에 맞는 행렬로 기하·렌더 위치·bounds 함께 갱신. 조각마다 마지막 적용 행렬(`CutJob::appliedMatrices`)과 같으면 건너뜀 |
 | 표시 | RenderScene → CutDebugView::Draw → ProceduralMeshRenderer::Draw | 뷰는 확정 메시를 그대로 그리며 별도 표면 메시를 만들지 않음 |
 
 다음 Enter는 이전 확정을 되돌린 뒤 원본에서 다시 생성한다. 누적 재절단 기능을 추가한 작업은 아니다.
