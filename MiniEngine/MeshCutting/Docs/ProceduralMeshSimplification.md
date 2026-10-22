@@ -1,4 +1,4 @@
-상태: 완료 — 통합 구현 및 CPU·Debug/Release 빌드 검증 완료 (`d418fcd` 이후 작업 트리, 구현 커밋은 README 참조).
+상태: 완료 — 통합 구현 및 CPU·Debug/Release 빌드 검증 완료 (`cb1c12a`).
 
 # ProceduralMesh 중심 통합
 

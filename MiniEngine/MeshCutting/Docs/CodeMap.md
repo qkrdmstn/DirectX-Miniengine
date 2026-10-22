@@ -1,4 +1,4 @@
-상태: 완료 — ProceduralMesh 통합 구현 및 CPU·Debug/Release 빌드 검증 완료 (`d418fcd` 이후 작업 트리, 구현 커밋은 README 참조).
+상태: 완료 — ProceduralMesh 통합 구현 및 CPU·Debug/Release 빌드 검증 완료 (`cb1c12a`).
 
 # 코드 지도: 하나의 메시 객체를 따라가기
 
