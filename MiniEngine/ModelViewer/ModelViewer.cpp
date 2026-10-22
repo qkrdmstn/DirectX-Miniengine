@@ -208,7 +208,7 @@ void ModelViewer::Startup(void)
 
     LoadIBLTextures();
 
-    std::wstring gltfFileName = L"Models/CesiumMan.glb";
+    std::wstring gltfFileName = L"Models/Xbot.glb";
 
     bool forceRebuild = false;
     uint32_t rebuildValue;
@@ -231,8 +231,8 @@ void ModelViewer::Startup(void)
     else
     {
         m_ModelInst = Renderer::LoadModel(gltfFileName, forceRebuild);
-        m_ModelInst.LoopAllAnimations();
-        m_ModelInst.Resize(10.0f);
+        m_ModelInst.PlayAnimation(6, true); // 확인한 Xbot 파일의 walk
+        m_ModelInst.Resize(0.01f);
 
         const Model* model = m_ModelInst.GetModel();
         if (model != nullptr)
