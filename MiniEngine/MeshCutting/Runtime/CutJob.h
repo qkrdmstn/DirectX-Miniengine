@@ -112,6 +112,8 @@ namespace MeshCutting
         PatchPiece positive, negative;
         DirectX::XMFLOAT3 confirmedNormal = { 0.0f, 1.0f, 0.0f };
         uint64_t confirmedGeneration = 0;
+        uint32_t breakNode = kNoNode;       // 확정 때 끊을 joint의 장면 그래프 노드 (스켈레탈 joint 작업만, U-5a)
+        DirectX::XMFLOAT3 breakOffset = { 0.0f, 0.0f, 0.0f };     // 끊은 노드를 옮길 world 이동량
         bool cutAttempted = false;          // Ctrl+Z 뒤 Enter를 처리했는가
         SliceStatus lastCutStatus = SliceStatus::InvalidInput;      // 마지막 Enter의 결과
         std::string lastCutError;
@@ -161,6 +163,7 @@ namespace MeshCutting
         std::vector<std::vector<SegmentHit>> segmentHits;       // palettes와 같은 순서, 평면이 지나는 뼈 선분 (표시용)
         std::vector<CutStaticMesh> staticMeshes;    // 스킨 없는 메시 전부
         std::set<uint32_t> maskedMeshes;            // 버텍스 컬러 마스크를 덮어쓴 스킨 메시 번호 (U-4b)
+        std::set<uint32_t> brokenNodes;             // BreakConstraint로 끊어 둔 노드 번호 (U-5a)
         std::wstring error;                         // 마지막 자세 읽기 오류
         float radius = 0.0f;                        // 표시 오프셋과 tube 크기
     };

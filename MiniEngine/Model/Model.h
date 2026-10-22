@@ -171,6 +171,12 @@ public:
     bool SetVertexColorOverride(uint32_t meshIndex, const std::vector<uint32_t>& colors);
     void ClearVertexColorOverride(uint32_t meshIndex);
 
+    // Debug stand-in for Unreal BreakConstraint: pins the node at its world matrix from the last Update and moves it by offset
+    // (an immediate shift instead of Unreal's Impulse). Descendants still animate on top of it. Does nothing if the node is already broken.
+    void BreakConstraint(const Math::Vector3& offset, uint32_t nodeIndex);
+    void ResetBrokenConstraints();
+    bool IsConstraintBroken(uint32_t nodeIndex) const;
+
     void Resize(float newRadius);
     void SetPosition(const Math::Vector3& position);    // world position of the model origin (scale is kept)
     Math::Vector3 GetCenter() const;
@@ -206,5 +212,7 @@ private:
     std::vector<AnimationState> m_AnimState;    // Per-animation (not per-curve)
     std::unique_ptr<Joint[]> m_Skeleton;
     std::vector<uint8_t> m_MeshHidden;          // Hidden flag per mesh index (reset to all visible when the model changes)
+    struct BrokenConstraint { uint32_t node; Math::Matrix4 world; };
+    std::vector<BrokenConstraint> m_BrokenConstraints;      // Pinned node worlds used by Update instead of parent * local (reset when the model changes)
     std::vector<std::unique_ptr<ByteAddressBuffer>> m_VertexColors;     // Vertex color override per mesh index (null = none; reset when the model changes)
 };

@@ -16,6 +16,7 @@ namespace MeshCutting
     namespace
     {
         const float kPickMinWeight = 0.05f;        // 절단 joint 후보가 되는 최소 가중치 (설계 2.2절)
+        const float kBreakOffsetRatio = 0.3f;      // 끊긴 joint를 평면 법선으로 옮기는 거리 / 대상 반지름 (Unreal Impulse 대신)
 
         // 지수 평균. 값이 0이면 첫 표본으로 시작한다.
         void Smooth(float& value, float sample)
@@ -33,6 +34,33 @@ namespace MeshCutting
                 meshPtr += sizeof(Mesh) + (((const Mesh*)meshPtr)->numDraws - 1) * sizeof(Mesh::Draw);
             const Mesh& mesh = *(const Mesh*)meshPtr;
             return mesh.vbStride == 0 ? 0 : mesh.vbSize / mesh.vbStride;
+        }
+
+        // 끊을 노드의 자손 joint(없으면 자기 자신)가 평면 법선 쪽에 있으면 +1, 아니면 -1. 절단 때 자세(poseJointWorld) 기준.
+        float ChildSide(const Model& model, const BonePatchSource& source, uint32_t breakNode, const SlicePlane& plane)
+        {
+            const SkinPalette& palette = model.m_SkinPalettes[source.paletteId];
+            const Vector3 normal(plane.normal.x, plane.normal.y, plane.normal.z);
+            const Vector3 point(plane.point.x, plane.point.y, plane.point.z);
+            float childSum = 0.0f, selfSum = 0.0f;
+            bool anyChild = false;
+            for (uint32_t j = 0; j < palette.numJoints && j < source.poseJointWorld.size(); ++j)
+            {
+                uint32_t node = model.m_JointIndices[palette.startJoint + j];
+                const float distance = float(Dot(normal, Vector3(source.poseJointWorld[j].GetW()) - point));
+                if (node == breakNode)
+                    selfSum = distance;
+                for (uint32_t depth = 0; node != breakNode && depth <= model.m_NumNodes && node < model.m_NodeParents.size(); ++depth)
+                {
+                    node = model.m_NodeParents[node];
+                    if (node == breakNode)
+                    {
+                        childSum += distance;
+                        anyChild = true;
+                    }
+                }
+            }
+            return (anyChild ? childSum : selfSum) >= 0.0f ? 1.0f : -1.0f;
         }
 
         float ElapsedMs(int64_t start)
@@ -160,7 +188,57 @@ namespace MeshCutting
         }
         for (CutTarget& target : m_Targets)
             if (target.id == id)
+            {
                 UpdateSkinMask(target);
+                UpdateBrokenJoints(target);
+            }
+    }
+
+    // 확정된 스켈레탈 작업의 joint를 BreakConstraint로 끊는다. 끊은 노드 집합이 달라졌을 때만 모두 되돌리고 다시 끊는다.
+    void CutController::UpdateBrokenJoints(CutTarget& target)
+    {
+        std::map<uint32_t, Vector3> wanted;
+        for (const auto& entry : m_Jobs)
+        {
+            const CutJob& job = entry.second;
+            if (job.key.target == target.id && job.key.kind == CutJobKind::SkeletalJoint && job.haveConfirmed && job.breakNode != kNoNode)
+                wanted.emplace(job.breakNode, Vector3(job.breakOffset.x, job.breakOffset.y, job.breakOffset.z));
+        }
+        bool same = wanted.size() == target.brokenNodes.size();
+        for (auto it = wanted.begin(); same && it != wanted.end(); ++it)
+            same = target.brokenNodes.count(it->first) != 0;
+        if (same)
+            return;
+        target.instance->ResetBrokenConstraints();
+        target.brokenNodes.clear();
+        for (const auto& entry : wanted)
+        {
+            target.instance->BreakConstraint(entry.second, entry.first);
+            target.brokenNodes.insert(entry.first);
+        }
+    }
+
+    // 확정된 스켈레탈 joint 작업의 끊을 노드와 이동량을 정한다: 평면 법선 방향 x 반지름 x 비율, 부호는 자손 쪽 (끊긴 쪽이 평면에서 멀어진다).
+    void CutController::SetBreakOf(CutJob& job)
+    {
+        job.breakNode = kNoNode;
+        const CutTarget* target = FindTarget(job.key.target);
+        if (job.key.kind != CutJobKind::SkeletalJoint || !job.haveConfirmed || !job.source.bone || target == nullptr || target->model == nullptr)
+            return;
+        const BonePatchSource& source = *job.source.bone;
+        const Model& model = *target->model;
+        if (source.paletteId >= model.m_SkinPalettes.size())
+            return;
+        const SkinPalette& palette = model.m_SkinPalettes[source.paletteId];
+        if (job.key.b >= palette.numJoints)
+            return;
+        const uint32_t node = model.m_JointIndices[palette.startJoint + job.key.b];     // 노드 번호 = matrixIdx
+        if (node >= model.m_NumNodes)
+            return;
+        const SlicePlane plane = m_Plane.ToSlicePlane();
+        const float distance = ChildSide(model, source, node, plane) * target->radius * kBreakOffsetRatio;
+        job.breakNode = node;
+        job.breakOffset = { plane.normal.x * distance, plane.normal.y * distance, plane.normal.z * distance };
     }
 
     // 확정된 스켈레탈 작업이 복사한 joint 영향 범위를 메시별 버텍스 컬러(R=255)로 덮어써 원본에서 숨긴다 (Unreal SetVertexColorOverride).
@@ -307,6 +385,7 @@ namespace MeshCutting
             if (job.haveConfirmed)
                 SetOriginalVisible(job, true);
             job.haveConfirmed = false;
+            job.breakNode = kNoNode;
             job.cutAttempted = false;
             job.lastCutStatus = SliceStatus::InvalidInput;
             job.lastCutError.clear();
@@ -323,7 +402,10 @@ namespace MeshCutting
             ++it;
         }
         for (CutTarget& target : m_Targets)
+        {
             UpdateSkinMask(target);
+            UpdateBrokenJoints(target);
+        }
     }
 
     // 모델이 바뀐 대상의 작업을 지우고, 평면을 편집 중이면 자세를 읽는다.
@@ -760,7 +842,10 @@ namespace MeshCutting
             job.patch.Clear();
         }
         for (CutTarget& target : m_Targets)
+        {
             UpdateSkinMask(target);     // 스켈레탈 확정마다가 아니라 한 번에 덮어쓴다
+            UpdateBrokenJoints(target);
+        }
     }
 
     // 후보 작업 하나를 지금 자세에서 추출하고 스키닝한 뒤 자른다. 실패한 작업은 결과가 없다.
@@ -801,6 +886,7 @@ namespace MeshCutting
         job.haveConfirmed = true;
         job.confirmedGeneration = ++m_Generation;
         SetOriginalVisible(job, false);
+        SetBreakOf(job);
 
         const double original = TotalArea(job.patch, PatchFaceKind::Surface);
         const double positive = TotalArea(result.positive, PatchFaceKind::Surface);
@@ -841,7 +927,16 @@ namespace MeshCutting
         if (m_CutRequested)
         {
             m_CutRequested = false;
-            if (m_PlaneValid)
+            bool anyBroken = false;
+            for (const CutTarget& target : m_Targets)
+                anyBroken = anyBroken || !target.brokenNodes.empty();
+            if (m_PlaneValid && anyBroken)
+            {
+                // 끊긴 자세에서 추출하지 않도록 이번 프레임은 되돌리기만 하고, 원래 자세가 계산된 다음 프레임에 자른다.
+                DiscardCut();
+                m_CutRequested = true;
+            }
+            else if (m_PlaneValid)
             {
                 PhaseTimer timer(L"Confirm cut", m_Frame.confirm);
                 ConfirmAll();

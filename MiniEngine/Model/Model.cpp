@@ -129,6 +129,28 @@ void ModelInstance::ClearVertexColorOverride(uint32_t meshIndex)
     m_VertexColors[meshIndex] = nullptr;
 }
 
+void ModelInstance::BreakConstraint(const Vector3& offset, uint32_t nodeIndex)
+{
+    if (m_Model == nullptr || m_NodeWorld == nullptr || nodeIndex >= m_Model->m_NumNodes || IsConstraintBroken(nodeIndex))
+        return;
+    Matrix4 world = m_NodeWorld[nodeIndex];
+    world.SetW(world.GetW() + Vector4(offset, 0.0f));
+    m_BrokenConstraints.push_back({ nodeIndex, world });
+}
+
+void ModelInstance::ResetBrokenConstraints()
+{
+    m_BrokenConstraints.clear();
+}
+
+bool ModelInstance::IsConstraintBroken(uint32_t nodeIndex) const
+{
+    for (const BrokenConstraint& broken : m_BrokenConstraints)
+        if (broken.node == nodeIndex)
+            return true;
+    return false;
+}
+
 ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
     : m_Model(sourceModel), m_Locator(kIdentity)
 {
@@ -175,6 +197,7 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
 {
     m_Model = sourceModel;
     m_MeshHidden.clear();
+    m_BrokenConstraints.clear();
     if (!m_VertexColors.empty())
     {
         g_CommandManager.GetGraphicsQueue().WaitForIdle();
@@ -254,6 +277,11 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
         Matrix4 xform = Node->xform;
         if (!Node->skeletonRoot)
             xform = ParentMatrix * xform;
+
+        // A broken node ignores its parent and animation; its descendants use this world as their parent
+        for (const BrokenConstraint& broken : m_BrokenConstraints)
+            if (broken.node == Node->matrixIdx)
+                xform = broken.world;
 
         // Concatenate the transform with the parent's matrix and update the matrix list
         {
