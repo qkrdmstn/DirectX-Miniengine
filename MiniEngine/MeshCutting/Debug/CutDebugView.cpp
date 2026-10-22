@@ -281,10 +281,9 @@ namespace MeshCutting
             }
         };
 
-        // 조각은 작업마다 따로 X 방향 한 줄에 나란히 놓는다 (겹치지 않게). 첫 작업은 대상 옆(대상 반지름만큼 X로 이동)에서
-        // 시작하고, 다음 작업은 앞 작업의 오른쪽 끝에 이어 붙인다. 각 작업은 평면 법선으로 두 조각을 벌려서 절단을 볼 수 있게 한다.
-        bool firstPlaced = false;
-        float rowEnd = 0.0f;        // 지금까지 놓은 조각들의 오른쪽 끝 x
+        // 원본은 숨겨지므로 조각은 원래 자리에 그린다. 각 작업은 평면 법선으로 두 조각을 벌려서 절단을 볼 수 있게 한다.
+        // 벌어진 거리: 반지름의 12%. 원래 자리라 5%로는 두 조각이 붙어 보여서 절단면의 틈이 화면에서 구분될 만큼 키웠다.
+        constexpr float kSeparationRatio = 0.12f;
         for (const auto& entry : cut.GetJobs())
         {
             const CutJob& job = entry.second;
@@ -308,21 +307,11 @@ namespace MeshCutting
                 }
                 continue;
             }
-            const float gap = radius * 0.05f;
+            // 조각은 원래 자리에서 출발해 평면 법선 방향으로만 벌어진다 (positive는 +n, negative는 -n: 절단면에서 멀어지는 쪽).
             const DirectX::XMFLOAT3& n = job.confirmedNormal;
-            const Vector3 shift = Vector3(n.x, n.y, n.z) * gap;
-            // 두 조각 경계의 중심으로 가로 위치를 정한다: 중심의 x를 슬롯 중앙에 맞추고, y와 z는 원래 높이를 유지한다.
-            const ProceduralMeshBounds& positiveBounds = meshes.positive->GetBounds();
-            const ProceduralMeshBounds& negativeBounds = meshes.negative->GetBounds();
-            const float centerX = positiveBounds.valid && negativeBounds.valid ? (positiveBounds.center.x + negativeBounds.center.x) * 0.5f
-                : (positiveBounds.valid ? positiveBounds.center.x : negativeBounds.center.x);
-            const float halfWidth = radius * 1.15f;
-            const float slotCenter = firstPlaced ? rowEnd + halfWidth : centerX + (target != nullptr ? target->radius : 0.0f);
-            rowEnd = slotCenter + halfWidth;
-            firstPlaced = true;
-            const Vector3 offset(slotCenter - centerX, 0.0f, 0.0f);
-            const Matrix4 positiveWorld(AffineTransform::MakeTranslation(offset + shift));
-            const Matrix4 negativeWorld(AffineTransform::MakeTranslation(offset - shift));
+            const Vector3 shift = Vector3(n.x, n.y, n.z) * (radius * kSeparationRatio);
+            const Matrix4 positiveWorld(AffineTransform::MakeTranslation(shift));
+            const Matrix4 negativeWorld(AffineTransform::MakeTranslation(-shift));
             drawSurface(*meshes.positive, positiveWorld, pieceOptions, color);
             drawSurface(*meshes.negative, negativeWorld, pieceOptions, color);
             if (m_RenderMode == RenderMode::Debug)
