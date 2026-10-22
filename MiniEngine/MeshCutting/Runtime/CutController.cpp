@@ -79,7 +79,7 @@ namespace MeshCutting
 
     }
 
-    CutTargetId CutController::RegisterInstance(const ModelInstance& instance, std::wstring name)
+    CutTargetId CutController::RegisterInstance(ModelInstance& instance, std::wstring name)
     {
         CutTarget target;
         target.id = m_NextTargetId++;
@@ -138,12 +138,24 @@ namespace MeshCutting
         {
             if (it->first.target == id)
             {
+                if (it->second.haveConfirmed)
+                    SetOriginalVisible(it->second, true);     // 확정으로 숨긴 것만 되돌린다
                 it = m_Jobs.erase(it);
                 ++m_JobListGeneration;
             }
             else
                 ++it;
         }
+    }
+
+    // 스태틱 메시 작업의 원본 메시를 보이거나 숨긴다 (Unreal SetVisibility). 스켈레탈 작업은 건드리지 않는다.
+    void CutController::SetOriginalVisible(const CutJob& job, bool visible)
+    {
+        if (job.key.kind != CutJobKind::StaticMesh)
+            return;
+        for (CutTarget& target : m_Targets)
+            if (target.id == job.key.target)
+                target.instance->SetMeshVisibility(job.key.a, visible);
     }
 
     const CutTarget* CutController::FindTarget(CutTargetId id) const
@@ -240,6 +252,8 @@ namespace MeshCutting
         for (auto it = m_Jobs.begin(); it != m_Jobs.end();)
         {
             CutJob& job = it->second;
+            if (job.haveConfirmed)
+                SetOriginalVisible(job, true);
             job.haveConfirmed = false;
             job.cutAttempted = false;
             job.lastCutStatus = SliceStatus::InvalidInput;
@@ -730,6 +744,7 @@ namespace MeshCutting
         job.negative = result.negative;
         job.haveConfirmed = true;
         job.confirmedGeneration = ++m_Generation;
+        SetOriginalVisible(job, false);
 
         const double original = TotalArea(job.patch, PatchFaceKind::Surface);
         const double positive = TotalArea(result.positive, PatchFaceKind::Surface);

@@ -33,7 +33,8 @@ void Model::Render(
     MeshSorter& sorter,
     const GpuBuffer& meshConstants,
     const AffineTransform sphereTransforms[],
-    const Joint* skeleton ) const
+    const Joint* skeleton,
+    const std::vector<uint8_t>* meshHidden ) const
 {
     // Pointer to current mesh
     const uint8_t* pMesh = m_MeshData.get();
@@ -55,7 +56,8 @@ void Model::Render(
 		BoundingSphere sphereWS = BoundingSphere(sphereXform * sphereLS.GetCenter(), sphereScale * sphereLS.GetRadius());
         BoundingSphere sphereVS = BoundingSphere(viewMat * sphereWS.GetCenter(), sphereWS.GetRadius());
 
-        if (frustum.IntersectSphere(sphereVS))
+        const bool hidden = meshHidden != nullptr && i < meshHidden->size() && (*meshHidden)[i] != 0;
+        if (!hidden && frustum.IntersectSphere(sphereVS))
         {
             float distance = -sphereVS.GetCenter().GetZ() - sphereVS.GetRadius();
             sorter.AddMesh(mesh, distance,
@@ -74,8 +76,21 @@ void ModelInstance::Render(MeshSorter& sorter) const
     {
         //const Frustum& frustum = sorter.GetWorldFrustum();
         m_Model->Render(sorter, m_MeshConstantsGPU, m_BoundingSphereTransforms.get(),
-            m_Skeleton.get());
+            m_Skeleton.get(), &m_MeshHidden);
     }
+}
+
+void ModelInstance::SetMeshVisibility(uint32_t meshIndex, bool visible)
+{
+    if (m_Model == nullptr || meshIndex >= m_Model->m_NumMeshes)
+        return;
+    m_MeshHidden.resize(m_Model->m_NumMeshes, 0);
+    m_MeshHidden[meshIndex] = visible ? 0 : 1;
+}
+
+bool ModelInstance::IsMeshVisible(uint32_t meshIndex) const
+{
+    return meshIndex >= m_MeshHidden.size() || m_MeshHidden[meshIndex] == 0;
 }
 
 ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
@@ -123,6 +138,7 @@ ModelInstance::ModelInstance( const ModelInstance& modelInstance )
 ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceModel )
 {
     m_Model = sourceModel;
+    m_MeshHidden.clear();
     m_Locator = UniformTransform(kIdentity);
     if (sourceModel == nullptr)
     {

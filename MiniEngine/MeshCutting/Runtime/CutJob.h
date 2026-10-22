@@ -151,7 +151,7 @@ namespace MeshCutting
     struct CutTarget
     {
         CutTargetId id = 0;
-        const ModelInstance* instance = nullptr;
+        ModelInstance* instance = nullptr;
         const Model* model = nullptr;               // 등록 때의 Model (바뀌면 작업을 모두 지운다)
         std::wstring name;
         std::vector<uint32_t> palettes;             // numJoints > 0인 스킨 팔레트 전부

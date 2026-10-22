@@ -113,7 +113,8 @@ public:
     void Render(Renderer::MeshSorter& sorter,
         const GpuBuffer& meshConstants,
         const Math::AffineTransform sphereTransforms[],
-        const Joint* skeleton) const;
+        const Joint* skeleton,
+        const std::vector<uint8_t>* meshHidden = nullptr) const;     // meshHidden[i] != 0 skips the i-th mesh
 
     Math::BoundingSphere m_BoundingSphere; // Object-space bounding sphere
     Math::AxisAlignedBox m_BoundingBox;
@@ -158,6 +159,10 @@ public:
     void Update(GraphicsContext& gfxContext, float deltaTime);
     void Render(Renderer::MeshSorter& sorter) const;
 
+    // Per-mesh visibility (like Unreal SetVisibility): hidden meshes skip color, depth and shadow passes. Out-of-range indices are ignored.
+    void SetMeshVisibility(uint32_t meshIndex, bool visible);
+    bool IsMeshVisible(uint32_t meshIndex) const;
+
     void Resize(float newRadius);
     void SetPosition(const Math::Vector3& position);    // world position of the model origin (scale is kept)
     Math::Vector3 GetCenter() const;
@@ -192,4 +197,5 @@ private:
     std::unique_ptr<GraphNode[]> m_AnimGraph;   // A copy of the scene graph when instancing animation
     std::vector<AnimationState> m_AnimState;    // Per-animation (not per-curve)
     std::unique_ptr<Joint[]> m_Skeleton;
+    std::vector<uint8_t> m_MeshHidden;          // Hidden flag per mesh index (reset to all visible when the model changes)
 };

@@ -67,7 +67,8 @@ namespace MeshCutting
     {
     public:
         // 등록한 인스턴스는 UnregisterInstance 전까지 살아 있어야 한다. 해제하면 그 대상의 작업이 모두 지워진다.
-        CutTargetId RegisterInstance(const ModelInstance& instance, std::wstring name);
+        // 스태틱 메시 절단이 확정되면 컨트롤러가 인스턴스의 원본 메시를 숨기므로 non-const로 받는다.
+        CutTargetId RegisterInstance(ModelInstance& instance, std::wstring name);
         void UnregisterInstance(CutTargetId id);
 
         void ToggleEditPlane();     // T: 첫 대상의 bounds 중심에 평면을 놓는다 (처음 한 번)
@@ -102,6 +103,7 @@ namespace MeshCutting
         void BuildStaticCache(const CutTarget& target, CutStaticMesh& mesh);
         void PickStaticMeshes(CutTarget& target, bool planeChanged, std::vector<CutJobKey>& current, std::map<CutJobKey, uint32_t>& triangles);
         void RemoveJobsOf(CutTargetId id);
+        void SetOriginalVisible(const CutJob& job, bool visible);
         void UpdateTargets();
         void UpdateCandidates();
         void ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, uint32_t>& triangles);
