@@ -2,7 +2,7 @@
 
 > 작성: 2026-10-20 · 대상 커밋: `11c4be6` (Procedural Mesh 스키닝 애니메이션)
 >
-> 상태: **완료**. D-0~D-3은 `d33b1a7`. 자동 미리보기 제거는 현재 작업 트리(`a045aec` 이후)에 반영했다. 키 배치는 `SceneViewControlsDesign.md`를 따른다.
+> 상태: **완료**. D-0~D-3은 `d33b1a7`. 자동 미리보기 제거는 `cd9a09e`. 키 배치는 `SceneViewControlsDesign.md`를 따른다.
 
 ## 현재 동작: Enter에서만 절단
 

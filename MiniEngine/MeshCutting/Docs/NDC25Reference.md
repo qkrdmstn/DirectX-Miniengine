@@ -80,19 +80,19 @@
 - **[추론, 소스 미확인]** 섹션 바운딩 박스로 평면 한쪽에 있는 섹션은 통째로 보내고, 걸친 섹션만 삼각형 단위로 분할한다. 잘린 에지를 2D로 투영해 다각형으로 이은 뒤 삼각분할해서 cap을 만든다.
 - **뼈·웨이트 개념이 없다.** "어느 Bone을 자를지"는 발표자가 직접 만든 로직이다. 언리얼에서는 보통 충돌 결과(`FHitResult.BoneName`)로 Bone을 얻는데, NDC가 그렇게 했는지는 확인되지 않았다.
 
-## 8. 이 프로젝트 코드와의 대응 (2026-10-21 작업 트리 기준)
+## 8. 이 프로젝트 코드와의 대응 (커밋 `762538f` 기준)
 
 | NDC 단계 | 코드 | 상태 |
 | --- | --- | --- |
-| 절단 위치의 Bone 선택 | `CutPlane::PickSegments`, `CutPlane::CutJoints` (평면이 지나는 segment의 부모 joint) | 구현 |
-| 영향 범위 복사 | `ExtractBonePatch` (BonePatch.cpp, joint 웨이트 > minWeight인 삼각형) → `MakeWeldInput` → `BuildPatchPiece` | 구현 |
-| 복사본 절단 + cap | `SlicePatch`, `ExtractCutLoops`, `BuildCap` (Geometry/Slice.cpp, SliceCap.cpp) | 구현 |
-| 수동 스키닝 | `SkinPatchPiece` (Geometry/Skinning.cpp), `CutController::Update` | 구현 |
+| 절단 위치의 Bone 선택 | `CutPick::PickJoints` (Geometry/CutPick, 평면과 교차하는 삼각형마다 절단 joint 하나). 스킨 없는 메시는 `CutPick::SphereMayCross` → `CountCrossedTriangles`. 뼈 선분 표시는 `CutPlane::PickSegments` | 구현 (단일 joint 작업, `JointCutDesign.md`) |
+| 영향 범위 복사 | Enter 순간 `CutController::ExtractJob`: `ExtractBonePatch` (BonePatch.cpp, joint 웨이트 > minWeight인 삼각형) → `MakeWeldInput` → `BuildPatchPiece`. 스킨 없는 메시는 `CopyProceduralMeshFromStaticMesh` (StaticMeshCopy) | 구현 |
+| 복사본 절단 + cap | `CutController::SliceWithPlane` → `SliceProceduralMesh` (Unreal 모양 진입점, `SlicePatch`를 감쌈) → `ExtractCutLoops`, `BuildCap` (Geometry/Slice.cpp, SliceCap.cpp). 유한 평면 검사는 `CutPlane::ContainsLoops` | 구현 |
+| 수동 스키닝 | `CutController::SkinPatch`: `BuildSkinMatrices` → `Skinning::Apply` (Geometry/Skinning). 스킨 없는 메시는 `BuildRigidMatrices` | 구현 |
 | BreakConstraint | 없음 (MiniEngine에 물리 없음. 디버그 분리 → 물리 라이브러리 후보 Jolt) | 미구현 |
 | 원본 숨김 | 없음 (mask + discard, color/depth/shadow 모두) | 미구현 |
 | 남는 쪽 조각의 기여 교체 | `PatchPiece::skinStateId` 자리만 있음 | 미구현 |
 | cap 본 부착 | `PatchCap`에 기록만 있음 (지금 cap은 rim 정점을 공유해 표면을 따라감) | 미구현 |
-| 합친 뒤 자르기 / 아일랜드 / 각도 보정 | 없음 | 확장 범위 |
+| 합친 뒤 자르기 / 아일랜드 / 각도 보정 | 없음 (합친 뒤 자르기는 `RegionCutDesign.md`, 보류) | 확장 범위 |
 
 ## 9. CesiumMan 리그에서 확인한 사실 (CesiumMan.glb, bind 자세, Z가 위)
 

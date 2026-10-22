@@ -1,6 +1,6 @@
 # Unreal 방식 정렬 로드맵
 
-> 상태: **U-1, U-2, U-3a, U-3b, U-3c 구현 완료 (커밋 전, 기준 `cd9a09e`)**. 화면 확인(U-1: 작업 색, 확정 조각 배치, 상태 줄 / U-2: Enter 결과가 U-1과 같음)은 사용자 확인 필요. U-3b·U-3c의 화면 확인(cube·bunny에 평면을 걸치고 Enter, 조각 배치, 상태 줄)도 사용자 확인 필요. U-4 이후는 설계안.
+> 상태: **U-1~U-3b는 `ccf0349`, U-3c는 `762538f`에서 구현 (설계 기준 `cd9a09e`)**. 화면 확인(U-1: 작업 색, 확정 조각 배치, 상태 줄 / U-2: Enter 결과가 U-1과 같음)은 사용자 확인 필요. U-3b·U-3c의 화면 확인(cube·bunny에 평면을 걸치고 Enter, 조각 배치, 상태 줄)도 사용자 확인 필요. U-4 이후는 설계안.
 >
 > 목적: 절단 기능을 Unreal의 `ProceduralMeshComponent`, `UKismetProceduralMeshLibrary::SliceProceduralMesh`, `BreakConstraint` 흐름에 맞춘다. BVH는 쓰지 않는다. 근거: `NDC25Reference.md` 7절, 측정은 `PickPerformanceDesign.md`.
 
@@ -26,11 +26,11 @@ Unreal에서 절단은 **맞은 순간 한 번** 일어난다 **[확인: 공개 
 
 | 단계 | 내용 | 줄이는 것 / 얻는 것 |
 | --- | --- | --- |
-| **U-1 절단 시점 생성 (구현 완료, 커밋 전)** | 편집 중에는 joint 선택(`PickJoints`)과 작업 목록만 갱신한다. 패치 추출·용접·스키닝은 Enter 때 작업마다 한 번(현재 자세로) 하고 바로 절단한다 | 추출 반복과 후보 패치 스키닝 제거 (측정상 최대 비용). Unreal 호출 시점과 같아짐 |
-| **U-2 Unreal 모양의 진입점 (구현 완료, 커밋 전)** | `SliceProceduralMesh(inOutMesh, planePosition, planeNormal, createOtherHalf, outOtherHalf, capOption, capMaterialSlot, ...)`를 `SlicePatch` 위에 얇게 둔다. CapOption은 NoCap / CreateNewSectionForCap / UseLastSectionForCap. 세부는 4절 | 이름·인자를 Unreal과 맞춤 (알고리즘 변경 없음) |
-| **U-3a 스태틱 메시 복사 기반 (구현 완료, 커밋 전)** | CPU 접근(`m_GeometryCPU` 보존, Unreal `bAllowCPUAccess`), 메시 하나를 절단 입력으로 복사(`CopyProceduralMeshFromStaticMesh`, `CopyProceduralMeshFromStaticMeshComponent` 대응), world 행렬 하나로 위치 갱신(`BuildRigidMatrices`, 강체 정점). 세부는 5절 | 스태틱 절단의 입력과 위치 갱신 |
-| **U-3b 스태틱 메시 연결 (구현 완료, 커밋 전)** | 컨트롤러의 후보 찾기·Enter 경로에 U-3a를 연결한다. 세부는 5.1절 | 스태틱 절단 지원 |
-| **U-3c 정적 모델 표시 (구현 완료, 커밋 전)** | ModelViewer가 `Models/cube.glb`, `bunny.glb`를 캐릭터 +X 쪽에 띄우고(크기 = 캐릭터 반지름 0.6배, 중심 간격 4배·8배) 절단 대상으로 등록한다. `ModelInstance::SetPosition` 추가. 파일이 없으면 건너뛴다 | 화면 확인 |
+| **U-1 절단 시점 생성 (구현, `ccf0349`)** | 편집 중에는 joint 선택(`PickJoints`)과 작업 목록만 갱신한다. 패치 추출·용접·스키닝은 Enter 때 작업마다 한 번(현재 자세로) 하고 바로 절단한다 | 추출 반복과 후보 패치 스키닝 제거 (측정상 최대 비용). Unreal 호출 시점과 같아짐 |
+| **U-2 Unreal 모양의 진입점 (구현, `ccf0349`)** | `SliceProceduralMesh(inOutMesh, planePosition, planeNormal, createOtherHalf, outOtherHalf, capOption, capMaterialSlot, ...)`를 `SlicePatch` 위에 얇게 둔다. CapOption은 NoCap / CreateNewSectionForCap / UseLastSectionForCap. 세부는 4절 | 이름·인자를 Unreal과 맞춤 (알고리즘 변경 없음) |
+| **U-3a 스태틱 메시 복사 기반 (구현, `ccf0349`)** | CPU 접근(`m_GeometryCPU` 보존, Unreal `bAllowCPUAccess`), 메시 하나를 절단 입력으로 복사(`CopyProceduralMeshFromStaticMesh`, `CopyProceduralMeshFromStaticMeshComponent` 대응), world 행렬 하나로 위치 갱신(`BuildRigidMatrices`, 강체 정점). 세부는 5절 | 스태틱 절단의 입력과 위치 갱신 |
+| **U-3b 스태틱 메시 연결 (구현, `ccf0349`)** | 컨트롤러의 후보 찾기·Enter 경로에 U-3a를 연결한다. 세부는 5.1절 | 스태틱 절단 지원 |
+| **U-3c 정적 모델 표시 (구현, `762538f`)** | ModelViewer가 `Models/cube.glb`, `bunny.glb`를 캐릭터 +X 쪽에 띄우고(크기 = 캐릭터 반지름 0.6배, 중심 간격 4배·8배) 절단 대상으로 등록한다. `ModelInstance::SetPosition` 추가. 파일이 없으면 건너뛴다 | 화면 확인 |
 | U-4 원본 숨김 | 스켈레탈: 복사 범위 마스크(color/depth/shadow). 스태틱: 그 메시 그리기 끄기 | NDC 3단계 |
 | U-5 분리 | `BreakConstraint` 대응 디버그 분리(joint 서브트리를 따로 움직임), 남는 쪽 기여 교체 | NDC 2·5단계 |
 | (측정 후) 섹션 컬링 | `PickPerformanceDesign.md` 안 B. pick이 다시 병목일 때만 | pick 비용 |

@@ -1,6 +1,6 @@
 # 절단 후보 선택 성능 설계
 
-> 상태: **안 A는 `UnrealAlignmentDesign.md` U-1로 구현 완료 (커밋 전)**. 안 B는 설계안. 측정 기준 커밋 `cd9a09e`. 계측 코드는 `CutPhaseTime`/`PhaseTimer` (CutController), 표시는 CutDebugView 통계 줄.
+> 상태: **안 A는 `UnrealAlignmentDesign.md` U-1로 구현 (`ccf0349`)**. 안 B는 설계안. 측정 기준 커밋 `cd9a09e`. 계측 코드는 `CutPhaseTime`/`PhaseTimer` (CutController), 표시는 CutDebugView 통계 줄.
 >
 > 목적: 평면을 편집하는 동안 "무엇을 자를지(작업)"를 고르는 비용을 줄일 방향을 정한다. 최적화는 이 문서에서 하지 않는다. BVH는 쓰지 않는다 (Unreal `SliceProceduralMesh` 방식, `NDC25Reference.md` 7절).
 

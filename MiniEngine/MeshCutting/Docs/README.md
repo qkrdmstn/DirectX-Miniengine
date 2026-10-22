@@ -3,19 +3,36 @@
 필요한 문서만 연다. 구조를 모르면 `CodeMap.md`부터, 기법 판단은 `NDC25Reference.md`를 본다.
 상태가 바뀌면 이 표와 해당 문서 머리의 `상태:` 줄을 함께 고친다.
 
+## 기준 문서 (항상 최신으로 유지)
+
 | 문서 | 용도 | 상태 | 언제 읽나 |
 | --- | --- | --- | --- |
-| `NDC25Reference.md` | 원본 기법(NDC25) 정리, 항목별 근거 수준 | 기준 문서 | 설계·구현·리뷰 판단 전 |
-| `CodeMap.md` | 계층, 호출 흐름, 상태의 주인 (줄 번호 없음) | 기준 문서 | 코드를 처음 열 때, 수정 위치를 찾을 때 |
-| [CurrentFlowReport.md](CurrentFlowReport.md) | 현재 선분별 작업의 데이터 흐름, 타입·객체·함수·파일 역할, 중복과 개선 조언 | 분석 완료 (`1287cb5` 기준) | 최신 실행 구조를 처음부터 이해할 때 (CodeMap의 구 흐름과 구분) |
-| `ClassLayoutDesign.md` | 기능을 클래스 6개로 묶는 계획 (K-0~K-6) | 설계안 | 클래스 정리 작업 전 |
+| `NDC25Reference.md` | 원본 기법(NDC25) 정리, 항목별 근거 수준, 코드 대응표(8절) | 기준 문서 (8절은 `762538f` 기준) | 설계·구현·리뷰 판단 전 |
+| `UnrealAlignmentDesign.md` | Unreal(ProceduralMesh, SliceProceduralMesh, BreakConstraint) 정렬 로드맵 U-1~U-5 | U-1~U-3b `ccf0349`, U-3c `762538f`. U-1·U-2·U-3b·U-3c 화면 확인 대기. U-4~U-5 설계안 | 절단 시점·API 모양·스태틱·숨김·분리 작업 전 |
+| `CodeMap.md` | 계층, 프레임 흐름, 상태의 주인 (함수 이름으로 인용, 줄 번호 없음) | 기준 문서 (`762538f`) | 코드를 처음 열 때, 수정 위치를 찾을 때 |
+
+## 진행·예정 설계
+
+| 문서 | 용도 | 상태 | 언제 읽나 |
+| --- | --- | --- | --- |
+| `ClassLayoutDesign.md` | 기능을 클래스 6개로 묶는 계획 (K-0~K-6), 이름 규칙(7.2절) | 설계안 | 클래스 정리 작업 전 |
+| `RegionCutDesign.md` | 영역 작업, 걸친 joint 합친 뒤 자르기 (NDC 한계 돌파) | 설계안, 보류 (JointCutDesign 다음 단계) | 한계 돌파 작업 전 |
+| `PickPerformanceDesign.md` | 절단 후보 선택(pick·추출) 성능 측정과 BVH 없는 개선 방향 | 안 A는 U-1로 구현 (`ccf0349`), 안 B 설계안. U-1 이후 실측 포함 | 편집 중·Enter 프레임 비용을 줄일 때 |
+
+## 완료 기록 (코드 주석이 참조하므로 자리를 옮기지 않는다)
+
+| 문서 | 용도 | 상태 | 언제 읽나 |
+| --- | --- | --- | --- |
+| `JointCutDesign.md` | 메시 교차 기반 단일 joint 작업 (NDC 초기 단계, 한계 체험) | 구현 (J-1~J-3, `a6b5d86`). 화면 확인 대기 | 무엇을 자를지(작업·패치 joint) 바꿀 때 |
 | `PerSegmentCutDesign.md` | 선분별·인스턴스별 절단 작업 | 구현 (`b606ba4`). 작업 식별은 JointCutDesign으로 대체됨 (선분 key는 모양만 남김) | 작업 목록·등록·Enter/Ctrl+Z·표시를 고칠 때 |
-| `JointCutDesign.md` | 메시 교차 기반 단일 joint 작업 (NDC 초기 단계, 한계 체험) | 구현 완료 (J-1~J-3, 커밋 전). 화면 확인 대기 | 무엇을 자를지(작업·패치 joint) 바꿀 때 |
-| `PickPerformanceDesign.md` | 절단 후보 선택(pick·추출) 성능 측정과 BVH 없는 개선 방향 | 안 A는 U-1로 구현 완료 (커밋 전), 안 B 설계안. U-1 이후 실측 포함 | 편집 중·Enter 프레임 비용을 줄일 때 |
-| `UnrealAlignmentDesign.md` | Unreal(ProceduralMesh, SliceProceduralMesh, BreakConstraint) 정렬 로드맵 U-1~U-5 | U-1~U-3c 구현 완료 (U-1~U-3b는 `ccf0349`, U-3c는 커밋 전). U-1·U-2·U-3b·U-3c 화면 확인 대기. U-4~U-5 설계안 | 절단 시점·API 모양·스태틱·숨김·분리 작업 전 |
-| `RegionCutDesign.md` | 영역 작업, 걸친 joint 합친 뒤 자르기 (NDC 한계 돌파) | 설계안, JointCutDesign 다음 단계 | 한계 돌파 작업 전 |
-| `PlaneFirstCutDesign.md` | world 유한 평면, 후보 패치 (P-1, P-2) | P-1·P-2 완료, P-3 폐기 | 평면·후보 패치 코드를 고칠 때 |
+| `PlaneFirstCutDesign.md` | world 유한 평면, 후보 패치 (P-1, P-2) | P-1·P-2 완료, P-3 폐기 | 평면 코드를 고칠 때 |
 | `SceneViewControlsDesign.md` | 마우스 카메라, 평면 기즈모, 키 (S-1~S-4) | 완료 (`0fc39fe`), 현재 조작의 기준 | 입력·기즈모를 고칠 때 |
-| `CutDebugDesign.md` | 디버그 와이어프레임, Enter 확정 절단 (D-0~D-3 이력 포함) | 완료 (`d33b1a7`), 자동 미리보기 제거 반영 (작업 트리, `a045aec` 이후) | 디버그 표시를 고칠 때 |
+| `CutDebugDesign.md` | 디버그 와이어프레임, Enter 확정 절단 (D-0~D-3 이력 포함) | 완료 (`d33b1a7`), 자동 미리보기 제거 `cd9a09e` | 디버그 표시를 고칠 때 |
 | `PlaneSlicingDesign.md` | 평면 슬라이스, 루프, cap, 조각 스키닝 알고리즘 | 완료 (`3e0f55f`, `11c4be6`) | Slice/SliceCap/Skinning 알고리즘을 볼 때 |
-| `archive/ProjectFlowReport.md` | 2026-10-20 시점 흐름 보고서 (Codex 작성) | 보관, 줄 번호 낡음 | 과거 구조를 확인할 때만 |
+
+## 보관 (`archive/`, 과거 구조 확인용)
+
+| 문서 | 용도 | 상태 |
+| --- | --- | --- |
+| `archive/CurrentFlowReport.md` | 선분별 작업 시점의 흐름 보고서 (U-1 이전, 편집 중 패치 추출) | 보관, `1287cb5` 기준. 현재 흐름은 `CodeMap.md` |
+| `archive/ProjectFlowReport.md` | 2026-10-20 시점 흐름 보고서 (Codex 작성) | 보관, 줄 번호 낡음 |
