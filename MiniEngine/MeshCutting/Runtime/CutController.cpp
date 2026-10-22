@@ -799,6 +799,24 @@ namespace MeshCutting
             }
 
             std::string error;
+            if (job.key.kind == CutJobKind::StaticMesh)
+            {
+                // 스태틱 조각: 정점은 절단 순간 world에 고정돼 있다. 지금 메시 world와의 차이(지금 × inverse(절단 순간))만 구해
+                // 그릴 때 곱한다. 정점을 다시 쓰지 않으므로 렌더러도 다시 올리지 않는다.
+                PhaseTimer timer(L"Job matrices", m_Frame.jobMatrices);
+                if (!BuildJobMatrices(*target, job, job.skinMatrices, &error) || job.skinMatrices.empty() || job.skinMatrices[0].empty())
+                {
+                    job.skinError = error.empty() ? "no mesh world" : error;
+                    continue;
+                }
+                const Matrix4 now(DirectX::XMLoadFloat4x4(&job.skinMatrices[0][0]));
+                const Matrix4 atCut(DirectX::XMLoadFloat4x4(&job.cutWorld));
+                DirectX::XMStoreFloat4x4(&job.pieceWorld, DirectX::XMMATRIX(now * Invert(atCut)));
+                m_Frame.jobSkipped += 2;
+                job.poseValid = true;
+                continue;
+            }
+
             bool matricesOk = true;
             bool ok = true;
             const int64_t start = SystemTime::GetCurrentTick();
@@ -937,6 +955,12 @@ namespace MeshCutting
         job.negative = std::move(negative);
         job.appliedMatrices[0].clear();     // 새 조각은 첫 SkinJobs에서 반드시 갱신한다
         job.appliedMatrices[1].clear();
+        if (job.key.kind == CutJobKind::StaticMesh)
+        {
+            // 조각은 SkinPatch가 이번 프레임 world로 이미 옮겼다. 그 world를 기준으로 이후 이동을 행렬로만 표현한다.
+            job.cutWorld = job.skinMatrices[0][0];
+            DirectX::XMStoreFloat4x4(&job.pieceWorld, DirectX::XMMatrixIdentity());
+        }
         job.haveConfirmed = true;
         job.confirmedGeneration = ++m_Generation;
         SetOriginalVisible(job, false);

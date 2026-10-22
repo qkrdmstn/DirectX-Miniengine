@@ -104,6 +104,9 @@ namespace MeshCutting
         // The view retains these same objects until GPU registrations are released.
         std::shared_ptr<ProceduralMesh> positive, negative;
         std::vector<std::vector<DirectX::XMFLOAT4X4>> appliedMatrices[2];     // 조각(positive, negative)마다 마지막으로 UpdatePose에 성공한 스킨 행렬 (조각이 바뀌면 비운다)
+        // 스태틱 작업만: 조각 정점은 절단 순간 world에 고정하고, 이후에는 행렬로만 옮긴다 (Unreal 컴포넌트 트랜스폼처럼)
+        DirectX::XMFLOAT4X4 cutWorld = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };      // 절단 순간의 메시 world
+        DirectX::XMFLOAT4X4 pieceWorld = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };    // 지금 world × inverse(cutWorld). 그릴 때 곱한다
         DirectX::XMFLOAT3 confirmedNormal = { 0.0f, 1.0f, 0.0f };
         uint64_t confirmedGeneration = 0;
         uint32_t breakNode = kInvalidIndex;       // 확정 때 끊을 joint의 장면 그래프 노드 (스켈레탈 joint 작업만, U-5a)

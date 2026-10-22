@@ -1,4 +1,4 @@
-상태: 안 1 구현 — 측정·확인 실험 `4f4bfb0` (Release), 안 2·3 미구현
+상태: 안 1·2 구현 — 측정·확인 실험 `4f4bfb0` (Release), 안 3 미구현. 구현 후 재측정은 아직 안 함
 
 # 절단 확정 후 프레임 드랍: 측정과 해결안
 
@@ -79,7 +79,9 @@ Ctrl+Z로 확정 조각이 사라지면 이 두 가지가 모두 멈추므로 �
 - 위험: 낮음. 비교는 행렬 수(스태틱은 1개)만큼만 든다. 행렬 외의 원인(예: `SetSectionSplit`)으로 바뀌는 경우는 이미 별도 경로가 버전을 올린다.
 - 한계: 애니메이션 중인 스켈레탈 조각은 여전히 매 프레임 갱신한다.
 
-### 안 2. 스태틱 조각은 정점을 고정하고 world 행렬로 움직이기 (Unreal 방식)
+### 안 2. 스태틱 조각은 정점을 고정하고 world 행렬로 움직이기 (Unreal 방식) — 구현 (이 문서와 같은 커밋)
+
+구현: 확정 때 `CutJob::cutWorld`(절단 순간 메시 world)를 저장하고, `SkinJobs`는 스태틱 작업에서 `UpdatePose` 없이 `CutJob::pieceWorld = 지금 world × inverse(cutWorld)`만 계산한다. `CutDebugView::Draw`가 `pieceWorld × 법선 벌림`으로 그리고, 스태틱 조각의 경계 튜브는 매 프레임 다시 굽지 않는다. 조각 bounds는 절단 순간 world 기준으로 남는다.
 
 - Unreal의 ProceduralMeshComponent는 메시 섹션을 한 번 만들고, 컴포넌트 트랜스폼으로 움직인다. 정점을 다시 쓰지 않는다.
 - 변경 위치: 스태틱 작업은 확정 때 로컬 공간 정점으로 한 번만 굽고, `SkinJobs`에서는 world 행렬만 계산해 `CutDebugView`/`ProceduralMeshRenderer::Draw`의 `world` 인자로 넘긴다(지금도 법선 이동 행렬을 이 인자로 넘긴다).

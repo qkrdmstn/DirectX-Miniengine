@@ -182,7 +182,8 @@ namespace MeshCutting
             }
 
             // 표면 위치는 메시가 갱신했다. 여기서는 디버그 경계 튜브만 갱신한다.
-            if (!job.poseValid || !job.haveConfirmed || piecesChanged)
+            // 스태틱 조각은 정점이 바뀌지 않으므로 튜브를 다시 굽지 않는다 (확정 때 구운 것을 pieceWorld로 그린다).
+            if (!job.poseValid || !job.haveConfirmed || piecesChanged || job.key.kind == CutJobKind::StaticMesh)
                 continue;
             const float tubeRadius = targetRadius * 0.008f;
             const auto refreshTubes = [&](const MeshGeometry& piece, ProceduralMesh& mesh)
@@ -310,8 +311,12 @@ namespace MeshCutting
             // 조각은 원래 자리에서 출발해 평면 법선 방향으로만 벌어진다 (positive는 +n, negative는 -n: 절단면에서 멀어지는 쪽).
             const DirectX::XMFLOAT3& n = job.confirmedNormal;
             const Vector3 shift = Vector3(n.x, n.y, n.z) * (radius * kSeparationRatio);
-            const Matrix4 positiveWorld(AffineTransform::MakeTranslation(shift));
-            const Matrix4 negativeWorld(AffineTransform::MakeTranslation(-shift));
+            // 스태틱 조각은 절단 순간 world에 고정된 정점에 pieceWorld(지금 × inverse(절단 순간))를 곱한다. 스켈레탈은 항등.
+            // 벌림은 절단 순간 world에서 먼저 적용하므로 메시가 움직여도 절단면 법선을 따라간다.
+            const Matrix4 pieceWorld = job.key.kind == CutJobKind::StaticMesh
+                ? Matrix4(DirectX::XMLoadFloat4x4(&job.pieceWorld)) : Matrix4(kIdentity);
+            const Matrix4 positiveWorld = pieceWorld * Matrix4(AffineTransform::MakeTranslation(shift));
+            const Matrix4 negativeWorld = pieceWorld * Matrix4(AffineTransform::MakeTranslation(-shift));
             drawSurface(*meshes.positive, positiveWorld, pieceOptions, color);
             drawSurface(*meshes.negative, negativeWorld, pieceOptions, color);
             if (m_RenderMode == RenderMode::Debug)
