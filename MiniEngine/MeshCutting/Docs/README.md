@@ -9,6 +9,7 @@
 | --- | --- | --- | --- |
 | `NDC25Reference.md` | NDC25 근거와 프로젝트 대응 | 8절은 통합 구현 `cb1c12a` 기준 | 설계·구현 판단 전 |
 | `UnrealAlignmentDesign.md` | Unreal 정렬 로드맵의 이력 | U-1~U-5b 코드 구현. 분리는 디버그 방식이며 물리는 미구현 | 과거 설계 배경 확인 |
+| `UnrealSourceComparison.md` | 언리얼 소스(Slice, ProceduralMesh, BreakConstraint, FMeshPlaneCut)와의 비교, 맞춘 cap 정책 | 진행 중 (커밋 전) | 절단·cap·관절 분리를 언리얼과 맞출 때 |
 | `CodeMap.md` | 현재 실행·데이터 흐름과 파일별 역할 | ProceduralMesh 통합·CPU·Debug/Release 빌드 검증 완료 (`cb1c12a`) | 코드를 처음 열 때 |
 
 ## 진행·예정 설계

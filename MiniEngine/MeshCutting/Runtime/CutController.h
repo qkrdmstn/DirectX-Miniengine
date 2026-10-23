@@ -72,7 +72,7 @@ namespace MeshCutting
         CutTargetId RegisterInstance(ModelInstance& instance, std::wstring name);
         void UnregisterInstance(CutTargetId id);
 
-        void ToggleEditPlane();     // T: 첫 대상의 bounds 중심에 평면을 놓는다 (처음 한 번)
+        void ToggleEditPlane();     // T: 평면을 켜면 첫 대상의 bounds 중심에 놓는다
         void SetGizmoTool(GizmoTool tool) { m_Plane.SetGizmoTool(tool); }
         bool UpdateGizmo(const GizmoView& view, const GizmoInput& input);   // 드래그로 평면이 바뀌면 true
         void CancelGizmo() { m_Plane.CancelGizmo(); }
@@ -83,7 +83,7 @@ namespace MeshCutting
         void Update();
 
         const CutPlane& GetPlane() const { return m_Plane; }
-        bool PlaneEditing() const { return m_PlaneEditing; }
+        bool PlaneEditing() const { return m_PlaneValid; }
         bool PlaneValid() const { return m_PlaneValid; }
         float GetModelRadius() const { return m_ModelRadius; }      // 평면 조작과 디버그 tube 크기의 기준
 
@@ -98,17 +98,18 @@ namespace MeshCutting
         bool GetJointColors(CutTargetId target, uint32_t palette, std::vector<DirectX::XMFLOAT4>& colors) const;
 
     private:
-        void ReloadPalettes(CutTarget& target);
+        void InitializeTargetModelData(CutTarget& target);
+        void UpdateTarget(CutTarget& target);
+        void InitCutStaticMesh(CutTarget& target);
         void BuildSource(CutTarget& target, size_t slot);
         void RefreshPick(CutTarget& target, size_t slot, bool planeChanged);
-        void BuildStaticCache(const CutTarget& target, CutStaticMesh& mesh);
+        void UpdateStaticMeshCache(const CutTarget& target, CutStaticMesh& mesh);
         void PickStaticMeshes(CutTarget& target, bool planeChanged, std::vector<CutJobKey>& current, std::map<CutJobKey, uint32_t>& triangles);
         void RemoveJobsOf(CutTargetId id);
         void SetOriginalVisible(const CutJob& job, bool visible);
         void UpdateSkinMask(CutTarget& target);
         void UpdateBrokenJoints(CutTarget& target);
         void SetBreakOf(CutJob& job);
-        void UpdateTargets();
         void UpdateCandidates();
         void ApplyDiff(const CutJobDiff& diff, const std::map<CutJobKey, uint32_t>& triangles);
         void ExtractJob(CutJob& job, ProceduralMesh& mesh);
@@ -122,7 +123,6 @@ namespace MeshCutting
         void PlacePlane(const ModelInstance& instance);
 
         CutPlane m_Plane;
-        bool m_PlaneEditing = false;
         bool m_PlaneValid = false;
         bool m_CutRequested = false;
         float m_ModelRadius = 0.0f;

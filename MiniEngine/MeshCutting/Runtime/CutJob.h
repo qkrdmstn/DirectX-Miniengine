@@ -148,7 +148,6 @@ namespace MeshCutting
         DirectX::XMFLOAT4 bounds = { 0.0f, 0.0f, 0.0f, 0.0f };     // 로컬 바운딩 구 (x, y, z, 반지름)
         std::vector<DirectX::XMFLOAT3> positions;       // 로컬 위치 (CopyProceduralMeshFromStaticMesh의 정점)
         std::vector<uint32_t> indices;                  // 삼각형 3개씩
-        bool attempted = false;                         // 캐시를 만들어 보았는가
         DirectX::XMFLOAT4X4 world;                      // 마지막으로 교차를 찾은 world 행렬
         bool havePicked = false;
         uint32_t crossed = 0;                           // 마지막 교차 삼각형 수
@@ -164,9 +163,10 @@ namespace MeshCutting
         std::wstring name;
         std::vector<uint32_t> palettes;             // numJoints > 0인 스킨 팔레트 전부
         std::vector<SkeletonPose> skeletons;        // palettes와 같은 순서, 이번 프레임 자세
-        std::vector<CutTargetSource> sources;       // palettes와 같은 순서
+        std::vector<CutTargetSource> sources;       // palettes와 같은 순서, 원본 데이터 캐시
         std::vector<std::vector<SegmentHit>> segmentHits;       // palettes와 같은 순서, 평면이 지나는 뼈 선분 (표시용)
-        std::vector<CutStaticMesh> staticMeshes;    // 스킨 없는 메시 전부
+        std::vector<CutStaticMesh> staticMeshes;    // 절단 정보를 포함한 Static Mesh
+        bool staticMeshesInitialized = false;       // 정적 메시 목록과 로컬 캐시를 한 번 생성했는가 (빈 목록 포함)
         std::set<uint32_t> maskedMeshes;            // 버텍스 컬러 마스크를 덮어쓴 스킨 메시 번호 (U-4b)
         std::set<uint32_t> brokenNodes;             // BreakConstraint로 끊어 둔 노드 번호 (U-5a)
         std::wstring error;                         // 마지막 자세 읽기 오류

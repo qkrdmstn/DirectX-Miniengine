@@ -605,6 +605,50 @@ static void TestOpenSheetIsOpenLoop()
     CHECK_STATUS(SliceGeometry(tri, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::OpenLoop, result.detail);
 }
 
+static uint32_t CountCapFaces(const MeshGeometry& piece);
+static SliceOptions CapOptions();
+
+// Unreal 방식: 원본의 구멍(OpenSurface)에서 끝나는 사슬은 실패가 아니라 cap 없는 열린 사슬이다.
+// 그 에지는 OpenSurface가 되어, 같은 조각을 다시 잘라도 OpenLoop가 나지 않는다.
+static void TestOpenSurfaceChainHasNoCap()
+{
+    std::vector<XMFLOAT3> p;
+    for (int y = 0; y <= 3; ++y)
+        for (int x = 0; x <= 3; ++x)
+            p.push_back({ float(x), float(y), 0.0f });
+    std::vector<Tri> t;
+    for (int y = 0; y < 3; ++y)
+        for (int x = 0; x < 3; ++x)
+        {
+            const uint32_t a = uint32_t(y * 4 + x);
+            t.push_back({ a, a + 1, a + 5 });
+            t.push_back({ a, a + 5, a + 4 });
+        }
+    MeshGeometry grid = MakePiece(p, t);
+    TagOpenEdges(grid, MeshEdgeTag::OpenSurface);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(grid, MakePlane(1.5f, 0, 0, 1, 0, 0), 1, SliceOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.empty());
+    CHECK(result.uncapped.size() == 1);
+    CHECK(!result.uncapped.empty() && result.uncapped[0].size() >= 2);
+    for (const MeshGeometry* piece : { &result.positive, &result.negative })
+    {
+        CHECK(CountCapFaces(*piece) == 0);
+        CHECK(CountKind(*piece, MeshEdgeTag::Cut) == 0);       // 열린 사슬 에지도 구멍(OpenSurface)으로 바뀐다
+        CheckPieceValid(*piece, "open surface piece");
+    }
+
+    // 잘린 조각을 다시 잘라도 이전 사슬이 구멍으로 다뤄진다
+    GeometrySliceResult again;
+    const MeshGeometry left = result.negative;
+    CHECK_STATUS(SliceGeometry(left, MakePlane(0, 1.5f, 0, 0, 1, 0), 2, SliceOptions(), again), SliceStatus::Ok, again.detail);
+    CHECK(again.uncapped.size() == 1 && again.loops.empty());
+
+    // NoCap은 기존 규칙대로 Cut 경계를 남긴다
+    CHECK_STATUS(SliceGeometry(grid, MakePlane(1.5f, 0, 0, 1, 0, 0), 1, NoCapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(CountKind(result.positive, MeshEdgeTag::Cut) > 0);
+}
+
 // Case 3: an edge lies on the plane and both faces around it are on the same side (touching).
 static void TestTouchingIsNoCut()
 {
@@ -931,7 +975,7 @@ static void TestThickTubeHoleLoops()
 }
 
 // Two solids that touch at one vertex: that vertex has two outgoing and two incoming cut edges.
-static void TestSharedNodeIsNonManifoldLoop()
+static void TestSharedNodeHasNoCap()
 {
     std::vector<XMFLOAT3> p = { { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 }, { 0, -1, 0 } };
     std::vector<Tri> t;
@@ -953,30 +997,41 @@ static void TestSharedNodeIsNonManifoldLoop()
     std::string detail;
     CHECK_STATUS(ValidateMeshGeometry(pair, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
     GeometrySliceResult result;
-    CHECK_STATUS(SliceGeometry(pair, MakePlane(0, 0, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::NonManifoldLoop, result.detail);
+    // Unreal 방식: 루프를 만들 수 없어도 절단은 되고, 모든 절단 에지가 cap 없는 경계(두 정점씩)로 남는다
+    CHECK_STATUS(SliceGeometry(pair, MakePlane(0, 0, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.empty() && !result.uncapped.empty());
+    for (const std::vector<uint32_t>& edge : result.uncapped)
+        CHECK(edge.size() == 2);
+    CHECK(CountCapFaces(result.positive) == 0 && CountKind(result.positive, MeshEdgeTag::Cut) == 0);
+    CheckPieceValid(result.positive, "shared node +");
+    CheckPieceValid(result.negative, "shared node -");
 }
 
-// Loops that cross, nest with the wrong winding, or nest too deep are InvalidLoop.
-static void TestInvalidLoops()
+// Unreal 방식: 겹치거나, 방향이 틀리거나, 너무 깊이 중첩된 루프는 절단을 막지 않고 그 루프의 cap만 빠진다.
+static void TestInvalidLoopsHaveNoCap()
 {
     GeometrySliceResult result;
 
     MeshGeometry crossing = MakeBoxAt(0, 0, 1, 2);
     AppendPiece(crossing, MakeBoxAt(1, 1, 1, 2));
-    CHECK_STATUS(SliceGeometry(crossing, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
-    CHECK(result.detail.find("cross") != std::string::npos);
+    CHECK_STATUS(SliceGeometry(crossing, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.empty() && result.uncapped.size() == 2);
+    CHECK(CountCapFaces(result.positive) == 0);
 
-    // A box inside a box with the same orientation: the inner loop is not a hole.
+    // A box inside a box with the same orientation: the inner loop is not a hole, so only the outer loop is capped.
     MeshGeometry nested = MakeBoxAt(0, 0, 3, 2);
     AppendPiece(nested, MakeBoxAt(0, 0, 1, 2));
-    CHECK_STATUS(SliceGeometry(nested, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
-    CHECK(result.detail.find("wrong way") != std::string::npos);
+    CHECK_STATUS(SliceGeometry(nested, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.size() == 1 && result.uncapped.size() == 1);
+    CHECK(CountCapFaces(result.positive) > 0);
+    CheckPieceValid(result.positive, "nested +");
 
-    // An island inside the hole of a thick tube is nested two deep.
+    // An island inside the hole of a thick tube is nested two deep: the tube is capped with its hole, the island is not.
     MeshGeometry island = MakeThickTube(8, 3.0f, 2.0f);
     AppendPiece(island, MakeBoxAt(0, 0, 0.5f, 2));
-    CHECK_STATUS(SliceGeometry(island, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
-    CHECK(result.detail.find("nested") != std::string::npos);
+    CHECK_STATUS(SliceGeometry(island, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.size() == 2 && result.uncapped.size() == 1);
+    CheckPieceValid(result.negative, "island -");
 
     // A prism with a bow-tie cross section: the cut loop touches itself in the middle.
     std::vector<XMFLOAT3> p = { { -1, 0, -1 }, { 1, 0, 1 }, { 1, 0, -1 }, { -1, 0, 1 },
@@ -993,8 +1048,18 @@ static void TestInvalidLoops()
     const MeshGeometry bowtie = MakePiece(p, t);
     std::string detail;
     CHECK_STATUS(ValidateMeshGeometry(bowtie, kDefaultEpsilonScale, &detail), SliceStatus::Ok, detail);
-    CHECK_STATUS(SliceGeometry(bowtie, MakePlane(0, 1, 0, 0, 1, 0), 1, NoCapOptions(), result), SliceStatus::InvalidLoop, result.detail);
-    CHECK(result.detail.find("itself") != std::string::npos);
+    CHECK_STATUS(SliceGeometry(bowtie, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(result.loops.empty() && result.uncapped.size() == 1);
+    CHECK(!result.uncapped.empty() && result.uncapped[0].front() == result.uncapped[0].back());     // 닫힌 루프 표기
+
+    // 근접 허용오차는 조각 크기에 비례한다: 0.0001 간격의 긴 두 상자를 아래쪽 끝 근처에서 자르면 큰 조각은 두 루프를 "닿음"으로
+    // 빼고 작은 조각은 남긴다. 두 조각의 판정이 달라도 절단은 성공하고, 작은 조각에만 cap이 생긴다.
+    MeshGeometry slender = MakeBoxAt(-1.00005f, 0, 1, 100);
+    AppendPiece(slender, MakeBoxAt(1.00005f, 0, 1, 100));
+    CHECK_STATUS(SliceGeometry(slender, MakePlane(0, 1, 0, 0, 1, 0), 1, CapOptions(), result), SliceStatus::Ok, result.detail);
+    CHECK(CountCapFaces(result.positive) == 0 && CountCapFaces(result.negative) > 0);
+    CheckPieceValid(result.positive, "slender +");
+    CheckPieceValid(result.negative, "slender -");
 }
 
 // ---------------------------------------------------------------- 2-4 tests
@@ -2662,6 +2727,46 @@ static void TestRigidSlice()
     }
 }
 
+// 윗면이 없는 강체 상자(버니 바닥 구멍과 같은 상황): 열린 경계는 OpenSurface이고, 구멍을 지나는 세로 절단은
+// cap 없이 성공하며(Unreal 방식), 구멍을 지나지 않는 가로 절단은 지금처럼 cap을 만든다.
+static void TestRigidOpenBoxSlice()
+{
+    ProceduralMeshData data = MakeRigidBoxMeshData(ToFloat4x4(DirectX::XMMatrixIdentity()));
+    data.indices.erase(data.indices.begin() + 6, data.indices.begin() + 12);       // 면 2, 3 = 윗면 (y = 2)
+    MeshGeometry box;
+    WeldStats stats;
+    std::string detail;
+    CHECK_STATUS(BuildMeshGeometry(data, kDefaultEpsilonScale, box, stats, &detail), SliceStatus::Ok, detail);
+    CHECK(stats.openSurfaceEdges == 4 && stats.replacementEdges == 0);
+    CHECK(CountKind(box, MeshEdgeTag::OpenSurface) == 4);
+
+    MeshGeometry piece = box, other;
+    SliceStatus status = SliceStatus::InvalidInput;
+    std::vector<std::vector<uint32_t>> loops;
+    CHECK(SliceTestGeometry(piece, { 0.3f, 0, 0 }, { 1, 0, 0.2f }, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
+        &status, &detail, &loops));
+    CHECK(status == SliceStatus::Ok);
+    CHECK(loops.size() == 1);       // 열린 사슬 하나 (유한 평면 검사용으로 outLoops에 붙는다)
+    CHECK(CountCapFaces(piece) == 0 && CountCapFaces(other) == 0);
+    CheckPieceValid(piece, "open box +");
+    CheckPieceValid(other, "open box -");
+
+    piece = box;
+    CHECK(SliceTestGeometry(piece, { 0, 1, 0 }, { 0, 1, 0 }, true, &other, SliceCapOption::CreateNewSectionForCap, 1,
+        &status, &detail, &loops));
+    CHECK(status == SliceStatus::Ok && loops.size() == 1);
+    CHECK(CountCapFaces(piece) > 0 && CountCapFaces(other) > 0);
+
+    // 스킨 입력의 열린 경계는 여전히 Replacement이고, 거기에 닿는 절단은 OpenLoop다
+    ProceduralMeshData skinned = MakeBoxMeshData();
+    skinned.indices.erase(skinned.indices.begin() + 6, skinned.indices.begin() + 12);
+    MeshGeometry patch;
+    CHECK_STATUS(BuildMeshGeometry(skinned, kDefaultEpsilonScale, patch, stats, &detail), SliceStatus::Ok, detail);
+    CHECK(stats.replacementEdges == 4 && stats.openSurfaceEdges == 0);
+    GeometrySliceResult result;
+    CHECK_STATUS(SliceGeometry(patch, MakePlane(0.3f, 0, 0, 1, 0, 0.2f), 1, SliceOptions(), result), SliceStatus::OpenLoop, result.detail);
+}
+
 // ---------------------------------------------------------------- main
 
 // ---------------------------------------------------------------- cut job tests (Runtime/CutJob.h)
@@ -3372,6 +3477,7 @@ int main()
     TestPlaneThroughNodes();
     TestOneNodeOnPlane();
     TestOpenSheetIsOpenLoop();
+    TestOpenSurfaceChainHasNoCap();
     TestTouchingIsNoCut();
     TestCoplanarFace();
     TestMissIsNoCut();
@@ -3386,8 +3492,8 @@ int main()
     TestUvSeamTubeCut();
     TestSkinSplitSeamIsOpenLoop();
     TestThickTubeHoleLoops();
-    TestSharedNodeIsNonManifoldLoop();
-    TestInvalidLoops();
+    TestSharedNodeHasNoCap();
+    TestInvalidLoopsHaveNoCap();
 
     TestCapIsWatertight();
     TestCapWithHole();
@@ -3430,6 +3536,7 @@ int main()
     TestSkinRefusesBadInput();
     TestRigidWeldAndSkin();
     TestRigidSlice();
+    TestRigidOpenBoxSlice();
     TestProceduralMeshOwnsGeometry();
     TestPublicProceduralMeshPipeline();
 

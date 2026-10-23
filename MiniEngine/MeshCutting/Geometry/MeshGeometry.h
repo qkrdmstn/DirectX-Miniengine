@@ -83,6 +83,7 @@ namespace MeshCutting
     // Replacement, or UnweldedSeam when another boundary edge covers the same bind positions
     // (same slot) or the same posed positions (different slots).
     // 모든 정점의 가중치가 0이면 강체 입력(스킨 없는 메시)으로 받는다. 일부만 0이면 InvalidInput이다.
+    // 강체 입력은 메시 전체의 복사라서 열린 경계를 Replacement 대신 OpenSurface(원본의 구멍)로 표시한다.
     //
     // stats is filled as far as the build got, even on failure. On failure out is empty.
     // in.bindings는 in.vertices와 같은 크기여야 한다. 원본 복사의 출력물을 재포장하지 않고 읽는다.

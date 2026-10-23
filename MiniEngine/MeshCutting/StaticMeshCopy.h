@@ -21,8 +21,8 @@ namespace MeshCutting
         DirectX::XMFLOAT4 bounds = { 0.0f, 0.0f, 0.0f, 0.0f };  // 로컬 바운딩 구 (x, y, z, 반지름)
     };
 
-    // 모델의 스킨 없는 메시를 메시 번호 순서로 모은다.
-    void ListStaticMeshes(const Model& model, std::vector<StaticMeshInfo>& out);
+    // 모델의 스킨 없는 메시(StaticMesh)를 메시 번호 순서로 모은다.
+    void GetModelStaticMeshes(const Model& model, std::vector<StaticMeshInfo>& out);
 
     // 스킨 없는(kHasSkin 없음) 메시 meshIndex의 모든 draw, 모든 삼각형을 복사한다.
     // outMesh는 현재 world 위치·법선, outSource는 로컬 위치·법선과 빈 스킨(joints, weights 0)을 담는다. 실패하면 출력을 바꾸지 않는다.

@@ -133,22 +133,40 @@ void ModelInstance::BreakConstraint(const Vector3& offset, uint32_t nodeIndex)
 {
     if (m_Model == nullptr || m_NodeWorld == nullptr || nodeIndex >= m_Model->m_NumNodes || IsConstraintBroken(nodeIndex))
         return;
-    Matrix4 world = m_NodeWorld[nodeIndex];
-    world.SetW(world.GetW() + Vector4(offset, 0.0f));
-    m_BrokenConstraints.push_back({ nodeIndex, world });
+    const uint32_t numNodes = m_Model->m_NumNodes;
+    if (m_DetachedNodes.size() != numNodes)
+    {
+        m_DetachedNodes.assign(numNodes, 0);
+        m_DetachedWorld.assign(numNodes, Matrix4(kIdentity));
+    }
+    const std::vector<uint32_t>& parents = m_Model->m_NodeParents;
+    // Like Unreal UpdateMeshForBrokenConstraints, the broken bone and all of its descendants are released together
+    for (uint32_t node = 0; node < numNodes; ++node)
+    {
+        uint32_t walk = node;
+        while (walk != nodeIndex && walk < parents.size() && parents[walk] < numNodes)
+            walk = parents[walk];
+        if (walk != nodeIndex)
+            continue;
+        // Start from the fixed world if the node is already detached, otherwise from the last Update
+        Matrix4 world = m_DetachedNodes[node] ? m_DetachedWorld[node] : m_NodeWorld[node];
+        world.SetW(world.GetW() + Vector4(offset, 0.0f));
+        m_DetachedWorld[node] = world;
+        m_DetachedNodes[node] = 1;
+    }
+    m_BrokenNodes.push_back(nodeIndex);
 }
 
 void ModelInstance::ResetBrokenConstraints()
 {
-    m_BrokenConstraints.clear();
+    m_BrokenNodes.clear();
+    m_DetachedNodes.clear();
+    m_DetachedWorld.clear();
 }
 
 bool ModelInstance::IsConstraintBroken(uint32_t nodeIndex) const
 {
-    for (const BrokenConstraint& broken : m_BrokenConstraints)
-        if (broken.node == nodeIndex)
-            return true;
-    return false;
+    return std::find(m_BrokenNodes.begin(), m_BrokenNodes.end(), nodeIndex) != m_BrokenNodes.end();
 }
 
 ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
@@ -197,7 +215,7 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
 {
     m_Model = sourceModel;
     m_MeshHidden.clear();
-    m_BrokenConstraints.clear();
+    ResetBrokenConstraints();
     if (!m_VertexColors.empty())
     {
         g_CommandManager.GetGraphicsQueue().WaitForIdle();
@@ -278,10 +296,9 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
         if (!Node->skeletonRoot)
             xform = ParentMatrix * xform;
 
-        // A broken node ignores its parent and animation; its descendants use this world as their parent
-        for (const BrokenConstraint& broken : m_BrokenConstraints)
-            if (broken.node == Node->matrixIdx)
-                xform = broken.world;
+        // A detached node (broken or below a broken one) ignores its parent and animation (Unreal: the physics body drives the bone)
+        if (Node->matrixIdx < m_DetachedNodes.size() && m_DetachedNodes[Node->matrixIdx])
+            xform = m_DetachedWorld[Node->matrixIdx];
 
         // Concatenate the transform with the parent's matrix and update the matrix list
         {

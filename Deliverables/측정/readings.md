@@ -32,3 +32,13 @@
 - 기존 빌드 B(CPU 약 5 ms, GPU 약 6.6 ms, jobSkin 8~10 ms)와 비교해 확정 후에도 CPU 약 0.8~1.2 ms, GPU 약 5.0 ms로 절단 전 수준이다.
 - 조각 위치: 확정 직후와 D 상태의 전체 화면 캡처에서 두 조각이 원본 자리에서 평면 법선 방향으로 벌어진 정상 모습으로 보였다(기존 빌드와 같은 배치, 어긋남 없음).
 - 참고: 상단 extract/cut 값은 확정 횟수에 따라 누적되어 D에서 extract 244.1 ms (2 extractions), cut 267.0 ms로 표시된다.
+
+## 해결안 1·2 빌드 (16:18 빌드) — 측정 무효, 재측정 필요
+
+파일 `fix_A_1~3`, `fix_B_1~3`, `fix_C_1~3`, `fix_D_1~3`은 저장했지만 아래 이유로 상태별 수치로 쓸 수 없다.
+
+- 장면이 이전과 다르다: Xbot이 로드되지 않았다(`targets 2 pal 0`, cube·bunny만). 처음 평면도 cube 쪽에 생겼다.
+- 입력 없이 상태가 바뀌었다: 이쪽에서 입력을 보내지 않은 8초 동안 extractions가 6→7로 늘었다. 촬영 중에는 7→16까지 늘었고, B~D 사이에 카메라와 평면이 저절로 움직였다. 결과도 `cut OpenLoop`(Replacement 경계)로 바뀌었다.
+- 맨 위 "CPU 1.725 ms, GPU 3.205 ms, 60 Hz" 줄이 12장 모두 같은 값으로 고정되어 프레임 시간을 읽을 수 없다.
+- 판독 가능한 값: fix_B_1(확정 1개)에서 `pieces skipped 2`, jobSkin 0.00/0.00, follow 0.000 ms, job verts 0. A·C에서는 `pieces skipped 0`, jobSkin 0.00.
+- 조각 위치·Debug 튜브 확인: 확정 상태가 유지되지 않아 확인하지 못했다(fix_D 시점에는 OpenLoop로 조각 없음).

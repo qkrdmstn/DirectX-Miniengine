@@ -171,8 +171,10 @@ public:
     bool SetVertexColorOverride(uint32_t meshIndex, const std::vector<uint32_t>& colors);
     void ClearVertexColorOverride(uint32_t meshIndex);
 
-    // Debug stand-in for Unreal BreakConstraint: pins the node at its world matrix from the last Update and moves it by offset
-    // (an immediate shift in node-matrix (m_NodeWorld) space instead of Unreal's Impulse). Descendants still animate on top of it. Does nothing if the node is already broken.
+    // Stand-in for Unreal BreakConstraint: the node and all of its descendants stop animating (Unreal hands those bodies to the
+    // physics simulation) and stay at their world matrices from the last Update, moved by offset (an immediate shift in node-matrix
+    // (m_NodeWorld) space instead of Unreal's Impulse; there is no physics engine). Every other node keeps animating.
+    // Does nothing if the node is already broken. Breaking a node that is already detached moves only its own subtree further.
     void BreakConstraint(const Math::Vector3& offset, uint32_t nodeIndex);
     void ResetBrokenConstraints();
     bool IsConstraintBroken(uint32_t nodeIndex) const;
@@ -212,7 +214,9 @@ private:
     std::vector<AnimationState> m_AnimState;    // Per-animation (not per-curve)
     std::unique_ptr<Joint[]> m_Skeleton;
     std::vector<uint8_t> m_MeshHidden;          // Hidden flag per mesh index (reset to all visible when the model changes)
-    struct BrokenConstraint { uint32_t node; Math::Matrix4 world; };
-    std::vector<BrokenConstraint> m_BrokenConstraints;      // Pinned node worlds used by Update instead of parent * local (reset when the model changes)
+    // BreakConstraint state (cleared when the model changes)
+    std::vector<uint32_t> m_BrokenNodes;                    // Nodes passed to BreakConstraint
+    std::vector<uint8_t> m_DetachedNodes;                   // Per node: 1 if it is a broken node or one of its descendants (Unreal: simulated body)
+    std::vector<Math::Matrix4> m_DetachedWorld;             // Fixed world that Update uses for those nodes instead of parent * local
     std::vector<std::unique_ptr<ByteAddressBuffer>> m_VertexColors;     // Vertex color override per mesh index (null = none; reset when the model changes)
 };

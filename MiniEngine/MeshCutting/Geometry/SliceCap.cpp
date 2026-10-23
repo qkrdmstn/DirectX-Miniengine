@@ -56,9 +56,11 @@ namespace MeshCutting
 
     SliceStatus ExtractCutLoops(const MeshGeometry& piece, const std::vector<uint8_t>& onPlane,
         const SlicePlane& plane, bool positiveSide, float epsilonScale,
-        std::vector<SliceLoop>& loops, std::string* detail)
+        std::vector<SliceLoop>& loops, std::string* detail, std::vector<std::vector<uint32_t>>* uncapped)
     {
         loops.clear();
+        if (uncapped)
+            uncapped->clear();
         if (detail)
             detail->clear();
         SlicePlaneBasis basis;
@@ -71,6 +73,7 @@ namespace MeshCutting
         // Directed cut edges from the faces: each boundary edge belongs to exactly one face.
         const size_t nodeCount = piece.vertices.size();
         std::vector<uint32_t> outCount(nodeCount, 0), inCount(nodeCount, 0), next(nodeCount, kInvalidIndex);
+        std::vector<std::vector<uint32_t>> cutEdges;      // (from, to): 루프를 만들 수 없을 때 cap 없는 경계로 그대로 넘긴다
         for (const MeshFace& face : piece.faces)
         {
             for (int k = 0; k < 3; ++k)
@@ -83,11 +86,13 @@ namespace MeshCutting
                 ++outCount[from];
                 ++inCount[to];
                 next[from] = to;
+                cutEdges.push_back({ from, to });
             }
         }
 
         // What else the boundary touches at a vertex, in key order so the message is stable.
         std::vector<int> blocker(nodeCount, -1);
+        std::vector<uint8_t> onHole(nodeCount, 0);      // OpenSurface 에지(원본의 구멍)에 닿은 정점
         std::vector<uint64_t> keys;
         keys.reserve(piece.edgeTags.size());
         for (const auto& entry : piece.edgeTags)
@@ -103,6 +108,8 @@ namespace MeshCutting
                 continue;
             if (kind == MeshEdgeTag::Cut && onPlane[a] && onPlane[b])
                 continue;       // a cut edge of this plane, not a blocker
+            if (kind == MeshEdgeTag::OpenSurface)
+                onHole[a] = onHole[b] = 1;
             if (blocker[a] < 0)
                 blocker[a] = int(kind);
             if (blocker[b] < 0)
@@ -118,6 +125,8 @@ namespace MeshCutting
                 continue;
             if (out == 1 && in == 1)
                 continue;
+            if (out + in == 1 && onHole[n] && uncapped)
+                continue;       // 원본의 구멍에서 끝나는 열린 사슬의 끝 (아래에서 사슬로 뽑는다)
             if (out + in == 1 && blocker[n] >= 0)
             {
                 if (openNode == kInvalidIndex)
@@ -126,15 +135,50 @@ namespace MeshCutting
             else if (badNode == kInvalidIndex)
                 badNode = n;
         }
-        if (badNode != kInvalidIndex)
-            return Fail(detail, SliceStatus::NonManifoldLoop, "cut vertex " + Num(badNode) + " has " + Num(outCount[badNode])
-                + " outgoing and " + Num(inCount[badNode]) + " incoming cut edges");
-        if (openNode != kInvalidIndex)
+        // 스켈레탈 패치 경계(Replacement/UnweldedSeam)에서 끝나는 절단은 패치를 잘못 잡았다는 뜻이라 어느 모드든 거절한다
+        if (openNode != kInvalidIndex && (uncapped || badNode == kInvalidIndex))
             return Fail(detail, SliceStatus::OpenLoop, "cut loop ends at vertex " + Num(openNode) + " on a "
                 + EdgeTagName(MeshEdgeTag(blocker[openNode])) + " boundary");
+        if (badNode != kInvalidIndex)
+        {
+            if (!uncapped)
+                return Fail(detail, SliceStatus::NonManifoldLoop, "cut vertex " + Num(badNode) + " has " + Num(outCount[badNode])
+                    + " outgoing and " + Num(inCount[badNode]) + " incoming cut edges");
+            // Unreal은 이런 정점도 거리로 이어 붙이고 닫히지 않으면 cap을 버린다. 여기서는 루프를 만들지 않고 모든 절단 에지를 cap 없이 둔다
+            *uncapped = std::move(cutEdges);
+            return SliceStatus::Ok;
+        }
+
+        // Open chains first: each starts at a hole end with no incoming cut edge and follows next until
+        // the other hole end. The degree check above already allowed only hole ends to have degree one.
+        std::vector<uint8_t> visited(nodeCount, 0);
+        for (uint32_t start = 0; uncapped && start < nodeCount; ++start)
+        {
+            if (outCount[start] != 1 || inCount[start] != 0)
+                continue;
+            std::vector<uint32_t> chain;
+            uint32_t vertex = start;
+            while (vertex != kInvalidIndex && !visited[vertex])
+            {
+                visited[vertex] = 1;
+                chain.push_back(vertex);
+                vertex = outCount[vertex] == 1 ? next[vertex] : kInvalidIndex;
+            }
+            if (vertex != kInvalidIndex)
+                return Fail(detail, SliceStatus::NonManifoldLoop, "open cut chain from vertex " + Num(start) + " runs into itself");
+            uncapped->push_back(std::move(chain));
+        }
+
+        // Unreal처럼 채울 수 없는 루프는 절단을 막지 않고 cap만 뺀다 (uncapped가 있을 때). 닫힌 루프는 첫 정점을 끝에 한 번 더 넣어
+        // 닫는 에지까지 연속한 쌍으로 표현한다. uncapped가 없으면 예전처럼 실패를 돌려준다.
+        const auto setAside = [&](std::vector<uint32_t> vertices)
+        {
+            if (!vertices.empty())
+                vertices.push_back(vertices.front());
+            uncapped->push_back(std::move(vertices));
+        };
 
         // Every remaining cut vertex has one way in and one way out, so the cut edges are cycles.
-        std::vector<uint8_t> visited(nodeCount, 0);
         for (uint32_t start = 0; start < nodeCount; ++start)
         {
             if (outCount[start] != 1 || visited[start])
@@ -148,8 +192,13 @@ namespace MeshCutting
                 vertex = next[vertex];
             } while (vertex != start);
             if (loop.vertices.size() < 3)
-                return Fail(detail, SliceStatus::InvalidLoop, "loop through vertex " + Num(start) + " has only "
-                    + Num(loop.vertices.size()) + " vertices");
+            {
+                if (!uncapped)
+                    return Fail(detail, SliceStatus::InvalidLoop, "loop through vertex " + Num(start) + " has only "
+                        + Num(loop.vertices.size()) + " vertices");
+                setAside(std::move(loop.vertices));
+                continue;
+            }
             loops.push_back(std::move(loop));
         }
         if (loops.empty())
@@ -168,8 +217,18 @@ namespace MeshCutting
             }
         }
 
+        // 검사에 걸린 루프는 엄격 모드(uncapped 없음)면 실패, 아니면 keep을 끈다 (cap 없이 남는다).
+        std::vector<uint8_t> keep(loops.size(), 1);
+        SliceStatus strictStatus = SliceStatus::Ok;
+        const auto reject = [&](size_t l, const std::string& why)
+        {
+            if (!uncapped && strictStatus == SliceStatus::Ok)
+                strictStatus = Fail(detail, SliceStatus::InvalidLoop, why);
+            keep[l] = 0;
+        };
+
         // Segments of one loop may only meet at their shared vertex; loops may not meet at all.
-        for (size_t a = 0; a < loops.size(); ++a)
+        for (size_t a = 0; a < loops.size() && strictStatus == SliceStatus::Ok; ++a)
         {
             const size_t na = points[a].size();
             for (size_t i = 0; i < na; ++i)
@@ -180,7 +239,7 @@ namespace MeshCutting
                     if (i == 0 && j == na - 1)
                         continue;       // adjacent through the closing segment
                     if (SegmentDistance(a0, a1, points[a][j], points[a][(j + 1) % na]) <= epsilon)
-                        return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(a) + " crosses or touches itself between vertices "
+                        reject(a, "loop " + Num(a) + " crosses or touches itself between vertices "
                             + Num(loops[a].vertices[i]) + " and " + Num(loops[a].vertices[j]));
                 }
                 for (size_t b = a + 1; b < loops.size(); ++b)
@@ -188,11 +247,16 @@ namespace MeshCutting
                     const size_t nb = points[b].size();
                     for (size_t j = 0; j < nb; ++j)
                         if (SegmentDistance(a0, a1, points[b][j], points[b][(j + 1) % nb]) <= epsilon)
-                            return Fail(detail, SliceStatus::InvalidLoop, "loops " + Num(a) + " and " + Num(b) + " cross or touch near vertices "
+                        {
+                            reject(a, "loops " + Num(a) + " and " + Num(b) + " cross or touch near vertices "
                                 + Num(loops[a].vertices[i]) + " and " + Num(loops[b].vertices[j]));
+                            keep[b] = 0;
+                        }
                 }
             }
         }
+        if (strictStatus != SliceStatus::Ok)
+            return strictStatus;
 
         // Signed areas, containment and winding.
         for (size_t l = 0; l < loops.size(); ++l)
@@ -206,15 +270,21 @@ namespace MeshCutting
             }
             loops[l].signedArea = 0.5 * area;
             if (std::fabs(loops[l].signedArea) <= epsilon * epsilon)
-                return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(l) + " has no area");
+                reject(l, "loop " + Num(l) + " has no area");
         }
+        if (strictStatus != SliceStatus::Ok)
+            return strictStatus;
+
+        // 포함 관계는 남은 루프끼리만 본다.
         for (size_t l = 0; l < loops.size(); ++l)
         {
+            if (!keep[l])
+                continue;
             uint32_t depth = 0;
             uint32_t parent = kInvalidIndex;
             for (size_t m = 0; m < loops.size(); ++m)
             {
-                if (m == l || std::fabs(loops[m].signedArea) <= std::fabs(loops[l].signedArea))
+                if (m == l || !keep[m] || std::fabs(loops[m].signedArea) <= std::fabs(loops[l].signedArea))
                     continue;
                 if (!PointInPolygon(points[l][0], points[m]))
                     continue;
@@ -222,20 +292,50 @@ namespace MeshCutting
                 if (parent == kInvalidIndex || std::fabs(loops[m].signedArea) < std::fabs(loops[parent].signedArea))
                     parent = uint32_t(m);
             }
-            if (depth > 1)
-                return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(l) + " is nested " + Num(depth)
-                    + " deep; islands inside holes are not supported");
             loops[l].depth = depth;
             loops[l].parent = parent;
         }
+        for (size_t l = 0; l < loops.size() && strictStatus == SliceStatus::Ok; ++l)
+            if (keep[l] && loops[l].depth > 1)
+                reject(l, "loop " + Num(l) + " is nested " + Num(loops[l].depth)
+                    + " deep; islands inside holes are not supported");
+        if (strictStatus != SliceStatus::Ok)
+            return strictStatus;
         const double outerSign = positiveSide ? 1.0 : -1.0;
-        for (size_t l = 0; l < loops.size(); ++l)
+        for (size_t l = 0; l < loops.size() && strictStatus == SliceStatus::Ok; ++l)
         {
+            if (!keep[l])
+                continue;
             const double expected = loops[l].depth == 0 ? outerSign : -outerSign;
             if (loops[l].signedArea * expected <= 0.0)
-                return Fail(detail, SliceStatus::InvalidLoop, "loop " + Num(l) + " winds the wrong way for "
+                reject(l, "loop " + Num(l) + " winds the wrong way for "
                     + (loops[l].depth == 0 ? "an outer boundary" : "a hole"));
         }
+        if (strictStatus != SliceStatus::Ok)
+            return strictStatus;
+
+        // 바깥 루프가 빠지면 그 구멍도 뺀다. 구멍만 빠지면 바깥 루프가 구멍 자리까지 채운다 (Unreal과 같은 결과).
+        for (size_t l = 0; l < loops.size(); ++l)
+            if (keep[l] && loops[l].depth == 1 && (loops[l].parent == kInvalidIndex || !keep[loops[l].parent]))
+                keep[l] = 0;
+
+        // 남은 루프를 앞으로 모으고 구멍의 parent를 새 번호로 바꾼다. 뺀 루프는 cap 없는 경계로 넘긴다.
+        std::vector<uint32_t> newIndex(loops.size(), kInvalidIndex);
+        std::vector<SliceLoop> kept;
+        for (size_t l = 0; l < loops.size(); ++l)
+        {
+            if (keep[l])
+            {
+                newIndex[l] = uint32_t(kept.size());
+                kept.push_back(std::move(loops[l]));
+            }
+            else
+                setAside(std::move(loops[l].vertices));
+        }
+        for (SliceLoop& loop : kept)
+            if (loop.depth == 1)
+                loop.parent = newIndex[loop.parent];
+        loops = std::move(kept);
         return SliceStatus::Ok;
     }
 

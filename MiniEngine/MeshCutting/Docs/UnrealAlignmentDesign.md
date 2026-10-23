@@ -86,7 +86,7 @@ Unreal에서 절단은 **맞은 순간 한 번** 일어난다 **[확인: 공개 
 | 컴포넌트 로컬로 옮긴 평면으로 정점 검사 **[추론]** | `CutPick::CountCrossedTriangles`: 평면을 메시 로컬로 옮겨 삼각형 부호를 본다 (정점은 world로 옮기지 않는다) |
 | `CopyProceduralMeshFromStaticMeshComponent` → `SliceProceduralMesh` | Enter: `CopyProceduralMeshFromStaticMesh` → `MakeWeldInput` → `BuildPatchPiece` → `BuildRigidMatrices` + `Skinning::Apply` → `SliceWithPlane` |
 
-- **대상의 메시 목록:** `ReloadPalettes`가 `ListStaticMeshes`로 `kHasSkin` 없는 메시를 `CutTarget::staticMeshes`(`CutStaticMesh`)에 모은다: 메시 번호, `meshCBV`, 로컬 바운딩 구. 로컬 위치·인덱스 캐시는 편집을 처음 시작하는 프레임에 `BuildStaticCache`가 `CopyProceduralMeshFromStaticMesh`로 한 번 만든다(실패하면 편집 모드를 다시 켤 때 재시도, 오류는 화면에 표시).
+- **대상의 메시 목록:** `CutController::Update`가 각 대상에 `UpdateTarget`과 `InitCutStaticMesh`를 호출한다. `InitCutStaticMesh`는 대상별 최초 한 번 `GetModelStaticMeshes`로 `kHasSkin` 없는 메시의 번호, `meshCBV`, 로컬 바운딩 구를 모으고, `ReadStaticMesh`로 평면 교차 검사에 쓸 로컬 위치·인덱스 캐시까지 만든다. 평면 활성화 전에도 준비하며 빈 목록도 완료 상태로 기록한다. 읽기 실패는 대상의 메시 오류로 남고 재시도하지 않는다.
 - **후보 찾기:** `PickStaticMeshes`가 평면이나 메시 world 행렬이 바뀐 프레임에만 다시 계산한다. 구 판정에서 건너뛰면 교차 0, 아니면 `CountCrossedTriangles`. 교차 삼각형이 하나 이상이면 `MakeStaticMeshKey` 후보이고, 목록 갱신은 기존 `DiffJobs`/`ApplyDiff`다.
 - **PickJoints와 같은 규칙:** 부호(epsilon 안은 0), 평면 양쪽에 걸침 판정, 절단선 선분과 사각형 교차를 `CutPick.cpp`의 공통 함수(`SignOf`, `IsMixed`, `CutLineHitsRectangle`)로 묶었다. `PickJoints` 결과는 그대로이고, 테스트가 두 함수의 교차 수·계측 개수 일치를 확인한다. 로컬 정점의 부호 거리는 `(M n)·p + (t·n − o·n)`이라 법선을 늘이지 않고도 world 거리와 같아서(비균등 크기에서도) epsilon 규칙이 같다. 교차 에지의 끝점 둘만 world로 옮겨 사각형과 비교한다 (`SegmentHitsRectangle`; `CutPlane::Contains`는 점이 아니라 선분 교차 규칙을 PickJoints와 맞추려고 쓰지 않았다).
 - **구 반지름:** 3x3의 크기 배율은 sqrt(최대 행 합 × 최대 열 합)(최대 특이값의 상한)이라 구를 키우기만 한다. 반지름이 0이거나 유한하지 않으면 건너뛰지 않는다.

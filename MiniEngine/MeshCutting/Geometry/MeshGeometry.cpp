@@ -95,6 +95,7 @@ namespace MeshCutting
         case MeshEdgeTag::UnweldedSeam: return "UnweldedSeam";
         case MeshEdgeTag::Cut: return "Cut";
         case MeshEdgeTag::CapSeam: return "CapSeam";
+        case MeshEdgeTag::OpenSurface: return "OpenSurface";
         }
         return "Unknown";
     }
@@ -584,10 +585,14 @@ namespace MeshCutting
             const uint32_t a = EdgeKeyLow(key), b = EdgeKeyHigh(key);
             const bool seam = bindPairCount[pairKey(vertexBindId[a], vertexBindId[b])] > 1
                 || worldPairCount[pairKey(vertexWorldId[a], vertexWorldId[b])] > 1;
-            boundary[key] = seam ? MeshEdgeTag::UnweldedSeam : MeshEdgeTag::Replacement;
+            // 강체 입력은 메시 전체를 복사한 것이라 열린 경계가 패치 가장자리가 아니라 원본의 구멍이다
+            const MeshEdgeTag open = rigidVertices != 0 ? MeshEdgeTag::OpenSurface : MeshEdgeTag::Replacement;
+            boundary[key] = seam ? MeshEdgeTag::UnweldedSeam : open;
             ++stats.boundaryEdges;
             if (seam)
                 ++stats.unweldedSeamEdges;
+            else if (open == MeshEdgeTag::OpenSurface)
+                ++stats.openSurfaceEdges;
             else
                 ++stats.replacementEdges;
         }

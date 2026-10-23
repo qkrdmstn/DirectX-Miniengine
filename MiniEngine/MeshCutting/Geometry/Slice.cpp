@@ -53,6 +53,8 @@ namespace MeshCutting
             void AddFace(int side, const MeshFace& source, bool split, uint32_t c0, uint32_t c1, uint32_t c2);
             bool BuildPiece(int side, MeshGeometry& piece);
             bool InheritedKind(uint32_t globalA, uint32_t globalB, MeshEdgeTag& kind) const;
+            void CapWhatFits(MeshGeometry& piece, bool positiveSide, std::vector<SliceLoop>& loops,
+                std::vector<std::vector<uint32_t>>& uncapped) const;
             bool IsCutVertex(uint32_t global) const { return global >= m_In.vertices.size(); }
 
             const MeshGeometry& m_In;
@@ -343,6 +345,68 @@ namespace MeshCutting
 
         // The kind an edge of the output inherits from the input piece. A half of a split edge
         // carries the kind of the whole edge; edges created by this cut have none.
+        // Unreal SliceProceduralMesh는 다각형마다 따로 삼각분할하고 실패한 다각형의 cap만 버린다. 여기서는 바깥 루프와 그 구멍을
+        // 한 묶음으로 본다: 전부 한 번에 되면 그대로, 아니면 묶음마다 시험해서 되는 묶음만 cap을 만들고 나머지는 uncapped로 보낸다.
+        // loops는 cap을 만든 루프만 남는다. piece는 cap이 하나도 안 되면 바뀌지 않는다.
+        void Slicer::CapWhatFits(MeshGeometry& piece, bool positiveSide, std::vector<SliceLoop>& loops,
+            std::vector<std::vector<uint32_t>>& uncapped) const
+        {
+            if (loops.empty() || BuildCap(piece, m_Plane, positiveSide, m_CutId, loops, m_Options.epsilonScale,
+                m_Options.capUvScale) == SliceStatus::Ok)
+                return;
+
+            // 묶음 = 바깥 루프 하나 + 그 구멍들 (parent는 묶음 안 번호)
+            const auto groupOf = [&](size_t outer)
+            {
+                std::vector<SliceLoop> group(1, loops[outer]);
+                group[0].parent = kInvalidIndex;
+                for (const SliceLoop& loop : loops)
+                    if (loop.depth == 1 && loop.parent == outer)
+                    {
+                        group.push_back(loop);
+                        group.back().parent = 0;
+                    }
+                return group;
+            };
+            std::vector<SliceLoop> fits;
+            for (size_t l = 0; l < loops.size(); ++l)
+            {
+                if (loops[l].depth != 0)
+                    continue;
+                std::vector<SliceLoop> group = groupOf(l);
+                MeshGeometry probe = piece;
+                const bool ok = BuildCap(probe, m_Plane, positiveSide, m_CutId, group, m_Options.epsilonScale,
+                    m_Options.capUvScale) == SliceStatus::Ok;
+                const uint32_t base = uint32_t(fits.size());
+                for (SliceLoop& loop : group)
+                {
+                    if (ok)
+                    {
+                        if (loop.depth == 1)
+                            loop.parent = base;
+                        fits.push_back(std::move(loop));
+                    }
+                    else
+                    {
+                        loop.vertices.push_back(loop.vertices.front());     // 닫힌 루프: 닫는 에지까지 연속한 쌍
+                        uncapped.push_back(std::move(loop.vertices));
+                    }
+                }
+            }
+            if (!fits.empty() && BuildCap(piece, m_Plane, positiveSide, m_CutId, fits, m_Options.epsilonScale,
+                m_Options.capUvScale) != SliceStatus::Ok)
+            {
+                // 묶음마다는 됐지만 합치면 안 되는 경우(예상 밖)는 모두 cap 없이 둔다
+                for (SliceLoop& loop : fits)
+                {
+                    loop.vertices.push_back(loop.vertices.front());
+                    uncapped.push_back(std::move(loop.vertices));
+                }
+                fits.clear();
+            }
+            loops = std::move(fits);
+        }
+
         bool Slicer::InheritedKind(uint32_t globalA, uint32_t globalB, MeshEdgeTag& kind) const
         {
             uint32_t a = globalA, b = globalB;
@@ -510,11 +574,12 @@ namespace MeshCutting
 
             // Cut loops come from each half's own boundary and must agree between the halves.
             std::vector<SliceLoop> loops[2];
+            std::vector<std::vector<uint32_t>> chains[2];       // cap 없는 절단 경계 (GeometrySliceResult::uncapped 형식)
             for (int side = 0; side < 2; ++side)
             {
                 std::string loopWhy;
                 const SliceStatus loopStatus = ExtractCutLoops(pieces[side], m_OnPlane[side], m_Plane, side == 0,
-                    m_Options.epsilonScale, loops[side], &loopWhy);
+                    m_Options.epsilonScale, loops[side], &loopWhy, &chains[side]);
                 if (loopStatus != SliceStatus::Ok)
                 {
                     out.status = loopStatus;
@@ -522,18 +587,21 @@ namespace MeshCutting
                     return loopStatus;
                 }
             }
-            std::vector<size_t> sizes[2];
+            // 두 조각의 절단 에지 수는 같아야 한다. cap을 만들지 말지는 조각마다 다를 수 있다: 근접 허용오차가 조각 크기에
+            // 비례해서, 같은 루프가 큰 조각에서는 빠지고 작은 조각에서는 남을 수 있다 (그 경우 한쪽만 cap이 생긴다).
+            size_t cutEdges[2] = { 0, 0 };
             for (int side = 0; side < 2; ++side)
             {
                 for (const SliceLoop& loop : loops[side])
-                    sizes[side].push_back(loop.vertices.size());
-                std::sort(sizes[side].begin(), sizes[side].end());
+                    cutEdges[side] += loop.vertices.size();
+                for (const std::vector<uint32_t>& chain : chains[side])
+                    cutEdges[side] += chain.empty() ? 0 : chain.size() - 1;
             }
-            if (sizes[0] != sizes[1])
+            if (cutEdges[0] != cutEdges[1])
             {
                 out.status = SliceStatus::InvalidLoop;
-                out.detail = "internal: the two pieces disagree on the cut loops (" + Num(loops[0].size()) + " vs "
-                    + Num(loops[1].size()) + ")";
+                out.detail = "internal: the two pieces disagree on the cut edges (" + Num(cutEdges[0]) + " vs "
+                    + Num(cutEdges[1]) + ")";
                 return out.status;
             }
 
@@ -541,15 +609,15 @@ namespace MeshCutting
             {
                 for (int side = 0; side < 2; ++side)
                 {
-                    std::string capWhy;
-                    const SliceStatus capStatus = BuildCap(pieces[side], m_Plane, side == 0, m_CutId, loops[side],
-                        m_Options.epsilonScale, m_Options.capUvScale, &capWhy);
-                    if (capStatus != SliceStatus::Ok)
-                    {
-                        out.status = capStatus;
-                        out.detail = std::string(side == 0 ? "positive" : "negative") + " cap: " + capWhy;
-                        return capStatus;
-                    }
+                    CapWhatFits(pieces[side], side == 0, loops[side], chains[side]);
+                    // cap이 없는 경계는 이제 구멍의 일부다. Cut으로 남기면 다음 절단이 막힌다
+                    for (const std::vector<uint32_t>& chain : chains[side])
+                        for (size_t i = 0; i + 1 < chain.size(); ++i)
+                        {
+                            const auto tag = pieces[side].edgeTags.find(MakeEdgeKey(chain[i], chain[i + 1]));
+                            if (tag != pieces[side].edgeTags.end() && tag->second == MeshEdgeTag::Cut)
+                                tag->second = MeshEdgeTag::OpenSurface;
+                        }
                 }
             }
 
@@ -561,6 +629,7 @@ namespace MeshCutting
                 out.loopDepth.push_back(loop.depth);
                 out.loopArea.push_back(loop.signedArea);
             }
+            out.uncapped = std::move(chains[0]);
             out.status = SliceStatus::Ok;
             out.detail.clear();
             return SliceStatus::Ok;
@@ -581,6 +650,7 @@ namespace MeshCutting
             out.loops.clear();
             out.loopDepth.clear();
             out.loopArea.clear();
+            out.uncapped.clear();
         }
         return status;
     }
@@ -645,7 +715,11 @@ namespace MeshCutting
                 outOtherHalf->Clear();
         }
         if (outLoops)
+        {
             *outLoops = std::move(result.loops);
+            for (std::vector<uint32_t>& chain : result.uncapped)
+                outLoops->push_back(std::move(chain));
+        }
         if (error)
             error->clear();
         return true;

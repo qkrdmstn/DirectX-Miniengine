@@ -113,6 +113,7 @@ namespace MeshCutting
         case MeshEdgeTag::UnweldedSeam: return { 0.1f, 1.0f, 0.1f, 1.0f };    // green
         case MeshEdgeTag::Cut: return { 1.0f, 0.45f, 0.0f, 1.0f };            // orange
         case MeshEdgeTag::CapSeam: return { 1.0f, 1.0f, 1.0f, 1.0f };         // white
+        case MeshEdgeTag::OpenSurface: return { 0.2f, 0.6f, 1.0f, 1.0f };     // blue
         case MeshEdgeTag::Interior: break;
         }
         return { 0.5f, 0.5f, 0.5f, 1.0f };

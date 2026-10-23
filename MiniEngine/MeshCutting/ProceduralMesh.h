@@ -59,7 +59,8 @@ namespace MeshCutting
         Replacement,    // open boundary of the extracted patch
         UnweldedSeam,   // seam that welding did not merge (skin or mesh slot differs)
         Cut,            // boundary created by a cut that has no cap yet
-        CapSeam         // edge shared by a cap and the surface (same topology as Interior)
+        CapSeam,        // edge shared by a cap and the surface (same topology as Interior)
+        OpenSurface     // 원본 표면 자체의 구멍(스태틱 복사의 열린 경계). 절단선이 닿으면 그 사슬만 cap 없이 자른다 (Unreal 방식)
     };
 
     // One cut = one cap record, stored on both pieces.
@@ -100,6 +101,7 @@ namespace MeshCutting
         uint32_t faces = 0;
         uint32_t boundaryEdges = 0;
         uint32_t replacementEdges = 0;
+        uint32_t openSurfaceEdges = 0;      // 강체 입력의 열린 경계 (Replacement 대신)
         uint32_t unweldedSeamEdges = 0;     // counts both sides of a seam
         uint32_t nonManifoldEdges = 0;
     };

@@ -79,7 +79,7 @@ namespace MeshCutting
         }
     }
 
-    void ListStaticMeshes(const Model& model, std::vector<StaticMeshInfo>& out)
+    void GetModelStaticMeshes(const Model& model, std::vector<StaticMeshInfo>& out)
     {
         out.clear();
         const uint8_t* meshPtr = model.m_MeshData.get();

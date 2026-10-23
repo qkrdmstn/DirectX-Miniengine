@@ -86,9 +86,9 @@
 | --- | --- | --- |
 | Bone 선택 | CutPick::PickJoints. 스태틱은 SphereMayCross → CountCrossedTriangles | 실제 메시 교차 기반 구현 |
 | 영향 범위 복사 | ExtractBonePatch / CopyProceduralMeshFromStaticMesh → ProceduralMesh::Build | 공통 ProceduralMesh 생성 구현 |
-| 복사본 절단 + cap | SliceProceduralMesh(ProceduralMesh) → 내부 SliceGeometry / ExtractCutLoops / BuildCap | 구현. ContainsLoops로 유한 사각형 범위 승인 |
+| 복사본 절단 + cap | SliceProceduralMesh(ProceduralMesh) → 내부 SliceGeometry / ExtractCutLoops / BuildCap | 구현. ContainsLoops로 유한 사각형 범위 승인. cap은 언리얼처럼 되는 만큼만 채운다 (`UnrealSourceComparison.md` 2절) |
 | 수동 스키닝 | BuildPieceMatrices → ProceduralMesh::UpdatePose → Skinning::Apply | 스킨/강체 갱신 구현 |
-| BreakConstraint | CutController::UpdateBrokenJoints → ModelInstance::BreakConstraint | 디버그 world 고정·이동 구현. 실제 물리 아님 |
+| BreakConstraint | CutController::UpdateBrokenJoints → ModelInstance::BreakConstraint | 끊은 노드와 모든 자손을 world에 고정·이동하고 애니메이션을 멈춘다 (언리얼 `UpdateMeshForBrokenConstraints`와 같은 범위). 실제 물리 아님 |
 | 원본 숨김 | SetMeshVisibility / UpdateSkinMask → SetVertexColorOverride → color/depth 셰이더 discard | 구현 |
 | 남는 쪽 기여 교체 | SetBreakOf / BuildPieceMatrices의 절단 순간 행렬과 자손 집합 | 구현 |
 | cap 본 부착 | rim Vertex를 공유하여 표면을 따라감 | 독립 cap 본 부착은 미구현 |

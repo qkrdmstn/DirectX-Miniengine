@@ -147,6 +147,7 @@ namespace MeshCutting
 
     }
 
+    // 모델을 식별 가능한 대상으로 등록(게임 오브젝트화)
     CutTargetId CutController::RegisterInstance(ModelInstance& instance, std::wstring name)
     {
         CutTarget target;
@@ -154,11 +155,12 @@ namespace MeshCutting
         target.instance = &instance;
         target.model = instance.GetModel();
         target.name = std::move(name);
-        ReloadPalettes(target);
+        InitializeTargetModelData(target);
         m_Targets.push_back(std::move(target));
         return m_Targets.back().id;
     }
 
+    // 모델 등록 해제
     void CutController::UnregisterInstance(CutTargetId id)
     {
         RemoveJobsOf(id);
@@ -170,36 +172,32 @@ namespace MeshCutting
             }
     }
 
-    void CutController::ReloadPalettes(CutTarget& target)
+    void CutController::InitializeTargetModelData(CutTarget& target)
     {
+        // 초기화
         target.palettes.clear();
         target.skeletons.clear();
         target.staticMeshes.clear();
+        target.staticMeshesInitialized = false;
         target.error.clear();
         target.radius = float(target.instance->GetRadius());
         if (!(target.radius > 0.0f))
             target.radius = 1.0f;
         if (target.model == nullptr)
             return;
+
+        // 미니엔진에서 추출해둔 skin palettes 데이터 연결
         for (uint32_t paletteId = 0; paletteId < target.model->m_SkinPalettes.size(); ++paletteId)
             if (target.model->m_SkinPalettes[paletteId].numJoints > 0)
                 target.palettes.push_back(paletteId);
-        std::vector<StaticMeshInfo> infos;
-        ListStaticMeshes(*target.model, infos);
-        target.staticMeshes.clear();
-        for (const StaticMeshInfo& info : infos)
-        {
-            CutStaticMesh mesh;
-            mesh.meshIndex = info.meshIndex;
-            mesh.meshCBV = info.meshCBV;
-            mesh.bounds = info.bounds;
-            target.staticMeshes.push_back(std::move(mesh));     // 캐시는 첫 편집 프레임에 만든다
-        }
+
+        // 팔레트 개수를 참고하여 메모리 공간 할당
         target.skeletons.resize(target.palettes.size());
-        target.segmentHits.assign(target.palettes.size(), std::vector<SegmentHit>());
-        target.sources.assign(target.palettes.size(), CutTargetSource());      // 원본 캐시는 첫 편집 프레임에 만든다 (등록 때는 아직 자세가 없다)
+        target.sources.assign(target.palettes.size(), CutTargetSource()); // 원본 캐시는 첫 편집 프레임에 만든다 (등록 때는 아직 자세가 없다)
+        target.segmentHits.assign(target.palettes.size(), std::vector<SegmentHit>()); // 디버깅용 본(선분)
     }
 
+    // 타겟의 절단 작업을 되돌린다.
     void CutController::RemoveJobsOf(CutTargetId id)
     {
         for (auto it = m_Jobs.begin(); it != m_Jobs.end();)
@@ -215,11 +213,13 @@ namespace MeshCutting
                 ++it;
         }
         for (CutTarget& target : m_Targets)
+        {
             if (target.id == id)
             {
                 UpdateSkinMask(target);
                 UpdateBrokenJoints(target);
             }
+        }
     }
 
     // 확정된 스켈레탈 작업의 joint를 BreakConstraint로 끊는다. 끊은 노드 집합이 달라졌을 때만 모두 되돌리고 다시 끊는다.
@@ -407,20 +407,21 @@ namespace MeshCutting
 
     void CutController::ToggleEditPlane()
     {
-        if (!m_PlaneEditing && m_Targets.empty())
-            return;
-        m_PlaneEditing = !m_PlaneEditing;
+        if (m_PlaneValid)
+            m_PlaneValid = false;
+        else
+        {
+            if (m_Targets.empty() || m_Targets.front().instance == nullptr)
+                return;
+            PlacePlane(*m_Targets.front().instance);
+        }
         m_CutRequested = false;
         m_HavePickedFrame = false;      // 다음 Update에서 교차를 다시 찾는다
         for (CutTarget& target : m_Targets)
         {
             for (CutTargetSource& cache : target.sources)
                 cache.attempted = cache.attempted && cache.source != nullptr;      // 실패한 캐시는 다시 시도한다
-            for (CutStaticMesh& mesh : target.staticMeshes)
-                mesh.attempted = mesh.attempted && !mesh.positions.empty();
         }
-        if (m_PlaneEditing && !m_PlaneValid && m_Targets.front().instance != nullptr)
-            PlacePlane(*m_Targets.front().instance);
     }
 
     bool CutController::UpdateGizmo(const GizmoView& view, const GizmoInput& input)
@@ -431,7 +432,7 @@ namespace MeshCutting
     // 후보 작업이 하나도 없으면 요청은 버려진다.
     void CutController::RequestCut()
     {
-        if (!m_PlaneEditing || !m_PlaneValid)
+        if (!m_PlaneValid)
             return;
         for (const auto& entry : m_Jobs)
             if (entry.second.candidate)
@@ -476,52 +477,70 @@ namespace MeshCutting
         }
     }
 
-    // 모델이 바뀐 대상의 작업을 지우고, 평면을 편집 중이면 자세를 읽는다.
-    void CutController::UpdateTargets()
+    // 평면 활성화되어 있으면 미니엔진에서 계산한 본 행렬을 참조해
+    // 본 위치와 계층 정보를 갱신하고, 필요한 원본 메시 캐시를 준비한다.
+    // (미니엔진에서는 스키닝 정보가 GPU에서 바로 계산되기 때문에 CPU에서 이를 가져올 방법이 없다.)
+    void CutController::UpdateTarget(CutTarget& target)
     {
-        for (CutTarget& target : m_Targets)
-        {
-            const Model* model = target.instance->GetModel();
-            if (model != target.model)
-            {
-                RemoveJobsOf(target.id);
-                target.model = model;
-                ReloadPalettes(target);
-            }
-            if (model == nullptr || !m_PlaneEditing || !m_PlaneValid)
-                continue;
+        const Model* model = target.instance != nullptr ? target.instance->GetModel() : nullptr;
 
-            target.error.clear();
-            for (size_t i = 0; i < target.palettes.size(); ++i)
+        // 평면 없으면 건너뛰기
+        if (model == nullptr || !m_PlaneValid)
+            return;
+
+        // target의 스켈레탈 메시 정보를 업데이트 한다.
+        target.error.clear();
+        for (size_t i = 0; i < target.palettes.size(); ++i)
+        {
+            std::string error;
+            bool skeletonOk;
             {
-                std::string error;
-                bool skeletonOk;
-                {
-                    PhaseTimer timer(L"Palette skeleton", m_Frame.skeleton);
-                    skeletonOk = ComputePaletteSkeleton(*model, *target.instance, target.palettes[i], target.skeletons[i], &error);
-                }
-                if (!skeletonOk)
-                {
-                    target.skeletons[i] = SkeletonPose();
-                    target.error = Utility::UTF8ToWideString(error);
-                }
-                if (!target.sources[i].attempted)
-                {
-                    target.sources[i].attempted = true;
-                    BuildSource(target, i);
-                }
+                // 미니 엔진의 노드 행렬을 참고하여 현재 본의 위치, 부모 관계를 계산한다.
+                PhaseTimer timer(L"Palette skeleton", m_Frame.skeleton);
+                skeletonOk = ComputePaletteSkeleton(*model, *target.instance, target.palettes[i], target.skeletons[i], &error);
             }
-            for (CutStaticMesh& mesh : target.staticMeshes)
-                if (!mesh.attempted)
-                {
-                    mesh.attempted = true;
-                    BuildStaticCache(target, mesh);
-                }
+
+            // 실패 처리
+            if (!skeletonOk)
+            {
+                target.skeletons[i] = SkeletonPose();
+                target.error = Utility::UTF8ToWideString(error);
+            }
+
+            // 원본 캐시 생성
+            if (!target.sources[i].attempted)
+            {
+                target.sources[i].attempted = true;
+                BuildSource(target, i);
+            }
         }
     }
 
-    // 스킨 없는 메시 하나를 복사해(CopyProceduralMeshFromStaticMesh) 로컬 위치와 인덱스만 pick용 캐시로 둔다.
-    void CutController::BuildStaticCache(const CutTarget& target, CutStaticMesh& mesh)
+    // 정적 메시 목록과 교차 검사에 쓸 로컬 정점·인덱스 캐시를 함께 만든다.
+    // ReadStaticMesh가 노드 행렬을 요구하므로 Update에서 자세 갱신 뒤 최초 한 번 호출한다.
+    void CutController::InitCutStaticMesh(CutTarget& target)
+    {
+        if (target.staticMeshesInitialized || target.model == nullptr || target.instance == nullptr)
+            return;
+
+        // 빈 목록도 완료로 기록해 매 프레임 목록을 다시 만들지 않는다.
+        target.staticMeshesInitialized = true;
+        std::vector<StaticMeshInfo> infos;
+        GetModelStaticMeshes(*target.model, infos);
+        target.staticMeshes.reserve(infos.size());
+        for (const StaticMeshInfo& info : infos)
+        {
+            CutStaticMesh mesh;
+            mesh.meshIndex = info.meshIndex;
+            mesh.meshCBV = info.meshCBV;
+            mesh.bounds = info.bounds;
+            UpdateStaticMeshCache(target, mesh);
+            target.staticMeshes.push_back(std::move(mesh));
+        }
+    }
+
+    // Static Mesh 하나를 복사해(CopyProceduralMeshFromStaticMesh) 로컬 위치와 인덱스만 pick용 캐시로 둔다.
+    void CutController::UpdateStaticMeshCache(const CutTarget& target, CutStaticMesh& mesh)
     {
         ProceduralMeshData copy;
         MeshSource source;
@@ -977,7 +996,7 @@ namespace MeshCutting
     {
         ScopedTimer _prof(L"Patch Pose Update");
 
-        // 이번 프레임의 개수와 단계 시간을 비운다 (평균은 남긴다).
+        // 성능 측정 초기화
         const CutFrameStats previous = m_Frame;
         m_Frame = CutFrameStats();
         CutPhaseTime* phases[] = { &m_Frame.skeleton, &m_Frame.poseMatrices, &m_Frame.cacheSkin, &m_Frame.pick, &m_Frame.segments,
@@ -990,8 +1009,14 @@ namespace MeshCutting
         for (const CutTarget& target : m_Targets)
             m_Frame.palettes += uint32_t(target.palettes.size());
 
-        UpdateTargets();
-        if (m_PlaneEditing && m_PlaneValid)
+
+        for (CutTarget& target : m_Targets)
+        {
+            UpdateTarget(target);
+            InitCutStaticMesh(target);
+        }
+
+        if (m_PlaneValid)
             UpdateCandidates();
         else
         {

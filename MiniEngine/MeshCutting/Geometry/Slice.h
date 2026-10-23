@@ -28,7 +28,10 @@ namespace MeshCutting
         std::vector<std::vector<uint32_t>> loops;
         std::vector<uint32_t> loopDepth;    // per loop: 0 = outer boundary, 1 = hole
         std::vector<double> loopArea;       // per loop: signed area in the plane basis (positive piece)
-        std::string detail;                 // where a failure happened (face / edge / vertex ids)
+        // cap이 없는 절단 경계 (positive 번호, 연속한 두 정점이 에지 하나): 구멍에서 끝나는 열린 사슬, 검사나 삼각분할을
+        // 통과하지 못한 루프(첫 정점을 끝에 한 번 더 넣어 닫는다). loops에는 cap을 만든 루프만 남는다.
+        std::vector<std::vector<uint32_t>> uncapped;
+        std::string detail;                // where a failure happened (face / edge / vertex ids)
     };
 
     // Cuts a piece with a plane. The positive piece keeps the side the normal points to.
@@ -37,8 +40,12 @@ namespace MeshCutting
     // filled, so a caller that keeps its old pieces on !Ok never sees half-written results.
     // A plane that leaves every face on one side (touching included) returns NoCut.
     // Two shells on opposite sides of the plane with no crossing face are Ok with no loops.
-    // Cut loops are extracted and validated from each piece's Cut boundary in every cap mode
-    // (OpenLoop, NonManifoldLoop, InvalidLoop); CapMode::None only skips the cap faces.
+    // Cut loops are extracted from each piece's Cut boundary in every cap mode; CapMode::None only
+    // skips the cap faces.
+    // Unreal SliceProceduralMesh처럼 cap은 되는 만큼만 만든다: 열린 사슬, 꼬이거나 겹친 루프, 너무 깊은 중첩, 방향이 틀린 루프,
+    // 삼각분할에 실패한 루프 묶음은 절단을 막지 않고 cap만 빠진다(uncapped). CapMode::Create이면 그 에지를 Cut에서
+    // OpenSurface로 바꿔 다음 절단에서도 구멍으로 다룬다. 절단이 스켈레탈 패치 경계(Replacement/UnweldedSeam)에서
+    // 끝나는 경우만 OpenLoop로 거절한다.
     SliceStatus SliceGeometry(const MeshGeometry& in, const SlicePlane& plane, uint32_t cutId,
         const SliceOptions& options, GeometrySliceResult& out);
 
@@ -56,6 +63,7 @@ namespace MeshCutting
     // outOtherHalf가 있으면 반대쪽 조각을 받는다(createOtherHalf가 거짓이면 빈 조각). 실패하면 inOutMesh, outOtherHalf, outLoops를 바꾸지 않는다.
     // 평면은 패치와 같은 world 공간이다 (Unreal은 컴포넌트 로컬로 옮긴다고 추정되지만 패치가 이미 world라 옮기지 않는다).
     // cutId는 inOutMesh에 있는 가장 큰 cutId + 1이다. outLoops는 이 프로젝트의 확장으로, 양의 쪽 번호의 절단 루프를 받는다.
+    // cap 없는 경계(uncapped)도 outLoops 뒤에 붙인다: 유한 평면 검사(CutPlane::ContainsLoops)가 그 점들도 보도록.
     bool SliceProceduralMesh(ProceduralMesh& inOutMesh, const DirectX::XMFLOAT3& planePosition,
         const DirectX::XMFLOAT3& planeNormal, bool createOtherHalf, ProceduralMesh* outOtherHalf,
         SliceCapOption capOption, uint32_t capMaterialSlot, SliceStatus* outStatus = nullptr,
@@ -82,12 +90,17 @@ namespace MeshCutting
     //    match its depth: an outer loop of the positive piece is counter-clockwise in
     //    (u, v), of the negative piece clockwise, and holes are the opposite.
     //
+    // uncapped가 있으면 Unreal 방식(되는 만큼)이다: 양 끝이 OpenSurface에 닿는 열린 사슬, 위 검사에 걸린 루프, 차수가 맞지
+    // 않는 정점이 있을 때의 모든 절단 에지가 실패 대신 uncapped로 간다(형식은 GeometrySliceResult::uncapped). 바깥 루프가
+    // 빠지면 그 구멍도 빠지고, 구멍만 빠지면 바깥 루프가 남는다. Replacement/UnweldedSeam에서 끝나는 사슬은 여전히 OpenLoop다.
+    //
     // onPlane[vertex] != 0 marks vertices that lie on the cutting plane (new cut vertices and vertices
     // classified 0). Cut edges that are not on the plane belong to an older cut and are ignored.
     // loops is cleared first. detail names the offending vertex, edge or loop.
     SliceStatus ExtractCutLoops(const MeshGeometry& piece, const std::vector<uint8_t>& onPlane,
         const SlicePlane& plane, bool positiveSide, float epsilonScale,
-        std::vector<SliceLoop>& loops, std::string* detail = nullptr);
+        std::vector<SliceLoop>& loops, std::string* detail = nullptr,
+        std::vector<std::vector<uint32_t>>* uncapped = nullptr);
 
     // Fills the cut loops of one output piece with cap faces (design 1.8, 3.5).
     //

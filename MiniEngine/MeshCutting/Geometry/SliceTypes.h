@@ -23,7 +23,7 @@ namespace MeshCutting
         DegenerateInput,        // zero-area face or repeated vertex in a face
         CoplanarFace,           // a face lies in the plane
         CrossesCap,             // the plane cuts an existing cap face
-        OpenLoop,               // cut loop runs into a Replacement/UnweldedSeam boundary
+        OpenLoop,               // cut loop runs into a Replacement/UnweldedSeam boundary (OpenSurface ends are allowed)
         NonManifoldLoop,        // cut edges do not form simple loops
         InvalidLoop,            // self/mutual crossing, unsupported nesting, wrong winding
         CapTriangulationFailed,
