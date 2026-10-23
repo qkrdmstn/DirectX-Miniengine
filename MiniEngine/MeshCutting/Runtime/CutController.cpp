@@ -694,7 +694,7 @@ namespace MeshCutting
     }
 
     // 평면과 교차하는 삼각형이 고른 joint마다 작업 key를 만든다. 패치는 만들지 않고(Enter 때 만든다), 사라진 key는 후보에서 뺀다.
-    // 평면이 지나는 뼈 선분은 작업과 무관하게 표시용으로만 찾는다.
+    // 평면이 지나는 뼈(선분)은 작업과 무관하게 표시용으로만 찾는다.
     void CutController::UpdateCandidates()
     {
         const CutPlane::Frame frame = m_Plane.GetFrame();
