@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>절단 과정</title>
+<style>
+html, body { margin: 0; background: #F5F9FD; }
+svg text { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; }
+.mono { font-family: Consolas, "Malgun Gothic", monospace; }
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker>
+    <marker id="n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#008BA6"/></marker>
+  </defs>
+
+  <text x="30" y="50" font-size="30" font-weight="700" fill="#12294A">절단 알고리즘 (평면으로 삼각형 메시 나누기)</text>
+  <text x="30" y="78" font-size="15" fill="#5F7590">평면(점 q, 법선 n)으로 정점을 나누고, 걸친 삼각형만 쪼갠다. 그림의 점선 = 절단 평면, 주황 = 새로 생긴 교점과 경계</text>
+
+  <g transform="translate(0 -80)">
+  <!-- ===== B-1. 정점 분류 ===== -->
+  <rect x="30" y="180" width="320" height="400" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="50" y="214" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">1</tspan> 정점 분류</text>
+  <g transform="translate(40 230)">
+    <rect x="10" y="118" width="280" height="24" fill="#00A8C8" opacity="0.15"/>
+    <line x1="10" y1="130" x2="290" y2="130" stroke="#00A8C8" stroke-width="3" stroke-dasharray="8 5"/>
+    <line x1="40" y1="130" x2="40" y2="70" stroke="#008BA6" stroke-width="2.5" marker-end="url(#n)"/>
+    <text x="48" y="80" font-size="15" font-weight="700" fill="#008BA6">n</text>
+    <circle cx="120" cy="50" r="8" fill="#2E9E6B"/><text x="136" y="55" font-size="14" fill="#2E9E6B" font-weight="700">+   d &gt; ε</text>
+    <line x1="120" y1="58" x2="120" y2="128" stroke="#2E9E6B" stroke-dasharray="3 3"/>
+    <circle cx="190" cy="133" r="8" fill="#1A6BC4"/><text x="206" y="113" font-size="14" fill="#1A6BC4" font-weight="700">0   |d| ≤ ε</text>
+    <circle cx="150" cy="210" r="8" fill="#C2417A"/><text x="166" y="215" font-size="14" fill="#C2417A" font-weight="700">−   d &lt; −ε</text>
+    <line x1="150" y1="132" x2="150" y2="202" stroke="#C2417A" stroke-dasharray="3 3"/>
+  </g>
+  <text x="50" y="478" font-size="14.5" fill="#12294A" class="mono">d = n · (p − q)</text>
+  <text x="50" y="504" font-size="14" fill="#12294A">정점마다 평면까지의 부호 거리</text>
+  <text x="50" y="530" font-size="13" fill="#5F7590">ε = 조각 반지름 × 1e-5 (기본값)</text>
+  <text x="50" y="552" font-size="13" fill="#5F7590">0 정점은 옮기지 않고 교점도 만들지 않는다</text>
+
+  <!-- ===== B-2. 면 분할 5가지 ===== -->
+  <rect x="370" y="180" width="1200" height="400" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="390" y="214" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">2</tspan> 면 분할: 삼각형 하나의 세 정점 부호로 경우를 나눈다</text>
+
+  <!-- case 1 -->
+  <g transform="translate(390 236)">
+    <rect x="0" y="0" width="220" height="330" rx="10" fill="#F7FAFD"/>
+    <g transform="translate(40 20)">
+      <line x1="-20" y1="110" x2="160" y2="110" stroke="#00A8C8" stroke-width="2.5" stroke-dasharray="7 5"/>
+      <polygon points="10,20 130,30 70,85" fill="#D7EFE3" stroke="#2E9E6B" stroke-width="2.5"/>
+      <g fill="#2E9E6B"><circle cx="10" cy="20" r="5"/><circle cx="130" cy="30" r="5"/><circle cx="70" cy="85" r="5"/></g>
+    </g>
+    <text x="14" y="190" font-size="15" font-weight="700" fill="#12294A">+ 와 0 만</text>
+    <text x="14" y="216" font-size="14" fill="#5F7590">+ 조각에 그대로</text>
+    <text x="14" y="246" font-size="15" font-weight="700" fill="#12294A">− 와 0 만</text>
+    <text x="14" y="272" font-size="14" fill="#5F7590">− 조각에 그대로</text>
+    <text x="14" y="306" font-size="13" fill="#5F7590">(대부분의 면이 여기)</text>
+  </g>
+  <!-- case 2 -->
+  <g transform="translate(626 236)">
+    <rect x="0" y="0" width="220" height="330" rx="10" fill="#F7FAFD"/>
+    <g transform="translate(40 20)">
+      <polygon points="10,110 120,20 105,110" fill="#D7EFE3" stroke="none"/>
+      <polygon points="10,110 105,110 95,165" fill="#F6DCE7" stroke="none"/>
+      <polygon points="10,110 120,20 95,165" fill="none" stroke="#12294A" stroke-width="2"/>
+      <line x1="-20" y1="110" x2="160" y2="110" stroke="#00A8C8" stroke-width="2.5" stroke-dasharray="7 5"/>
+      <line x1="10" y1="110" x2="105" y2="110" stroke="#E39B2D" stroke-width="3"/>
+      <circle cx="10" cy="110" r="6" fill="#1A6BC4"/><circle cx="120" cy="20" r="5" fill="#2E9E6B"/><circle cx="95" cy="165" r="5" fill="#C2417A"/>
+      <circle cx="105" cy="110" r="6" fill="#E39B2D"/>
+    </g>
+    <text x="14" y="232" font-size="15" font-weight="700" fill="#12294A">0, +, −</text>
+    <text x="14" y="258" font-size="14" fill="#5F7590">+ − 에지에 교점 1개</text>
+    <text x="14" y="282" font-size="14" fill="#5F7590">→ 삼각형 2개</text>
+    <text x="14" y="306" font-size="14" fill="#5F7590">(양쪽에 하나씩)</text>
+  </g>
+  <!-- case 3 -->
+  <g transform="translate(862 236)">
+    <rect x="0" y="0" width="220" height="330" rx="10" fill="#F7FAFD"/>
+    <g transform="translate(40 20)">
+      <polygon points="45,110 10,20 120,25 96,110" fill="#D7EFE3"/>
+      <polygon points="45,110 96,110 70,165" fill="#F6DCE7"/>
+      <polygon points="10,20 120,25 70,165" fill="none" stroke="#12294A" stroke-width="2"/>
+      <line x1="45" y1="110" x2="120" y2="25" stroke="#1A6BC4" stroke-width="2" stroke-dasharray="4 3"/>
+      <line x1="-20" y1="110" x2="160" y2="110" stroke="#00A8C8" stroke-width="2.5" stroke-dasharray="7 5"/>
+      <line x1="45" y1="110" x2="96" y2="110" stroke="#E39B2D" stroke-width="3"/>
+      <circle cx="10" cy="20" r="5" fill="#2E9E6B"/><circle cx="120" cy="25" r="5" fill="#2E9E6B"/><circle cx="70" cy="165" r="5" fill="#C2417A"/>
+      <circle cx="45" cy="110" r="6" fill="#E39B2D"/><circle cx="96" cy="110" r="6" fill="#E39B2D"/>
+    </g>
+    <text x="14" y="232" font-size="15" font-weight="700" fill="#12294A">+, +, − (또는 −, −, +)</text>
+    <text x="14" y="258" font-size="14" fill="#5F7590">교점 2개</text>
+    <text x="14" y="282" font-size="14" fill="#5F7590">혼자인 쪽 삼각형 1개 +</text>
+    <text x="14" y="306" font-size="14" fill="#5F7590">반대쪽 사각형 → 삼각형 2개</text>
+  </g>
+  <!-- case 4: reject -->
+  <g transform="translate(1098 236)">
+    <rect x="0" y="0" width="220" height="330" rx="10" fill="#FDF2F5"/>
+    <g transform="translate(40 20)">
+      <polygon points="0,110 140,104 70,116" fill="#BFE9F2" stroke="#00A8C8" stroke-width="2"/>
+      <line x1="-20" y1="110" x2="160" y2="110" stroke="#00A8C8" stroke-width="2.5" stroke-dasharray="7 5"/>
+      <g fill="#1A6BC4"><circle cx="0" cy="110" r="5"/><circle cx="140" cy="104" r="5"/><circle cx="70" cy="116" r="5"/></g>
+      <text x="70" y="70" font-size="34" fill="#C2417A" text-anchor="middle" font-weight="700">✕</text>
+    </g>
+    <text x="14" y="190" font-size="15" font-weight="700" fill="#C2417A">0, 0, 0</text>
+    <text x="14" y="216" font-size="14" fill="#5F7590">면이 평면과 겹침</text>
+    <text x="14" y="240" font-size="14" fill="#5F7590">→ CoplanarFace 거절</text>
+    <text x="14" y="274" font-size="15" font-weight="700" fill="#C2417A">기존 cap 면을 지남</text>
+    <text x="14" y="300" font-size="14" fill="#5F7590">→ CrossesCap 거절</text>
+  </g>
+  <!-- note -->
+  <g transform="translate(1334 236)">
+    <rect x="0" y="0" width="220" height="330" rx="10" fill="#E8F2FC"/>
+    <text x="14" y="32" font-size="15" font-weight="700" fill="#1A6BC4">규칙</text>
+    <text x="14" y="62" font-size="13.5" fill="#12294A">교점은 양 끝 부호가</text>
+    <text x="14" y="84" font-size="13.5" fill="#12294A">정반대(+ / −)인 에지에서만</text>
+    <text x="14" y="106" font-size="13.5" fill="#12294A">생긴다</text>
+    <text x="14" y="140" font-size="13.5" fill="#12294A">→ 끝점에 붙은 교점 · 길이 0</text>
+    <text x="14" y="162" font-size="13.5" fill="#12294A">선분이 생기지 않는다</text>
+    <text x="14" y="196" font-size="13.5" fill="#12294A">삼각형 감김 방향은</text>
+    <text x="14" y="218" font-size="13.5" fill="#12294A">원본과 같게 유지</text>
+    <text x="14" y="254" font-size="13" fill="#5F7590"><tspan fill="#E39B2D">●</tspan> 교점  <tspan fill="#1A6BC4">●</tspan> 0 정점</text>
+    <text x="14" y="278" font-size="13" fill="#5F7590"><tspan fill="#E39B2D">━</tspan> 새 경계 (Cut)</text>
+    <text x="14" y="302" font-size="13" fill="#5F7590"><tspan fill="#1A6BC4">┅</tspan> 나누며 생긴 에지</text>
+  </g>
+
+  <!-- ===== C. 교점 공유 · 보간 · 조각 · 결과 ===== -->
+  <rect x="30" y="600" width="370" height="440" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="50" y="634" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">3</tspan> 교점은 에지마다 한 번</text>
+  <g transform="translate(90 660)">
+    <polygon points="30,15 120,20 110,175" fill="#F7FAFD" stroke="#12294A" stroke-width="2"/>
+    <polygon points="30,15 110,175 25,170" fill="#F7FAFD" stroke="#12294A" stroke-width="2"/>
+    <line x1="-20" y1="95" x2="180" y2="95" stroke="#00A8C8" stroke-width="2.5" stroke-dasharray="7 5"/>
+    <line x1="30" y1="15" x2="110" y2="175" stroke="#E39B2D" stroke-width="3.5"/>
+    <circle cx="70" cy="95" r="8" fill="#E39B2D"/>
+    <circle cx="27.5" cy="95" r="6" fill="#E39B2D"/><circle cx="115" cy="95" r="6" fill="#E39B2D"/>
+    <text x="80" y="88" font-size="14" font-weight="700" fill="#B26C00">P</text>
+    <text x="90" y="60" font-size="13" fill="#5F7590">면 1</text><text x="35" y="140" font-size="13" fill="#5F7590">면 2</text>
+  </g>
+  <text x="50" y="882" font-size="14" fill="#12294A">이웃한 두 면이 공유하는 에지의 교점 P는</text>
+  <text x="50" y="906" font-size="14" fill="#12294A">에지 캐시에 한 번만 만든다</text>
+  <text x="50" y="940" font-size="13" fill="#5F7590">· 키 = (작은 정점 번호, 큰 정점 번호)</text>
+  <text x="50" y="962" font-size="13" fill="#5F7590">· 두 면이 같은 정점을 써서 틈이 없다</text>
+  <text x="50" y="984" font-size="13" fill="#5F7590">· 양쪽 조각도 같은 위치를 쓴다</text>
+
+  <rect x="420" y="600" width="370" height="440" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="440" y="634" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">4</tspan> 교점의 값 정하기</text>
+  <g transform="translate(450 670)">
+    <line x1="20" y1="50" x2="290" y2="50" stroke="#12294A" stroke-width="2.5"/>
+    <circle cx="20" cy="50" r="7" fill="#2E9E6B"/><circle cx="290" cy="50" r="7" fill="#C2417A"/>
+    <line x1="128" y1="10" x2="128" y2="90" stroke="#00A8C8" stroke-width="2.5" stroke-dasharray="7 5"/>
+    <circle cx="128" cy="50" r="8" fill="#E39B2D"/>
+    <text x="10" y="80" font-size="14" font-weight="700" fill="#2E9E6B">A  (dA &gt; 0)</text>
+    <text x="230" y="80" font-size="14" font-weight="700" fill="#C2417A">B  (dB &lt; 0)</text>
+    <text x="136" y="30" font-size="14" font-weight="700" fill="#B26C00">P</text>
+  </g>
+  <text x="440" y="790" font-size="14.5" fill="#12294A" class="mono">t = dA / (dA − dB)</text>
+  <text x="440" y="816" font-size="14.5" fill="#12294A" class="mono">P = A + t (B − A)</text>
+  <text x="440" y="852" font-size="13.5" fill="#12294A">위치는 Vertex 하나에 한 번 계산</text>
+  <text x="440" y="876" font-size="13.5" fill="#12294A">UV · 색은 Corner마다 t로 보간, 법선은 보간 후 정규화</text>
+  <text x="440" y="900" font-size="13" fill="#5F7590">(UV seam이 있어도 위치는 같다)</text>
+  <text x="440" y="934" font-size="13.5" fill="#12294A">출처 기록: A · B의 출처를 t 비율로</text>
+  <text x="440" y="958" font-size="13.5" fill="#12294A">섞는다 (원본 정점 3개 이하)</text>
+  <text x="440" y="982" font-size="13" fill="#5F7590">(나중에 조각을 움직일 때 사용)</text>
+
+  <!-- ===== 예: 메시 전체에 적용 ===== -->
+  <rect x="810" y="600" width="760" height="440" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="830" y="634" font-size="19" font-weight="700" fill="#12294A">예: 메시 전체에 적용 (옆에서 본 표면)</text>
+  <defs>
+    <g id="grid" stroke="#5F7590" stroke-width="1.6" fill="none">
+      <path d="M20 10 H160 M20 75 H160 M20 140 H160 M20 205 H160 M20 10 V205 M90 10 V205 M160 10 V205"/>
+      <path d="M20 10 L90 75 M90 10 L160 75 M20 75 L90 140 M90 75 L160 140 M20 140 L90 205 M90 140 L160 205"/>
+    </g>
+    <g id="dotsTop" fill="#2E9E6B"><circle cx="20" cy="10" r="5.5"/><circle cx="90" cy="10" r="5.5"/><circle cx="160" cy="10" r="5.5"/><circle cx="20" cy="75" r="5.5"/><circle cx="90" cy="75" r="5.5"/><circle cx="160" cy="75" r="5.5"/></g>
+    <g id="dotsBot" fill="#C2417A"><circle cx="20" cy="140" r="5.5"/><circle cx="90" cy="140" r="5.5"/><circle cx="160" cy="140" r="5.5"/><circle cx="20" cy="205" r="5.5"/><circle cx="90" cy="205" r="5.5"/><circle cx="160" cy="205" r="5.5"/></g>
+  </defs>
+  <!-- 분류 후 -->
+  <g transform="translate(850 655)">
+    <rect x="20" y="10" width="140" height="98" fill="#EAF6F0"/><rect x="20" y="108" width="140" height="97" fill="#FBEAF1"/>
+    <use href="#grid"/><use href="#dotsTop"/><use href="#dotsBot"/>
+    <line x1="-5" y1="108" x2="185" y2="108" stroke="#00A8C8" stroke-width="2.5" stroke-dasharray="7 5"/>
+    <text x="90" y="236" font-size="13.5" fill="#12294A" text-anchor="middle">1. 정점 분류</text>
+  </g>
+  <line x1="1050" y1="760" x2="1080" y2="760" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a)"/>
+  <!-- 분할 후 -->
+  <g transform="translate(1090 655)">
+    <rect x="20" y="10" width="140" height="98" fill="#EAF6F0"/><rect x="20" y="108" width="140" height="97" fill="#FBEAF1"/>
+    <use href="#grid"/>
+    <rect x="20" y="75" width="140" height="65" fill="none" stroke="#E39B2D" stroke-width="2.5"/>
+    <g stroke="#1A6BC4" stroke-width="1.8" stroke-dasharray="4 3">
+      <line x1="55.5" y1="108" x2="20" y2="140"/><line x1="125.5" y1="108" x2="90" y2="140"/>
+      <line x1="90" y1="75" x2="55.5" y2="108"/><line x1="160" y1="75" x2="125.5" y2="108"/>
+    </g>
+    <line x1="20" y1="108" x2="160" y2="108" stroke="#E39B2D" stroke-width="3.5"/>
+    <use href="#dotsTop"/><use href="#dotsBot"/>
+    <g fill="#E39B2D"><circle cx="20" cy="108" r="6"/><circle cx="55.5" cy="108" r="6"/><circle cx="90" cy="108" r="6"/><circle cx="125.5" cy="108" r="6"/><circle cx="160" cy="108" r="6"/></g>
+    <text x="90" y="236" font-size="13.5" fill="#12294A" text-anchor="middle">2. 걸친 줄만 분할</text>
+  </g>
+  <g font-size="13.5">
+    <text x="1310" y="680" fill="#12294A" font-weight="700">위 줄 · 아래 줄</text>
+    <text x="1310" y="702" fill="#5F7590">모든 정점이 한쪽 → 그대로</text>
+    <text x="1310" y="738" fill="#B26C00" font-weight="700">가운데 줄 (주황 칸)</text>
+    <text x="1310" y="760" fill="#5F7590">삼각형 4개가 평면에 걸침</text>
+    <text x="1310" y="782" fill="#5F7590">→ 각각 +,+,− 또는 +,−,−</text>
+    <text x="1310" y="804" fill="#5F7590">→ 삼각형 3개씩, 총 12개</text>
+    <text x="1310" y="840" fill="#B26C00" font-weight="700">교점 5개</text>
+    <text x="1310" y="862" fill="#5F7590">면마다 2개씩이면 8번이지만</text>
+    <text x="1310" y="884" fill="#5F7590">걸친 에지 5개에서 한 번씩 → 5개</text>
+  </g>
+  <text x="830" y="934" font-size="14" fill="#12294A">평면 위에 새로 생긴 에지(주황 선)가 두 조각을 가르는 경계(Cut)가 된다.</text>
+  <text x="830" y="960" font-size="14" fill="#12294A">닫힌 메시라면 이 경계가 이어져 루프가 되고, 그 루프가 단면(cap)의 테두리다 → 단면 생성 그림.</text>
+  </g>
+</svg>
+</body>
+</html>

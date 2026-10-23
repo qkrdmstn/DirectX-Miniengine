@@ -14,6 +14,7 @@ namespace MeshCutting
     constexpr float kDefaultEpsilonScale = 1e-5f;
 
     class Skinning;
+    enum class SliceCapOption;      // Slice.h. 검증된 기하를 채택하는 friend 선언에 필요하다
 
     // 스킨 정점 최대 3개의 무게중심 조합 (skinVertex는 Skinning의 스킨 정점 번호, 쓰는 칸이 앞에 오름차순, 안 쓰는 칸은 kInvalidIndex와 0)
     struct MeshVertexOrigin
@@ -152,6 +153,13 @@ namespace MeshCutting
     class ProceduralMesh
     {
     public:
+        ProceduralMesh() = default;
+        ProceduralMesh(const ProceduralMesh&) = default;
+        ProceduralMesh& operator=(const ProceduralMesh&) = default;
+        // 이동된 원본은 "검증됨" 표시를 잃는다 (기하를 빼앗겼으므로)
+        ProceduralMesh(ProceduralMesh&& other);     // unordered_map 이동 생성이 할당하므로 noexcept가 아니다
+        ProceduralMesh& operator=(ProceduralMesh&& other) noexcept;
+
         SliceStatus Build(const ProceduralMeshData& data, WeldStats& stats, std::string* error = nullptr);
         bool SetMesh(ProceduralMeshData data, std::string* error = nullptr);
         bool UpdateVertices(const std::vector<MeshRenderVertex>& vertices, std::string* error = nullptr);
@@ -169,10 +177,20 @@ namespace MeshCutting
         const ProceduralMeshBounds& GetBounds() const { return m_Bounds; }
         uint64_t GetVertexVersion() const { return m_VertexVersion; }
         uint64_t GetTopologyVersion() const { return m_TopologyVersion; }
+        // 참이면 m_Geometry가 kDefaultEpsilonScale로 ValidateMeshGeometry를 통과한 뒤 바뀌지 않았다.
+        // UpdatePose·SetMesh·Clear·이동된 원본은 거짓이다. Slicer가 입력 검증을 건너뛸 수 있는지 판단하는 데 쓴다.
+        bool IsGeometryValidated() const { return m_GeometryValidated; }
 
     private:
+        // 이미 ValidateMeshGeometry(kDefaultEpsilonScale)를 통과한 기하를 채택한다. SetTopology에서 기하 검증만 뺀 것이다.
+        // 호출자는 Build(BuildMeshGeometry가 검증함)와 SliceProceduralMesh(SliceGeometry가 Ok인 조각)뿐이다.
+        friend bool SliceProceduralMesh(ProceduralMesh&, const DirectX::XMFLOAT3&, const DirectX::XMFLOAT3&,
+            bool, ProceduralMesh*, SliceCapOption, uint32_t, SliceStatus*, std::string*,
+            std::vector<std::vector<uint32_t>>*);
+        bool AdoptValidatedTopology(MeshGeometry geometry, std::string* error);
         bool SetRenderData(ProceduralMeshData data, std::string* error);
         MeshGeometry m_Geometry;
+        bool m_GeometryValidated = false;
         bool m_SectionSplit = false;
         ProceduralMeshData m_Data;
         ProceduralMeshBounds m_Bounds;

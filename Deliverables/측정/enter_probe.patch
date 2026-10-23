@@ -1,0 +1,629 @@
+diff --git a/MiniEngine/MeshCutting/Debug/CutDebugView.cpp b/MiniEngine/MeshCutting/Debug/CutDebugView.cpp
+index b0fe8ba..0e9d969 100644
+--- a/MiniEngine/MeshCutting/Debug/CutDebugView.cpp
++++ b/MiniEngine/MeshCutting/Debug/CutDebugView.cpp
+@@ -1,5 +1,6 @@
+ ﻿#include "../pch.h"
+ #include "CutDebugView.h"
++#include "../TempProbe.h"
+ #include "../Runtime/CutController.h"
+ #include "../Rendering/RenderBake.h"
+ #include "BufferManager.h"
+@@ -255,7 +256,11 @@ namespace MeshCutting
+     void CutDebugView::Draw(GraphicsContext& context, ProceduralMeshRenderer& renderer, const CutController& cut,
+         const Matrix4& viewProj, const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor)
+     {
+-        Sync(renderer, cut);
++        TEMP_PROBE("CutDebugView.Draw");
++        {
++            TEMP_PROBE("Sync");
++            Sync(renderer, cut);
++        }
+ 
+         ProceduralMeshRenderer::DrawOptions pieceOptions;
+         pieceOptions.cull = ProceduralMeshRenderer::CullMode::TwoSided;
+diff --git a/MiniEngine/MeshCutting/Geometry/MeshGeometry.cpp b/MiniEngine/MeshCutting/Geometry/MeshGeometry.cpp
+index aa3a977..10afd5b 100644
+--- a/MiniEngine/MeshCutting/Geometry/MeshGeometry.cpp
++++ b/MiniEngine/MeshCutting/Geometry/MeshGeometry.cpp
+@@ -3,6 +3,7 @@
+ #include "MeshGeometry.h"
+ #include "../ProceduralMesh.h"
+ #include "Skinning.h"
++#include "../TempProbe.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -145,6 +146,7 @@ namespace MeshCutting
+ 
+     void CollectEdgeUsage(const MeshGeometry& piece, MeshEdgeUsageMap& usage)
+     {
++        TEMP_PROBE("CollectEdgeUsage");
+         usage.clear();
+         usage.reserve(piece.faces.size() * 2);
+         for (const MeshFace& face : piece.faces)
+@@ -219,6 +221,7 @@ namespace MeshCutting
+ 
+     SliceStatus ValidateMeshGeometry(const MeshGeometry& piece, float epsilonScale, std::string* detail)
+     {
++        TEMP_PROBE("ValidateMeshGeometry");
+         if (!std::isfinite(epsilonScale) || epsilonScale < 0.0f)
+             return Fail(detail, SliceStatus::InvalidInput, "epsilon scale is not a finite non-negative value");
+         if (piece.faces.empty())
+@@ -443,6 +446,7 @@ namespace MeshCutting
+             return Fail(detail, SliceStatus::InvalidInput, "index count must be a positive multiple of three");
+ 
+         size_t rigidVertices = 0, firstRigid = 0;      // 가중치가 모두 0인 정점 (스킨 없는 메시의 강체 정점)
++        std::unique_ptr<TempProbe::Scope> probe(new TempProbe::Scope("a inputCheck"));
+         for (size_t i = 0; i < in.vertices.size(); ++i)
+         {
+             const MeshRenderVertex& v = in.vertices[i];
+@@ -468,6 +472,8 @@ namespace MeshCutting
+             if (in.indices[i] >= in.vertices.size())
+                 return Fail(detail, SliceStatus::InvalidInput, "index " + Num(i) + " refers beyond the vertex array");
+ 
++        probe.reset();
++        probe.reset(new TempProbe::Scope("b weld"));
+         MeshGeometry piece;
+         std::vector<SkinVertex> skinVertices;
+         std::unordered_map<WeldKey, uint32_t, WeldKeyHash> nodeOf;
+@@ -516,6 +522,8 @@ namespace MeshCutting
+             skinVertices.push_back(skin);
+         }
+         piece.skin = std::make_shared<const Skinning>(std::move(skinVertices));
++        probe.reset();
++        probe.reset(new TempProbe::Scope("c cornersFaces"));
+ 
+         for (size_t i = 0; i < in.vertices.size(); ++i)
+         {
+@@ -538,6 +546,8 @@ namespace MeshCutting
+             piece.faces.push_back(face);
+         }
+ 
++        probe.reset();
++        probe.reset(new TempProbe::Scope("d boundaryTags"));
+         stats.corners = uint32_t(in.vertices.size());
+         stats.vertices = uint32_t(piece.vertices.size());
+         stats.positionVertices = uint32_t(positionVertexCount.size());
+@@ -598,6 +608,7 @@ namespace MeshCutting
+         }
+ 
+         piece.edgeTags = std::move(boundary);
++        probe.reset();
+         std::string why;
+         const SliceStatus status = ValidateMeshGeometry(piece, epsilonScale, &why);
+         if (status != SliceStatus::Ok)
+diff --git a/MiniEngine/MeshCutting/Geometry/Slice.cpp b/MiniEngine/MeshCutting/Geometry/Slice.cpp
+index c8b320a..e239c04 100644
+--- a/MiniEngine/MeshCutting/Geometry/Slice.cpp
++++ b/MiniEngine/MeshCutting/Geometry/Slice.cpp
+@@ -5,6 +5,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <unordered_map>
++#include "../TempProbe.h"
+ 
+ namespace MeshCutting
+ {
+@@ -517,6 +518,8 @@ namespace MeshCutting
+         {
+             std::string why;
+             SliceStatus status = ValidatePlane(m_Plane, &why);
++            TEMP_PROBE("Slicer::Run");
++            std::unique_ptr<TempProbe::Scope> probe(new TempProbe::Scope("a validateInput"));
+             if (status == SliceStatus::Ok)
+                 status = ValidateMeshGeometry(m_In, m_Options.epsilonScale, &why);
+             if (status != SliceStatus::Ok)
+@@ -525,6 +528,8 @@ namespace MeshCutting
+                 out.detail = why;
+                 return status;
+             }
++            probe.reset();
++            probe.reset(new TempProbe::Scope("b classify+faces"));
+             MakePlaneBasis(m_Plane, m_Basis);
+             m_Epsilon = ComputePieceRadius(m_In) * double(m_Options.epsilonScale);
+             ClassifyVertices();
+@@ -550,9 +555,12 @@ namespace MeshCutting
+                 return out.status;
+             }
+ 
++            probe.reset();
+             MeshGeometry pieces[2];
+             for (int side = 0; side < 2; ++side)
+             {
++                probe.reset();
++                probe.reset(new TempProbe::Scope("c buildPiece"));
+                 if (!BuildPiece(side, pieces[side]))
+                 {
+                     out.status = m_Status;
+@@ -562,6 +570,8 @@ namespace MeshCutting
+                 // A result must be a valid input for the next cut. Clipping can leave slivers
+                 // below the degeneracy threshold of the piece (for example a face that was just
+                 // above it), and those are rejected instead of published.
++                probe.reset();
++                probe.reset(new TempProbe::Scope("d validateOutput"));
+                 std::string outputWhy;
+                 const SliceStatus outputStatus = ValidateMeshGeometry(pieces[side], m_Options.epsilonScale, &outputWhy);
+                 if (outputStatus != SliceStatus::Ok)
+@@ -572,6 +582,8 @@ namespace MeshCutting
+                 }
+             }
+ 
++            probe.reset();
++            probe.reset(new TempProbe::Scope("e loops"));
+             // Cut loops come from each half's own boundary and must agree between the halves.
+             std::vector<SliceLoop> loops[2];
+             std::vector<std::vector<uint32_t>> chains[2];       // cap 없는 절단 경계 (GeometrySliceResult::uncapped 형식)
+@@ -605,6 +617,8 @@ namespace MeshCutting
+                 return out.status;
+             }
+ 
++            probe.reset();
++            probe.reset(new TempProbe::Scope("f cap"));
+             if (m_Options.cap == CapMode::Create)
+             {
+                 for (int side = 0; side < 2; ++side)
+@@ -621,6 +635,8 @@ namespace MeshCutting
+                 }
+             }
+ 
++            probe.reset();
++            probe.reset(new TempProbe::Scope("g move"));
+             out.positive = std::move(pieces[0]);
+             out.negative = std::move(pieces[1]);
+             for (const SliceLoop& loop : loops[0])
+diff --git a/MiniEngine/MeshCutting/Geometry/SliceCap.cpp b/MiniEngine/MeshCutting/Geometry/SliceCap.cpp
+index 77925ef..6d6bc78 100644
+--- a/MiniEngine/MeshCutting/Geometry/SliceCap.cpp
++++ b/MiniEngine/MeshCutting/Geometry/SliceCap.cpp
+@@ -1,6 +1,7 @@
+ ﻿// 이 파일은 잘린 조각의 절단 경계에서 루프를 뽑아 검증하는 CutLoops와, 그 루프를 캡 면으로 채우는 CapBuilder를 구현한다.
+ #include "../pch.h"
+ #include "Slice.h"
++#include "../TempProbe.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -508,6 +509,8 @@ namespace MeshCutting
+     SliceStatus BuildCap(MeshGeometry& piece, const SlicePlane& plane, bool positiveSide, uint32_t cutId,
+         const std::vector<SliceLoop>& loops, float epsilonScale, float uvScale, std::string* detail)
+     {
++        TEMP_PROBE("BuildCap");
++        std::unique_ptr<TempProbe::Scope> probe(new TempProbe::Scope("a rings+earclip"));
+         if (detail)
+             detail->clear();
+         if (loops.empty())
+@@ -575,7 +578,11 @@ namespace MeshCutting
+ 
+         // Append the cap: one corner per rim vertex, outward normal, planar UVs. A copy of the piece
+         // is edited first so a failed check leaves the caller's piece untouched.
++        probe.reset();
++        probe.reset(new TempProbe::Scope("b copyPiece"));
+         MeshGeometry capped = piece;
++        probe.reset();
++        probe.reset(new TempProbe::Scope("c capFaces+edgeCheck"));
+         const double sign = positiveSide ? -1.0 : 1.0;      // cap normal = -n for the positive piece
+         const DirectX::XMFLOAT3 normal = { float(sign * basis.n[0]), float(sign * basis.n[1]), float(sign * basis.n[2]) };
+         std::unordered_map<uint32_t, uint32_t> cornerOf;
+@@ -646,6 +653,7 @@ namespace MeshCutting
+                 }
+         capped.caps.push_back(record);
+ 
++        probe.reset();
+         std::string why;
+         const SliceStatus valid = ValidateMeshGeometry(capped, epsilonScale, &why);
+         if (valid != SliceStatus::Ok)
+diff --git a/MiniEngine/MeshCutting/ProceduralMesh.cpp b/MiniEngine/MeshCutting/ProceduralMesh.cpp
+index 2503276..a499206 100644
+--- a/MiniEngine/MeshCutting/ProceduralMesh.cpp
++++ b/MiniEngine/MeshCutting/ProceduralMesh.cpp
+@@ -2,6 +2,7 @@
+ #include "ProceduralMesh.h"
+ #include "Geometry/Skinning.h"
+ #include "Rendering/RenderBake.h"
++#include "TempProbe.h"
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -149,9 +150,14 @@ namespace MeshCutting
+     SliceStatus ProceduralMesh::Build(const ProceduralMeshData& data, WeldStats& stats, std::string* error)
+     {
+         MeshGeometry geometry;
+-        const SliceStatus status = BuildMeshGeometry(data, kDefaultEpsilonScale, geometry, stats, error);
++        SliceStatus status;
++        {
++            TEMP_PROBE("BuildMeshGeometry");
++            status = BuildMeshGeometry(data, kDefaultEpsilonScale, geometry, stats, error);
++        }
+         if (status != SliceStatus::Ok)
+             return status;
++        TEMP_PROBE("SetTopology");
+         return SetTopology(std::move(geometry), error) ? SliceStatus::Ok : SliceStatus::InvalidInput;
+     }
+ 
+@@ -206,12 +212,22 @@ namespace MeshCutting
+ 
+     bool ProceduralMesh::SetTopology(MeshGeometry geometry, std::string* error)
+     {
+-        if (ValidateMeshGeometry(geometry, kDefaultEpsilonScale, error) != SliceStatus::Ok)
+-            return false;
++        {
++            TEMP_PROBE("a Validate");
++            if (ValidateMeshGeometry(geometry, kDefaultEpsilonScale, error) != SliceStatus::Ok)
++                return false;
++        }
+         ProceduralMeshData data;
+-        BuildRenderMesh(geometry, data);
+-        if (!SetRenderData(std::move(data), error))
+-            return false;
++        {
++            TEMP_PROBE("b BuildRenderMesh");
++            BuildRenderMesh(geometry, data);
++        }
++        {
++            TEMP_PROBE("c SetRenderData");
++            if (!SetRenderData(std::move(data), error))
++                return false;
++        }
++        TEMP_PROBE("d move");
+         m_Geometry = std::move(geometry);
+         m_SectionSplit = false;
+         return true;
+@@ -236,6 +252,7 @@ namespace MeshCutting
+ 
+     bool ProceduralMesh::UpdatePose(const std::vector<std::vector<DirectX::XMFLOAT4X4>>& matrices, std::string* error)
+     {
++        TEMP_PROBE("UpdatePose");
+         if (m_Geometry.Empty() || !m_Geometry.skin)
+             return Fail(error, "Mesh has no cutting geometry or skin");
+         // Skinning needs only vertices and the shared source table. Keep topology in place.
+diff --git a/MiniEngine/MeshCutting/Rendering/ProceduralMeshRenderer.cpp b/MiniEngine/MeshCutting/Rendering/ProceduralMeshRenderer.cpp
+index f8b9937..a76d299 100644
+--- a/MiniEngine/MeshCutting/Rendering/ProceduralMeshRenderer.cpp
++++ b/MiniEngine/MeshCutting/Rendering/ProceduralMeshRenderer.cpp
+@@ -1,5 +1,6 @@
+ #include "../pch.h"
+ #include "ProceduralMeshRenderer.h"
++#include "../TempProbe.h"
+ #include "../../Core/CommandContext.h"
+ #include "../../Core/CommandListManager.h"
+ #include "../../Core/GraphicsCommon.h"
+@@ -146,6 +147,7 @@ namespace MeshCutting
+ 
+     void ProceduralMeshRenderer::Upload(GraphicsContext& context, Buffer& buffer, const void* data, uint32_t bytes)
+     {
++        TEMP_PROBE("Upload");
+         const size_t padded = (size_t(bytes) + 15u) & ~size_t(15u);
+         void* staging = _aligned_malloc(padded, 16);
+         if (!staging)
+diff --git a/MiniEngine/MeshCutting/Runtime/CutController.cpp b/MiniEngine/MeshCutting/Runtime/CutController.cpp
+index ad36aec..2f72db2 100644
+--- a/MiniEngine/MeshCutting/Runtime/CutController.cpp
++++ b/MiniEngine/MeshCutting/Runtime/CutController.cpp
+@@ -6,6 +6,7 @@
+ #include "EngineProfiling.h"
+ #include "SystemTime.h"
+ #include "Utility.h"
++#include "../TempProbe.h"
+ 
+ #include <cstring>
+ 
+@@ -886,11 +887,17 @@ namespace MeshCutting
+     {
+         const SlicePlane plane = m_Plane.ToSlicePlane();
+         SliceStatus status = SliceStatus::InvalidInput;
+-        if (!SliceProceduralMesh(mesh, plane.point, plane.normal, true, &other,
+-            SliceCapOption::CreateNewSectionForCap, 1, &status, &error, &loops))
++        bool sliced;
++        {
++            TEMP_PROBE("SliceProceduralMesh");
++            sliced = SliceProceduralMesh(mesh, plane.point, plane.normal, true, &other,
++                SliceCapOption::CreateNewSectionForCap, 1, &status, &error, &loops);
++        }
++        if (!sliced)
+             return status;
+         const CutTarget* target = FindTarget(job.key.target);
+         const float margin = (target != nullptr ? target->radius : m_ModelRadius) * 0.01f;
++        TEMP_PROBE("ContainsLoops");
+         if (!m_Plane.ContainsLoops(mesh.GetGeometry(), loops, margin, &error))
+             return SliceStatus::LoopOutsidePlane;
+         return SliceStatus::Ok;
+@@ -924,7 +931,11 @@ namespace MeshCutting
+     // 먼저 이전 확정 결과를 모두 지우고(Ctrl+Z와 같다), 후보 작업마다 독립으로 자른다. 미절단 패치는 작업마다 버린다.
+     void CutController::ConfirmAll()
+     {
+-        DiscardCut();
++        TEMP_PROBE("ConfirmAll");
++        {
++            TEMP_PROBE("DiscardCut");
++            DiscardCut();
++        }
+         for (auto& entry : m_Jobs)
+         {
+             CutJob& job = entry.second;
+@@ -932,6 +943,7 @@ namespace MeshCutting
+                 continue;
+             ConfirmJob(job);
+         }
++        TEMP_PROBE("SkinMask+BrokenJoints");
+         for (CutTarget& target : m_Targets)
+         {
+             UpdateSkinMask(target);     // 스켈레탈 확정마다가 아니라 한 번에 덮어쓴다
+@@ -947,28 +959,45 @@ namespace MeshCutting
+         job.cutInfo.clear();
+         auto positive = std::make_shared<ProceduralMesh>();
+         auto negative = std::make_shared<ProceduralMesh>();
+-        ExtractJob(job, *positive);
++        TEMP_PROBE("ConfirmJob");
++        {
++            TEMP_PROBE("1 ExtractJob");
++            ExtractJob(job, *positive);
++        }
+         if (job.patchStatus != SliceStatus::Ok)
+         {
+             job.lastCutStatus = job.patchStatus;
+             job.lastCutError = job.patchError;
+             return;
+         }
+-        if (!SkinPatch(job, *positive, job.lastCutError))
++        bool skinned;
++        {
++            TEMP_PROBE("2 SkinPatch");
++            skinned = SkinPatch(job, *positive, job.lastCutError);
++        }
++        if (!skinned)
+         {
+             job.lastCutStatus = SliceStatus::InvalidInput;
+             return;
+         }
+-        const double originalArea = TotalArea(positive->GetGeometry(), MeshFaceKind::Surface);
++        double originalArea;
++        {
++            TEMP_PROBE("3 TotalArea");
++            originalArea = TotalArea(positive->GetGeometry(), MeshFaceKind::Surface);
++        }
+         std::vector<std::vector<uint32_t>> loops;
+         {
++            TEMP_PROBE("4 SliceWithPlane");
+             PhaseTimer timer(L"Cut job", m_Frame.cut);
+             const int64_t start = SystemTime::GetCurrentTick();
+             job.lastCutStatus = SliceWithPlane(job, *positive, *negative, loops, job.lastCutError);
+             job.cutMs = ElapsedMs(start);
+         }
+         if (job.lastCutStatus != SliceStatus::Ok)
++        {
++            TempProbe::Note(std::string("job cut failed: ") + SliceStatusName(job.lastCutStatus) + " " + job.lastCutError);
+             return;
++        }
+         job.confirmedNormal = m_Plane.ToSlicePlane().normal;
+         job.positive = std::move(positive);
+         job.negative = std::move(negative);
+@@ -982,6 +1011,17 @@ namespace MeshCutting
+         }
+         job.haveConfirmed = true;
+         job.confirmedGeneration = ++m_Generation;
++        TEMP_PROBE("5 Hide+Break+Area+Info");
++        {
++            const ProceduralMeshData& p = job.positive->GetData();
++            const ProceduralMeshData& n = job.negative->GetData();
++            char note[256];
++            sprintf_s(note, "job status Ok  input corners %zu verts %zu faces %zu | +: verts %zu faces %zu renderVerts %zu | -: verts %zu faces %zu renderVerts %zu | loops %zu",
++                size_t(job.weld.corners), size_t(job.weld.vertices), size_t(job.weld.faces),
++                job.positive->GetGeometry().vertices.size(), job.positive->GetGeometry().faces.size(), p.vertices.size(),
++                job.negative->GetGeometry().vertices.size(), job.negative->GetGeometry().faces.size(), n.vertices.size(), loops.size());
++            TempProbe::Note(note);
++        }
+         SetOriginalVisible(job, false);
+         SetBreakOf(job);
+         const double area = TotalArea(job.positive->GetGeometry(), MeshFaceKind::Surface)
+@@ -995,6 +1035,7 @@ namespace MeshCutting
+     void CutController::Update()
+     {
+         ScopedTimer _prof(L"Patch Pose Update");
++        TEMP_PROBE("CutController.Update");
+ 
+         // 성능 측정 초기화
+         const CutFrameStats previous = m_Frame;
+@@ -1043,7 +1084,10 @@ namespace MeshCutting
+                 ConfirmAll();
+             }
+         }
+-        SkinJobs();
++        {
++            TEMP_PROBE("SkinJobs");
++            SkinJobs();
++        }
+ 
+         for (CutPhaseTime* phase : phases)
+             UpdateAverage(*phase);
+diff --git a/MiniEngine/MeshCutting/Runtime/CutController.h b/MiniEngine/MeshCutting/Runtime/CutController.h
+index 991ae3c..c905c46 100644
+--- a/MiniEngine/MeshCutting/Runtime/CutController.h
++++ b/MiniEngine/MeshCutting/Runtime/CutController.h
+@@ -81,6 +81,14 @@ namespace MeshCutting
+ 
+         // 모든 인스턴스의 Update 뒤에 한 번: 메시 교차 -> 작업 목록 -> 스키닝 -> Enter 요청 시 확정
+         void Update();
++        void TempPlacePlane(const DirectX::XMFLOAT3& center, float radius, float tiltRadians)       // TEMPORARY: Enter 측정
++        {
++            m_Plane = CutPlane::MakeHorizontal(center, radius);
++            m_Plane.RotateAroundLocalAxis(0, tiltRadians);
++            m_ModelRadius = radius;
++            m_PlaneValid = true;
++            m_HavePickedFrame = false;
++        }
+ 
+         const CutPlane& GetPlane() const { return m_Plane; }
+         bool PlaneEditing() const { return m_PlaneValid; }
+diff --git a/MiniEngine/MeshCutting/StaticMeshCopy.cpp b/MiniEngine/MeshCutting/StaticMeshCopy.cpp
+index fa61ca3..b0ab968 100644
+--- a/MiniEngine/MeshCutting/StaticMeshCopy.cpp
++++ b/MiniEngine/MeshCutting/StaticMeshCopy.cpp
+@@ -3,6 +3,7 @@
+ #include "StaticMeshCopy.h"
+ #include "Geometry/Skinning.h"
+ #include "../Model/Model.h"
++#include "TempProbe.h"
+ 
+ #include <DirectXPackedVector.h>
+ #include <cstring>
+@@ -219,8 +220,12 @@ namespace MeshCutting
+         stats = WeldStats();
+         ProceduralMeshData data;
+         MeshSource source;
+-        if (!ReadStaticMesh(model, instance, meshIndex, data, source, error))
+-            return SliceStatus::InvalidInput;
++        {
++            TEMP_PROBE("ReadStaticMesh");
++            if (!ReadStaticMesh(model, instance, meshIndex, data, source, error))
++                return SliceStatus::InvalidInput;
++        }
++        TEMP_PROBE("ProceduralMesh::Build");
+         const SliceStatus status = outMesh.Build(data, stats, error);
+         if (status == SliceStatus::Ok)
+             outSource = std::move(source);
+diff --git a/MiniEngine/MeshCutting/TempProbe.h b/MiniEngine/MeshCutting/TempProbe.h
+new file mode 100644
+index 0000000..d374b1e
+--- /dev/null
++++ b/MiniEngine/MeshCutting/TempProbe.h
+@@ -0,0 +1,66 @@
++// TEMPORARY: Enter cost measurement. Remove after measuring.
++#pragma once
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <map>
++#include <string>
++
++namespace MeshCutting
++{
++    namespace TempProbe
++    {
++        struct Entry { double ms = 0.0; uint32_t count = 0; };
++        inline std::map<std::string, Entry>& Table() { static std::map<std::string, Entry> t; return t; }
++        inline std::string& Path() { static std::string p; return p; }
++        inline std::string& Notes() { static std::string n; return n; }
++        inline bool& Enabled() { static bool e = false; return e; }
++        inline double Now()
++        {
++            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
++        }
++        inline void Note(const std::string& s) { if (Enabled()) Notes() += s + "\n"; }
++
++        class Scope
++        {
++        public:
++            explicit Scope(const char* name)
++            {
++                if (!Enabled()) return;
++                m_On = true;
++                m_PrevSize = Path().size();
++                Path() += "/";
++                Path() += name;
++                m_Start = Now();
++            }
++            ~Scope()
++            {
++                if (!m_On) return;
++                Entry& e = Table()[Path()];
++                e.ms += Now() - m_Start;
++                ++e.count;
++                Path().resize(m_PrevSize);
++            }
++        private:
++            bool m_On = false;
++            size_t m_PrevSize = 0;
++            double m_Start = 0.0;
++        };
++
++        inline void Dump(const char* file, int run, double frameMs)
++        {
++            FILE* f = nullptr;
++            if (fopen_s(&f, file, "a") != 0 || f == nullptr) return;
++            fprintf(f, "=== run %d  frameDelta %.3f ms\n", run, frameMs);
++            fputs(Notes().c_str(), f);
++            for (const auto& entry : Table())
++                fprintf(f, "%9.3f ms  x%-3u %s\n", entry.second.ms, entry.second.count, entry.first.c_str());
++            fclose(f);
++            Table().clear();
++            Notes().clear();
++        }
++    }
++}
++#define TEMP_PROBE_CAT2(a, b) a##b
++#define TEMP_PROBE_CAT(a, b) TEMP_PROBE_CAT2(a, b)
++#define TEMP_PROBE(name) ::MeshCutting::TempProbe::Scope TEMP_PROBE_CAT(tempProbe_, __LINE__)(name)
+diff --git a/MiniEngine/ModelViewer/ModelViewer.cpp b/MiniEngine/ModelViewer/ModelViewer.cpp
+index ff6c6be..6d91179 100644
+--- a/MiniEngine/ModelViewer/ModelViewer.cpp
++++ b/MiniEngine/ModelViewer/ModelViewer.cpp
+@@ -38,6 +38,7 @@
+ #include "../MeshCutting/Debug/SceneViewCamera.h"
+ #include "../MeshCutting/Rendering/ProceduralMeshRenderer.h"
+ #include "../MeshCutting/Runtime/CutController.h"
++#include "../MeshCutting/TempProbe.h"
+ #include <deque>
+ 
+ #define LEGACY_RENDERER
+@@ -276,6 +277,52 @@ namespace Graphics
+ void ModelViewer::Update(float deltaT)
+ {
+     ScopedTimer _prof(L"Update State");
++    // TEMPORARY: Enter 1회 비용 측정 드라이버. 60프레임에 bunny 평면을 놓고, 90프레임부터 40프레임마다 Enter를 12번 요청한다.
++    {
++        static int s_Frame = 0, s_Run = 0, s_CutFrame = -1;
++        static double s_LastUpdate = 0.0;
++        const double now = MeshCutting::TempProbe::Now();
++        const double wall = s_LastUpdate > 0.0 ? now - s_LastUpdate : 0.0;
++        s_LastUpdate = now;
++        ++s_Frame;
++        const char* kLog = "C:/Users/Pes/AppData/Local/Temp/claude/C--Users-Pes-Desktop-DirectX-Miniengine/2aa2d342-93cc-40ec-84f4-d98170166728/scratchpad/enter_probe.log";
++        if (s_CutFrame >= 0 && s_Frame == s_CutFrame + 1)
++        {
++            MeshCutting::TempProbe::Enabled() = false;
++            char note[128];
++            sprintf_s(note, "engine deltaT %.3f ms  wall Update-to-Update %.3f ms\n", deltaT * 1000.0f, wall);
++            MeshCutting::TempProbe::Notes() += note;
++            MeshCutting::TempProbe::Dump(kLog, s_Run, wall);
++        }
++        else if (s_CutFrame >= 0 && s_Frame == s_CutFrame + 2)
++        {
++            FILE* f = nullptr;
++            if (fopen_s(&f, kLog, "a") == 0 && f) { fprintf(f, "next frame: engine deltaT %.3f ms  wall %.3f ms\n", deltaT * 1000.0f, wall); fclose(f); }
++        }
++        if (!m_StaticInsts.empty())
++        {
++            const ModelInstance& bunny = m_StaticInsts.front().instance;
++            if (s_Frame == 60)
++            {
++                const Vector3 c = bunny.GetCenter();
++                m_Cut.TempPlacePlane({ float(c.GetX()), float(c.GetY()), float(c.GetZ()) }, float(bunny.GetRadius()) * 2.4f, 0.5236f);
++            }
++            if (s_Frame >= 90 && (s_Frame - 90) % 40 == 0 && s_Run < 12)
++            {
++                ++s_Run;
++                m_Cut.RequestCut();
++                s_CutFrame = s_Frame;
++                MeshCutting::TempProbe::Enabled() = true;
++            }
++            if (s_Run == 12 && s_Frame > s_CutFrame + 3)
++            {
++                FILE* f = nullptr;
++                if (fopen_s(&f, kLog, "a") == 0 && f) { fprintf(f, "DONE\n"); fclose(f); }
++                s_Run = 13;
++            }
++        }
++    }
++    TEMP_PROBE("ModelViewer.Update");
+ 
+ 
+     const Model* model = m_ModelInst.GetModel();
+@@ -390,6 +437,7 @@ void ModelViewer::Update(float deltaT)
+ 
+ void ModelViewer::RenderScene(void)
+ {
++    TEMP_PROBE("ModelViewer.RenderScene");
+     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
+ 
+     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();

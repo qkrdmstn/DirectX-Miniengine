@@ -3,6 +3,7 @@
 #include "Slice.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <unordered_map>
 
@@ -30,8 +31,11 @@ namespace MeshCutting
         class Slicer
         {
         public:
-            Slicer(const MeshGeometry& in, const SlicePlane& plane, uint32_t cutId, const SliceOptions& options)
-                : m_In(in), m_Plane(plane), m_CutId(cutId), m_Options(options)
+            // inputValidated가 참이면 호출자가 in을 m_Options.epsilonScale로 이미 검증했다고 보증하고 입력 검증(③)을 건너뛴다.
+            // 공개 SliceOptions에는 넣지 않는다: 다른 epsilon으로 부르는 호출자가 켜면 계약이 깨진다.
+            Slicer(const MeshGeometry& in, const SlicePlane& plane, uint32_t cutId, const SliceOptions& options,
+                bool inputValidated)
+                : m_In(in), m_Plane(plane), m_CutId(cutId), m_Options(options), m_InputValidated(inputValidated)
             {
             }
 
@@ -61,6 +65,7 @@ namespace MeshCutting
             const SlicePlane& m_Plane;
             uint32_t m_CutId;
             SliceOptions m_Options;
+            const bool m_InputValidated;
 
             SlicePlaneBasis m_Basis;
             double m_Epsilon = 0.0;
@@ -518,7 +523,17 @@ namespace MeshCutting
             std::string why;
             SliceStatus status = ValidatePlane(m_Plane, &why);
             if (status == SliceStatus::Ok)
-                status = ValidateMeshGeometry(m_In, m_Options.epsilonScale, &why);
+            {
+                if (!m_InputValidated)
+                    status = ValidateMeshGeometry(m_In, m_Options.epsilonScale, &why);
+#ifdef _DEBUG
+                else
+                {
+                    // 검증을 건너뛰는 자리의 계약 확인
+                    assert(ValidateMeshGeometry(m_In, m_Options.epsilonScale, nullptr) == SliceStatus::Ok);
+                }
+#endif
+            }
             if (status != SliceStatus::Ok)
             {
                 out.status = status;
@@ -636,23 +651,33 @@ namespace MeshCutting
         }
     }
 
+    namespace
+    {
+        // SliceGeometry와 SliceProceduralMesh가 함께 쓰는 본체. inputValidated는 Slicer 생성자 설명 참고.
+        SliceStatus SliceGeometryImpl(const MeshGeometry& in, const SlicePlane& plane, uint32_t cutId,
+            const SliceOptions& options, bool inputValidated, GeometrySliceResult& out)
+        {
+            out = GeometrySliceResult();
+            Slicer slicer(in, plane, cutId, options, inputValidated);
+            const SliceStatus status = slicer.Run(out);
+            if (status != SliceStatus::Ok)
+            {
+                // Failure contract: only status and detail are filled.
+                out.positive.Clear();
+                out.negative.Clear();
+                out.loops.clear();
+                out.loopDepth.clear();
+                out.loopArea.clear();
+                out.uncapped.clear();
+            }
+            return status;
+        }
+    }
+
     SliceStatus SliceGeometry(const MeshGeometry& in, const SlicePlane& plane, uint32_t cutId,
         const SliceOptions& options, GeometrySliceResult& out)
     {
-        out = GeometrySliceResult();
-        Slicer slicer(in, plane, cutId, options);
-        const SliceStatus status = slicer.Run(out);
-        if (status != SliceStatus::Ok)
-        {
-            // Failure contract: only status and detail are filled.
-            out.positive.Clear();
-            out.negative.Clear();
-            out.loops.clear();
-            out.loopDepth.clear();
-            out.loopArea.clear();
-            out.uncapped.clear();
-        }
-        return status;
+        return SliceGeometryImpl(in, plane, cutId, options, false, out);
     }
 
     bool SliceProceduralMesh(ProceduralMesh& inOutMesh, const DirectX::XMFLOAT3& planePosition,
@@ -680,7 +705,10 @@ namespace MeshCutting
         SliceOptions options;
         options.cap = capOption == SliceCapOption::NoCap ? CapMode::None : CapMode::Create;
         GeometrySliceResult result;
-        const SliceStatus status = SliceGeometry(geometry, { planePosition, planeNormal }, cutId, options, result);
+        // 기본 epsilon으로 검증된 기하만 입력 검증을 건너뛴다
+        const bool inputValidated = inOutMesh.IsGeometryValidated() && options.epsilonScale == kDefaultEpsilonScale;
+        const SliceStatus status = SliceGeometryImpl(geometry, { planePosition, planeNormal }, cutId, options,
+            inputValidated, result);
         if (outStatus)
             *outStatus = status;
         if (status != SliceStatus::Ok)
@@ -700,8 +728,9 @@ namespace MeshCutting
                 }
 
         ProceduralMesh positive, negative;
-        if (!positive.SetTopology(std::move(result.positive), error)
-            || (createOtherHalf && outOtherHalf && !negative.SetTopology(std::move(result.negative), error)))
+        // SliceGeometry가 Ok면 두 조각은 ④⑤ 또는 ⑥⑦ 검증을 통과했으므로 기하를 다시 검증하지 않는다
+        if (!positive.AdoptValidatedTopology(std::move(result.positive), error)
+            || (createOtherHalf && outOtherHalf && !negative.AdoptValidatedTopology(std::move(result.negative), error)))
         {
             if (outStatus) *outStatus = SliceStatus::InvalidInput;
             return false;

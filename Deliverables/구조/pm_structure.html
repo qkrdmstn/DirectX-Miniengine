@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>ProceduralMesh 구성</title>
+<style>
+html, body { margin: 0; background: #F5F9FD; }
+svg text { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; }
+.mono { font-family: Consolas, "Malgun Gothic", monospace; }
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 1600 800">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker>
+  </defs>
+
+  <text x="40" y="54" font-size="30" font-weight="700" fill="#12294A">ProceduralMesh의 구성</text>
+  <text x="40" y="84" font-size="16" fill="#5F7590">압축 바이트를 풀어 담고, 자르기 쉽게 "위치"와 "렌더 속성"을 나눠 저장한다</text>
+
+  <!-- 1 디코딩 -->
+  <rect x="40" y="110" width="430" height="300" rx="16" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="64" y="146" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">1</tspan> 디코딩 (렌더 정점)</text>
+  <g font-size="13">
+    <rect x="64" y="166" width="120" height="34" fill="#D7E8FA" stroke="#1A6BC4"/><text x="124" y="188" text-anchor="middle" fill="#1A6BC4">위치 12 B</text>
+    <rect x="184" y="166" width="70" height="34" fill="#FFE2B5" stroke="#E39B2D"/><text x="219" y="188" text-anchor="middle" fill="#B26C00">법선 4 B</text>
+    <rect x="254" y="166" width="70" height="34" fill="#DDF1E6" stroke="#2E9E6B"/><text x="289" y="188" text-anchor="middle" fill="#2E9E6B">UV 4 B</text>
+  </g>
+  <line x1="200" y1="206" x2="200" y2="240" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a)"/>
+  <text x="214" y="228" font-size="12.5" fill="#1A6BC4">풀기 + world 변환</text>
+  <rect x="64" y="246" width="382" height="140" rx="10" fill="#E8F2FC"/>
+  <text x="80" y="272" font-size="14.5" font-weight="700" fill="#12294A" class="mono">MeshRenderVertex</text>
+  <text x="80" y="298" font-size="13.5" fill="#12294A" class="mono">float3 position</text><text x="250" y="298" font-size="13" fill="#5F7590">world 위치</text>
+  <text x="80" y="320" font-size="13.5" fill="#12294A" class="mono">float3 normal</text><text x="250" y="320" font-size="13" fill="#5F7590">world 법선</text>
+  <text x="80" y="342" font-size="13.5" fill="#12294A" class="mono">float2 uv</text>
+  <text x="80" y="364" font-size="13.5" fill="#12294A" class="mono">float4 color</text><text x="250" y="342" font-size="13" fill="#5F7590">+ Binding</text><text x="250" y="364" font-size="13" fill="#5F7590">(로컬 위치·스킨)</text>
+
+  <line x1="472" y1="260" x2="530" y2="260" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a)"/>
+  <text x="501" y="246" font-size="12.5" fill="#1A6BC4" text-anchor="middle">용접</text>
+
+  <!-- 2 기하 구조 -->
+  <rect x="534" y="110" width="1026" height="300" rx="16" fill="#fff" stroke="#1A6BC4" stroke-width="2.5"/>
+  <text x="558" y="146" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">2</tspan> 기하 구조 (MeshGeometry) — 위치와 속성을 나눈다</text>
+
+  <!-- 그림: UV seam 정점 -->
+  <g transform="translate(570 170)">
+    <polygon points="0,90 90,10 90,170" fill="#EAF6F0" stroke="#2E9E6B" stroke-width="2"/>
+    <polygon points="90,10 180,90 90,170" fill="#E8F2FC" stroke="#1A6BC4" stroke-width="2"/>
+    <circle cx="90" cy="10" r="9" fill="#12294A"/>
+    <circle cx="90" cy="170" r="9" fill="#12294A"/>
+    <text x="102" y="14" font-size="13" fill="#12294A" font-weight="700">Vertex</text>
+    <circle cx="80" cy="28" r="5" fill="#2E9E6B"/><circle cx="100" cy="28" r="5" fill="#1A6BC4"/>
+    <text x="-10" y="200" font-size="12.5" fill="#5F7590">UV가 다른 두 면(seam)이 만나도</text>
+    <text x="-10" y="220" font-size="12.5" fill="#5F7590">위치는 Vertex 하나, Corner는 따로</text>
+  </g>
+
+  <g font-size="13.5">
+    <rect x="800" y="166" width="236" height="220" rx="10" fill="#12294A"/>
+    <text x="816" y="192" font-weight="700" fill="#8CC8F2" class="mono">Vertex</text>
+    <text x="816" y="214" fill="#D6E6F6">기하 점 = 위치 하나</text>
+    <text x="816" y="240" fill="#fff" class="mono">position</text>
+    <text x="816" y="262" fill="#fff" class="mono">origin</text><text x="890" y="262" fill="#B9D3EE">원본 정점 출처</text>
+    <text x="816" y="284" fill="#fff" class="mono">cutId</text><text x="890" y="284" fill="#B9D3EE">만든 절단</text>
+    <text x="816" y="316" fill="#B9D3EE">메시 · 로컬 위치 · 스킨이 같은</text>
+    <text x="816" y="336" fill="#B9D3EE">렌더 정점을 하나로 (용접)</text>
+    <text x="816" y="356" fill="#B9D3EE">→ 교점을 이웃과 공유</text>
+
+    <rect x="1050" y="166" width="236" height="220" rx="10" fill="#E8F2FC"/>
+    <text x="1066" y="192" font-weight="700" fill="#1A6BC4" class="mono">Corner</text>
+    <text x="1066" y="214" fill="#5F7590">렌더 정점 = Vertex + 속성</text>
+    <text x="1066" y="240" fill="#12294A" class="mono">vertex</text><text x="1140" y="240" fill="#5F7590">Vertex 번호</text>
+    <text x="1066" y="262" fill="#12294A" class="mono">normal · uv</text>
+    <text x="1066" y="284" fill="#12294A" class="mono">color</text>
+    <text x="1066" y="316" fill="#5F7590">UV seam · 각진 법선은</text>
+    <text x="1066" y="336" fill="#5F7590">Corner가 따로 가진다</text>
+
+    <rect x="1300" y="166" width="236" height="220" rx="10" fill="#E8F2FC"/>
+    <text x="1316" y="192" font-weight="700" fill="#1A6BC4" class="mono">Face</text>
+    <text x="1316" y="214" fill="#5F7590">삼각형</text>
+    <text x="1316" y="240" fill="#12294A" class="mono">corner[3]</text>
+    <text x="1316" y="262" fill="#12294A" class="mono">kind</text><text x="1370" y="262" fill="#5F7590">표면 / cap</text><text x="1316" y="306" fill="#12294A" class="mono">sourceTriangle</text>
+    <text x="1316" y="284" fill="#12294A" class="mono">cutId</text><line x1="1300" y1="320" x2="1536" y2="320" stroke="#9CC6EE"/><text x="1316" y="340" fill="#1A6BC4" font-size="12.5">MeshGeometry 전체에:</text>
+    <text x="1316" y="362" fill="#12294A" class="mono">edgeTags · caps</text>
+    
+    <text x="1316" y="380" fill="#5F7590" font-size="12.5">경계 종류 · 단면 기록</text>
+  </g>
+
+  <!-- 3 API / 렌더 -->
+  <rect x="40" y="440" width="1520" height="320" rx="16" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="64" y="476" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">3</tspan> 쓰는 방법 — 언리얼 ProceduralMeshComponent와 대응</text>
+  <g font-size="14">
+    <rect x="64" y="496" width="1472" height="40" rx="8" fill="#12294A"/>
+    <text x="84" y="522" fill="#fff" font-weight="700">하는 일</text>
+    <text x="400" y="522" fill="#fff" font-weight="700">우리 ProceduralMesh</text>
+    <text x="900" y="522" fill="#fff" font-weight="700">Unreal (비슷한 역할)</text>
+
+    <text x="84" y="566" fill="#12294A">원본에서 복사해 만들기</text>
+    <text x="400" y="566" fill="#1A6BC4" class="mono">CopyProceduralMeshFromStaticMesh → Build</text>
+    <text x="900" y="566" fill="#5F7590" class="mono">CopyProceduralMeshFromStaticMeshComponent</text>
+    <line x1="64" y1="580" x2="1536" y2="580" stroke="#DCE6F2"/>
+
+    <text x="84" y="610" fill="#12294A">평면으로 자르기 (결과 2개)</text>
+    <text x="400" y="610" fill="#1A6BC4" class="mono">SliceProceduralMesh</text>
+    <text x="900" y="610" fill="#5F7590" class="mono">SliceProceduralMesh</text>
+    <line x1="64" y1="624" x2="1536" y2="624" stroke="#DCE6F2"/>
+
+    <text x="84" y="654" fill="#12294A">기하 전체 교체 (렌더 캐시 재구성)</text>
+    <text x="400" y="654" fill="#1A6BC4" class="mono">SetTopology</text>
+    <text x="900" y="654" fill="#5F7590" class="mono">CreateMeshSection</text>
+    <line x1="64" y1="668" x2="1536" y2="668" stroke="#DCE6F2"/>
+
+    <text x="84" y="698" fill="#12294A">행렬로 위치만 갱신 (위상 · UV 그대로)</text>
+    <text x="400" y="698" fill="#1A6BC4" class="mono">UpdatePose</text>
+    <text x="900" y="698" fill="#5F7590" class="mono">UpdateMeshSection</text>
+    <line x1="64" y1="712" x2="1536" y2="712" stroke="#DCE6F2"/>
+
+    <text x="84" y="742" fill="#12294A">그리기</text>
+    <text x="400" y="742" fill="#1A6BC4">렌더 캐시를 굽고 ProceduralMeshRenderer가 GPU로 올림</text>
+    <text x="900" y="742" fill="#5F7590">컴포넌트가 렌더 스레드로 전달</text>
+  </g>
+</svg>
+</body>
+</html>

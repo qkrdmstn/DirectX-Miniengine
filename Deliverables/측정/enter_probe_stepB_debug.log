@@ -1,0 +1,649 @@
+=== run 1  frameDelta 1089.857 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1089.857 ms
+   10.186 ms  x1   /ModelViewer.RenderScene
+    8.850 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    1.037 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.662 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1074.064 ms  x1   /ModelViewer.Update
+ 1073.729 ms  x1   /ModelViewer.Update/CutController.Update
+ 1073.609 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1073.556 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  475.551 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  301.432 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+   90.516 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   64.919 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   29.898 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   25.580 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  210.898 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+   65.793 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   30.028 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   17.793 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   49.389 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   11.371 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   52.352 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   28.934 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  172.821 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.060 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  592.112 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  477.848 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+   63.382 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+   63.377 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   28.920 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  109.604 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+   70.186 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   30.517 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   68.224 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   68.209 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   29.597 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   40.298 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  126.092 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  126.074 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+   68.202 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   32.117 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   11.353 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    2.727 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   36.203 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   31.174 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+   99.067 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   67.589 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   31.655 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   29.476 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.021 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.037 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 11.664 ms
+=== run 2  frameDelta 1171.274 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1171.274 ms
+    8.819 ms  x1   /ModelViewer.RenderScene
+    7.590 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    3.215 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.203 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1160.460 ms  x1   /ModelViewer.Update
+ 1160.175 ms  x1   /ModelViewer.Update/CutController.Update
+ 1160.107 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1160.062 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  547.291 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  364.757 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  116.589 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   84.134 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   35.796 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   32.436 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  248.150 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+   73.977 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   33.777 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   20.126 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   66.465 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   11.991 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   57.867 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   31.911 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  180.985 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.027 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  609.585 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  490.694 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+   63.886 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+   63.880 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   27.582 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  129.346 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+   69.310 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   28.652 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   63.932 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   63.922 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   28.033 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   37.422 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  126.732 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  126.715 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+   69.719 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   32.086 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   10.697 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    2.362 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   35.598 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   30.307 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  104.162 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   73.095 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   33.744 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   28.849 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.018 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.023 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 7.018 ms
+=== run 3  frameDelta 1101.089 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1101.089 ms
+    9.506 ms  x1   /ModelViewer.RenderScene
+    8.140 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    3.344 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.600 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1089.551 ms  x1   /ModelViewer.Update
+ 1089.294 ms  x1   /ModelViewer.Update/CutController.Update
+ 1089.221 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1089.171 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  486.165 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  309.402 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  100.402 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   74.029 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   34.724 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   26.355 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  208.980 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+   66.654 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   29.146 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   15.677 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   47.389 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   11.857 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   50.595 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   28.350 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  175.159 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.031 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  599.548 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  482.215 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+   68.705 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+   68.698 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   31.853 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  111.420 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+   68.990 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   28.124 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   68.172 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   68.160 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   33.603 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   36.678 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  128.184 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  128.167 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+   75.264 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   34.614 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   10.708 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    2.484 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   32.552 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   28.293 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  103.940 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   71.191 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   31.943 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   30.576 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.018 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.027 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 16.558 ms
+=== run 4  frameDelta 1099.510 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1099.510 ms
+    8.996 ms  x1   /ModelViewer.RenderScene
+    7.774 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    3.236 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.334 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1088.468 ms  x1   /ModelViewer.Update
+ 1088.181 ms  x1   /ModelViewer.Update/CutController.Update
+ 1088.107 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1088.062 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  519.674 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  319.780 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+   90.918 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   64.028 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   28.284 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   26.869 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  228.839 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+   65.321 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   30.407 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   16.533 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   61.567 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   13.145 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   57.317 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   33.773 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  198.506 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.030 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  565.114 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  459.045 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+   65.104 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+   65.099 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   29.108 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  110.622 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+   68.280 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   28.472 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   62.295 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   62.285 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   27.373 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   36.877 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  115.804 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  115.785 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+   62.767 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   28.170 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   10.760 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    2.261 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   32.764 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   28.821 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+   93.054 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   64.355 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   28.694 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   27.308 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.017 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.026 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 6.892 ms
+=== run 5  frameDelta 1153.092 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1153.092 ms
+    9.775 ms  x1   /ModelViewer.RenderScene
+    8.193 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    3.840 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.155 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1141.314 ms  x1   /ModelViewer.Update
+ 1140.968 ms  x1   /ModelViewer.Update/CutController.Update
+ 1140.896 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1140.846 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  485.080 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  310.987 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  107.663 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   73.959 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   33.169 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   33.683 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  203.304 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+   63.477 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   29.028 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   15.332 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   48.489 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   10.810 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   50.117 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   28.011 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  172.285 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.030 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  651.828 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  529.361 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+   79.448 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+   79.440 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   34.293 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  136.970 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+   68.180 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   27.739 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   67.180 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   67.163 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   29.404 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   40.888 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  136.627 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  136.607 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+   75.991 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   33.541 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   13.203 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    2.756 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   37.029 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   32.043 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  106.409 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   68.724 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   28.805 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   35.978 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.018 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.026 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 15.620 ms
+=== run 6  frameDelta 1558.829 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1558.829 ms
+    9.885 ms  x1   /ModelViewer.RenderScene
+    8.270 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    3.816 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.251 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1545.029 ms  x1   /ModelViewer.Update
+ 1544.773 ms  x1   /ModelViewer.Update/CutController.Update
+ 1544.705 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1544.656 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  676.715 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  418.280 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  115.740 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   84.024 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   41.189 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   31.696 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  302.519 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+   99.126 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   50.167 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   26.907 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   58.539 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   18.410 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   68.737 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   36.535 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  256.975 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.031 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  863.961 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  727.034 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+  104.492 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+  104.479 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   47.078 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  164.401 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+  113.605 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   54.081 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   85.958 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   85.941 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   37.079 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   51.891 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  206.597 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  206.577 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+  115.435 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   48.402 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   16.032 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    3.075 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   62.851 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   56.508 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  120.932 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   77.662 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   34.370 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   41.478 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.021 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.026 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 14.554 ms
+=== run 7  frameDelta 1642.128 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1642.128 ms
+    9.012 ms  x1   /ModelViewer.RenderScene
+    7.743 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    3.519 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.059 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1631.280 ms  x1   /ModelViewer.Update
+ 1630.941 ms  x1   /ModelViewer.Update/CutController.Update
+ 1630.866 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1630.805 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  728.691 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  462.396 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  122.134 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   90.737 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   37.498 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   31.376 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  340.243 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+  133.971 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   61.524 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   24.094 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   59.550 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   14.304 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   74.158 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   45.609 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  264.571 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.033 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  896.928 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  732.109 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+   91.916 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+   91.908 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   38.571 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  185.795 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+  116.021 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   41.033 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+  107.770 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+  107.754 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   46.555 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   51.824 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  178.695 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  178.668 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+  102.138 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   49.912 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   18.736 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    2.916 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   44.220 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   38.357 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  145.955 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+  109.892 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   54.644 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   34.084 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.027 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.025 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 16.559 ms
+=== run 8  frameDelta 1888.028 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1888.028 ms
+   12.625 ms  x1   /ModelViewer.RenderScene
+   10.937 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    5.241 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    5.455 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1872.934 ms  x1   /ModelViewer.Update
+ 1872.647 ms  x1   /ModelViewer.Update/CutController.Update
+ 1872.567 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1872.519 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  742.183 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  475.133 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  138.633 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+  103.646 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   42.814 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   34.963 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  336.479 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+  105.004 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   53.897 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   25.343 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   79.922 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   21.471 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   76.987 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   44.329 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  265.488 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.027 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+ 1126.277 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  977.170 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+  106.812 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+  106.804 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   40.886 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  185.495 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+  192.413 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   80.795 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+  156.758 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+  156.730 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   71.494 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   86.573 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  249.033 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  249.015 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+  136.585 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   59.260 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   19.439 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    3.712 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   78.710 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   70.489 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  132.942 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   93.713 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   34.958 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   37.305 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.016 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.035 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 33.870 ms
+=== run 9  frameDelta 1510.649 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 1510.649 ms
+   15.003 ms  x1   /ModelViewer.RenderScene
+   13.053 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    5.730 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    6.884 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 1492.856 ms  x1   /ModelViewer.Update
+ 1492.441 ms  x1   /ModelViewer.Update/CutController.Update
+ 1492.357 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 1492.293 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+  646.852 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  406.097 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  127.943 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   89.806 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   38.596 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   38.117 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  278.133 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+   89.351 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   46.381 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   20.696 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+   56.411 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   15.772 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+   75.565 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   41.972 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  238.868 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.041 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  841.287 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  688.694 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+   94.133 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+   94.123 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   34.209 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  165.422 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+   91.391 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   37.305 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   93.344 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   93.331 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   43.094 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   52.073 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  192.264 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  192.243 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+  100.372 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   48.174 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   19.008 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    3.634 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   59.240 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   53.038 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  133.425 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+   93.086 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   41.089 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   38.798 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.025 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.027 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 33.773 ms
+=== run 10  frameDelta 2436.283 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 2436.283 ms
+   16.171 ms  x1   /ModelViewer.RenderScene
+   13.478 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    6.253 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    6.973 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 2416.782 ms  x1   /ModelViewer.Update
+ 2416.360 ms  x1   /ModelViewer.Update/CutController.Update
+ 2416.259 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 2416.197 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+ 1229.906 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  936.115 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  254.038 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+  186.704 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   99.380 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   67.264 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  682.045 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+  181.824 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   74.751 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   53.675 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+  198.103 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   34.608 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+  168.753 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   98.297 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  291.384 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.035 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+ 1179.598 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  958.290 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+  185.663 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+  185.652 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   93.697 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  224.493 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+  149.604 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   60.817 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+  128.390 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+  128.373 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   54.436 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   69.554 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  200.490 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  200.464 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+  116.654 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   60.610 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   16.563 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    3.143 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   54.614 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   48.168 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  202.722 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+  150.947 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   77.797 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   49.730 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.020 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.039 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 16.220 ms
+=== run 11  frameDelta 2562.546 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 2562.546 ms
+   11.079 ms  x1   /ModelViewer.RenderScene
+    9.668 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    4.202 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    5.206 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 2548.827 ms  x1   /ModelViewer.Update
+ 2548.364 ms  x1   /ModelViewer.Update/CutController.Update
+ 2548.240 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 2548.161 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+ 1605.261 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+ 1088.657 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  367.271 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+  283.343 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+  131.232 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   83.894 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  721.351 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+  188.593 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   87.870 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   55.992 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+  224.082 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   36.675 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+  164.564 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   99.983 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  514.020 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.044 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  936.587 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  755.500 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+  147.503 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+  147.493 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   64.693 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  176.395 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+   99.517 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   34.560 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+   84.403 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+   84.388 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   34.421 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   45.618 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  201.985 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  201.960 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+  120.488 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   67.141 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   20.145 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    3.079 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   48.262 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   42.870 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  163.540 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+  118.855 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   59.580 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   42.812 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.035 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.024 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 33.342 ms
+=== run 12  frameDelta 2137.669 ms
+job status Ok  +: verts 7336 faces 14668 | -: verts 8748 faces 17318 | loops 1
+engine deltaT 16.667 ms  wall Update-to-Update 2137.669 ms
+   10.429 ms  x1   /ModelViewer.RenderScene
+    8.445 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw
+    3.970 ms  x1   /ModelViewer.RenderScene/CutDebugView.Draw/Sync
+    4.289 ms  x6   /ModelViewer.RenderScene/CutDebugView.Draw/Upload
+ 2124.919 ms  x1   /ModelViewer.Update
+ 2124.447 ms  x1   /ModelViewer.Update/CutController.Update
+ 2124.181 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll
+ 2124.034 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob
+ 1194.845 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob
+  811.774 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build
+  138.296 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology
+   98.870 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry
+   46.822 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/ValidateMeshGeometry/CollectEdgeUsage
+   39.404 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/AdoptValidatedTopology/renderBake+SetRenderData
+  673.442 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry
+  123.412 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry
+   52.562 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage
+   82.035 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck
+  262.276 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld
+   45.129 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces
+  134.811 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags
+   63.972 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage
+  380.541 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/1 ExtractJob/ReadStaticMesh
+    0.057 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/2 static matrices
+  924.390 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane
+  754.002 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run
+  139.723 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput
+  139.714 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry
+   67.030 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage
+  158.644 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/b classify+faces
+  111.080 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece
+   46.277 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/c buildPiece/CollectEdgeUsage
+  101.605 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput
+  101.589 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry
+   46.672 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage
+   44.187 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/e loops
+  198.678 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap
+  198.651 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap
+  109.514 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry
+   45.002 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage
+   15.863 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/a rings+earclip
+    3.628 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/b copyPiece
+   59.838 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck
+   52.595 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage
+  154.255 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces
+  110.574 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry
+   48.615 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/ValidateMeshGeometry/CollectEdgeUsage
+   41.650 ms  x2   /ModelViewer.Update/CutController.Update/ConfirmAll/ConfirmJob/4 SliceWithPlane/adopt pieces/renderBake+SetRenderData
+    0.030 ms  x1   /ModelViewer.Update/CutController.Update/ConfirmAll/DiscardCut
+    0.185 ms  x1   /ModelViewer.Update/CutController.Update/SkinJobs
+next frame: engine deltaT 16.667 ms  wall 34.652 ms
+DONE

@@ -954,7 +954,31 @@ namespace MeshCutting
             job.lastCutError = job.patchError;
             return;
         }
-        if (!SkinPatch(job, *positive, job.lastCutError))
+        if (job.key.kind == CutJobKind::StaticMesh)
+        {
+            // 스태틱은 ReadStaticMesh가 이미 같은 RigidPoint로 정점을 이번 프레임 world에 옮겼으므로 SkinPatch(UpdatePose)를 건너뛴다.
+            // 정점 버전이 오르지 않아도 SliceProceduralMesh가 조각에 새 버전을 주므로 괜찮다. 행렬만 채운다.
+            const CutTarget* target = FindTarget(job.key.target);
+            bool matricesOk = false;
+            if (target == nullptr || target->model == nullptr || !job.source)
+                job.lastCutError = "no source";
+            else
+            {
+                PhaseTimer timer(L"Job matrices", m_Frame.jobMatrices);
+                matricesOk = BuildJobMatrices(*target, job, job.skinMatrices, &job.lastCutError);
+                if (matricesOk && (job.skinMatrices.empty() || job.skinMatrices[0].empty()))
+                {
+                    matricesOk = false;
+                    job.lastCutError = "empty rigid matrix";
+                }
+            }
+            if (!matricesOk)
+            {
+                job.lastCutStatus = SliceStatus::InvalidInput;
+                return;
+            }
+        }
+        else if (!SkinPatch(job, *positive, job.lastCutError))
         {
             job.lastCutStatus = SliceStatus::InvalidInput;
             return;
@@ -976,7 +1000,7 @@ namespace MeshCutting
         job.appliedMatrices[1].clear();
         if (job.key.kind == CutJobKind::StaticMesh)
         {
-            // 조각은 SkinPatch가 이번 프레임 world로 이미 옮겼다. 그 world를 기준으로 이후 이동을 행렬로만 표현한다.
+            // 조각은 ReadStaticMesh가 이번 프레임 world로 이미 옮겼다. 그 world를 기준으로 이후 이동을 행렬로만 표현한다.
             job.cutWorld = job.skinMatrices[0][0];
             DirectX::XMStoreFloat4x4(&job.pieceWorld, DirectX::XMMatrixIdentity());
         }

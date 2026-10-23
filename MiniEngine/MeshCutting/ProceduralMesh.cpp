@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cmath>
 #include <limits>
 
@@ -152,7 +153,33 @@ namespace MeshCutting
         const SliceStatus status = BuildMeshGeometry(data, kDefaultEpsilonScale, geometry, stats, error);
         if (status != SliceStatus::Ok)
             return status;
-        return SetTopology(std::move(geometry), error) ? SliceStatus::Ok : SliceStatus::InvalidInput;
+        // BuildMeshGeometry가 이미 검증했으므로 다시 검증하지 않는다
+        return AdoptValidatedTopology(std::move(geometry), error) ? SliceStatus::Ok : SliceStatus::InvalidInput;
+    }
+
+    // MSVC의 unordered_map(edgeTags) 이동 생성은 버킷을 할당하므로 noexcept가 아니다. 기본 생성 뒤 이동 대입으로 옮긴다.
+    ProceduralMesh::ProceduralMesh(ProceduralMesh&& other)
+    {
+        *this = std::move(other);
+    }
+
+    ProceduralMesh& ProceduralMesh::operator=(ProceduralMesh&& other) noexcept
+    {
+        if (this != &other)
+        {
+            // 원본의 표시를 먼저 끈다: 멤버를 옮기는 도중에 원본이 참인 채로 기하를 잃는 순간이 없게 한다
+            const bool validated = other.m_GeometryValidated;
+            other.m_GeometryValidated = false;
+            m_Geometry = std::move(other.m_Geometry);
+            m_GeometryValidated = validated;
+            m_SectionSplit = other.m_SectionSplit;
+            m_Data = std::move(other.m_Data);
+            m_Bounds = other.m_Bounds;
+            m_VertexVersion = other.m_VertexVersion;
+            m_TopologyVersion = other.m_TopologyVersion;
+            other.m_GeometryValidated = false;
+        }
+        return *this;
     }
 
     bool ProceduralMesh::SetMesh(ProceduralMeshData data, std::string* error)
@@ -160,6 +187,7 @@ namespace MeshCutting
         if (!SetRenderData(std::move(data), error))
             return false;
         m_Geometry.Clear();
+        m_GeometryValidated = false;
         m_SectionSplit = false;
         return true;
     }
@@ -208,11 +236,21 @@ namespace MeshCutting
     {
         if (ValidateMeshGeometry(geometry, kDefaultEpsilonScale, error) != SliceStatus::Ok)
             return false;
+        return AdoptValidatedTopology(std::move(geometry), error);
+    }
+
+    bool ProceduralMesh::AdoptValidatedTopology(MeshGeometry geometry, std::string* error)
+    {
+#ifdef _DEBUG
+        // 검증을 건너뛰는 자리의 계약 확인: 호출자가 넘긴 기하는 이미 기본 epsilon 검증을 통과했어야 한다
+        assert(ValidateMeshGeometry(geometry, kDefaultEpsilonScale, nullptr) == SliceStatus::Ok);
+#endif
         ProceduralMeshData data;
         BuildRenderMesh(geometry, data);
         if (!SetRenderData(std::move(data), error))
             return false;
         m_Geometry = std::move(geometry);
+        m_GeometryValidated = true;
         m_SectionSplit = false;
         return true;
     }
@@ -255,6 +293,7 @@ namespace MeshCutting
         m_Geometry.vertices.swap(posed.vertices);
         m_Data.vertices.swap(vertices);
         m_Bounds = bounds;
+        m_GeometryValidated = false;     // 정점이 움직였으므로 면적·축퇴를 다시 확인하지 않은 상태
         m_VertexVersion = NextVersion();
         if (error) error->clear();
         return true;
@@ -265,6 +304,7 @@ namespace MeshCutting
         ProceduralMeshData empty;
         std::swap(m_Data, empty);
         m_Geometry.Clear();
+        m_GeometryValidated = false;
         m_SectionSplit = false;
         m_Bounds = {};
         m_VertexVersion = NextVersion();

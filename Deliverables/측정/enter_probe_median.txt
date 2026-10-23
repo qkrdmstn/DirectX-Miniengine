@@ -1,0 +1,51 @@
+1 ExtractJob                                                                                    med   79.334 min   76.076 max  159.855
+1 ExtractJob/ProceduralMesh::Build                                                              med   53.555 min   52.096 max  113.673
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry                                            med   39.070 min   37.176 max   82.133
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry                       med   10.478 min    9.336 max   25.902
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/ValidateMeshGeometry/CollectEdgeUsage      med    5.448 min    5.058 max    9.916
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/a inputCheck                               med    2.784 min    2.700 max    3.917
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/b weld                                     med    7.583 min    7.175 max   20.759
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/c cornersFaces                             med    3.780 min    3.333 max    6.187
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags                             med    9.787 min    7.898 max   19.478
+1 ExtractJob/ProceduralMesh::Build/BuildMeshGeometry/d boundaryTags/CollectEdgeUsage            med    5.003 min    4.658 max   13.506
+1 ExtractJob/ProceduralMesh::Build/SetTopology                                                  med   14.944 min   14.229 max   31.535
+1 ExtractJob/ProceduralMesh::Build/SetTopology/a Validate                                       med    9.361 min    8.987 max   19.580
+1 ExtractJob/ProceduralMesh::Build/SetTopology/a Validate/ValidateMeshGeometry                  med    9.359 min    8.985 max   19.578
+1 ExtractJob/ProceduralMesh::Build/SetTopology/a Validate/ValidateMeshGeometry/CollectEdgeUsage med    4.875 min    4.459 max    9.697
+1 ExtractJob/ProceduralMesh::Build/SetTopology/b BuildRenderMesh                                med    1.988 min    1.735 max    7.389
+1 ExtractJob/ProceduralMesh::Build/SetTopology/c SetRenderData                                  med    3.549 min    3.298 max    4.559
+1 ExtractJob/ProceduralMesh::Build/SetTopology/d move                                           med    0.001 min    0.001 max    0.002
+1 ExtractJob/ReadStaticMesh                                                                     med   24.874 min   22.795 max   45.341
+2 SkinPatch                                                                                     med    6.689 min    5.854 max   11.457
+2 SkinPatch/UpdatePose                                                                          med    6.684 min    5.849 max   11.446
+3 TotalArea                                                                                     med    0.356 min    0.314 max    0.589
+4 SliceWithPlane                                                                                med   89.815 min   85.524 max  210.567
+4 SliceWithPlane/ContainsLoops                                                                  med    0.006 min    0.005 max    0.009
+4 SliceWithPlane/SliceProceduralMesh                                                            med   89.807 min   85.516 max  210.554
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run                                                med   71.172 min   67.322 max  148.070
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/a validateInput                                med    9.241 min    8.828 max   16.107
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/a validateInput/ValidateMeshGeometry           med    9.239 min    8.827 max   16.104
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/a validateInput/ValidateMeshGeometry/CollectEdgeUsage med    4.940 min    4.519 max    9.731
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/b classify+faces                               med   13.748 min   12.367 max   20.762
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/c buildPiece                                   med   11.847 min   11.325 max   30.502
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/c buildPiece/CollectEdgeUsage                  med    4.757 min    4.438 max    7.119
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/d validateOutput                               med    8.896 min    8.310 max   27.255
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/d validateOutput/ValidateMeshGeometry          med    8.895 min    8.309 max   27.250
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/d validateOutput/ValidateMeshGeometry/CollectEdgeUsage med    4.532 min    4.210 max   12.040
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/e loops                                        med    6.011 min    5.528 max   12.714
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap                                          med   20.127 min   19.235 max   49.818
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap/BuildCap                                 med   20.123 min   19.231 max   49.808
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry            med    9.647 min    9.081 max   26.231
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap/BuildCap/ValidateMeshGeometry/CollectEdgeUsage med    5.486 min    4.812 max   16.274
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap/BuildCap/a rings+earclip                 med    0.720 min    0.637 max    1.550
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap/BuildCap/b copyPiece                     med    1.506 min    1.206 max    4.215
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck            med    6.723 min    6.091 max   13.872
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/f cap/BuildCap/c capFaces+edgeCheck/CollectEdgeUsage med    4.923 min    4.443 max   10.625
+4 SliceWithPlane/SliceProceduralMesh/Slicer::Run/g move                                         med    0.006 min    0.005 max    0.018
+4 SliceWithPlane/SliceProceduralMesh/a Validate                                                 med    9.555 min    8.795 max   29.841
+4 SliceWithPlane/SliceProceduralMesh/a Validate/ValidateMeshGeometry                            med    9.553 min    8.792 max   29.837
+4 SliceWithPlane/SliceProceduralMesh/a Validate/ValidateMeshGeometry/CollectEdgeUsage           med    5.247 min    4.572 max   17.071
+4 SliceWithPlane/SliceProceduralMesh/b BuildRenderMesh                                          med    2.073 min    1.827 max    6.811
+4 SliceWithPlane/SliceProceduralMesh/c SetRenderData                                            med    3.516 min    3.335 max   16.278
+4 SliceWithPlane/SliceProceduralMesh/d move                                                     med    0.003 min    0.002 max    0.024
+5 Hide+Break+Area+Info                                                                          med    0.372 min    0.335 max    1.321

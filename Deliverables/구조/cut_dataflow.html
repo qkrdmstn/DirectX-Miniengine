@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>절단 데이터 흐름</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #F5F9FD; }
+body { width: 1600px; height: 820px; padding: 36px 40px; font-family: "Malgun Gothic", "맑은 고딕", sans-serif; color: #12294A; position: relative; }
+h1 { font-size: 30px; margin-bottom: 30px; }
+.row { display: flex; align-items: stretch; gap: 0; }
+.card { width: 348px; background: #fff; border: 2px solid #DCE6F2; border-radius: 16px; padding: 14px; display: flex; flex-direction: column; }
+.card.blue { background: #E8F2FC; border-color: #9CC6EE; }
+.card.dark { background: #12294A; border-color: #12294A; color: #fff; }
+.step { font-size: 18px; margin-right: 4px; font-weight: 700; color: #1A6BC4; }
+.dark .step { color: #8CC8F2; }
+.name { font-size: 21px; font-weight: 700; margin: 2px 0 10px; }
+.pic { height: 240px; border-radius: 10px; background: #0E1116; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; }
+.pic img { width: 100%; height: 100%; object-fit: contain; }
+.desc { font-size: 14.5px; line-height: 1.55; margin-top: 12px; color: #5F7590; }
+.dark .desc { color: #B9D3EE; }
+.code { font-family: Consolas, monospace; font-size: 13px; color: #1A6BC4; }
+.dark .code { color: #8CC8F2; }
+.arrow { width: 42px; display: flex; align-items: center; justify-content: center; font-size: 34px; color: #1A6BC4; }
+.copy img { filter: sepia(1) hue-rotate(170deg) saturate(2.2) brightness(0.95); }
+.badge { position: absolute; left: 10px; top: 10px; font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: #1A6BC4; color: #fff; }
+.two { display: flex; flex-direction: column; gap: 10px; }
+.two .tag { font-size: 14px; font-weight: 700; padding: 8px 10px; border-radius: 10px; background: #fff; }
+.pos { border: 2.5px solid #2E9E6B; color: #2E9E6B; }
+.neg { border: 2.5px solid #C2417A; color: #C2417A; }
+.bottom { margin-top: 26px; display: flex; gap: 24px; align-items: center; background: #fff; border: 2px solid #DCE6F2; border-radius: 16px; padding: 16px 22px; }
+.bottom .pic { width: 330px; height: 170px; flex: none; }
+.bottom .name { margin: 0 0 6px; }
+.bottom p { font-size: 16px; line-height: 1.7; }
+.down { position: absolute; right: 200px; top: 548px; font-size: 30px; color: #1A6BC4; }
+</style>
+</head>
+<body>
+<h1>스태틱 메시 절단의 데이터 흐름</h1>
+
+<div class="row">
+  <div class="card">
+    <div class="step">①</div><div class="name">원본 메시</div>
+    <div class="pic"><img src="img/bunny.png" alt=""></div>
+    <div class="desc">ModelInstance 하나의 메시 하나 (버니)<br><span class="code">m_GeometryCPU</span> 정점·인덱스<br>+ ModelInstance의 노드 world 변환</div>
+  </div>
+  <div class="arrow">➜</div>
+
+  <div class="card blue copy">
+    <div class="step">②</div><div class="name">복사 → ProceduralMesh</div>
+    <div class="pic"><img src="img/bunny.png" alt=""><span class="badge">복사본 1개</span></div>
+    <div class="desc"><span class="code">CopyProceduralMeshFromStaticMesh</span><br>정점을 world로 옮기고 용접<br>→ 자를 수 있는 메시</div>
+  </div>
+  <div class="arrow">➜</div>
+
+  <div class="card blue">
+    <div class="step">③</div><div class="name">평면으로 자르기</div>
+    <div class="pic"><img src="img/demo1_plane.png" alt=""></div>
+    <div class="desc"><span class="code">SliceProceduralMesh</span><br>분류 → 걸친 면 분할<br>→ 채울 수 있는 단면에 cap</div>
+  </div>
+  <div class="arrow">➜</div>
+
+  <div class="card dark">
+    <div class="step">④</div><div class="name">ProceduralMesh 2개</div>
+    <div class="pic"><img src="img/demo2_solid.png" alt=""></div>
+    <div class="two" style="margin-top: 12px;">
+      <div class="tag pos">ProceduralMesh · + 쪽 (법선 쪽)</div>
+      <div class="tag neg">ProceduralMesh · − 쪽 (반대쪽)</div>
+    </div>
+  </div>
+</div>
+
+<div class="down">⬇</div>
+
+<div class="bottom">
+  <div class="pic"><img src="img/summary_bunny_cut.png" alt=""></div>
+  <div>
+    <div class="step">⑤</div><div class="name">원본 대체</div>
+    <p>절단이 성공하고 단면이 평면 사각형 안에 있을 때만 확정한다. 실패하면 원본을 그대로 둔다.<br>확정하면 원본 버니는 숨기고 (<span class="code">SetMeshVisibility</span>), 두 ProceduralMesh를 원본 자리에서 평면 법선 방향으로 조금 벌려 그린다.<br>다른 모델(큐브, 캐릭터)은 그대로 남는다.</p>
+  </div>
+</div>
+</body>
+</html>

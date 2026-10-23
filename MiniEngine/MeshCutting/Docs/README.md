@@ -20,6 +20,8 @@
 | `ProceduralMeshSimplification.md` | 공통 메시 통합, 중간 변환·중복 제거 | 구현·CPU·Debug/Release 빌드 검증 완료 (`cb1c12a`) | 현재 구조와 검증 확인 |
 | `RegionCutDesign.md` | 영역 작업, 걸친 joint 합친 뒤 자르기 (NDC 한계 돌파) | 설계안, 보류 (JointCutDesign 다음 단계) | 한계 돌파 작업 전 |
 | `CutFrameDropReport.md` | 절단 확정 후 매 프레임 드랍 측정, 원인(조각 재계산·재업로드)과 해결안 | 안 1 구현 `57587ba`, 안 2 구현 (측정·확인 실험 `4f4bfb0`). 안 3 미구현, 구현 후 재측정 전 | 확정 조각 갱신·업로드 비용을 줄일 때 |
+| `CutEnterCostReport.md` | 스태틱 bunny Enter 1회 비용의 단계별 실측(약 186 ms), 중복 검증·추출 반복과 줄일 수 있는 양 | 측정 완료 (`fc1f739` Release, 임시 계측 되돌림), 개선 미구현 | Enter 프레임 비용을 줄일 때 |
+| `EnterCostReductionDesign.md` | Enter 비용 줄이기 단계 설계: C 스태틱 SkinPatch 생략 → B 중복 검증 제거 → A 용접 결과 캐시 | 단계 C·B 구현·검증 완료 (커밋 전, Enter 약 186 → 148 ms), A 설계안 | Enter 비용 개선을 구현할 때 |
 | `PickPerformanceDesign.md` | 절단 후보 선택(pick·추출) 성능 측정과 BVH 없는 개선 방향 | 안 A는 U-1로 구현 (`ccf0349`), 안 B 설계안. U-1 이후 실측 포함 | 편집 중·Enter 프레임 비용을 줄일 때 |
 
 ## 완료 기록 (코드 주석이 참조하므로 자리를 옮기지 않는다)

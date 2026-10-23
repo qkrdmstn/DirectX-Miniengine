@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>단면 생성</title>
+<style>
+html, body { margin: 0; background: #F5F9FD; }
+svg text { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; }
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="620" viewBox="0 0 1600 620">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker>
+    <marker id="o" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#B26C00"/></marker>
+    <marker id="p" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#C2417A"/></marker>
+    <!-- 예시 단면: 바깥 루프 + 구멍 루프 -->
+    <polygon id="outer" points="20,60 80,15 160,30 185,110 120,180 35,155"/>
+    <polygon id="hole" points="80,80 130,75 135,120 85,125"/>
+    <g id="outerDots" fill="#E39B2D">
+      <circle cx="20" cy="60" r="5.5"/><circle cx="80" cy="15" r="5.5"/><circle cx="160" cy="30" r="5.5"/>
+      <circle cx="185" cy="110" r="5.5"/><circle cx="120" cy="180" r="5.5"/><circle cx="35" cy="155" r="5.5"/>
+    </g>
+    <g id="holeDots" fill="#C2417A">
+      <circle cx="80" cy="80" r="5.5"/><circle cx="130" cy="75" r="5.5"/><circle cx="135" cy="120" r="5.5"/><circle cx="85" cy="125" r="5.5"/>
+    </g>
+  </defs>
+
+  <text x="30" y="52" font-size="30" font-weight="700" fill="#12294A">단면(cap) 생성</text>
+  <text x="30" y="82" font-size="15" fill="#5F7590">예: 관처럼 속이 빈 물체를 잘랐을 때의 단면 (바깥 루프 1개 + 구멍 루프 1개). 그림은 절단 평면 위에서 본 모습</text>
+
+  <g fill="#fff" stroke="#DCE6F2" stroke-width="2">
+    <rect x="30" y="110" width="282" height="470" rx="14"/>
+    <rect x="340" y="110" width="282" height="470" rx="14"/>
+    <rect x="650" y="110" width="282" height="470" rx="14"/>
+    <rect x="960" y="110" width="282" height="470" rx="14"/>
+    <rect x="1270" y="110" width="300" height="470" rx="14" fill="#12294A" stroke="#12294A"/>
+  </g>
+  <g stroke="#1A6BC4" stroke-width="3" fill="none">
+    <line x1="314" y1="300" x2="336" y2="300" marker-end="url(#a)"/>
+    <line x1="624" y1="300" x2="646" y2="300" marker-end="url(#a)"/>
+    <line x1="934" y1="300" x2="956" y2="300" marker-end="url(#a)"/>
+    <line x1="1244" y1="300" x2="1266" y2="300" marker-end="url(#a)"/>
+  </g>
+
+  <!-- ① 루프 추출 -->
+  <text x="50" y="146" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">①</tspan> 루프 추출</text>
+  <g transform="translate(70 180)">
+    <use href="#outer" fill="none" stroke="#E39B2D" stroke-width="3.5"/>
+    <use href="#hole" fill="none" stroke="#C2417A" stroke-width="3.5"/>
+    <use href="#outerDots"/><use href="#holeDots"/>
+    <g stroke="#B26C00" stroke-width="2" fill="none">
+      <line x1="42" y1="44" x2="62" y2="29" marker-end="url(#o)"/>
+      <line x1="112" y1="21" x2="136" y2="26" marker-end="url(#o)"/>
+      <line x1="171" y1="64" x2="177" y2="86" marker-end="url(#o)"/>
+    </g>
+    <g stroke="#C2417A" stroke-width="2" fill="none">
+      <line x1="83" y1="100" x2="83" y2="114" marker-end="url(#p)"/>
+    </g>
+  </g>
+  <text x="50" y="410" font-size="14.5" fill="#12294A">잘린 조각의 경계에서</text>
+  <text x="50" y="434" font-size="14.5" fill="#12294A">절단 에지(Cut)만 모아</text>
+  <text x="50" y="458" font-size="14.5" fill="#12294A">정점 공유로 이어 붙인다</text>
+  <text x="50" y="494" font-size="13" fill="#5F7590">· 방향 = 삼각형 감김 방향</text>
+  <text x="50" y="516" font-size="13" fill="#5F7590">· 정점마다 들어오고 나가는 에지 1개씩</text>
+  <text x="50" y="538" font-size="13" fill="#5F7590">· 원본 구멍(OpenSurface)에서 끝나면</text><text x="50" y="558" font-size="13" fill="#5F7590">  cap 없는 열린 사슬로 둔다</text>
+
+  <!-- ② 2D 투영 · 포함 관계 -->
+  <text x="360" y="146" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">②</tspan> 2D 투영 · 포함</text>
+  <g transform="translate(380 180)">
+    <line x1="0" y1="200" x2="210" y2="200" stroke="#9AA8B8" stroke-width="1.5" marker-end="url(#a)"/>
+    <line x1="0" y1="200" x2="0" y2="-5" stroke="#9AA8B8" stroke-width="1.5" marker-end="url(#a)"/>
+    <text x="200" y="216" font-size="13" fill="#5F7590">u</text>
+    <text x="-14" y="6" font-size="13" fill="#5F7590">v</text>
+    <use href="#outer" fill="#FFF7EA" stroke="#E39B2D" stroke-width="3.5"/>
+    <use href="#hole" fill="#fff" stroke="#C2417A" stroke-width="3.5"/>
+    <text x="40" y="150" font-size="12.5" fill="#B26C00" font-weight="700">바깥</text>
+    <text x="40" y="166" font-size="12" fill="#B26C00">깊이 0</text>
+    <text x="92" y="104" font-size="12.5" fill="#C2417A" font-weight="700">구멍</text>
+    <text x="92" y="118" font-size="12" fill="#C2417A">깊이 1</text>
+  </g>
+  <text x="360" y="410" font-size="14.5" fill="#12294A">평면 좌표 (u, v)로 옮기고</text>
+  <text x="360" y="434" font-size="14.5" fill="#12294A">어느 루프가 어느 루프 안에</text>
+  <text x="360" y="458" font-size="14.5" fill="#12294A">있는지 본다</text>
+  <text x="360" y="494" font-size="13" fill="#5F7590">· 검사: 꼬임 · 루프끼리 겹침</text>
+  <text x="360" y="516" font-size="13" fill="#5F7590">  면적 0 · 감김 방향 · 중첩 깊이 ≤ 1</text>
+  <text x="360" y="538" font-size="13" fill="#5F7590">· 걸린 루프는 cap에서 뺀다</text>
+
+  <!-- ③ 구멍 브리지 -->
+  <text x="670" y="146" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">③</tspan> 구멍 잇기 (브리지)</text>
+  <g transform="translate(690 180)">
+    <use href="#outer" fill="#FFF7EA" stroke="#E39B2D" stroke-width="3.5"/>
+    <use href="#hole" fill="#fff" stroke="#C2417A" stroke-width="3.5"/>
+    <line x1="135" y1="120" x2="185" y2="110" stroke="#1A6BC4" stroke-width="4"/>
+    <use href="#outerDots"/><use href="#holeDots"/>
+    <text x="140" y="145" font-size="13" fill="#1A6BC4" font-weight="700">브리지</text>
+  </g>
+  <text x="670" y="410" font-size="14.5" fill="#12294A">구멍에서 u가 가장 큰 정점을</text>
+  <text x="670" y="434" font-size="14.5" fill="#12294A">바깥 루프의 가장 가까운</text><text x="670" y="458" font-size="14.5" fill="#12294A">보이는 정점과 잇는다</text>
+  <text x="670" y="494" font-size="13" fill="#5F7590">· 바깥 → 브리지 → 구멍 한 바퀴</text>
+  <text x="670" y="516" font-size="13" fill="#5F7590">  → 브리지 → 바깥으로 돌아와</text>
+  <text x="670" y="538" font-size="13" fill="#5F7590">  구멍 있는 단면이 루프 하나가 된다</text>
+
+  <!-- ④ ear clipping -->
+  <text x="980" y="146" font-size="19" font-weight="700" fill="#12294A"><tspan fill="#1A6BC4">④</tspan> 귀 자르기</text>
+  <g transform="translate(1000 180)">
+    <use href="#outer" fill="#FFF7EA" stroke="none"/>
+    <g stroke="#B26C00" stroke-width="1.5" fill="#FFE2B5">
+      <polygon points="20,60 80,15 80,80"/>
+      <polygon points="80,15 160,30 130,75"/>
+      <polygon points="80,15 130,75 80,80"/>
+      <polygon points="160,30 185,110 130,75"/>
+      <polygon points="185,110 135,120 130,75"/>
+    </g>
+    <polygon points="20,60 80,15 80,80" fill="#E39B2D" stroke="#B26C00" stroke-width="2"/>
+    <use href="#outer" fill="none" stroke="#E39B2D" stroke-width="3.5"/>
+    <use href="#hole" fill="#fff" stroke="#C2417A" stroke-width="3.5"/>
+    <use href="#outerDots"/><use href="#holeDots"/>
+    <text x="38" y="58" font-size="13" font-weight="700" fill="#fff">귀</text>
+  </g>
+  <text x="980" y="410" font-size="14.5" fill="#12294A">볼록하고 안에 다른 정점이</text>
+  <text x="980" y="434" font-size="14.5" fill="#12294A">없는 삼각형(귀)을 떼어 내고</text>
+  <text x="980" y="458" font-size="14.5" fill="#12294A">남은 다각형에서 반복한다</text>
+  <text x="980" y="494" font-size="13" fill="#5F7590">· 새 정점을 만들지 않는다</text>
+  <text x="980" y="516" font-size="13" fill="#5F7590">· 바깥 + 구멍 묶음마다 시도</text>
+  <text x="980" y="538" font-size="13" fill="#5F7590">· 실패한 묶음은 cap만 뺀다</text>
+
+  <!-- ⑤ 결과 -->
+  <text x="1290" y="146" font-size="19" font-weight="700" fill="#fff"><tspan fill="#8CC8F2">⑤</tspan> 완성된 cap</text>
+  <g transform="translate(1320 180)">
+    <g stroke="#B26C00" stroke-width="1.5" fill="#FFD9A0">
+      <polygon points="20,60 80,15 80,80"/>
+      <polygon points="80,15 160,30 130,75"/>
+      <polygon points="80,15 130,75 80,80"/>
+      <polygon points="160,30 185,110 130,75"/>
+      <polygon points="185,110 135,120 130,75"/>
+      <polygon points="185,110 120,180 135,120"/>
+      <polygon points="120,180 85,125 135,120"/>
+      <polygon points="120,180 35,155 85,125"/>
+      <polygon points="35,155 80,80 85,125"/>
+      <polygon points="35,155 20,60 80,80"/>
+    </g>
+    <use href="#outer" fill="none" stroke="#E39B2D" stroke-width="3.5"/>
+    <use href="#hole" fill="#12294A" stroke="#C2417A" stroke-width="3.5"/>
+    <use href="#outerDots"/><use href="#holeDots"/>
+  </g>
+  <text x="1290" y="410" font-size="14.5" fill="#fff">삼각형 10개, 구멍은 비어 있다</text>
+  <text x="1290" y="446" font-size="13" fill="#B9D3EE">· 위치는 루프 정점을 공유</text>
+  <text x="1290" y="468" font-size="13" fill="#B9D3EE">  → 표면과 cap 사이에 틈이 없다</text>
+  <text x="1290" y="490" font-size="13" fill="#B9D3EE">· 두 조각에 각각 하나씩 만든다</text>
+  <text x="1290" y="512" font-size="13" fill="#B9D3EE">  (법선: + 조각 −n, − 조각 +n)</text>
+  <text x="1290" y="534" font-size="13" fill="#B9D3EE">· 법선 · UV는 cap 전용 Corner</text><text x="1290" y="556" font-size="13" fill="#B9D3EE">  UV = 평면 좌표 (u, v) × capUvScale</text>
+</svg>
+</body>
+</html>

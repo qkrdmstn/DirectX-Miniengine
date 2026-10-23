@@ -3339,6 +3339,147 @@ static bool SamePiece(const MeshGeometry& a, const MeshGeometry& b)
     return true;
 }
 
+// ---------------------------------------------------------------- 검증 계약 (검증된 기하를 다시 검증하지 않는다)
+
+// SliceProceduralMesh가 검증 없이 채택한 두 조각이 실제로 ValidateMeshGeometry를 통과하는가
+static void CheckPiecesPass(const ProceduralMesh& a, const ProceduralMesh& b, const char* label)
+{
+    std::string why;
+    const bool okA = ValidateMeshGeometry(a.GetGeometry(), kDefaultEpsilonScale, &why) == SliceStatus::Ok;
+    const bool okB = ValidateMeshGeometry(b.GetGeometry(), kDefaultEpsilonScale, &why) == SliceStatus::Ok;
+    if (!okA || !okB)
+        std::printf("validate failed: %s %s\n", label, why.c_str());
+    CHECK(okA && okB);
+    CHECK(a.IsGeometryValidated() && b.IsGeometryValidated());
+}
+
+static void TestSlicedPiecesStayValid()
+{
+    std::string error;
+    ProceduralMesh box, boxOther;
+    CHECK(box.SetTopology(MakeBox(), &error));
+    CHECK(SliceProceduralMesh(box, { 0, 1, 0 }, { 0, 1, 0 }, true, &boxOther, SliceCapOption::CreateNewSectionForCap, 1, nullptr, &error));
+    CheckPiecesPass(box, boxOther, "capped");
+
+    // 재절단: 채택된 조각을 다시 자른다 (표시가 켜진 채로 Slicer 입력 검증을 건너뛴다)
+    ProceduralMesh upperOther;
+    CHECK(SliceProceduralMesh(box, { 0, 1.5f, 0 }, { 0, 1, 0 }, true, &upperOther, SliceCapOption::CreateNewSectionForCap, 1, nullptr, &error));
+    CheckPiecesPass(box, upperOther, "recut");
+
+    ProceduralMesh open, openOther;
+    CHECK(open.SetTopology(MakeBox(), &error));
+    CHECK(SliceProceduralMesh(open, { 0, 1, 0 }, { 0, 1, 0 }, true, &openOther, SliceCapOption::NoCap, 1, nullptr, &error));
+    CheckPiecesPass(open, openOther, "nocap");
+
+    ProceduralMesh tube, tubeOther;
+    CHECK(tube.SetTopology(MakeThickTube(8, 2.0f, 1.0f), &error));
+    CHECK(SliceProceduralMesh(tube, { 0, 1, 0 }, { 0, 1, 0 }, true, &tubeOther, SliceCapOption::UseLastSectionForCap, 1, nullptr, &error));
+    CheckPiecesPass(tube, tubeOther, "hole cap");
+}
+
+// 검증된 표시의 수명: 성공한 연산에서만 바뀌고, 실패한 호출은 이전 값을 둔다
+static void TestGeometryValidatedFlag()
+{
+    std::string error;
+    WeldStats stats;
+    const SlotMatrices identity(1, std::vector<XMFLOAT4X4>(1, ToFloat4x4(XMMatrixIdentity())));
+
+    ProceduralMesh mesh;
+    CHECK(!mesh.IsGeometryValidated());
+    CHECK(mesh.SetTopology(MakeBox(), &error) && mesh.IsGeometryValidated());
+
+    // 실패한 SetTopology는 이전 값(참)을 둔다
+    MeshGeometry invalid = mesh.GetGeometry();
+    invalid.faces[0].corner[0] = kInvalidIndex;
+    CHECK(!mesh.SetTopology(std::move(invalid), &error) && mesh.IsGeometryValidated());
+
+    CHECK(mesh.SetSectionSplit(true, &error) && mesh.IsGeometryValidated());      // 기하를 바꾸지 않는다
+    CHECK(mesh.SetSectionSplit(false, &error) && mesh.IsGeometryValidated());
+
+    ProceduralMesh built;
+    CHECK_STATUS(built.Build(MakeBoxMeshData(), stats, &error), SliceStatus::Ok, error);
+    CHECK(built.IsGeometryValidated());
+    ProceduralMesh failedBuild = built;
+    ProceduralMeshData bad = MakeBoxMeshData();
+    bad.bindings.clear();
+    CHECK_STATUS(failedBuild.Build(bad, stats, &error), SliceStatus::InvalidInput, error);
+    CHECK(failedBuild.IsGeometryValidated());                                      // 실패한 Build는 이전 값을 둔다
+
+    // 복사는 기하와 함께 표시도 복사한다
+    ProceduralMesh copied = built;
+    CHECK(copied.IsGeometryValidated() && built.IsGeometryValidated());
+    ProceduralMesh assigned;
+    assigned = built;
+    CHECK(assigned.IsGeometryValidated() && built.IsGeometryValidated());
+
+    // 이동: 대상이 이어받고 원본은 거짓
+    ProceduralMesh moved = std::move(copied);
+    CHECK(moved.IsGeometryValidated() && !copied.IsGeometryValidated());
+    ProceduralMesh moveAssigned;
+    moveAssigned = std::move(assigned);
+    CHECK(moveAssigned.IsGeometryValidated() && !assigned.IsGeometryValidated());
+
+    // UpdatePose는 거짓으로 만들고, 실패한 UpdatePose는 이전 값을 둔다
+    CHECK(!built.UpdatePose({}, &error) && built.IsGeometryValidated());
+    CHECK(built.UpdatePose(identity, &error) && !built.IsGeometryValidated());
+
+    // 거짓인 표시도 복사·이동으로 그대로 옮긴다
+    ProceduralMesh copiedFalse = built;
+    CHECK(!copiedFalse.IsGeometryValidated());
+    ProceduralMesh movedFalse = std::move(copiedFalse);
+    CHECK(!movedFalse.IsGeometryValidated() && !copiedFalse.IsGeometryValidated());
+
+    // 절단 기하가 있는 메시의 UpdateVertices는 거절되고 표시를 두며, 실패한 SetMesh도 표시를 둔다
+    CHECK(!moved.UpdateVertices(moved.GetData().vertices, &error) && moved.IsGeometryValidated());
+    ProceduralMeshData badMesh = MakeBoxMeshData();
+    badMesh.indices[0] = uint32_t(badMesh.vertices.size());
+    CHECK(!moved.SetMesh(badMesh, &error) && moved.IsGeometryValidated());
+
+    // SetMesh, Clear
+    CHECK(mesh.SetMesh(MakeBoxMeshData(), &error) && !mesh.IsGeometryValidated());
+    CHECK(moved.IsGeometryValidated());
+    moved.Clear();
+    CHECK(!moved.IsGeometryValidated());
+}
+
+// 자세로 축퇴한 기하(표시 거짓)는 Slicer 입력 검증이 다시 거절한다: 검증 생략 조건이 넓어지는 회귀를 잡는다
+static void TestPosedDegenerateInputIsRejected()
+{
+    std::string error;
+    WeldStats stats;
+    const SlotMatrices zero(1, std::vector<XMFLOAT4X4>(1, ToFloat4x4(XMMatrixScaling(0.0f, 0.0f, 0.0f))));
+    ProceduralMesh mesh, other;
+    CHECK_STATUS(mesh.Build(MakeBoxMeshData(), stats, &error), SliceStatus::Ok, error);
+    CHECK(mesh.UpdatePose(zero, &error) && !mesh.IsGeometryValidated());     // 위치는 유한하므로 UpdatePose는 성공한다
+    SliceStatus status = SliceStatus::Ok;
+    CHECK(!SliceProceduralMesh(mesh, { 0, 0, 0 }, { 0, 1, 0 }, true, &other, SliceCapOption::CreateNewSectionForCap, 1, &status, &error));
+    CHECK_STATUS(status, SliceStatus::DegenerateInput, error);
+}
+
+// 표시가 꺼진 메시(UpdatePose 뒤)는 입력 검증을 하고, 켜진 메시와 같은 절단 결과를 낸다
+static void TestSliceWithAndWithoutValidatedFlag()
+{
+    std::string error;
+    WeldStats stats;
+    const SlotMatrices identity(1, std::vector<XMFLOAT4X4>(1, ToFloat4x4(XMMatrixIdentity())));
+    ProceduralMesh validated, unvalidated;
+    CHECK_STATUS(validated.Build(MakeBoxMeshData(), stats, &error), SliceStatus::Ok, error);
+    unvalidated = validated;
+    CHECK(unvalidated.UpdatePose(identity, &error));
+    CHECK(validated.IsGeometryValidated() && !unvalidated.IsGeometryValidated());
+
+    ProceduralMesh validatedOther, unvalidatedOther;
+    std::vector<std::vector<uint32_t>> loopsA, loopsB;
+    CHECK(SliceProceduralMesh(validated, { 0, 0.5f, 0 }, { 0.3f, 1, 0 }, true, &validatedOther,
+        SliceCapOption::CreateNewSectionForCap, 1, nullptr, &error, &loopsA));
+    CHECK(SliceProceduralMesh(unvalidated, { 0, 0.5f, 0 }, { 0.3f, 1, 0 }, true, &unvalidatedOther,
+        SliceCapOption::CreateNewSectionForCap, 1, nullptr, &error, &loopsB));
+    CHECK(SamePiece(validated.GetGeometry(), unvalidated.GetGeometry()));
+    CHECK(SamePiece(validatedOther.GetGeometry(), unvalidatedOther.GetGeometry()));
+    CHECK(loopsA == loopsB && validated.GetGeometry().faces.size() == unvalidated.GetGeometry().faces.size());
+    CHECK(validated.IsGeometryValidated() && unvalidated.IsGeometryValidated());      // 채택한 조각은 참
+}
+
 // 같은 입력에서 SliceGeometry(cutId 1, cap 생성)와 같은 조각을 낸다. 실패하면 입력이 그대로다.
 static void TestSliceProceduralMeshMatchesSliceGeometry()
 {
@@ -3539,6 +3680,10 @@ int main()
     TestRigidOpenBoxSlice();
     TestProceduralMeshOwnsGeometry();
     TestPublicProceduralMeshPipeline();
+    TestSlicedPiecesStayValid();
+    TestGeometryValidatedFlag();
+    TestSliceWithAndWithoutValidatedFlag();
+    TestPosedDegenerateInputIsRejected();
 
     TestCutJobKey();
     TestDiffJobs();

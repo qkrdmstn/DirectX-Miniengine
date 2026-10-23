@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>ProceduralMesh가 필요한 이유</title>
+<style>
+html, body { margin: 0; background: #F5F9FD; }
+svg text { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; }
+.mono { font-family: Consolas, "Malgun Gothic", monospace; }
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1A6BC4"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9AA8B8"/></marker>
+  </defs>
+
+  <text x="40" y="54" font-size="30" font-weight="700" fill="#12294A">왜 ProceduralMesh가 필요했나</text>
+  <text x="40" y="84" font-size="16" fill="#5F7590">MiniEngine의 모델 데이터는 "그리기 위한" 압축 바이트라서, 자르려면 풀어서 고칠 수 있는 메시가 따로 필요했다</text>
+
+  <!-- ===== 위: MiniEngine 모델 로드 ===== -->
+  <text x="40" y="132" font-size="18" font-weight="700" fill="#1A6BC4">MiniEngine의 모델 로드</text>
+
+  <!-- glb -->
+  <rect x="40" y="150" width="200" height="150" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="140" y="190" font-size="18" font-weight="700" fill="#12294A" text-anchor="middle">bunny.glb</text>
+  <text x="140" y="216" font-size="13.5" fill="#5F7590" text-anchor="middle">원본 모델 파일</text>
+  <text x="140" y="252" font-size="13" fill="#5F7590" text-anchor="middle">float 위치 · 법선 · UV</text>
+
+  <!-- 최초 로드 변환 -->
+  <line x1="242" y1="200" x2="318" y2="200" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a)"/>
+  <text x="280" y="186" font-size="12.5" fill="#1A6BC4" text-anchor="middle">최초 로드</text>
+  <rect x="322" y="150" width="230" height="150" rx="14" fill="#E8F2FC" stroke="#9CC6EE" stroke-width="2"/>
+  <text x="437" y="190" font-size="18" font-weight="700" fill="#12294A" text-anchor="middle">변환 · 압축</text>
+  <text x="437" y="216" font-size="13" fill="#5F7590" text-anchor="middle" class="mono">ModelLoader · BuildModel</text>
+  <text x="437" y="250" font-size="13" fill="#5F7590" text-anchor="middle">GPU용 정점 형식으로 줄이고</text>
+  <text x="437" y="270" font-size="13" fill="#5F7590" text-anchor="middle">.mini 파일로 캐싱</text>
+
+  <!-- mini -->
+  <line x1="554" y1="200" x2="630" y2="200" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a)"/>
+  <rect x="634" y="150" width="200" height="150" rx="14" fill="#fff" stroke="#DCE6F2" stroke-width="2"/>
+  <text x="734" y="190" font-size="18" font-weight="700" fill="#12294A" text-anchor="middle">bunny.mini</text>
+  <text x="734" y="216" font-size="13.5" fill="#5F7590" text-anchor="middle">캐시 파일</text>
+  <text x="734" y="252" font-size="13" fill="#5F7590" text-anchor="middle">이후엔 유효한 캐시를 재사용</text>
+
+  <!-- 메모리 -->
+  <line x1="836" y1="200" x2="912" y2="200" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a)"/>
+  <text x="874" y="186" font-size="12.5" fill="#1A6BC4" text-anchor="middle">로드</text>
+  <rect x="916" y="150" width="644" height="150" rx="14" fill="#12294A"/>
+  <text x="940" y="184" font-size="18" font-weight="700" fill="#fff">Model (메모리)</text>
+  <text x="940" y="214" font-size="14" fill="#8CC8F2" class="mono">m_DataBuffer</text><text x="1080" y="214" font-size="14" fill="#D6E6F6">GPU 버퍼 — 그리기용</text>
+  <text x="940" y="240" font-size="14" fill="#8CC8F2" class="mono">m_GeometryCPU</text><text x="1080" y="240" font-size="14" fill="#D6E6F6">같은 바이트의 CPU 사본</text>
+  <text x="940" y="266" font-size="14" fill="#8CC8F2" class="mono">m_MeshData</text><text x="1080" y="266" font-size="14" fill="#D6E6F6">메시별 오프셋 · 형식 정보</text>
+  <text x="1380" y="214" font-size="13" fill="#B9D3EE">여러 인스턴스가</text>
+  <text x="1380" y="236" font-size="13" fill="#B9D3EE">하나를 공유</text>
+
+  <!-- ===== 가운데: 정점 한 개의 바이트 ===== -->
+  <text x="40" y="360" font-size="18" font-weight="700" fill="#1A6BC4">정점 하나가 저장된 모습 (스태틱 메시, 20 바이트 예)</text>
+  <g font-size="13">
+    <!-- position 12B -->
+    <g fill="#D7E8FA" stroke="#1A6BC4" stroke-width="1.5">
+      <rect x="40" y="378" width="40" height="44"/><rect x="80" y="378" width="40" height="44"/><rect x="120" y="378" width="40" height="44"/><rect x="160" y="378" width="40" height="44"/>
+      <rect x="200" y="378" width="40" height="44"/><rect x="240" y="378" width="40" height="44"/><rect x="280" y="378" width="40" height="44"/><rect x="320" y="378" width="40" height="44"/>
+      <rect x="360" y="378" width="40" height="44"/><rect x="400" y="378" width="40" height="44"/><rect x="440" y="378" width="40" height="44"/><rect x="480" y="378" width="40" height="44"/>
+    </g>
+    <g fill="#FFE2B5" stroke="#E39B2D" stroke-width="1.5">
+      <rect x="520" y="378" width="40" height="44"/><rect x="560" y="378" width="40" height="44"/><rect x="600" y="378" width="40" height="44"/><rect x="640" y="378" width="40" height="44"/>
+    </g>
+    <g fill="#DDF1E6" stroke="#2E9E6B" stroke-width="1.5">
+      <rect x="680" y="378" width="40" height="44"/><rect x="720" y="378" width="40" height="44"/><rect x="760" y="378" width="40" height="44"/><rect x="800" y="378" width="40" height="44"/>
+    </g>
+    <text x="280" y="448" text-anchor="middle" fill="#1A6BC4" font-weight="700">위치  float × 3  (12 B)</text>
+    <text x="600" y="448" text-anchor="middle" fill="#B26C00" font-weight="700">법선  10:10:10:2  (4 B)</text>
+    <text x="760" y="448" text-anchor="middle" fill="#2E9E6B" font-weight="700">UV  half × 2  (4 B)</text>
+    <text x="40" y="478" fill="#5F7590">법선은 축마다 10비트 정수, UV는 16비트 half — 읽으려면 디코딩이 필요하다. 위치는 메시 로컬 좌표.</text>
+  </g>
+
+  <!-- 문제 -->
+  <rect x="890" y="340" width="670" height="150" rx="14" fill="#FDF2F5" stroke="#E7A9C3" stroke-width="2"/>
+  <text x="914" y="374" font-size="18" font-weight="700" fill="#C2417A">이 데이터로는 바로 자를 수 없다</text>
+  <text x="914" y="404" font-size="14.5" fill="#12294A">· 압축된 바이트 배열 — 값을 읽고 쓰려면 매번 풀고 다시 묶어야 한다</text>
+  <text x="914" y="430" font-size="14.5" fill="#12294A">· 정점 · 삼각형 개수가 고정 — 교점 추가, 삼각형 분할이 전제에 없다</text>
+  <text x="914" y="456" font-size="14.5" fill="#12294A">· 모든 인스턴스가 공유 — 원본을 고치면 다른 버니도 같이 잘린다</text>
+
+  <!-- ===== 아래: 해결 ===== -->
+  <rect x="40" y="520" width="1520" height="210" rx="16" fill="#fff" stroke="#1A6BC4" stroke-width="2.5"/>
+  <text x="64" y="558" font-size="20" font-weight="700" fill="#12294A">해결: 풀어서 담는 런타임 메시 타입을 추가했다</text>
+
+  <rect x="64" y="580" width="300" height="126" rx="12" fill="#F2F5F9"/>
+  <text x="84" y="612" font-size="15" font-weight="700" fill="#12294A">m_GeometryCPU (압축 바이트)</text>
+  <text x="84" y="640" font-size="13.5" fill="#5F7590">원본은 읽기만 한다</text>
+  <text x="84" y="664" font-size="13.5" fill="#5F7590">자르는 메시 하나만 골라서</text>
+  <line x1="366" y1="643" x2="430" y2="643" stroke="#1A6BC4" stroke-width="3" marker-end="url(#a)"/>
+  <text x="398" y="630" font-size="12.5" fill="#1A6BC4" text-anchor="middle">디코딩</text>
+
+  <rect x="434" y="580" width="420" height="126" rx="12" fill="#12294A"/>
+  <text x="456" y="614" font-size="20" font-weight="700" fill="#fff">ProceduralMesh</text>
+  <text x="456" y="642" font-size="14" fill="#D6E6F6">float 위치 · 법선 · UV를 풀어서 CPU에 보관</text>
+  <text x="456" y="666" font-size="14" fill="#D6E6F6">정점 · 삼각형을 런타임에 추가 · 수정 가능</text>
+  <text x="456" y="690" font-size="14" fill="#D6E6F6">인스턴스마다 따로 소유 (원본은 그대로)</text>
+
+  <line x1="856" y1="643" x2="920" y2="643" stroke="#9AA8B8" stroke-width="3" stroke-dasharray="7 5" marker-end="url(#g)"/>
+  <text x="888" y="630" font-size="12.5" fill="#5F7590" text-anchor="middle">참고</text>
+  <rect x="924" y="580" width="612" height="126" rx="12" fill="#F2F5F9"/>
+  <text x="946" y="612" font-size="15" font-weight="700" fill="#12294A">Unreal ProceduralMeshComponent</text>
+  <text x="946" y="640" font-size="13.5" fill="#5F7590">런타임에 정점을 바꿀 수 있는 메시 컴포넌트.</text>
+  <text x="946" y="664" font-size="13.5" fill="#5F7590">CopyProceduralMeshFromStaticMeshComponent로 복사하고</text>
+  <text x="946" y="688" font-size="13.5" fill="#5F7590">SliceProceduralMesh로 자른다 → 같은 흐름을 MiniEngine에 만들었다</text>
+</svg>
+</body>
+</html>
