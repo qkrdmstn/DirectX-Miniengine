@@ -1,6 +1,6 @@
 # 주말 Codex 작업 후보 (2026-10-23 조사, 읽기 전용)
 
-조사: Sonnet 서브에이전트. 근거는 `MiniEngine/MeshCutting/Docs/`, 코드, git 기록. 코드 주석의 TODO는 사실상 없고 예정 작업은 거의 전부 문서에 있다.
+조사: Sonnet 서브에이전트. 근거는 현재 `Docs/`로 이동한 문서, 코드, git 기록. 코드 주석의 TODO는 사실상 없고 예정 작업은 거의 전부 문서에 있다.
 
 ## 먼저 알아둘 것
 - Geometry fail-soft cap, OpenSurface 태그, BreakConstraint 서브트리 고정은 이미 커밋됨 (`548fa07`, `fc1f739`). 그런데 `UnrealSourceComparison.md` 상태 줄은 아직 "커밋 전".

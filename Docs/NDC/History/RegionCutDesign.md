@@ -1,6 +1,6 @@
 # 메시 교차 기반 절단 작업 설계 (영역 작업)
 
-> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../../Current/CutPlaneDesign.md)를 따른다.
 
 > 상태: **설계안, 보류** (기준 커밋 `1287cb5`). `JointCutDesign.md`(단일 joint 작업) 다음의 "한계 돌파" 단계로 진행한다. 물리 도입 뒤에는 `PhysicsSkeletalCutDesign.md` N-3 단계에서 조각 재절단 계약(같은 문서 6.3절)과 함께 다시 설계한다.
 >

@@ -1,6 +1,6 @@
 상태: 설계안, 결정 확정 — 물리 엔진 도입과 실제 BreakConstraint를 받아들일 구조 개편 (기준 커밋 `9dfcc33`). Codex 설계 검토 12건 반영 (11절). 결정 D1~D8은 설계자 추천대로 확정 (9절, 2026-10-23). 구현 전
 
-> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../../Current/CutPlaneDesign.md)를 따른다.
 
 # 물리 기반 스켈레탈 절단으로의 확장 설계
 

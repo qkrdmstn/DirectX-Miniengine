@@ -52,24 +52,8 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 
 ## 현재 범위
 
-표시 모드는 기본 메인 컬러 패스에만 적용한다. 깊이·그림자는 solid, Gizmo는 기존 overlay다.
-Wireframe은 원래 재질·양면·깊이 PSO 쌍을 유지한다. Vertices는 원본 GPU 버퍼와 VS의
-스키닝 → World → ViewProj 결과를 DrawIndexed POINTLIST로 그리고 GS가 약 3px 사각형으로 확장한다.
-점 GS 입력은 DefaultVS 출력 전체와 같은 순서이며 tangent/UV1 유무에 맞는 네 변형을 선택한다.
-축약 입력에서는 TEXCOORD의 레지스터가 달라 D3D12 #660 `SHADER_LINKAGE_REGISTERINDEX`,
-`0x80070057` PSO 생성 실패가 발생했다. 스킨/비 스킨 VS의 변환 계산은 그대로 유지한다.
-실제 viewport 역수는 공통 b1 (ALL visibility)의 c11.zw로 전달한다. b0 메시 상수는 VS 전용이다.
-표시 대상은 인덱스가 참조하는 렌더 정점이며, 중복 참조·UV seam의 중복 정점은 겹친다.
-용접된 기하 구조나 고유 정점 수를 보여주지 않으며 참조되지 않는 정점은 표시하지 않는다.
-
-Vertices는 Separate Z Pass 설정과 무관하게 불투명 메시의 solid 깊이를 먼저 만든다.
-확장한 사각형에는 equal-depth 대신 reversed-Z GREATER_EQUAL·깊이 쓰기 금지를 사용한다.
-가려진 점은 solid 표면으로 차폐되며 경사진 표면에서 사각형 일부가 잘리거나 실루엣 밖으로
-약 1.5px 나올 수 있다. 점끼리는 깊이를 쓰지 않아 서로 차폐하지 않는다. 빈 표면 영역은
-배경 clear 색으로 남는다. 반투명 메시는 solid 깊이에 대해서만 검사하며 기존 정렬·블렌딩을 유지한다.
-점 색은 고정 노란색이고 알파는 해당 정점 UV의 base-color mip 0과 factor를 사용한다.
-알파 테스트 구멍은 정점 샘플로 근사하므로 원래 면의 텍스처 경계와 다를 수 있다.
-FXAA·해상도 스케일 등에 따라 최종 표시 크기와 선명도가 달라질 수 있다.
+표시 모드의 입력·PSO·깊이·알파·검증 계약은
+[RenderModes.md](RenderModes.md)를 따른다.
 
 선택은 모델의 CPU 경계 구와 가장 가까운 교차점을 이용한다. 삼각형 단위 선택이나
 애니메이션에 맞춘 경계 재계산은 없으므로 구가 겹치거나 빈 공간이 많은 모델에서는 근사 선택이다.
@@ -88,7 +72,7 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 
 ## CPU 검증
 
-`tests/SceneMathTests.cpp`는 실제 `GizmoMath`, `TransformHistory`, `EvaluateModelPose`를 호출한다.
+`MiniEngine/ModelViewer/Scene/tests/SceneMathTests.cpp`는 실제 `GizmoMath`, `TransformHistory`, `EvaluateModelPose`를 호출한다.
 표준/역방향/무한 역방향 Z의 투영·레이 왕복, 축/평면 드래그, 회전 부호·π 경계,
 양수 크기, Undo와 삭제된 대상, DFS 부모 복원 및 skeletonRoot 유/무의 locator 단일 적용을 검사한다.
 VS Developer PowerShell에서 파일 머리말의 명령을 사용하고 `/Fo`, `/Fe`는 저장소 밖으로 지정한다.

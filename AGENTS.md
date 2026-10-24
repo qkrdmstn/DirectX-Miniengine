@@ -6,7 +6,6 @@
 - `Samples/Desktop/` contains individual DirectX 12 samples; `TechniqueDemos/` contains larger demonstrations.
 - `Libraries/` holds supporting libraries and fallback-layer tests. `Tools/` holds standalone utilities.
 - `Assets/` contains repository imagery; runtime textures, models, and HLSL shaders also live beside their consuming projects.
-- For any `MiniEngine/MeshCutting/` work (design, implementation, review), consult `MiniEngine/MeshCutting/Docs/NDC25Reference.md`: the NDC25 skeletal-mesh cutting technique this module follows, with each claim marked by its evidence level.
 
 ## Build, Test, and Development Commands
 Use Visual Studio Developer PowerShell with C++ tools and the Windows SDK. MiniEngine uses v143; use Visual Studio/MSBuild supporting `.slnx`. Legacy projects may require older toolsets.
@@ -37,7 +36,19 @@ Build affected projects in Debug and Release. Run changed samples with DirectX v
 `Libraries/D3D12RaytracingFallback/src/FallbackLayerUnitTests/` uses Microsoft's C++ Unit Test Framework. Build its project with the required toolset and run through Visual Studio Test Explorer; follow existing `TEST_CLASS`/`TEST_METHOD` patterns. No repository-wide coverage threshold is defined.
 
 ## MeshCutting Workflow
-- Docs: start from `MiniEngine/MeshCutting/Docs/README.md` (index with status) and open only the documents the task needs; use `CodeMap.md` for structure.
+- 아래 표에서 실제 변경 기능·작업 범위에 해당하는 문서만 읽는다. 공통 진입 파일인 `MiniEngine/ModelViewer/ModelViewer.cpp`도 파일명만으로 문서를 모두 읽지 않고 변경 기능에 맞는 행을 선택한다.
+- 문서 파일 편집은 편집 대상과 직접 참조하는 문서만 읽는다. 문서를 찾을 때만 `Docs/README.md`의 필요한 항목을 확인한다. README·NDC 문서의 일괄 필독이나 History 일괄 읽기는 요구하지 않는다.
+
+| 코드 / 작업 범위 | 필독 문서 (저장소 루트 기준) |
+| --- | --- |
+| `MiniEngine/MeshCutting/Geometry/CutPlane.*`, `MiniEngine/ModelViewer/Scene/CutPlaneSystem.*`, `CutPlaneRenderer.*`, `Scene/Shaders/CutPlane*`의 평면 기하·편집·표시 | [Current/CutPlaneDesign.md](Docs/Current/CutPlaneDesign.md) |
+| `MiniEngine/ModelViewer/Scene/`의 Scene, GameObject, ObjectSelection, PickHit, Transform, Gizmo, History 및 해당 입력·소유권·변환 작업 | [Current/Scene.md](Docs/Current/Scene.md)의 관련 절 |
+| `MiniEngine/Model/Renderer*`, ConstantBuffers, Shaders의 Solid/Wireframe/Vertices 표시 모드 작업 | [Current/RenderModes.md](Docs/Current/RenderModes.md) (표시 모드만 변경할 때 Scene.md 추가 필독 없음) |
+| GPU 절단 버퍼·스키닝·출력 설계 | [GPU/GPUCuttingSystemDesign.md](Docs/GPU/GPUCuttingSystemDesign.md); GPU 논문·삼각분할 조사일 때만 [GPU/참고자료.md](Docs/GPU/참고자료.md) 추가 |
+| NDC 본 패치·스켈레탈 절단 기법 | [NDC/NDC25Reference.md](Docs/NDC/NDC25Reference.md)의 근거 등급 확인; `NDC/History/`는 해당 알고리즘의 역사 추적 시에만 선택 |
+| Unreal 소스·동작 비교 | [Unreal/UnrealSourceComparison.md](Docs/Unreal/UnrealSourceComparison.md); 정렬 설계 검토 시에만 [Unreal/UnrealAlignmentDesign.md](Docs/Unreal/UnrealAlignmentDesign.md) 추가 |
+| 전체 구조 조사 | [Current/CodeMap.md](Docs/Current/CodeMap.md) |
+
 - Every design doc begins with a `상태:` line (설계안 / 진행 중 / 완료, with the commit). Update it, and the README row, when a step lands. Long-lived docs cite function names, not line numbers.
 - Keep each implementation step to one concept and about 300 changed lines, then stop so the user can read and commit it before the next step. The user must be able to follow every line.
 - After changing `Geometry/`, run the CPU tests in `MiniEngine/MeshCutting/tests/PlaneSlicerTests.cpp` (build command in the file header); keep build output outside the repository.

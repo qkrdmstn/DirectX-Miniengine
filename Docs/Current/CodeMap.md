@@ -1,4 +1,4 @@
-상태: 완료 — 현황문서 (기준 `096f8a1c`, 미커밋)
+상태: 완료 — 현황문서 (기준 HEAD `527ed749`, 미커밋 문서 정리; 구현 변경 없음)
 
 # 현재 Scene과 유한 평면 코드 지도
 
@@ -17,11 +17,13 @@
 
 ## 소유권과 공간 계약
 
+아래 모듈 경로는 저장소의 `MiniEngine/` 기준이다. 문서는 최상위 `Docs/`에 모아 둔다.
+
 | 파일 / 자료형 | 소유 데이터와 책임 |
 | --- | --- |
 | `ModelViewer/Scene/Scene.*`의 `Scene`, `GameObject` | Scene이 객체를 소유한다. GameObject는 TRS의 원본이며 모델 없이도 존재한다. 모델이 있으면 ModelInstance를 가진다. |
 | `ModelViewer/Scene/ObjectSelection.*`, `PickHit.h` | 모델 경계 구 선택, 객체 ID와 `WorldT`, 가장 가까운 유효 후보 비교를 제공한다. |
-| `ModelViewer/Scene/TransformGizmo.*`, `SceneTransform.h` | 객체 TRS 편집과 입력 처리를 담당한다. 조작·Undo 계약은 [Scene README](../../ModelViewer/Scene/README.md)를 따른다. |
+| `ModelViewer/Scene/TransformGizmo.*`, `SceneTransform.h` | 객체 TRS 편집과 입력 처리를 담당한다. 조작·Undo 계약은 [Scene.md](Scene.md)를 따른다. |
 | `ModelViewer/Scene/CutPlaneSystem.*` | Scene을 참조하고 ObjectId별 `CutPlaneDesc`를 소유한다. 별도 평면 TRS를 보관하지 않는다. `Find`는 삭제된 객체를 거절한다. |
 | `MeshCutting/Geometry/CutPlane.*`의 `CutPlaneDesc` | 로컬 XZ, y=0 직사각형의 `Width`와 `Height`를 정의한다. |
 | `CutPlaneData` | `WorldPlane`은 정규화된 `Vector4(n, d)`이며 식은 n·x+d=0이다. `WorldToPlane`은 affine 역변환, `HalfWidth`·`HalfHeight`는 로컬 반크기, `WorldCorners`는 네 월드 모서리다. |
@@ -31,4 +33,4 @@
 
 `IntersectCutPlaneRectangle`은 정규화된 월드 ray의 거리 t를 보존한다. `ClipCoplanarSegmentToCutPlaneRectangle`은 공면 선분의 내부 구간을 원본 선분의 [0,1]로 반환한다. 둘 다 실패 시 출력 인자를 보존한다.
 
-구현·검증 범위는 [CutPlaneDesign.md](CutPlaneDesign.md), 후속 GPU 방향은 [GPUCuttingSystemDesign.md](GPUCuttingSystemDesign.md), NDC 근거 등급은 [NDC25Reference.md](NDC25Reference.md)를 본다.
+구현·검증 범위는 [CutPlaneDesign.md](CutPlaneDesign.md), 후속 GPU 방향은 [GPUCuttingSystemDesign.md](../GPU/GPUCuttingSystemDesign.md), NDC 근거 등급은 [NDC25Reference.md](../NDC/NDC25Reference.md)를 본다.

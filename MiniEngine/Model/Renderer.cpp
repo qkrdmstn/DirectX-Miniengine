@@ -324,7 +324,7 @@ void Renderer::Shutdown(void)
     s_SamplerHeap.Destroy();
 }
 
-// 원본 컬러 PSO 쌍과 동일한 입력·스키닝을 사용하는 표시 모드별 캐시를 만든다.
+// 원본 입력·스키닝을 유지하며 선은 깊이 오차를 보정하는 읽기 전용 PSO로 캐시한다.
 uint8_t Renderer::GetPSO(uint16_t psoFlags)
 {
     using namespace PSOFlags;
@@ -454,7 +454,12 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
         GraphicsPSO wire = sm_PSOs[i];
         auto rasterizer = (psoFlags & kTwoSided) ? RasterizerTwoSided : RasterizerDefault;
         rasterizer.FillMode = D3D12_FILL_MODE_WIREFRAME;
+        // 선/면 커버리지 차이를 역 Z의 작은 전방 바이어스로 보정하고 표면 차폐는 유지한다.
+        rasterizer.DepthBias = 2;
+        rasterizer.SlopeScaledDepthBias = 1.0f;
+        rasterizer.DepthBiasClamp = 0.00001f;
         wire.SetRasterizerState(rasterizer);
+        wire.SetDepthStencilState(DepthStateReadOnly);
         // VS의 tangent/UV 배치에 맞는 흰색 전용 PS를 선택한다. Solid 재질 PS는 유지한다.
         if (psoFlags & kHasTangent)
         {
@@ -528,7 +533,7 @@ void Renderer::DrawSkybox( GraphicsContext& gfxContext, const Camera& Camera, co
     gfxContext.Draw(3);
 }
 
-// 메시를 기존 패스로 분류하며 정점 표시에는 solid 깊이 선행 패스를 보장한다.
+// 메시를 기존 패스로 분류하며 선·점 표시에 solid 깊이 선행 패스를 보장한다.
 void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
@@ -565,7 +570,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_SortKeys.push_back(key.value);
         m_PassCounts[kTransparent]++;
     }
-    else if (SeparateZPass || alphaTest || m_RenderMode == RenderMode::Vertices)
+    else if (SeparateZPass || alphaTest || m_RenderMode != RenderMode::Solid)
     {
         key.passID = kZPass;
         key.psoIdx = depthPSO;
@@ -598,7 +603,7 @@ void MeshSorter::Sort()
     std::sort(m_SortKeys.begin(), m_SortKeys.end(), Cmp);
 }
 
-// 깊이·그림자는 원래 경로로 그리고 메인 컬러에만 표시 모드와 viewport 상수를 적용한다.
+// 깊이·그림자는 solid로 유지하고 선·점 컬러는 읽기 전용 표면 깊이로 차폐한다.
 void MeshSorter::RenderMeshes(
     DrawPass pass,
     GraphicsContext& context,
@@ -687,7 +692,7 @@ void MeshSorter::RenderMeshes(
 				context.SetDepthStencilTarget(m_DSV->GetDSV());
 				break;
 			case kOpaque:
-				if (SeparateZPass || m_RenderMode == RenderMode::Vertices)
+				if (SeparateZPass || m_RenderMode != RenderMode::Solid)
 				{
 					context.TransitionResource(*m_DSV, D3D12_RESOURCE_STATE_DEPTH_READ);
 					context.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);

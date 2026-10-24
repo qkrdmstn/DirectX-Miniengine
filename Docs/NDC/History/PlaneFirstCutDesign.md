@@ -1,6 +1,6 @@
 # 디버그 흐름 변경 설계: 평면 우선 절단
 
-> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../../Current/CutPlaneDesign.md)를 따른다.
 
 > 작성: 2026-10-20 · 대상 커밋: `6311352` (CutController/CutDebugView, D-0~D-3 반영 후)
 >

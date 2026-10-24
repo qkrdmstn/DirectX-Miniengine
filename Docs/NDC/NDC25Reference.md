@@ -1,6 +1,6 @@
 # NDC25 「저 메시의 목을 쳐라!」 참고 정리
 
-> 현황 구분: 원본 기법과 근거 등급은 보존한다. 8절 등 프로젝트 코드 대응은 제거된 과거 CPU 구현의 기록이다. 현재 구현은 [CodeMap.md](CodeMap.md)와 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+> 현황 구분: 원본 기법과 근거 등급은 보존한다. 8절 등 프로젝트 코드 대응은 제거된 과거 CPU 구현의 기록이다. 현재 구현은 [CodeMap.md](../Current/CodeMap.md)와 [CutPlaneDesign.md](../Current/CutPlaneDesign.md)를 따른다.
 
 > 이 프로젝트(MiniEngine/MeshCutting)가 따르는 원본 기법의 정리다. 코드 리뷰와 설계 판단의 기준으로 쓴다.
 >

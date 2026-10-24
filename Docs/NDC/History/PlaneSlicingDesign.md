@@ -1,6 +1,6 @@
 # 2단계 설계: 프로시저럴 패치 평면 슬라이싱 (v2)
 
-> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../../Current/CutPlaneDesign.md)를 따른다.
 
 > 작성: 2026-10-19 · 대상 커밋: `7e921f9` (본 영향 삼각형 → 프로시저럴 패치 복사)
 >

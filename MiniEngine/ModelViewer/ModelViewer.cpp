@@ -75,6 +75,9 @@ private:
     bool m_EscapeConsumed = false;
     Renderer::RenderMode m_RenderMode = Renderer::RenderMode::Solid;
     bool m_ViewDiagnosticPending = false;
+    std::wstring m_CapturePath;
+    uint32_t m_CaptureFrame = 0;
+    bool m_CapturePostPending = false;
     ShadowCamera m_SunShadowCamera;
 };
 
@@ -155,9 +158,10 @@ void LoadIBLTextures()
         g_IBLSet.Increment();
 }
 
-// 장면과 렌더러를 초기화하고 진단용 -view 값으로 시작 표시 모드를 선택한다.
+// 장면·렌더러를 초기화하고 opt-in 시작 모드와 픽셀 캡처 경로를 읽는다.
 void ModelViewer::Startup( void )
 {
+    CommandLineArgs::GetString(L"capture", m_CapturePath);
     uint32_t viewMode;
     if (CommandLineArgs::GetInteger(L"view", viewMode) && viewMode <= 2)
     {
@@ -297,9 +301,8 @@ void ModelViewer::Update( float deltaT )
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
-// 메인 정렬기에 표시 모드를 전달하고 기존 깊이·그림자·후처리 순서를 유지한다.
-// 선택한 모드로 장면을 그리고 -view 진단의 첫 프레임만 GPU 완료를 기다려 기록한다.
-// 모델 뒤에 평면 선을 깊이 검사로 그린 뒤 기존 후처리를 수행한다.
+// solid 깊이 뒤 배경과 선택한 표시 모드를 그리고 평면·후처리를 수행한다.
+// opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
@@ -370,6 +373,9 @@ void ModelViewer::RenderScene( void )
             gfxContext.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
             gfxContext.ClearColor(g_SceneColorBuffer);
 
+            // 깊이를 쓰지 않는 선·점의 실루엣 가장자리를 배경이 덮지 않도록 먼저 그린다.
+            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+
             {
                 ScopedTimer _prof(L"Render Color", gfxContext);
 
@@ -380,8 +386,6 @@ void ModelViewer::RenderScene( void )
 
                 sorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
             }
-
-            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
 
             sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
             const unsigned planeCount = Viewer::RenderCutPlanes(gfxContext, m_CutPlanes, m_SelectedObject,
@@ -406,7 +410,16 @@ void ModelViewer::RenderScene( void )
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    gfxContext.Finish(m_ViewDiagnosticPending);
+    const bool capture = !m_CapturePath.empty() && ++m_CaptureFrame == 60;
+    gfxContext.Finish(m_ViewDiagnosticPending || capture);
+    if (capture)
+    {
+        g_SceneColorBuffer.ExportToFile(m_CapturePath + L"-hdr.raw");
+        auto& restore = GraphicsContext::Begin(L"Restore capture state");
+        restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        restore.Finish(true);
+        m_CapturePostPending = true;
+    }
     if (m_ViewDiagnosticPending)
     {
         Utility::Printf("ModelViewer diagnostic: scene GPU work completed, view=%u\n", static_cast<unsigned>(m_RenderMode));
@@ -414,9 +427,18 @@ void ModelViewer::RenderScene( void )
     }
 }
 
-// 기즈모와 조작 안내 및 현재 메시 표시 모드를 overlay에 그린다.
+// opt-in 후처리 캡처 뒤 기즈모와 조작 안내 및 현재 표시 모드를 그린다.
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
+    if (m_CapturePostPending)
+    {
+        g_SceneColorBuffer.ExportToFile(m_CapturePath + L"-post.raw");
+        auto& restore = GraphicsContext::Begin(L"Restore capture state");
+        restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        restore.Finish(true);
+        m_CapturePostPending = false;
+        Utility::Printf("ModelViewer diagnostic: HDR/post pixels captured, view=%u, typedUAV=%u\n", static_cast<unsigned>(m_RenderMode), g_bTypedUAVLoadSupport_R11G11B10_FLOAT);
+    }
     m_Gizmo.Render(context, m_Scene, m_SelectedObject, m_Camera,
         float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
     TextContext text(context);

@@ -1,6 +1,6 @@
 # 메시 교차 기반 단일 joint 절단 작업 설계
 
-> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../../Current/CutPlaneDesign.md)를 따른다.
 
 > 상태: **구현 완료 (J-1~J-3, `a6b5d86`)**. 설계 기준 커밋 `1287cb5`. J-1 `Geometry/CutPick`, J-2 원본 캐시·컨트롤러 전환(`SkeletalJoint`), J-3 상태 줄. 화면 확인(머리 절단, 팔 결과, 비스듬한 몸통 OpenLoop)은 사용자 확인 필요.
 >

@@ -144,7 +144,7 @@ cap의 위치, normal/tangent, 내부층의 독립 변형도 각각 계약이 �
 
 첫 논문은 [저자 PDF](https://www.engr.mun.ca/~dpeters/papers/AlawnehPeters13a_hpcs2013.pdf), 둘째는 [출판사 페이지](https://www.sciencedirect.com/science/article/pii/S092577211830004X)에서 확인할 수 있다. 두 논문이 GPU 절단선 연결부터 hole 구성까지 해결한다고 해석하지 않는다.
 
-NDC 관련 주장은 [NDC25Reference.md](NDC25Reference.md)의 근거 등급을 따른다. 이중메시의 실제 채택이나 GPU 처리 여부가 확인되지 않은 부분은 확정 구현 사실로 쓰지 않는다.
+NDC 관련 주장은 [NDC25Reference.md](../NDC/NDC25Reference.md)의 근거 등급을 따른다. 이중메시의 실제 채택이나 GPU 처리 여부가 확인되지 않은 부분은 확정 구현 사실로 쓰지 않는다.
 
 ## 9. 구현 전 결정과 진행 순서
 

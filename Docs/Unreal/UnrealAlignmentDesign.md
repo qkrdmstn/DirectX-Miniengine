@@ -1,6 +1,6 @@
 상태: 완료 (채택한 U-1~U-5b 코드 경로) — 현재 공통 메시 API는 ProceduralMesh 통합 기록(삭제된 과거 기록) 기준. 아래는 과거 설계 이력이며 실제 물리는 미구현 (`d418fcd` 이후 작업 트리).
 
-> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../Current/CutPlaneDesign.md)를 따른다.
 
 # Unreal 방식 정렬 로드맵
 
