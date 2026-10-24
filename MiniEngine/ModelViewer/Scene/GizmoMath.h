@@ -1,0 +1,94 @@
+#pragma once
+
+#include "VectorMath.h"
+#include <cmath>
+
+namespace Viewer
+{
+    namespace GizmoMath
+    {
+        struct Point { float X, Y; };
+
+        inline Math::Vector3 RayDirection(const Math::Matrix4& viewProjection, Math::Vector3 eye, float x, float y)
+        {
+            // Interior depth avoids either projection convention's infinite far plane.
+            const Math::Vector3 point = Math::MakeHomogeneous(Math::Invert(viewProjection) *
+                Math::Vector4(2.0f * x - 1.0f, 1.0f - 2.0f * y, 0.5f, 1.0f));
+            return Math::Normalize(point - eye);
+        }
+
+        inline bool Project(Math::Vector3 position, const Math::Matrix4& viewProjection,
+            float width, float height, Point& result)
+        {
+            const Math::Vector4 clip = viewProjection * position;
+            if (float(clip.GetW()) <= 0.0001f)
+                return false;
+            const Math::Vector3 ndc = Math::MakeHomogeneous(clip);
+            result = { (float(ndc.GetX()) + 1.0f) * 0.5f * width,
+                (1.0f - float(ndc.GetY())) * 0.5f * height };
+            return true;
+        }
+
+        inline float SegmentDistance(Point point, Point a, Point b)
+        {
+            const float x = b.X - a.X, y = b.Y - a.Y;
+            const float length = x * x + y * y;
+            float t = length > 0.0001f ? ((point.X - a.X) * x + (point.Y - a.Y) * y) / length : 0.0f;
+            t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+            const float dx = point.X - a.X - x * t, dy = point.Y - a.Y - y * t;
+            return std::sqrt(dx * dx + dy * dy);
+        }
+
+        inline bool ArrowHead(Point start, Point tip, Point (&triangle)[3])
+        {
+            const float dx = tip.X - start.X, dy = tip.Y - start.Y;
+            const float length = std::sqrt(dx * dx + dy * dy);
+            if (length < 1.0f)
+                return false;
+            const float headLength = length < 30.0f ? length * 0.4f : 12.0f;
+            const float halfWidth = length < 30.0f ? length / 6.0f : 5.0f;
+            const float ux = dx / length, uy = dy / length;
+            const Point base = { tip.X - ux * headLength, tip.Y - uy * headLength };
+            triangle[0] = tip;
+            triangle[1] = { base.X - uy * halfWidth, base.Y + ux * halfWidth };
+            triangle[2] = { base.X + uy * halfWidth, base.Y - ux * halfWidth };
+            return true;
+        }
+
+        inline bool IntersectPlane(Math::Vector3 origin, Math::Vector3 direction,
+            Math::Vector3 point, Math::Vector3 normal, Math::Vector3& hit)
+        {
+            const float denominator = Math::Dot(direction, normal);
+            if (std::abs(denominator) < 0.0001f)
+                return false;
+            const float distance = float(Math::Dot(point - origin, normal)) / denominator;
+            if (distance < 0.0f || !std::isfinite(distance))
+                return false;
+            hit = origin + direction * distance;
+            return true;
+        }
+
+        // The axis drag plane contains the axis and faces the ray as much as possible.
+        inline bool AxisPlaneNormal(Math::Vector3 axis, Math::Vector3 viewDirection, Math::Vector3& normal)
+        {
+            const Math::Vector3 perpendicular = viewDirection - axis * Math::Dot(axis, viewDirection);
+            if (float(Math::LengthSquare(perpendicular)) < 0.0001f)
+                return false;
+            normal = Math::Normalize(perpendicular);
+            return true;
+        }
+
+        inline float SignedAngle(Math::Vector3 from, Math::Vector3 to, Math::Vector3 axis)
+        {
+            return std::atan2(float(Math::Dot(axis, Math::Cross(from, to))), float(Math::Dot(from, to)));
+        }
+
+        inline float UniformScale(float initialScale, float upwardPixels)
+        {
+            const float exponent = upwardPixels * 0.01f;
+            const float bounded = exponent < -12.0f ? -12.0f : (exponent > 12.0f ? 12.0f : exponent);
+            const float scale = initialScale * std::exp(bounded);
+            return scale < 0.0001f ? 0.0001f : (scale > 1.0e8f ? 1.0e8f : scale);
+        }
+    }
+}

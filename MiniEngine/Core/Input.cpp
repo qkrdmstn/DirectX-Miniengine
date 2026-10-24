@@ -55,6 +55,7 @@ namespace
     IDirectInput8A* s_DI;
     IDirectInputDevice8A* s_Keyboard;
     IDirectInputDevice8A* s_Mouse;
+    bool s_MouseExclusive = true;
 
     DIMOUSESTATE2 s_MouseState;
     unsigned char s_Keybuffer[256];
@@ -222,7 +223,8 @@ namespace
             ASSERT(false, "Mouse CreateDevice failed.");
         if (FAILED(s_Mouse->SetDataFormat(&c_dfDIMouse2)))
             ASSERT(false, "Mouse SetDataFormat failed.");
-        if (FAILED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND | DISCL_EXCLUSIVE)))
+        if (FAILED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND |
+            (s_MouseExclusive ? DISCL_EXCLUSIVE : DISCL_NONEXCLUSIVE))))
             ASSERT(false, "Mouse SetCooperativeLevel failed.");
 
         KbmZeroInputs();
@@ -242,6 +244,7 @@ namespace
             s_Mouse->Release();
             s_Mouse = nullptr;
         }
+        s_MouseExclusive = true;
         if (s_DI)
         {
             s_DI->Release();
@@ -443,4 +446,53 @@ float GameInput::GetAnalogInput( AnalogInput ai )
 float GameInput::GetTimeCorrectedAnalogInput( AnalogInput ai )
 {
     return s_AnalogsTC[ai];
+}
+
+bool GameInput::GetMousePosition(float& normalizedX, float& normalizedY)
+{
+#ifdef _GAMING_DESKTOP
+    POINT cursor;
+    RECT client;
+    if (GetForegroundWindow() != GameCore::g_hWnd || !GetCursorPos(&cursor) ||
+        !ScreenToClient(GameCore::g_hWnd, &cursor) || !GetClientRect(GameCore::g_hWnd, &client) ||
+        client.right <= 0 || client.bottom <= 0 || cursor.x < 0 || cursor.y < 0 ||
+        cursor.x >= client.right || cursor.y >= client.bottom)
+        return false;
+    normalizedX = float(cursor.x) / float(client.right);
+    normalizedY = float(cursor.y) / float(client.bottom);
+    return true;
+#else
+    (void)normalizedX;
+    (void)normalizedY;
+    return false;
+#endif
+}
+
+bool GameInput::SetMouseExclusive(bool exclusive)
+{
+#ifdef USE_KEYBOARD_MOUSE
+    if (!s_Mouse)
+        return false;
+    if (s_MouseExclusive == exclusive)
+        return true;
+    s_Mouse->Unacquire();
+    const HRESULT result = s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND |
+        (exclusive ? DISCL_EXCLUSIVE : DISCL_NONEXCLUSIVE));
+    if (FAILED(result))
+    {
+        s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND |
+            (s_MouseExclusive ? DISCL_EXCLUSIVE : DISCL_NONEXCLUSIVE));
+    }
+    else
+    {
+        s_MouseExclusive = exclusive;
+    }
+    // Startup precedes ShowWindow. If acquisition is not yet possible, KbmUpdate retries.
+    if (GetForegroundWindow() == GameCore::g_hWnd && IsWindowVisible(GameCore::g_hWnd))
+        s_Mouse->Acquire();
+    return SUCCEEDED(result);
+#else
+    (void)exclusive;
+    return false;
+#endif
 }

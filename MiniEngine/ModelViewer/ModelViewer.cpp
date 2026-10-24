@@ -33,8 +33,9 @@
 #include "ModelLoader.h"
 #include "ShadowCamera.h"
 #include "Display.h"
-
-#define LEGACY_RENDERER
+#include "Scene/ObjectSelection.h"
+#include "Scene/TransformGizmo.h"
+#include <cmath>
 
 using namespace GameCore;
 using namespace Math;
@@ -54,6 +55,8 @@ public:
 
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
+    virtual void RenderUI(GraphicsContext& context) override;
+    virtual bool IsDone() override { return !m_EscapeConsumed && IGameApp::IsDone(); }
 
 private:
 
@@ -63,7 +66,10 @@ private:
     D3D12_VIEWPORT m_MainViewport;
     D3D12_RECT m_MainScissor;
 
-    ModelInstance m_ModelInst;
+    Viewer::Scene m_Scene;
+    Viewer::ObjectId m_SelectedObject = Viewer::InvalidObjectId;
+    Viewer::TransformGizmo m_Gizmo;
+    bool m_EscapeConsumed = false;
     ShadowCamera m_SunShadowCamera;
 };
 
@@ -146,7 +152,9 @@ void LoadIBLTextures()
 
 void ModelViewer::Startup( void )
 {
-    MotionBlur::Enable = true;
+    if (!GameInput::SetMouseExclusive(false))
+        Utility::Printf("Unable to enable the ModelViewer free cursor.\n");
+    MotionBlur::Enable = false;
     TemporalEffects::EnableTAA = true;
     FXAA::Enable = false;
     PostEffects::EnableHDR = true;
@@ -166,42 +174,42 @@ void ModelViewer::Startup( void )
 
     if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
     {
-#ifdef LEGACY_RENDERER
-        Sponza::Startup(m_Camera);
-#else
-        m_ModelInst = Renderer::LoadModel(L"Sponza/PBR/sponza2.gltf", forceRebuild);
-        m_ModelInst.Resize(100.0f * m_ModelInst.GetRadius());
-        OrientedBox obb = m_ModelInst.GetBoundingBox();
-        float modelRadius = Length(obb.GetDimensions()) * 0.5f;
-        const Vector3 eye = obb.GetCenter() + Vector3(modelRadius * 0.5f, 0.0f, 0.0f);
-        m_Camera.SetEyeAtUp( eye, Vector3(kZero), Vector3(kYUnitVector) );
-#endif
+        m_Scene.CreateObject("Cube", Renderer::LoadModel(L"Models/cube.glb", forceRebuild));
+        m_Scene.CreateObject("Bunny", Renderer::LoadModel(L"Models/bunny.glb", forceRebuild));
     }
     else
     {
-        m_ModelInst = Renderer::LoadModel(gltfFileName, forceRebuild);
-        m_ModelInst.LoopAllAnimations();
-        m_ModelInst.Resize(10.0f);
-
-        MotionBlur::Enable = false;
+        m_Scene.CreateObject("Model", Renderer::LoadModel(gltfFileName, forceRebuild)).LoopAllAnimations();
     }
 
-    m_Camera.SetZRange(1.0f, 10000.0f);
-    if (gltfFileName.size() == 0)
-        m_CameraController.reset(new FlyingFPSCamera(m_Camera, Vector3(kYUnitVector)));
-    else
-        m_CameraController.reset(new OrbitCamera(m_Camera, m_ModelInst.GetBoundingSphere(), Vector3(kYUnitVector)));
+    size_t index = 0;
+    for (const auto& object : m_Scene.GetObjects())
+    {
+        const ModelInstance* model = object->GetModelInstance();
+        if (!model || float(model->GetRadius()) <= 0.0f)
+            continue;
+        const float scale = 2.0f / float(model->GetRadius());
+        const float x = m_Scene.GetObjects().size() == 1 ? 0.0f : (index++ == 0 ? -3.0f : 3.0f);
+        object->SetTransform(UniformTransform(Quaternion(kIdentity), scale,
+            Vector3(x, 0.0f, 0.0f) - model->GetCenter() * scale));
+    }
+    m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
+    m_Camera.SetZRange(0.1f, 1000.0f);
+    auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
+    controller->EnableMomentum(false);
+    controller->SetMoveSpeed(5.0f);
+    const Vector3 forward = m_Camera.GetForwardVec();
+    controller->SetHeadingPitchAndPosition(std::atan2(-float(forward.GetX()), -float(forward.GetZ())),
+        std::asin(float(forward.GetY())), m_Camera.GetPosition());
+    m_CameraController = std::move(controller);
+    m_Camera.Update();
 }
 
 void ModelViewer::Cleanup( void )
 {
-    m_ModelInst = nullptr;
+    m_Scene.Clear();
 
     g_IBLTextures.clear();
-
-#ifdef LEGACY_RENDERER
-    Sponza::Cleanup();
-#endif
 
     Renderer::Shutdown();
 }
@@ -220,11 +228,23 @@ void ModelViewer::Update( float deltaT )
     else if (GameInput::IsFirstPressed(GameInput::kRShoulder))
         DebugZoom.Increment();
 
-    m_CameraController->Update(deltaT);
+    m_Camera.SetAspectRatio(float(g_SceneColorBuffer.GetHeight()) / float(g_SceneColorBuffer.GetWidth()));
+    m_Camera.Update();
+    m_EscapeConsumed = m_Gizmo.IsDragging() && GameInput::IsFirstPressed(GameInput::kKey_escape);
+    const bool gizmoInput = m_Gizmo.Update(m_Scene, m_SelectedObject, m_Camera,
+        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
+    // Hold the right button to navigate; the free cursor selects objects with the left button.
+    if (!gizmoInput && !m_Gizmo.IsDragging() && GameInput::IsPressed(GameInput::kMouse1))
+        m_CameraController->Update(deltaT);
+
+    float mouseX, mouseY;
+    if (!gizmoInput && GameInput::IsFirstPressed(GameInput::kMouse0) && !GameInput::IsPressed(GameInput::kMouse1) &&
+        GameInput::GetMousePosition(mouseX, mouseY))
+        m_SelectedObject = Viewer::PickObject(m_Scene, Viewer::MakePickingRay(m_Camera, mouseX, mouseY));
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 
-    m_ModelInst.Update(gfxContext, deltaT);
+    m_Scene.Update(gfxContext, deltaT);
 
     gfxContext.Finish();
 
@@ -259,13 +279,6 @@ void ModelViewer::RenderScene( void )
 
     ParticleEffectManager::Update(gfxContext.GetComputeContext(), Graphics::GetFrameTime());
 
-    if (m_ModelInst.IsNull())
-    {
-#ifdef LEGACY_RENDERER
-        Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor);
-#endif
-    }
-    else
     {
         // Update global constants
         float costheta = cosf(g_SunOrientation);
@@ -274,9 +287,7 @@ void ModelViewer::RenderScene( void )
         float sinphi = sinf(g_SunInclination * 3.14159f * 0.5f);
 
         Vector3 SunDirection = Normalize(Vector3( costheta * cosphi, sinphi, sintheta * cosphi ));
-        Vector3 ShadowBounds = Vector3(m_ModelInst.GetRadius());
-        //m_SunShadowCamera.UpdateMatrix(-SunDirection, m_ModelInst.GetCenter(), ShadowBounds,
-        m_SunShadowCamera.UpdateMatrix(-SunDirection, Vector3(0, -500.0f, 0), Vector3(5000, 3000, 3000),
+        m_SunShadowCamera.UpdateMatrix(-SunDirection, Vector3(kZero), Vector3(50.0f),
             (uint32_t)g_ShadowBuffer.GetWidth(), (uint32_t)g_ShadowBuffer.GetHeight(), 16);
 
         GlobalConstants globals;
@@ -297,7 +308,7 @@ void ModelViewer::RenderScene( void )
 		sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
 		sorter.AddRenderTarget(g_SceneColorBuffer);
 
-        m_ModelInst.Render(sorter);
+        m_Scene.Render(sorter);
 
         sorter.Sort();
 
@@ -319,7 +330,7 @@ void ModelViewer::RenderScene( void )
 				shadowSorter.SetCamera(m_SunShadowCamera);
 				shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
 
-                m_ModelInst.Render(shadowSorter);
+                m_Scene.Render(shadowSorter);
 
                 shadowSorter.Sort();
                 shadowSorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
@@ -361,4 +372,28 @@ void ModelViewer::RenderScene( void )
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
     gfxContext.Finish();
+}
+
+void ModelViewer::RenderUI(GraphicsContext& context)
+{
+    m_Gizmo.Render(context, m_Scene, m_SelectedObject, m_Camera,
+        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
+    TextContext text(context);
+    text.Begin();
+    text.SetTextSize(22.0f);
+    text.ResetCursor(20.0f, 80.0f);
+    text.DrawString("Left click: select object | Hold right mouse + WASD/QE: camera\n");
+    text.DrawString("Q: View/select (hide gizmo) | W: Move | E: Rotate | R: Uniform scale (drag up/down)\n");
+    text.DrawFormattedString("L: %s axes | Esc during drag: cancel | Mode: %s\n",
+        m_Gizmo.IsLocal() ? "Local" : "World", m_Gizmo.GetMode() == Viewer::TransformGizmo::View ? "View" :
+        (m_Gizmo.GetMode() == Viewer::TransformGizmo::Translate ? "Move" :
+        (m_Gizmo.GetMode() == Viewer::TransformGizmo::Rotate ? "Rotate" : "Scale")));
+    text.DrawString("Ctrl+Z: undo last completed drag (128 commands)\n");
+    const Viewer::GameObject* selected = m_Scene.FindObject(m_SelectedObject);
+    if (selected)
+        text.DrawFormattedString("Selected: %s (ID %llu)\n", selected->GetName().c_str(),
+            static_cast<unsigned long long>(selected->GetId()));
+    else
+        text.DrawString("Selected: none\n");
+    text.End();
 }

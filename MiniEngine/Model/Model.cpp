@@ -87,6 +87,7 @@ ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
         m_MeshConstantsCPU.Destroy();
         m_MeshConstantsGPU.Destroy();
         m_BoundingSphereTransforms = nullptr;
+        m_ModelSpaceTransforms = nullptr;
         m_AnimGraph = nullptr;
         m_AnimState.clear();
         m_Skeleton = nullptr;
@@ -97,6 +98,7 @@ ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
         m_MeshConstantsGPU.Create(L"Mesh Constant GPU Buffer", sourceModel->m_NumNodes, sizeof(MeshConstants));
 
         m_BoundingSphereTransforms.reset(new AffineTransform[sourceModel->m_NumNodes]);
+        m_ModelSpaceTransforms.reset(new Matrix4[sourceModel->m_NumNodes]);
         m_Skeleton.reset(new Joint[sourceModel->m_NumJoints]);
 
         if (sourceModel->m_NumAnimations > 0)
@@ -127,6 +129,7 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
         m_MeshConstantsCPU.Destroy();
         m_MeshConstantsGPU.Destroy();
         m_BoundingSphereTransforms = nullptr;
+        m_ModelSpaceTransforms = nullptr;
         m_AnimGraph = nullptr;
         m_AnimState.clear();
         m_Skeleton = nullptr;
@@ -137,6 +140,7 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
         m_MeshConstantsGPU.Create(L"Mesh Constant GPU Buffer", sourceModel->m_NumNodes, sizeof(MeshConstants));
 
         m_BoundingSphereTransforms.reset(new AffineTransform[sourceModel->m_NumNodes]);
+        m_ModelSpaceTransforms.reset(new Matrix4[sourceModel->m_NumNodes]);
         m_Skeleton.reset(new Joint[sourceModel->m_NumJoints]);
 
         if (sourceModel->m_NumAnimations > 0)
@@ -159,11 +163,7 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
     if (m_Model == nullptr)
         return;
 
-    static const size_t kMaxStackDepth = 32;
-
-    size_t stackIdx = 0;
-    Matrix4 matrixStack[kMaxStackDepth];
-    Matrix4 ParentMatrix = Matrix4((AffineTransform)m_Locator);
+    const Matrix4 LocatorMatrix((AffineTransform)m_Locator);
 
     MeshConstants* cb = (MeshConstants*)m_MeshConstantsCPU.Map();
 
@@ -186,56 +186,30 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
 
     const GraphNode* sceneGraph = m_AnimGraph ? m_AnimGraph.get() : m_Model->m_SceneGraph.get();
 
-    // Traverse the scene graph in depth first order.  This is the same as linear order
-    // for how the nodes are stored in memory.  Uses a matrix stack instead of recursion.
-    for (const GraphNode* Node = sceneGraph; ; ++Node)
+    if (!EvaluateModelPose(sceneGraph, m_Model->m_NumNodes, m_ModelSpaceTransforms.get()))
     {
-        Matrix4 xform = Node->xform;
-        if (!Node->skeletonRoot)
-            xform = ParentMatrix * xform;
+        m_MeshConstantsCPU.Unmap();
+        ASSERT(false, "Invalid model scene graph");
+        return;
+    }
 
-        // Concatenate the transform with the parent's matrix and update the matrix list
-        {
-            // Scoped so that I don't forget that I'm pointing to write-combined memory and
-            // should not read from it.
-            MeshConstants& cbv = cb[Node->matrixIdx];
-            cbv.World = xform;
-            cbv.WorldIT = InverseTranspose(xform.Get3x3());
-
-            m_BoundingSphereTransforms[Node->matrixIdx] = AffineTransform(
-                (Vector3)xform.GetX(),
-                (Vector3)xform.GetY(),
-                (Vector3)xform.GetZ(),
-                (Vector3)xform.GetW());
-       }
-
-        // If the next node will be a descendent, replace the parent matrix with our new matrix
-        if (Node->hasChildren)
-        {
-            // ...but if we have siblings, make sure to backup our current parent matrix on the stack
-            if (Node->hasSibling)
-            {
-                ASSERT(stackIdx < kMaxStackDepth, "Overflowed the matrix stack");
-                matrixStack[stackIdx++] = ParentMatrix;
-            }
-            ParentMatrix = xform;
-        }
-        else if (!Node->hasSibling)
-        {
-            // There are no more siblings.  If the stack is empty, we are done.  Otherwise, pop
-            // a matrix off the stack and continue.
-            if (stackIdx == 0)
-                break;
-
-            ParentMatrix = matrixStack[--stackIdx];
-        }
+    // Skinning happens before the shader's mesh World transform.  Keep the pose
+    // model-local and apply the instance locator only to mesh/culling constants.
+    for (uint32_t i = 0; i < m_Model->m_NumNodes; ++i)
+    {
+        const Matrix4 worldXform = LocatorMatrix * m_ModelSpaceTransforms[i];
+        cb[i].World = worldXform;
+        cb[i].WorldIT = InverseTranspose(worldXform.Get3x3());
+        m_BoundingSphereTransforms[i] = AffineTransform(
+            (Vector3)worldXform.GetX(), (Vector3)worldXform.GetY(),
+            (Vector3)worldXform.GetZ(), (Vector3)worldXform.GetW());
     }
 
     // Update skeletal joints
     for (uint32_t i = 0; i < m_Model->m_NumJoints; ++i)
     {
         Joint& joint = m_Skeleton[i];
-        joint.posXform = cb[m_Model->m_JointIndices[i]].World * m_Model->m_JointIBMs[i];
+        joint.posXform = m_ModelSpaceTransforms[m_Model->m_JointIndices[i]] * m_Model->m_JointIBMs[i];
         joint.nrmXform = InverseTranspose(joint.posXform.Get3x3());
     }
 

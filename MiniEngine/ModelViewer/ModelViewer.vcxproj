@@ -70,6 +70,26 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ModelViewer.cpp" />
+    <ClCompile Include="Scene\Scene.cpp" />
+    <ClCompile Include="Scene\ObjectSelection.cpp" />
+    <ClCompile Include="Scene\GizmoDraw.cpp" />
+    <ClCompile Include="Scene\TransformGizmo.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Scene\Scene.h" />
+    <ClInclude Include="Scene\ObjectSelection.h" />
+    <ClInclude Include="Scene\GizmoMath.h" />
+    <ClInclude Include="Scene\GizmoDraw.h" />
+    <ClInclude Include="Scene\TransformGizmo.h" />
+    <ClInclude Include="Scene\TransformHistory.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Scene\Shaders\GizmoVS.hlsl">
+      <ShaderType>Vertex</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Scene\Shaders\GizmoPS.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Core/Core.vcxproj">
@@ -364,6 +384,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="Scene\README.md" />
+    <None Include="Scene\tests\SceneMathTests.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)', 'vcpkg.json'))\vcpkg\DirectX.vcpkg.targets" />

@@ -229,8 +229,34 @@
     <ClCompile Include="ModelViewer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Scene\Scene.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Scene\ObjectSelection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Scene\GizmoDraw.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Scene\TransformGizmo.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Scene\Scene.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Scene\ObjectSelection.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Scene\GizmoMath.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\GizmoDraw.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\TransformGizmo.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\TransformHistory.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Scene\Shaders\GizmoVS.hlsl" />
+    <FxCompile Include="Scene\Shaders\GizmoPS.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="Scene\README.md" />
+    <None Include="Scene\tests\SceneMathTests.cpp" />
   </ItemGroup>
 </Project>

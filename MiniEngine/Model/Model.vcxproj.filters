@@ -86,6 +86,7 @@
     <ClInclude Include="Model.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="ModelPose.h"><Filter>Source Files</Filter></ClInclude>
     <ClInclude Include="ModelLoader.h">
       <Filter>Source Files</Filter>
     </ClInclude>

@@ -14,6 +14,7 @@
 #pragma once
 
 #include "Animation.h"
+#include "ModelPose.h"
 #include "../Core/GpuBuffer.h"
 #include "../Core/VectorMath.h"
 #include "../Core/Camera.h"
@@ -79,19 +80,6 @@ struct Mesh
     Draw draw[1];           // Actually 1 or more draws
 };
 
-struct GraphNode // 96 bytes
-{
-    Math::Matrix4 xform;
-    Math::Quaternion rotation;
-    Math::XMFLOAT3 scale;
-
-    uint32_t matrixIdx : 28;
-    uint32_t hasSibling : 1;
-    uint32_t hasChildren : 1;
-    uint32_t staleMatrix : 1;
-    uint32_t skeletonRoot : 1;
-};
-
 struct Joint
 {
     Math::Matrix4 posXform;
@@ -149,6 +137,8 @@ public:
     void Render(Renderer::MeshSorter& sorter) const;
 
     void Resize(float newRadius);
+    void SetTransform(const Math::UniformTransform& transform) { m_Locator = transform; }
+    const Math::UniformTransform& GetTransform() const { return m_Locator; }
     Math::Vector3 GetCenter() const;
     Math::Scalar GetRadius() const;
     Math::BoundingSphere GetBoundingSphere() const;
@@ -167,6 +157,7 @@ private:
     UploadBuffer m_MeshConstantsCPU;
     ByteAddressBuffer m_MeshConstantsGPU;
     std::unique_ptr<Math::AffineTransform[]> m_BoundingSphereTransforms;
+    std::unique_ptr<Math::Matrix4[]> m_ModelSpaceTransforms;
     Math::UniformTransform m_Locator;
 
     std::unique_ptr<GraphNode[]> m_AnimGraph;   // A copy of the scene graph when instancing animation

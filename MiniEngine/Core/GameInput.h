@@ -189,6 +189,12 @@ namespace GameInput
     float GetAnalogInput( AnalogInput ai );
     float GetTimeCorrectedAnalogInput( AnalogInput ai );
 
+    // Client-area coordinates in [0, 1); false when unfocused or outside the client.
+    bool GetMousePosition(float& normalizedX, float& normalizedY);
+
+    // Change only on input-mode transitions. Nonexclusive mode keeps the OS cursor visible.
+    bool SetMouseExclusive(bool exclusive);
+
 #if !WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_TV_TITLE | WINAPI_PARTITION_DESKTOP)
     void SetKeyState(Windows::System::VirtualKey key, bool IsDown);
 #endif
