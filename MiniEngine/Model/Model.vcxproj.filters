@@ -154,9 +154,6 @@
     <FxCompile Include="Shaders\CutoutDepthPS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
-    <FxCompile Include="Shaders\DepthOnlySkinPS.hlsl">
-      <Filter>Shaders</Filter>
-    </FxCompile>
     <FxCompile Include="Shaders\DefaultNoTangentNoUV1PS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>

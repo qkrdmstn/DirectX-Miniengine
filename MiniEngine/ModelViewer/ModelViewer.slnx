@@ -6,17 +6,13 @@
     <Platform Name="Windows" />
     <Platform Name="ARM64" />
   </Configurations>
-  <Project Path="../Core/Core.vcxproj" Id="86a58508-0d6a-4786-a32f-01a301fdc6f3">
+  <Project Path="../Core/Core.vcxproj">
     <Platform Solution="*|Windows" Project="x64" />
   </Project>
-  <Project Path="../MeshCutting/MeshCutting.vcxproj" Id="fa993748-92fd-410d-96ba-3aed5430b365">
-    <BuildType Solution="Profile|*" Project="Release" />
-    <Platform Project="x64" />
-  </Project>
-  <Project Path="../Model/Model.vcxproj" Id="5d3aeefb-8789-48e5-9bd9-09c667052d09">
+  <Project Path="../Model/Model.vcxproj">
     <Platform Solution="*|Windows" Project="x64" />
   </Project>
-  <Project Path="ModelViewer.vcxproj" Id="1813bd6e-e2af-4a3c-8c54-4e72119da993">
+  <Project Path="ModelViewer.vcxproj">
     <Platform Solution="*|Windows" Project="x64" />
   </Project>
 </Solution>

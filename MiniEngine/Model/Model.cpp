@@ -14,12 +14,9 @@
 #include "Model.h"
 #include "Renderer.h"
 #include "ConstantBuffers.h"
-#include "../Core/CommandListManager.h"
-#include "../Core/GraphicsCore.h"
 
 using namespace Math;
 using namespace Renderer;
-using namespace Graphics;
 
 void Model::Destroy()
 {
@@ -36,9 +33,7 @@ void Model::Render(
     MeshSorter& sorter,
     const GpuBuffer& meshConstants,
     const AffineTransform sphereTransforms[],
-    const Joint* skeleton,
-    const std::vector<uint8_t>* meshHidden,
-    const std::vector<std::unique_ptr<ByteAddressBuffer>>* vertexColors ) const
+    const Joint* skeleton ) const
 {
     // Pointer to current mesh
     const uint8_t* pMesh = m_MeshData.get();
@@ -60,16 +55,13 @@ void Model::Render(
 		BoundingSphere sphereWS = BoundingSphere(sphereXform * sphereLS.GetCenter(), sphereScale * sphereLS.GetRadius());
         BoundingSphere sphereVS = BoundingSphere(viewMat * sphereWS.GetCenter(), sphereWS.GetRadius());
 
-        const bool hidden = meshHidden != nullptr && i < meshHidden->size() && (*meshHidden)[i] != 0;
-        if (!hidden && frustum.IntersectSphere(sphereVS))
+        if (frustum.IntersectSphere(sphereVS))
         {
             float distance = -sphereVS.GetCenter().GetZ() - sphereVS.GetRadius();
             sorter.AddMesh(mesh, distance,
                 meshConstants.GetGpuVirtualAddress() + sizeof(MeshConstants) * mesh.meshCBV,
                 m_MaterialConstants.GetGpuVirtualAddress() + sizeof(MaterialConstants) * mesh.materialCBV,
-                m_DataBuffer.GetGpuVirtualAddress(), skeleton,
-                vertexColors != nullptr && i < vertexColors->size() && (*vertexColors)[i] != nullptr
-                    ? (*vertexColors)[i]->GetGpuVirtualAddress() : 0);
+                m_DataBuffer.GetGpuVirtualAddress(), skeleton);
         }
 
         pMesh += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
@@ -82,91 +74,8 @@ void ModelInstance::Render(MeshSorter& sorter) const
     {
         //const Frustum& frustum = sorter.GetWorldFrustum();
         m_Model->Render(sorter, m_MeshConstantsGPU, m_BoundingSphereTransforms.get(),
-            m_Skeleton.get(), &m_MeshHidden, &m_VertexColors);
+            m_Skeleton.get());
     }
-}
-
-void ModelInstance::SetMeshVisibility(uint32_t meshIndex, bool visible)
-{
-    if (m_Model == nullptr || meshIndex >= m_Model->m_NumMeshes)
-        return;
-    m_MeshHidden.resize(m_Model->m_NumMeshes, 0);
-    m_MeshHidden[meshIndex] = visible ? 0 : 1;
-}
-
-bool ModelInstance::IsMeshVisible(uint32_t meshIndex) const
-{
-    return meshIndex >= m_MeshHidden.size() || m_MeshHidden[meshIndex] == 0;
-}
-
-bool ModelInstance::SetVertexColorOverride(uint32_t meshIndex, const std::vector<uint32_t>& colors)
-{
-    if (m_Model == nullptr || meshIndex >= m_Model->m_NumMeshes)
-        return false;
-    const uint8_t* pMesh = m_Model->m_MeshData.get();
-    for (uint32_t i = 0; i < meshIndex; ++i)
-        pMesh += sizeof(Mesh) + (((const Mesh*)pMesh)->numDraws - 1) * sizeof(Mesh::Draw);
-    const Mesh& mesh = *(const Mesh*)pMesh;
-    if ((mesh.psoFlags & PSOFlags::kHasSkin) == 0 || mesh.vbStride == 0 || colors.size() != mesh.vbSize / mesh.vbStride)
-        return false;
-
-    ClearVertexColorOverride(meshIndex);
-    m_VertexColors.resize(m_Model->m_NumMeshes);
-    m_VertexColors[meshIndex].reset(new ByteAddressBuffer());
-    // The upload helper copies in 16-byte units, so hand it a copy padded to a multiple of four colors.
-    std::vector<uint32_t> padded(colors);
-    padded.resize((colors.size() + 3) & ~size_t(3), 0u);
-    m_VertexColors[meshIndex]->Create(L"Vertex Color Override", (uint32_t)colors.size(), sizeof(uint32_t), padded.data());
-    return true;
-}
-
-void ModelInstance::ClearVertexColorOverride(uint32_t meshIndex)
-{
-    if (meshIndex >= m_VertexColors.size() || m_VertexColors[meshIndex] == nullptr)
-        return;
-    // Queued draws may still read the buffer; this is a rare edit, so drain the GPU before freeing it.
-    g_CommandManager.GetGraphicsQueue().WaitForIdle();
-    m_VertexColors[meshIndex] = nullptr;
-}
-
-void ModelInstance::BreakConstraint(const Vector3& offset, uint32_t nodeIndex)
-{
-    if (m_Model == nullptr || m_NodeWorld == nullptr || nodeIndex >= m_Model->m_NumNodes || IsConstraintBroken(nodeIndex))
-        return;
-    const uint32_t numNodes = m_Model->m_NumNodes;
-    if (m_DetachedNodes.size() != numNodes)
-    {
-        m_DetachedNodes.assign(numNodes, 0);
-        m_DetachedWorld.assign(numNodes, Matrix4(kIdentity));
-    }
-    const std::vector<uint32_t>& parents = m_Model->m_NodeParents;
-    // Like Unreal UpdateMeshForBrokenConstraints, the broken bone and all of its descendants are released together
-    for (uint32_t node = 0; node < numNodes; ++node)
-    {
-        uint32_t walk = node;
-        while (walk != nodeIndex && walk < parents.size() && parents[walk] < numNodes)
-            walk = parents[walk];
-        if (walk != nodeIndex)
-            continue;
-        // Start from the fixed world if the node is already detached, otherwise from the last Update
-        Matrix4 world = m_DetachedNodes[node] ? m_DetachedWorld[node] : m_NodeWorld[node];
-        world.SetW(world.GetW() + Vector4(offset, 0.0f));
-        m_DetachedWorld[node] = world;
-        m_DetachedNodes[node] = 1;
-    }
-    m_BrokenNodes.push_back(nodeIndex);
-}
-
-void ModelInstance::ResetBrokenConstraints()
-{
-    m_BrokenNodes.clear();
-    m_DetachedNodes.clear();
-    m_DetachedWorld.clear();
-}
-
-bool ModelInstance::IsConstraintBroken(uint32_t nodeIndex) const
-{
-    return std::find(m_BrokenNodes.begin(), m_BrokenNodes.end(), nodeIndex) != m_BrokenNodes.end();
 }
 
 ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
@@ -178,7 +87,6 @@ ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
         m_MeshConstantsCPU.Destroy();
         m_MeshConstantsGPU.Destroy();
         m_BoundingSphereTransforms = nullptr;
-        m_NodeWorld = nullptr;
         m_AnimGraph = nullptr;
         m_AnimState.clear();
         m_Skeleton = nullptr;
@@ -189,7 +97,6 @@ ModelInstance::ModelInstance( std::shared_ptr<const Model> sourceModel )
         m_MeshConstantsGPU.Create(L"Mesh Constant GPU Buffer", sourceModel->m_NumNodes, sizeof(MeshConstants));
 
         m_BoundingSphereTransforms.reset(new AffineTransform[sourceModel->m_NumNodes]);
-        m_NodeWorld.reset(new Matrix4[sourceModel->m_NumNodes]);
         m_Skeleton.reset(new Joint[sourceModel->m_NumJoints]);
 
         if (sourceModel->m_NumAnimations > 0)
@@ -214,20 +121,12 @@ ModelInstance::ModelInstance( const ModelInstance& modelInstance )
 ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceModel )
 {
     m_Model = sourceModel;
-    m_MeshHidden.clear();
-    ResetBrokenConstraints();
-    if (!m_VertexColors.empty())
-    {
-        g_CommandManager.GetGraphicsQueue().WaitForIdle();
-        m_VertexColors.clear();
-    }
     m_Locator = UniformTransform(kIdentity);
     if (sourceModel == nullptr)
     {
         m_MeshConstantsCPU.Destroy();
         m_MeshConstantsGPU.Destroy();
         m_BoundingSphereTransforms = nullptr;
-        m_NodeWorld = nullptr;
         m_AnimGraph = nullptr;
         m_AnimState.clear();
         m_Skeleton = nullptr;
@@ -238,7 +137,6 @@ ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceMode
         m_MeshConstantsGPU.Create(L"Mesh Constant GPU Buffer", sourceModel->m_NumNodes, sizeof(MeshConstants));
 
         m_BoundingSphereTransforms.reset(new AffineTransform[sourceModel->m_NumNodes]);
-        m_NodeWorld.reset(new Matrix4[sourceModel->m_NumNodes]);
         m_Skeleton.reset(new Joint[sourceModel->m_NumJoints]);
 
         if (sourceModel->m_NumAnimations > 0)
@@ -296,10 +194,6 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
         if (!Node->skeletonRoot)
             xform = ParentMatrix * xform;
 
-        // A detached node (broken or below a broken one) ignores its parent and animation (Unreal: the physics body drives the bone)
-        if (Node->matrixIdx < m_DetachedNodes.size() && m_DetachedNodes[Node->matrixIdx])
-            xform = m_DetachedWorld[Node->matrixIdx];
-
         // Concatenate the transform with the parent's matrix and update the matrix list
         {
             // Scoped so that I don't forget that I'm pointing to write-combined memory and
@@ -307,7 +201,6 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
             MeshConstants& cbv = cb[Node->matrixIdx];
             cbv.World = xform;
             cbv.WorldIT = InverseTranspose(xform.Get3x3());
-            m_NodeWorld[Node->matrixIdx] = xform;
 
             m_BoundingSphereTransforms[Node->matrixIdx] = AffineTransform(
                 (Vector3)xform.GetX(),
@@ -359,11 +252,6 @@ void ModelInstance::Resize( float newRadius )
         return;
 
     m_Locator.SetScale(newRadius / m_Model->m_BoundingSphere.GetRadius());
-}
-
-void ModelInstance::SetPosition(const Vector3& position)
-{
-    m_Locator.SetTranslation(position);
 }
 
 Vector3 ModelInstance::GetCenter() const

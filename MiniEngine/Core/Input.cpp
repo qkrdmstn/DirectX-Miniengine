@@ -57,7 +57,6 @@ namespace
     IDirectInputDevice8A* s_Mouse;
 
     DIMOUSESTATE2 s_MouseState;
-    bool s_MouseExclusive = true;   // exclusive hides the cursor; GameInput::SetMouseExclusive(false) shows it
     unsigned char s_Keybuffer[256];
     unsigned char s_DXKeyMapping[GameInput::kNumKeys]; // map DigitalInput enum to DX key codes 
 
@@ -223,7 +222,7 @@ namespace
             ASSERT(false, "Mouse CreateDevice failed.");
         if (FAILED(s_Mouse->SetDataFormat(&c_dfDIMouse2)))
             ASSERT(false, "Mouse SetDataFormat failed.");
-        if (FAILED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND | (s_MouseExclusive ? DISCL_EXCLUSIVE : DISCL_NONEXCLUSIVE))))
+        if (FAILED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND | DISCL_EXCLUSIVE)))
             ASSERT(false, "Mouse SetCooperativeLevel failed.");
 
         KbmZeroInputs();
@@ -287,74 +286,6 @@ void GameInput::Shutdown()
 {
 #ifdef USE_KEYBOARD_MOUSE
     KbmShutdown();
-#endif
-}
-
-bool GameInput::SetMouseExclusive(bool exclusive)
-{
-#ifdef USE_KEYBOARD_MOUSE
-    s_MouseExclusive = exclusive;
-    if (s_Mouse == nullptr)
-        return true;    // not created yet: Initialize uses the flag
-
-    // The cooperative level can only change while the device is not acquired; KbmUpdate acquires it again.
-    s_Mouse->Unacquire();
-    return SUCCEEDED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd,
-        DISCL_FOREGROUND | (exclusive ? DISCL_EXCLUSIVE : DISCL_NONEXCLUSIVE)));
-#else
-    (void)exclusive;
-    return false;
-#endif
-}
-
-bool GameInput::IsMouseExclusive()
-{
-#ifdef USE_KEYBOARD_MOUSE
-    return s_MouseExclusive;
-#else
-    return true;
-#endif
-}
-
-bool GameInput::GetClientSize(float& width, float& height)
-{
-    width = height = 0.0f;
-#ifdef USE_KEYBOARD_MOUSE
-    RECT client;
-    if (GameCore::g_hWnd == nullptr || !GetClientRect(GameCore::g_hWnd, &client))
-        return false;
-    width = float(client.right - client.left);
-    height = float(client.bottom - client.top);
-    return width > 0.0f && height > 0.0f;
-#else
-    return false;
-#endif
-}
-
-bool GameInput::GetCursorClientPos(float& x, float& y, float& normalizedX, float& normalizedY)
-{
-    x = y = normalizedX = normalizedY = -1.0f;
-#ifdef USE_KEYBOARD_MOUSE
-    // Only while this window is the foreground window and the cursor is inside its client area.
-    HWND window = GameCore::g_hWnd;
-    if (window == nullptr || GetForegroundWindow() != window)
-        return false;
-    POINT point;
-    RECT client;
-    if (!GetCursorPos(&point) || !ScreenToClient(window, &point) || !GetClientRect(window, &client))
-        return false;
-    const float width = float(client.right - client.left), height = float(client.bottom - client.top);
-    if (!(width > 0.0f) || !(height > 0.0f))
-        return false;
-    if (point.x < 0 || point.y < 0 || float(point.x) >= width || float(point.y) >= height)
-        return false;
-    x = float(point.x);
-    y = float(point.y);
-    normalizedX = x / width;
-    normalizedY = y / height;
-    return true;
-#else
-    return false;
 #endif
 }
 

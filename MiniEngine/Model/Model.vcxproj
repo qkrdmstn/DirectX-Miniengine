@@ -152,9 +152,6 @@
     <FxCompile Include="Shaders\DefaultVS.hlsl">
       <ShaderType>Vertex</ShaderType>
     </FxCompile>
-    <FxCompile Include="Shaders\DepthOnlySkinPS.hlsl">
-      <ShaderType>Pixel</ShaderType>
-    </FxCompile>
     <FxCompile Include="Shaders\DepthOnlySkinVS.hlsl">
       <ShaderType>Vertex</ShaderType>
     </FxCompile>

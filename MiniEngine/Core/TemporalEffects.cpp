@@ -160,9 +160,6 @@ void TemporalEffects::ResolveImage( CommandContext& BaseContext )
     uint32_t Src = s_FrameIndexMod2;
     uint32_t Dst = Src ^ 1;
 
-    if (!EnableTAA)
-        return;
-
     {
         ApplyTemporalAA(Context);
         SharpenImage(Context, g_TemporalColor[Dst]);

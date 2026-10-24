@@ -174,7 +174,6 @@ namespace glTF
 
     struct Node
     {
-        std::string name;
         union
         {
             uint8_t flags;

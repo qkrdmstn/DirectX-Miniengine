@@ -1,0 +1,49 @@
+INIT target=1 mesh=0 ms=0.133 cache=1 verts=8
+INITTARGET target=1 ms=1.106 meshes=1
+INIT target=2 mesh=0 ms=192.543 cache=1 verts=91014
+INITTARGET target=2 ms=193.609 meshes=1
+FIRSTUPDATE init-loop ms=196.000
+EXTRACT job a=0 cached=1 ms=5.378
+CONFIRMALL ms=248.062
+ENTERFRAME run=1 wall(Update-to-Update)=264.382
+EXTRACT job a=0 cached=1 ms=4.642
+CONFIRMALL ms=219.429
+ENTERFRAME run=2 wall(Update-to-Update)=244.464
+EXTRACT job a=0 cached=1 ms=6.183
+CONFIRMALL ms=347.692
+ENTERFRAME run=3 wall(Update-to-Update)=360.340
+EXTRACT job a=0 cached=1 ms=7.908
+CONFIRMALL ms=347.688
+ENTERFRAME run=4 wall(Update-to-Update)=365.806
+EXTRACT job a=0 cached=1 ms=8.516
+CONFIRMALL ms=374.083
+ENTERFRAME run=5 wall(Update-to-Update)=397.476
+EXTRACT job a=0 cached=1 ms=8.280
+CONFIRMALL ms=373.021
+ENTERFRAME run=6 wall(Update-to-Update)=389.465
+MOVED bunny origin to zero
+EXTRACT job a=0 cached=1 ms=0.012
+EXTRACT job a=0 cached=0 ms=314.525
+CONFIRMALL ms=663.912
+ENTERFRAME run=7 wall(Update-to-Update)=685.362
+EXTRACT job a=0 cached=1 ms=0.007
+EXTRACT job a=0 cached=0 ms=322.076
+CONFIRMALL ms=668.934
+ENTERFRAME run=8 wall(Update-to-Update)=684.516
+EXTRACT job a=0 cached=1 ms=0.007
+EXTRACT job a=0 cached=0 ms=319.716
+CONFIRMALL ms=659.344
+ENTERFRAME run=9 wall(Update-to-Update)=690.245
+EXTRACT job a=0 cached=1 ms=0.007
+EXTRACT job a=0 cached=0 ms=362.108
+CONFIRMALL ms=671.735
+ENTERFRAME run=10 wall(Update-to-Update)=687.375
+EXTRACT job a=0 cached=1 ms=0.009
+EXTRACT job a=0 cached=0 ms=304.245
+CONFIRMALL ms=678.122
+ENTERFRAME run=11 wall(Update-to-Update)=722.231
+EXTRACT job a=0 cached=1 ms=0.007
+EXTRACT job a=0 cached=0 ms=290.625
+CONFIRMALL ms=617.921
+ENTERFRAME run=12 wall(Update-to-Update)=632.799
+DONE

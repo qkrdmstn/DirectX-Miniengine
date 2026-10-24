@@ -24,7 +24,7 @@
 
 namespace glTF { class Asset; struct Mesh; }
 
-#define CURRENT_MINI_FILE_VERSION 14
+#define CURRENT_MINI_FILE_VERSION 13
 
 namespace Renderer
 {
@@ -59,9 +59,6 @@ namespace Renderer
         std::vector<AnimationSet> m_Animations;
         std::vector<uint16_t> m_JointIndices;
         std::vector<Matrix4> m_JointIBMs;
-        std::vector<SkinPalette> m_SkinPalettes;
-        std::vector<uint32_t> m_NodeParents;
-        std::vector<std::string> m_NodeNames;
         std::vector<MaterialTextureData> m_MaterialTextures;
         std::vector<MaterialConstantData> m_MaterialConstants;
         std::vector<Mesh*> m_Meshes;
@@ -85,7 +82,6 @@ namespace Renderer
         uint32_t numAnimationCurves;
         uint32_t numAnimations;
         uint32_t numJoints;     // All joints for all skins
-        uint32_t numSkins;
         float    boundingSphere[4];
         float    minPos[3];
         float    maxPos[3];

@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -57,9 +57,6 @@ __declspec(align(256)) struct MaterialConstants
     };
 };
 
-// 웨이트 뷰가 쓰는 joint 색 표의 최대 크기 (팔레트당 joint 수)
-static const uint32_t kMaxJointColors = 256;
-
 __declspec(align(256)) struct GlobalConstants
 {
     Math::Matrix4 ViewProjMatrix;
@@ -69,7 +66,4 @@ __declspec(align(256)) struct GlobalConstants
     Math::Vector3 SunIntensity;
     float IBLRange;
     float IBLBias;
-    uint32_t Reserved;                  // 예전 DebugJointIndex 자리 (셰이더와 배치를 맞추려고 남겼다)
-    uint32_t WeightDebugEnabled;
-    float JointColors[kMaxJointColors][4];      // 웨이트 뷰: joint 번호별 색 (정점 색 = Σ 가중치 × joint 색)
 };

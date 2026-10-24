@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -30,12 +30,6 @@ cbuffer GlobalConstants : register(b1)
     float3 ViewerPos;
     float3 SunDirection;
     float3 SunIntensity;
-    float _pad;
-    float IBLRange;
-    float IBLBias;
-    uint Reserved;
-    uint WeightDebugEnabled;
-    float4 JointColors[256];    // 웨이트 뷰: joint 번호별 색
 }
 
 #ifdef ENABLE_SKINNING
@@ -62,7 +56,6 @@ struct VSInput
 #ifdef ENABLE_SKINNING
     uint4 jointIndices : BLENDINDICES;
     float4 jointWeights : BLENDWEIGHT;
-    float4 cutColor : COLOR;        // vertex color override (slot 2); R >= 0.5 hides the vertex
 #endif
 };
 
@@ -79,16 +72,12 @@ struct VSOutput
 #endif
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
-    float3 weightColor : TEXCOORD4;     // 웨이트 뷰의 정점 색
-    float cutMask : TEXCOORD5;          // vertex color override R (>= 0.5 means hidden)
 };
 
 [RootSignature(Renderer_RootSig)]
 VSOutput main(VSInput vsInput)
 {
     VSOutput vsOutput;
-    vsOutput.weightColor = float3(0.12, 0.12, 0.12);     // 색 표에 없는 joint와 스킨 없는 메시는 회색
-    vsOutput.cutMask = 0.0;
 
     float4 position = float4(vsInput.position, 1.0);
     float3 normal = vsInput.normal * 2 - 1;
@@ -100,16 +89,6 @@ VSOutput main(VSInput vsInput)
     // I don't like this hack.  The weights should be normalized already, but something is fishy.
     float4 weights = vsInput.jointWeights / dot(vsInput.jointWeights, 1);
 
-    // 웨이트 뷰: 정점 색 = Σ 가중치 × joint 색 (색 표 범위를 넘는 번호는 마지막 칸을 쓴다)
-    if (WeightDebugEnabled != 0)
-    {
-        vsOutput.weightColor =
-            JointColors[min(vsInput.jointIndices.x, 255)].rgb * weights.x +
-            JointColors[min(vsInput.jointIndices.y, 255)].rgb * weights.y +
-            JointColors[min(vsInput.jointIndices.z, 255)].rgb * weights.z +
-            JointColors[min(vsInput.jointIndices.w, 255)].rgb * weights.w;
-    }
-
     float4x4 skinPosMat =
         Joints[vsInput.jointIndices.x].PosMatrix * weights.x +
         Joints[vsInput.jointIndices.y].PosMatrix * weights.y +
@@ -117,7 +96,6 @@ VSOutput main(VSInput vsInput)
         Joints[vsInput.jointIndices.w].PosMatrix * weights.w;
 
     position = mul(skinPosMat, position);
-    vsOutput.cutMask = vsInput.cutColor.r;
 
     float4x3 skinNrmMat =
         Joints[vsInput.jointIndices.x].NrmMatrix * weights.x +

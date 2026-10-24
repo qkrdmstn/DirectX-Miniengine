@@ -3,12 +3,12 @@
     <Platform Name="x64" />
     <Platform Name="ARM64" />
   </Configurations>
-  <Project Path="DynamicLOD/D3D12DynamicLOD.vcxproj" Id="759f6318-300c-43d7-a6d7-ec6f98acc070" />
-  <Project Path="MeshletCull/D3D12MeshletCull.vcxproj" Id="142428ed-b5c7-4bad-88e4-4af34bd9d48a" />
-  <Project Path="MeshletGenerator/D3D12MeshletGenerator.vcxproj" Id="265611fb-24a4-4fd0-b604-cd27089fc1da" />
-  <Project Path="MeshletInstancing/D3D12MeshletInstancing.vcxproj" Id="7794c60a-1871-4558-a982-95d627e42cdf" />
-  <Project Path="MeshletRender/D3D12MeshletRender.vcxproj" Id="decd10d0-a6f7-42f7-9da6-2f5d49e13c3e" />
-  <Project Path="WavefrontConverter/D3D12WavefrontConverter.vcxproj" Id="d4dbd8b1-49ca-4bc3-87e1-9128cf8f1126">
+  <Project Path="DynamicLOD/D3D12DynamicLOD.vcxproj" />
+  <Project Path="MeshletCull/D3D12MeshletCull.vcxproj" />
+  <Project Path="MeshletGenerator/D3D12MeshletGenerator.vcxproj" />
+  <Project Path="MeshletInstancing/D3D12MeshletInstancing.vcxproj" />
+  <Project Path="MeshletRender/D3D12MeshletRender.vcxproj" />
+  <Project Path="WavefrontConverter/D3D12WavefrontConverter.vcxproj">
     <BuildDependency Project="MeshletGenerator/D3D12MeshletGenerator.vcxproj" />
   </Project>
 </Solution>

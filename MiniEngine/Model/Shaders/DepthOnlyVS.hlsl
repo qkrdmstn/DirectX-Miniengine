@@ -47,7 +47,6 @@ struct VSInput
 #ifdef ENABLE_SKINNING
     uint4 jointIndices : BLENDINDICES;
     float4 jointWeights : BLENDWEIGHT;
-    float4 cutColor : COLOR;        // vertex color override (slot 2); R >= 0.5 hides the vertex
 #endif
 };
 
@@ -57,9 +56,6 @@ struct VSOutput
 #ifdef ENABLE_ALPHATEST
     float2 uv0 : TEXCOORD0;
 #endif
-#if defined(ENABLE_SKINNING) || defined(ENABLE_ALPHATEST)
-    float cutMask : TEXCOORD1;
-#endif
 };
 
 [RootSignature(Renderer_RootSig)]
@@ -68,10 +64,6 @@ VSOutput main(VSInput vsInput)
     VSOutput vsOutput;
 
     float4 position = float4(vsInput.position, 1.0);
-
-#if defined(ENABLE_SKINNING) || defined(ENABLE_ALPHATEST)
-    vsOutput.cutMask = 0.0;
-#endif
 
 #ifdef ENABLE_SKINNING
     // I don't like this hack.  The weights should be normalized already, but something is fishy.
@@ -84,7 +76,6 @@ VSOutput main(VSInput vsInput)
         Joints[vsInput.jointIndices.w].PosMatrix * weights.w;
 
     position = mul(skinPosMat, position);
-    vsOutput.cutMask = vsInput.cutColor.r;
 
 #endif
 

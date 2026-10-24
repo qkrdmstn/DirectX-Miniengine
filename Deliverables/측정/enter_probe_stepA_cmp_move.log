@@ -1,0 +1,73 @@
+INIT target=1 mesh=0 ms=0.095 cache=1 verts=8
+INITTARGET target=1 ms=1.703 meshes=1
+INIT target=2 mesh=0 ms=148.163 cache=1 verts=91014
+INITTARGET target=2 ms=148.770 meshes=1
+FIRSTUPDATE init-loop ms=151.418
+EXTRACT job a=0 cached=1 ms=5.485
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +14668 -17318): EQUAL
+CONFIRMALL ms=1039.906
+ENTERFRAME run=1 wall(Update-to-Update)=1063.028
+EXTRACT job a=0 cached=1 ms=6.620
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +14668 -17318): EQUAL
+CONFIRMALL ms=1256.865
+ENTERFRAME run=2 wall(Update-to-Update)=1271.017
+EXTRACT job a=0 cached=1 ms=8.631
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +14668 -17318): EQUAL
+CONFIRMALL ms=1282.489
+ENTERFRAME run=3 wall(Update-to-Update)=1302.320
+EXTRACT job a=0 cached=1 ms=12.157
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +14668 -17318): EQUAL
+CONFIRMALL ms=1252.366
+ENTERFRAME run=4 wall(Update-to-Update)=1266.941
+EXTRACT job a=0 cached=1 ms=6.808
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +14668 -17318): EQUAL
+CONFIRMALL ms=1324.139
+ENTERFRAME run=5 wall(Update-to-Update)=1338.270
+EXTRACT job a=0 cached=1 ms=7.396
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +14668 -17318): EQUAL
+CONFIRMALL ms=1202.933
+ENTERFRAME run=6 wall(Update-to-Update)=1221.643
+MOVED bunny origin to zero
+EXTRACT job a=0 cached=1 ms=0.016
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +20 -20): EQUAL
+EXTRACT job a=0 cached=0 ms=269.841
+CONFIRMALL ms=564.888
+ENTERFRAME run=7 wall(Update-to-Update)=595.478
+EXTRACT job a=0 cached=1 ms=0.016
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +20 -20): EQUAL
+EXTRACT job a=0 cached=0 ms=279.162
+CONFIRMALL ms=554.459
+ENTERFRAME run=8 wall(Update-to-Update)=573.357
+EXTRACT job a=0 cached=1 ms=0.022
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +20 -20): EQUAL
+EXTRACT job a=0 cached=0 ms=287.570
+CONFIRMALL ms=626.877
+ENTERFRAME run=9 wall(Update-to-Update)=640.840
+EXTRACT job a=0 cached=1 ms=0.018
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +20 -20): EQUAL
+EXTRACT job a=0 cached=0 ms=292.907
+CONFIRMALL ms=594.038
+ENTERFRAME run=10 wall(Update-to-Update)=621.597
+EXTRACT job a=0 cached=1 ms=0.018
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +20 -20): EQUAL
+EXTRACT job a=0 cached=0 ms=279.614
+CONFIRMALL ms=537.383
+ENTERFRAME run=11 wall(Update-to-Update)=550.375
+EXTRACT job a=0 cached=1 ms=0.018
+COMPARE a=0 extract(before cut): EQUAL
+COMPARE a=0 slice(ok=1 status=0 loops=1 faces +20 -20): EQUAL
+EXTRACT job a=0 cached=0 ms=257.338
+CONFIRMALL ms=529.392
+ENTERFRAME run=12 wall(Update-to-Update)=543.922
+DONE

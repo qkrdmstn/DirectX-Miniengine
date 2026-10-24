@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -21,8 +21,6 @@
 #include "../Core/GraphicsCommon.h"
 #include "../Core/BufferManager.h"
 #include "../Core/ShadowCamera.h"
-#include <algorithm>
-#include <cstring>
 
 #include "CompiledShaders/DefaultVS.h"
 #include "CompiledShaders/DefaultSkinVS.h"
@@ -38,7 +36,6 @@
 #include "CompiledShaders/DefaultNoTangentNoUV1PS.h"
 #include "CompiledShaders/DepthOnlyVS.h"
 #include "CompiledShaders/DepthOnlySkinVS.h"
-#include "CompiledShaders/DepthOnlySkinPS.h"
 #include "CompiledShaders/CutoutDepthVS.h"
 #include "CompiledShaders/CutoutDepthSkinVS.h"
 #include "CompiledShaders/CutoutDepthPS.h"
@@ -73,17 +70,12 @@ namespace Renderer
     GraphicsPSO m_DefaultPSO(L"Renderer: Default PSO"); // Not finalized.  Used as a template.
 
     DescriptorHandle m_CommonTextures;
-
-    ByteAddressBuffer s_ZeroVertexColor;    // One zero RGBA8, bound with stride 0 for skinned meshes without a color override
 }
 
 void Renderer::Initialize(void)
 {
     if (s_Initialized)
         return;
-
-    alignas(16) const uint32_t zeroColor[4] = {};     // the upload helper copies in 16-byte units
-    s_ZeroVertexColor.Create(L"Zero Vertex Color", 1, sizeof(uint32_t), zeroColor);
 
     SamplerDesc DefaultSamplerDesc;
     DefaultSamplerDesc.MaxAnisotropy = 8;
@@ -123,7 +115,6 @@ void Renderer::Initialize(void)
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_UNORM, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM,        2, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
     D3D12_INPUT_ELEMENT_DESC skinPosAndUV[] =
@@ -132,7 +123,6 @@ void Renderer::Initialize(void)
         { "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT,       0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_UNORM, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM,        2, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
     ASSERT(sm_PSOs.size() == 0);
@@ -163,7 +153,6 @@ void Renderer::Initialize(void)
     GraphicsPSO SkinDepthOnlyPSO = DepthOnlyPSO;
     SkinDepthOnlyPSO.SetInputLayout(_countof(skinPos), skinPos);
     SkinDepthOnlyPSO.SetVertexShader(g_pDepthOnlySkinVS, sizeof(g_pDepthOnlySkinVS));
-    SkinDepthOnlyPSO.SetPixelShader(g_pDepthOnlySkinPS, sizeof(g_pDepthOnlySkinPS));     // clips the cut mask
     SkinDepthOnlyPSO.Finalize();
     sm_PSOs.push_back(SkinDepthOnlyPSO);
 
@@ -316,7 +305,6 @@ void Renderer::Shutdown(void)
 {
     s_RadianceCubeMap = nullptr;
     s_IrradianceCubeMap = nullptr;
-    s_ZeroVertexColor.Destroy();
     TextureManager::Shutdown();
     s_TextureHeap.Destroy();
     s_SamplerHeap.Destroy();
@@ -348,7 +336,6 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
     {
         vertexLayout.push_back({ "BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 });
         vertexLayout.push_back({ "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_UNORM, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 });
-        vertexLayout.push_back({ "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 2, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 });
     }
 
     ColorPSO.SetInputLayout((uint32_t)vertexLayout.size(), vertexLayout.data());
@@ -444,21 +431,9 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
 #endif
     sm_PSOs.push_back(ColorPSO);
 
-    D3D12_RASTERIZER_DESC wireRasterizer = (psoFlags & kTwoSided) ? RasterizerTwoSided : RasterizerDefault;
-    wireRasterizer.FillMode = D3D12_FILL_MODE_WIREFRAME;
-    // Reversed-Z: a positive bias moves the lines toward the camera, so they pass the depth test against the
-    // surface they lie on (Solid + Wire). Same values as the cut pieces (ProceduralMeshRenderer).
-    wireRasterizer.DepthBias = 200;
-    wireRasterizer.SlopeScaledDepthBias = 1.5f;
-    ColorPSO.SetRasterizerState(wireRasterizer);
-    // The solid depth prepass already wrote depth; compare against it without writing depth.
-    ColorPSO.SetDepthStencilState(DepthStateReadOnly);
-    ColorPSO.Finalize();
-    sm_PSOs.push_back(ColorPSO);
-
     ASSERT(sm_PSOs.size() <= 256, "Ran out of room for unique PSOs");
 
-    return (uint8_t)sm_PSOs.size() - 3;
+    return (uint8_t)sm_PSOs.size() - 2;
 }
 
 void Renderer::DrawSkybox( GraphicsContext& gfxContext, const Camera& Camera, const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor )
@@ -498,8 +473,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
     D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
-    const Joint* skeleton,
-    D3D12_GPU_VIRTUAL_ADDRESS vertexColors)
+    const Joint* skeleton)
 {
     SortKey key;
     key.value = m_SortObjects.size();
@@ -531,7 +505,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_SortKeys.push_back(key.value);
         m_PassCounts[kTransparent]++;
     }
-    else if (SeparateZPass || alphaTest || m_Wireframe)
+    else if (SeparateZPass || alphaTest)
     {
         key.passID = kZPass;
         key.psoIdx = depthPSO;
@@ -554,38 +528,8 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_PassCounts[kOpaque]++;
     }
 
-    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr, vertexColors };
+    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr };
     m_SortObjects.push_back(object);
-}
-
-void MeshSorter::SetJointColors(uint32_t startJoint, const DirectX::XMFLOAT4* colors, uint32_t count)
-{
-    for (JointColorTable& table : m_JointColorTables)
-    {
-        if (table.startJoint == startJoint)
-        {
-            table.colors.assign(colors, colors + count);
-            return;
-        }
-    }
-    m_JointColorTables.push_back({ startJoint, std::vector<DirectX::XMFLOAT4>(colors, colors + count) });
-}
-
-// 메시의 팔레트(startJoint)에 맞는 색 표를 상수 버퍼에 채운다. 표가 없거나 모자란 joint는 회색이다.
-void MeshSorter::FillJointColors(GlobalConstants& globals, uint32_t startJoint) const
-{
-    const float gray[4] = { 0.12f, 0.12f, 0.12f, 1.0f };
-    for (uint32_t i = 0; i < kMaxJointColors; ++i)
-        std::memcpy(globals.JointColors[i], gray, sizeof(gray));
-    for (const JointColorTable& table : m_JointColorTables)
-    {
-        if (table.startJoint != startJoint)
-            continue;
-        const uint32_t count = std::min<uint32_t>(uint32_t(table.colors.size()), kMaxJointColors);
-        for (uint32_t i = 0; i < count; ++i)
-            std::memcpy(globals.JointColors[i], &table.colors[i], sizeof(float) * 4);
-        return;
-    }
 }
 
 void MeshSorter::Sort()
@@ -679,7 +623,7 @@ void MeshSorter::RenderMeshes(
 				context.SetDepthStencilTarget(m_DSV->GetDSV());
 				break;
 			case kOpaque:
-				if (SeparateZPass || m_Wireframe)
+				if (SeparateZPass)
 				{
 					context.TransitionResource(*m_DSV, D3D12_RESOURCE_STATE_DEPTH_READ);
 					context.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -712,14 +656,6 @@ void MeshSorter::RenderMeshes(
             const SortObject& object = m_SortObjects[key.objectIdx];
             const Mesh& mesh = *object.mesh;
 
-            if (m_BatchType == kDefault && m_CurrentPass != kZPass)
-            {
-                globals.WeightDebugEnabled = m_WeightDebug ? 1 : 0;
-                if (m_WeightDebug)
-                    FillJointColors(globals, mesh.startJoint);
-                context.SetDynamicConstantBufferView(kCommonCBV, sizeof(GlobalConstants), &globals);
-            }
-
             context.SetConstantBuffer(kMeshConstants, object.meshCBV);
             context.SetConstantBuffer(kMaterialConstants, object.materialCBV);
             context.SetDescriptorTable(kMaterialSRVs, s_TextureHeap[mesh.srvTable]);
@@ -729,9 +665,7 @@ void MeshSorter::RenderMeshes(
                 ASSERT(object.skeleton != nullptr, "Unspecified joint matrix array");
                 context.SetDynamicSRV(kSkinMatrices, sizeof(Joint) * mesh.numJoints, object.skeleton + mesh.startJoint);
             }
-            const uint32_t psoIndex = m_Wireframe && m_BatchType == kDefault && m_CurrentPass != kZPass
-                ? uint32_t(mesh.pso) + 2u : uint32_t(key.psoIdx);
-            context.SetPipelineState(sm_PSOs[psoIndex]);
+            context.SetPipelineState(sm_PSOs[key.psoIdx]);
 
             if (m_CurrentPass == kZPass)
             {
@@ -744,15 +678,6 @@ void MeshSorter::RenderMeshes(
             else
             {
                 context.SetVertexBuffer(0, {object.bufferPtr + mesh.vbOffset, mesh.vbSize, mesh.vbStride});
-            }
-
-            if (mesh.psoFlags & PSOFlags::kHasSkin)
-            {
-                // Slot 2 is the per-vertex cut mask color (slot 1 is the missing-UV0 fallback in GetPSO). Without an override, stride 0 makes every vertex read the shared zero.
-                if (object.vertexColors != 0)
-                    context.SetVertexBuffer(2, {object.vertexColors, mesh.vbSize / mesh.vbStride * 4, 4});
-                else
-                    context.SetVertexBuffer(2, {s_ZeroVertexColor.GetGpuVirtualAddress(), 4, 0});
             }
 
             context.SetIndexBuffer({object.bufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat});

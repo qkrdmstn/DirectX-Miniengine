@@ -35,7 +35,6 @@
     <MinimumVisualStudioVersion>16.0</MinimumVisualStudioVersion>
     <TargetRuntime>Native</TargetRuntime>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <ProjectName>ModelViewer</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
@@ -76,9 +75,6 @@
     <ProjectReference Include="../Core/Core.vcxproj">
       <Project>{86A58508-0D6A-4786-A32F-01A301FDC6F3}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
-    <ProjectReference Include="..\MeshCutting\MeshCutting.vcxproj">
-      <Project>{fa993748-92fd-410d-96ba-3aed5430b365}</Project>
     </ProjectReference>
     <ProjectReference Include="..\Model\Model.vcxproj">
       <Project>{5d3aeefb-8789-48e5-9bd9-09c667052d09}</Project>

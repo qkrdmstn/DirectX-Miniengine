@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -33,12 +33,6 @@
 #include "ModelLoader.h"
 #include "ShadowCamera.h"
 #include "Display.h"
-#include "Utility.h"
-#include "../MeshCutting/Debug/CutDebugView.h"
-#include "../MeshCutting/Debug/SceneViewCamera.h"
-#include "../MeshCutting/Rendering/ProceduralMeshRenderer.h"
-#include "../MeshCutting/Runtime/CutController.h"
-#include <deque>
 
 #define LEGACY_RENDERER
 
@@ -53,60 +47,31 @@ class ModelViewer : public GameCore::IGameApp
 {
 public:
 
-    ModelViewer(void) {}
+    ModelViewer( void ) {}
 
-    virtual void Startup(void) override;
-    virtual void Cleanup(void) override;
+    virtual void Startup( void ) override;
+    virtual void Cleanup( void ) override;
 
-    virtual void Update(float deltaT) override;
-    virtual void RenderScene(void) override;
-    virtual void RenderUI(GraphicsContext& context) override;
+    virtual void Update( float deltaT ) override;
+    virtual void RenderScene( void ) override;
 
 private:
 
     Camera m_Camera;
-    unique_ptr<MeshCutting::SceneViewCamera> m_SceneCamera;     // Unity Scene view style navigation
+    unique_ptr<CameraController> m_CameraController;
 
     D3D12_VIEWPORT m_MainViewport;
     D3D12_RECT m_MainScissor;
 
     ModelInstance m_ModelInst;
-    MeshCutting::CutTargetId m_CutTarget = 0;   // m_ModelInst를 CutController에 등록한 번호 (0 = 등록 안 함)
-    // 절단 확인용 정적 모델. deque는 추가해도 기존 원소의 주소가 바뀌지 않는다 (CutController가 주소를 들고 있다).
-    struct StaticTestInstance
-    {
-        ModelInstance instance;
-        MeshCutting::CutTargetId target = 0;
-    };
-    std::deque<StaticTestInstance> m_StaticInsts;
-    MeshCutting::ProceduralMeshRenderer m_ProceduralRenderer;
-    MeshCutting::CutController m_Cut;           // candidate patch, plane, cut pieces and their per-frame skinning
-    MeshCutting::CutDebugView m_CutView;        // debug meshes, render mode and status lines
     ShadowCamera m_SunShadowCamera;
-
-    void RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
-        const D3D12_RECT& scissor, uint32_t frameIndex);
-    bool SetWeightView(MeshSorter& sorter, bool alwaysOn);      // 웨이트 뷰의 joint 색 표를 정렬기에 넘긴다 (켰으면 true)
-    void AddStaticInstance(const std::wstring& fileName, float sizeRatio, float offsetRatio, bool forceRebuild);
 };
 
-// cube를 기준으로 정적 메시 절단을 확인한다. 크기는 bounds 반지름 단위다.
-static const float kStaticRadius = 100.0f;
-static const float kBunnySizeRatio = 0.8f;
-static const float kBunnyOffsetRatio = 2.4f;
-
-CREATE_APPLICATION(ModelViewer)
-
-static std::wstring BoneName(const Model& model, uint32_t nodeIndex, uint32_t jointIndex)
-{
-    if (nodeIndex < model.m_NodeNames.size() && !model.m_NodeNames[nodeIndex].empty())
-        return Utility::UTF8ToWideString(model.m_NodeNames[nodeIndex]);
-    return L"Joint_" + std::to_wstring(jointIndex);
-}
+CREATE_APPLICATION( ModelViewer )
 
 ExpVar g_SunLightIntensity("Viewer/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
-NumVar g_SunOrientation("Viewer/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f);
-NumVar g_SunInclination("Viewer/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f);
+NumVar g_SunOrientation("Viewer/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f );
+NumVar g_SunInclination("Viewer/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f );
 
 void ChangeIBLSet(EngineVar::ActionType);
 void ChangeIBLBias(EngineVar::ActionType);
@@ -153,22 +118,23 @@ void LoadIBLTextures()
         if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
             continue;
 
-        std::wstring diffuseFile = ffd.cFileName;
-        std::wstring baseFile = diffuseFile;
-        baseFile.resize(baseFile.rfind(L"_diffuseIBL.dds"));
-        std::wstring specularFile = baseFile + L"_specularIBL.dds";
+       std::wstring diffuseFile = ffd.cFileName;
+       std::wstring baseFile = diffuseFile; 
+       baseFile.resize(baseFile.rfind(L"_diffuseIBL.dds"));
+       std::wstring specularFile = baseFile + L"_specularIBL.dds";
 
-        TextureRef diffuseTex = TextureManager::LoadDDSFromFile(L"Textures/" + diffuseFile);
-        if (diffuseTex.IsValid())
-        {
-            TextureRef specularTex = TextureManager::LoadDDSFromFile(L"Textures/" + specularFile);
-            if (specularTex.IsValid())
-            {
-                g_IBLSet.AddEnum(baseFile);
-                g_IBLTextures.push_back(std::make_pair(diffuseTex, specularTex));
-            }
-        }
-    } while (FindNextFile(hFind, &ffd) != 0);
+       TextureRef diffuseTex = TextureManager::LoadDDSFromFile(L"Textures/" + diffuseFile);
+       if (diffuseTex.IsValid())
+       {
+           TextureRef specularTex = TextureManager::LoadDDSFromFile(L"Textures/" + specularFile);
+           if (specularTex.IsValid())
+           {
+               g_IBLSet.AddEnum(baseFile);
+               g_IBLTextures.push_back(std::make_pair(diffuseTex, specularTex));
+           }
+       }
+    }
+    while (FindNextFile(hFind, &ffd) != 0);
 
     FindClose(hFind);
 
@@ -178,85 +144,57 @@ void LoadIBLTextures()
         g_IBLSet.Increment();
 }
 
-void ModelViewer::Startup(void)
+void ModelViewer::Startup( void )
 {
-    // The mouse is exclusive by default, which hides the cursor. The cut debug controls need to see it.
-    GameInput::SetMouseExclusive(false);
-
-    // MotionBlur::Enable = true;      // off: motion blur (the engine default is already false)
-    TemporalEffects::EnableTAA = false; // 끔: 속도 버퍼가 카메라만 반영해 움직이는 메시에 잔상이 남음
-    FXAA::Enable = true;
+    MotionBlur::Enable = true;
+    TemporalEffects::EnableTAA = true;
+    FXAA::Enable = false;
     PostEffects::EnableHDR = true;
-    // PostEffects::EnableAdaptation = true;
-    PostEffects::EnableAdaptation = false;  // adaptive exposure made the screen brighten and darken slightly
+    PostEffects::EnableAdaptation = true;
     SSAO::Enable = true;
 
     Renderer::Initialize();
-    m_ProceduralRenderer.Initialize();
 
     LoadIBLTextures();
 
-    const std::wstring gltfFileName = L"Models/cube.glb";
+    std::wstring gltfFileName;
 
     bool forceRebuild = false;
     uint32_t rebuildValue;
     if (CommandLineArgs::GetInteger(L"rebuild", rebuildValue))
         forceRebuild = rebuildValue != 0;
 
-    m_ModelInst = Renderer::LoadModel(gltfFileName, forceRebuild);
-    if (!m_ModelInst.IsNull())
+    if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
     {
-        m_ModelInst.Resize(kStaticRadius);
-        m_ModelInst.SetPosition(-m_ModelInst.GetCenter());
-        m_CutTarget = m_Cut.RegisterInstance(m_ModelInst, gltfFileName);
-        AddStaticInstance(L"Models/bunny.glb", kBunnySizeRatio, kBunnyOffsetRatio, forceRebuild);
+#ifdef LEGACY_RENDERER
+        Sponza::Startup(m_Camera);
+#else
+        m_ModelInst = Renderer::LoadModel(L"Sponza/PBR/sponza2.gltf", forceRebuild);
+        m_ModelInst.Resize(100.0f * m_ModelInst.GetRadius());
+        OrientedBox obb = m_ModelInst.GetBoundingBox();
+        float modelRadius = Length(obb.GetDimensions()) * 0.5f;
+        const Vector3 eye = obb.GetCenter() + Vector3(modelRadius * 0.5f, 0.0f, 0.0f);
+        m_Camera.SetEyeAtUp( eye, Vector3(kZero), Vector3(kYUnitVector) );
+#endif
     }
-    MotionBlur::Enable = false;
+    else
+    {
+        m_ModelInst = Renderer::LoadModel(gltfFileName, forceRebuild);
+        m_ModelInst.LoopAllAnimations();
+        m_ModelInst.Resize(10.0f);
+
+        MotionBlur::Enable = false;
+    }
 
     m_Camera.SetZRange(1.0f, 10000.0f);
-    // 두 정적 모델의 bounds를 모두 담는 구에 시작 카메라를 맞춘다.
-    Vector3 focusCenter = m_ModelInst.GetCenter();
-    float focusRadius = m_ModelInst.IsNull() ? kStaticRadius : float(m_ModelInst.GetRadius());
-    if (!m_StaticInsts.empty())
-    {
-        const ModelInstance& other = m_StaticInsts.front().instance;
-        const Vector3 delta = other.GetCenter() - focusCenter;
-        focusCenter += delta * 0.5f;
-        focusRadius = float(Length(delta)) * 0.5f + std::max(focusRadius, float(other.GetRadius()));
-    }
-    const Math::BoundingSphere focus(focusCenter, Scalar(focusRadius));
-    m_SceneCamera.reset(new MeshCutting::SceneViewCamera(m_Camera, focus, Vector3(kYUnitVector)));
+    if (gltfFileName.size() == 0)
+        m_CameraController.reset(new FlyingFPSCamera(m_Camera, Vector3(kYUnitVector)));
+    else
+        m_CameraController.reset(new OrbitCamera(m_Camera, m_ModelInst.GetBoundingSphere(), Vector3(kYUnitVector)));
 }
 
-// 정적 모델을 불러와 기준 cube 옆에 놓고 절단 대상으로 등록한다. 파일이 없거나 실패하면 건너뛴다.
-// 크기와 위치를 정한 뒤에 등록해야 한다 (대상 반지름을 등록 때 읽는다).
-void ModelViewer::AddStaticInstance(const std::wstring& fileName, float sizeRatio, float offsetRatio, bool forceRebuild)
+void ModelViewer::Cleanup( void )
 {
-    std::shared_ptr<Model> model = Renderer::LoadModel(fileName, forceRebuild);
-    if (model == nullptr)
-        return;
-
-    m_StaticInsts.emplace_back();
-    StaticTestInstance& entry = m_StaticInsts.back();
-    entry.instance = model;
-
-    const float referenceRadius = float(m_ModelInst.GetRadius());
-    entry.instance.Resize(referenceRadius * sizeRatio);
-    entry.instance.SetPosition(Vector3(kZero));
-    const Vector3 wanted = m_ModelInst.GetCenter() + Vector3(referenceRadius * offsetRatio, 0.0f, 0.0f);
-    entry.instance.SetPosition(wanted - entry.instance.GetCenter());       // 모델 원점이 아니라 중심을 목표 위치에 맞춘다
-
-    entry.target = m_Cut.RegisterInstance(entry.instance, fileName);
-}
-
-void ModelViewer::Cleanup(void)
-{
-    for (StaticTestInstance& entry : m_StaticInsts)
-        m_Cut.UnregisterInstance(entry.target);
-    m_StaticInsts.clear();
-    m_Cut.UnregisterInstance(m_CutTarget);
-    m_CutView.Release(m_ProceduralRenderer);
-    m_ProceduralRenderer.Shutdown();
     m_ModelInst = nullptr;
 
     g_IBLTextures.clear();
@@ -273,99 +211,22 @@ namespace Graphics
     extern EnumVar DebugZoom;
 }
 
-void ModelViewer::Update(float deltaT)
+void ModelViewer::Update( float deltaT )
 {
     ScopedTimer _prof(L"Update State");
-
-
-    const Model* model = m_ModelInst.GetModel();
-    // T: debug mode (plane, gizmo, candidate patch, weight view). V: render mode. Ctrl+Z: undo the cut.
-    if (model != nullptr && GameInput::IsFirstPressed(GameInput::kKey_t))
-        m_Cut.ToggleEditPlane();
-    if (GameInput::IsFirstPressed(GameInput::kKey_v))
-        m_CutView.CycleRenderMode();
-    if (GameInput::IsPressed(GameInput::kKey_lcontrol) && GameInput::IsFirstPressed(GameInput::kKey_z))
-        m_Cut.DiscardCut();
-    if (m_Cut.PlaneEditing())
-    {
-        if (GameInput::IsFirstPressed(GameInput::kKey_return))
-            m_Cut.RequestCut();
-        // W/E/R/Q pick the gizmo tool, except while the right button is held (this frame's state): then they fly the camera.
-        if (!GameInput::IsPressed(GameInput::kMouse1))
-        {
-            if (GameInput::IsFirstPressed(GameInput::kKey_q))
-                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Hidden);
-            if (GameInput::IsFirstPressed(GameInput::kKey_w))
-                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Move);
-            if (GameInput::IsFirstPressed(GameInput::kKey_e))
-                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Rotate);
-            if (GameInput::IsFirstPressed(GameInput::kKey_r))
-                m_Cut.SetGizmoTool(MeshCutting::GizmoTool::Scale);
-        }
-    }
 
     if (GameInput::IsFirstPressed(GameInput::kLShoulder))
         DebugZoom.Decrement();
     else if (GameInput::IsFirstPressed(GameInput::kRShoulder))
         DebugZoom.Increment();
 
-    // F: frame the cut plane in debug mode, the model otherwise (not while flying or dragging the gizmo).
-    if (GameInput::IsFirstPressed(GameInput::kKey_f) && !GameInput::IsPressed(GameInput::kMouse1) && !m_Cut.GetPlane().IsDragging())
-    {
-        if (m_Cut.PlaneEditing() && m_Cut.PlaneValid())
-        {
-            const MeshCutting::CutPlane& plane = m_Cut.GetPlane();
-            m_SceneCamera->Frame(Vector3(plane.GetCenter().x, plane.GetCenter().y, plane.GetCenter().z),
-                std::sqrt(plane.GetHalfExtents().x * plane.GetHalfExtents().x + plane.GetHalfExtents().y * plane.GetHalfExtents().y));
-        }
-        else if (!m_ModelInst.IsNull())
-        {
-            const Math::BoundingSphere sphere = m_ModelInst.GetBoundingSphere();
-            m_SceneCamera->Frame(Vector3(sphere.GetCenter()), float(sphere.GetRadius()));
-        }
-    }
-
-    // The camera does not start new moves while a gizmo handle is being dragged.
-    m_SceneCamera->SetInputEnabled(!m_Cut.GetPlane().IsDragging());
-    m_SceneCamera->Update(deltaT);
-
-    // The gizmo works on this frame's camera (updated just above) and the window's client area. TAA jitter is a
-    // viewport offset, so the camera's ViewProj used here has no jitter in it.
-    float clientWidth = 0.0f, clientHeight = 0.0f;
-    if (m_Cut.PlaneEditing() && m_Cut.PlaneValid() && GameInput::GetClientSize(clientWidth, clientHeight))
-    {
-        DirectX::XMFLOAT4X4 viewProj;
-        XMStoreFloat4x4(&viewProj, XMMATRIX(m_Camera.GetViewProjMatrix()));
-        const Vector3 eye = m_Camera.GetPosition();
-        const MeshCutting::GizmoView gizmoView = MeshCutting::GizmoView::Make(viewProj,
-            DirectX::XMFLOAT3(float(eye.GetX()), float(eye.GetY()), float(eye.GetZ())), clientWidth, clientHeight, true);
-
-        MeshCutting::GizmoInput input;
-        float normalizedX, normalizedY;
-        input.cursorValid = GameInput::GetCursorClientPos(input.x, input.y, normalizedX, normalizedY);
-        input.leftDown = GameInput::IsPressed(GameInput::kMouse0);
-        input.leftPressed = GameInput::IsFirstPressed(GameInput::kMouse0);
-        // While the camera moves, or Alt is held (Alt + left button orbits), the gizmo is not touched.
-        input.blocked = m_SceneCamera->IsNavigating() || GameInput::IsPressed(GameInput::kKey_lalt)
-            || GameInput::IsPressed(GameInput::kMouse1) || GameInput::IsPressed(GameInput::kMouse2);
-
-        m_Cut.UpdateGizmo(gizmoView, input);
-        m_CutView.SetGizmoView(gizmoView);
-    }
-    else
-        m_Cut.CancelGizmo();
+    m_CameraController->Update(deltaT);
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 
     m_ModelInst.Update(gfxContext, deltaT);
-    for (StaticTestInstance& entry : m_StaticInsts)
-        entry.instance.Update(gfxContext, deltaT);
 
     gfxContext.Finish();
-
-    // 이번 프레임의 CPU 자세가 확정됐다. 모든 인스턴스의 Update 뒤에 한 번, 패치와 조각을 이 자세로 옮긴다.
-    m_Cut.Update();
-
 
     // We use viewport offsets to jitter sample positions from frame to frame (for TAA.)
     // D3D has a design quirk with fractional offsets such that the implicit scissor
@@ -388,7 +249,7 @@ void ModelViewer::Update(float deltaT)
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
-void ModelViewer::RenderScene(void)
+void ModelViewer::RenderScene( void )
 {
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
 
@@ -403,8 +264,6 @@ void ModelViewer::RenderScene(void)
 #ifdef LEGACY_RENDERER
         Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor);
 #endif
-        if (!SSAO::DebugDraw)
-            RenderProceduralMeshes(gfxContext, viewport, scissor, FrameIndex);
     }
     else
     {
@@ -414,13 +273,13 @@ void ModelViewer::RenderScene(void)
         float cosphi = cosf(g_SunInclination * 3.14159f * 0.5f);
         float sinphi = sinf(g_SunInclination * 3.14159f * 0.5f);
 
-        Vector3 SunDirection = Normalize(Vector3(costheta * cosphi, sinphi, sintheta * cosphi));
+        Vector3 SunDirection = Normalize(Vector3( costheta * cosphi, sinphi, sintheta * cosphi ));
         Vector3 ShadowBounds = Vector3(m_ModelInst.GetRadius());
         //m_SunShadowCamera.UpdateMatrix(-SunDirection, m_ModelInst.GetCenter(), ShadowBounds,
         m_SunShadowCamera.UpdateMatrix(-SunDirection, Vector3(0, -500.0f, 0), Vector3(5000, 3000, 3000),
             (uint32_t)g_ShadowBuffer.GetWidth(), (uint32_t)g_ShadowBuffer.GetHeight(), 16);
 
-        GlobalConstants globals = {};
+        GlobalConstants globals;
         globals.ViewProjMatrix = m_Camera.GetViewProjMatrix();
         globals.SunShadowMatrix = m_SunShadowCamera.GetShadowMatrix();
         globals.CameraPos = m_Camera.GetPosition();
@@ -432,19 +291,13 @@ void ModelViewer::RenderScene(void)
         gfxContext.ClearDepth(g_SceneDepthBuffer);
 
         MeshSorter sorter(MeshSorter::kDefault);
-        sorter.SetCamera(m_Camera);
-        sorter.SetViewport(viewport);
-        sorter.SetScissor(scissor);
-        // 원본 모델은 렌더링 모드를 따른다: Wire와 Debug는 선, 그 밖에는 면 (Solid + Wire는 아래에서 선을 한 번 더 그린다).
-        const MeshCutting::RenderMode renderMode = m_CutView.GetRenderMode();
-        sorter.SetWireframe(renderMode == MeshCutting::RenderMode::Wire || renderMode == MeshCutting::RenderMode::Debug);
-        SetWeightView(sorter, false);       // 평면 아래 후보 작업이 있으면 부모 joint를 작업 색으로 칠한다
-        sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
-        sorter.AddRenderTarget(g_SceneColorBuffer);
+		sorter.SetCamera(m_Camera);
+		sorter.SetViewport(viewport);
+		sorter.SetScissor(scissor);
+		sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
+		sorter.AddRenderTarget(g_SceneColorBuffer);
 
         m_ModelInst.Render(sorter);
-        for (const StaticTestInstance& entry : m_StaticInsts)
-            entry.instance.Render(sorter);
 
         sorter.Sort();
 
@@ -463,12 +316,10 @@ void ModelViewer::RenderScene(void)
                 ScopedTimer _prof(L"Sun Shadow Map", gfxContext);
 
                 MeshSorter shadowSorter(MeshSorter::kShadows);
-                shadowSorter.SetCamera(m_SunShadowCamera);
-                shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
+				shadowSorter.SetCamera(m_SunShadowCamera);
+				shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
 
                 m_ModelInst.Render(shadowSorter);
-                for (const StaticTestInstance& entry : m_StaticInsts)
-                    entry.instance.Render(shadowSorter);
 
                 shadowSorter.Sort();
                 shadowSorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
@@ -486,31 +337,9 @@ void ModelViewer::RenderScene(void)
                 gfxContext.SetViewportAndScissor(viewport, scissor);
 
                 sorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
-
-                // Solid + Wire: 원본 모델의 선을 면 위에 한 번 더 그린다. 웨이트 뷰 셰이더로 그려서 작업 색 표를 쓰고
-                // (후보 작업이 없으면 회색 선), 면 패스가 쓴 깊이가 가려진 선을 막는다.
-                if (renderMode == MeshCutting::RenderMode::SolidAndWire)
-                {
-                    MeshSorter wireSorter(MeshSorter::kDefault);
-                    wireSorter.SetCamera(m_Camera);
-                    wireSorter.SetViewport(viewport);
-                    wireSorter.SetScissor(scissor);
-                    wireSorter.SetWireframe(true);
-                    SetWeightView(wireSorter, true);
-                    wireSorter.SetDepthStencilTarget(g_SceneDepthBuffer);
-                    wireSorter.AddRenderTarget(g_SceneColorBuffer);
-                    m_ModelInst.Render(wireSorter);
-                    for (const StaticTestInstance& entry : m_StaticInsts)
-                        entry.instance.Render(wireSorter);
-                    wireSorter.Sort();
-                    wireSorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
-                }
             }
 
-            //Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
-
-            // Procedural meshes are opaque, so they must land before transparent blending.
-            RenderProceduralMeshes(gfxContext, viewport, scissor, FrameIndex);
+            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
 
             sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
         }
@@ -523,7 +352,7 @@ void ModelViewer::RenderScene(void)
 
     TemporalEffects::ResolveImage(gfxContext);
 
-    ParticleEffectManager::Render(gfxContext, m_Camera, g_SceneColorBuffer, g_SceneDepthBuffer, g_LinearDepth[FrameIndex]);
+    ParticleEffectManager::Render(gfxContext, m_Camera, g_SceneColorBuffer, g_SceneDepthBuffer,  g_LinearDepth[FrameIndex]);
 
     // Until I work out how to couple these two, it's "either-or".
     if (DepthOfField::Enable)
@@ -531,55 +360,5 @@ void ModelViewer::RenderScene(void)
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    m_ProceduralRenderer.NotifySubmitted(gfxContext.Finish());
-}
-
-void ModelViewer::RenderProceduralMeshes(GraphicsContext& gfxContext, const D3D12_VIEWPORT& viewport,
-    const D3D12_RECT& scissor, uint32_t frameIndex)
-{
-    m_CutView.Draw(gfxContext, m_ProceduralRenderer, m_Cut, m_Camera.GetViewProjMatrix(), viewport, scissor);
-
-    // SSAO linearized depth before these draws; refresh it so velocity, TAA and DoF see the new depth.
-    if (SSAO::Enable || SSAO::ComputeLinearZ)
-        SSAO::LinearizeZ(gfxContext.GetComputeContext(), m_Camera, frameIndex);
-}
-
-// 후보 작업이 있는 팔레트마다 joint -> 작업 색 표를 넘긴다. alwaysOn이면 후보가 없어도 (스킨이 있는 모델은) 회색으로 칠한다.
-bool ModelViewer::SetWeightView(MeshSorter& sorter, bool alwaysOn)
-{
-    const Model* model = m_ModelInst.GetModel();
-    if (model == nullptr || m_CutTarget == 0)
-        return false;
-    bool anyJob = false, anySkin = false;
-    for (uint32_t paletteId = 0; paletteId < model->m_SkinPalettes.size(); ++paletteId)
-    {
-        const SkinPalette& palette = model->m_SkinPalettes[paletteId];
-        anySkin = anySkin || palette.numJoints > 0;
-        std::vector<DirectX::XMFLOAT4> colors;
-        if (m_Cut.GetJointColors(m_CutTarget, paletteId, colors))
-        {
-            sorter.SetJointColors(palette.startJoint, colors.data(), uint32_t(colors.size()));
-            anyJob = true;
-        }
-    }
-    const bool enable = anyJob || (alwaysOn && anySkin);
-    sorter.SetWeightDebug(enable);
-    return enable;
-}
-
-void ModelViewer::RenderUI(GraphicsContext& context)
-{
-    const Model* model = m_ModelInst.GetModel();
-
-    TextContext text(context);
-    text.Begin();
-    text.ResetCursor(20.0f, 70.0f);
-    m_CutView.DrawUI(text, m_Cut, [this, model](MeshCutting::CutTargetId target, uint32_t palette, uint32_t joint) -> std::wstring
-        {
-            if (target != m_CutTarget || model == nullptr || palette >= model->m_SkinPalettes.size() || joint >= model->m_SkinPalettes[palette].numJoints)
-                return L"?";
-            const SkinPalette& skin = model->m_SkinPalettes[palette];
-            return BoneName(*model, model->m_JointIndices[skin.startJoint + joint], joint);
-        });
-    text.End();
+    gfxContext.Finish();
 }

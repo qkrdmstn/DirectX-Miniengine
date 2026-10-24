@@ -47,7 +47,6 @@ void glTF::Asset::ProcessNodes( json& nodes )
         node.flags = 0;
         node.mesh = nullptr;
         node.linearIdx = -1;
-        node.name = thisNode.value("name", std::string());
 
         if (thisNode.find("camera") != thisNode.end())
         {
@@ -414,7 +413,6 @@ void glTF::Asset::ProcessMaterials( json& materials )
         if (thisMaterial.find("normalTextureScale") != thisMaterial.end())
             material.normalTextureScale = thisMaterial.at("normalTextureScale");
 
-        material.emissiveFactor[0] = material.emissiveFactor[1] = material.emissiveFactor[2] = 0.0f;  // glTF default when absent
         if (thisMaterial.find("emissiveFactor") != thisMaterial.end())
             ReadFloats(thisMaterial.at("emissiveFactor"), material.emissiveFactor);
 

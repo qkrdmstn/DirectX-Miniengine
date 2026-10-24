@@ -17,7 +17,6 @@ struct VSOutput
 {
     float4 pos : SV_Position;
     float2 uv : TexCoord0;
-    float cutMask : TexCoord1;      // R of the vertex color override (>= 0.5 means hidden)
 };
 
 Texture2D<float4> baseColorTexture          : register(t0);
@@ -35,8 +34,6 @@ cbuffer MaterialConstants : register(b0)
 [RootSignature(Renderer_RootSig)]
 void main(VSOutput vsOutput)
 {
-    if (vsOutput.cutMask >= 0.5)
-        discard;
     float cutoff = f16tof32(flags >> 16);
     if (baseColorTexture.Sample(baseColorSampler, vsOutput.uv).a < cutoff)
         discard;

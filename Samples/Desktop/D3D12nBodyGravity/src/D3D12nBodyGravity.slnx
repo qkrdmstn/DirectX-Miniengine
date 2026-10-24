@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="ARM64" />
   </Configurations>
-  <Project Path="D3D12nBodyGravity.vcxproj" Id="2e637720-4aee-45b5-a5ac-d165e5623db9" />
+  <Project Path="D3D12nBodyGravity.vcxproj" />
 </Solution>

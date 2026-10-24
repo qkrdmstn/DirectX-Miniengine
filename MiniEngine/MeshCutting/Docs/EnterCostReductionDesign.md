@@ -1,4 +1,4 @@
-상태: 진행 중 — 단계 C·B 구현·검증 (커밋 전, 3절·4절 "결과"). A는 설계안. 근거는 `CutEnterCostReport.md`(`fc1f739` Release 실측), Codex 설계 검토 4건 반영 (7절)
+상태: 진행 중 — 단계 C·B 구현 (`548fa07`). 단계 A 구현·검증 (커밋 전, 5절 "결과"). 근거는 `CutEnterCostReport.md`(`fc1f739` Release 실측), Codex 설계 검토 4건 반영 (7절)
 
 # 스태틱 메시 Enter 비용 줄이기: 단계별 설계 (C → B → A)
 
@@ -222,6 +222,77 @@ cap 없는 사슬의 태그를 `Cut` → `OpenSurface`로 바꾸는 것은 경�
   1.5 ms였으므로 수 ms로 추정한다. 재측정에서 `ExtractJob` 구간으로 확인한다.
   복사를 아예 없애려면 입력을 const로 받고 결과만 새 메시에 쓰는 절단 함수가 필요하다. 이는 Unreal `SliceProceduralMesh`(inOut)와 모양이 달라지므로 이번에는 하지 않는다.
 
+### 구현 상세 (2026-10-23, 단계 C·B가 들어간 `548fa07` 기준)
+
+바꾸는 파일은 `Runtime/CutJob.h`, `Runtime/CutController.h/.cpp`, `Debug/CutDebugView.cpp` 넷이다. `ProceduralMesh`, `StaticMeshCopy`,
+`Geometry/`는 바꾸지 않는다. 예상 약 100~130줄.
+
+1. **`CutStaticMesh`에 필드 추가** (`CutJob.h`)
+
+   ```cpp
+   // Enter용 캐시: 로드 뒤 한 번 용접·검증한 메시. world가 meshWorld와 비트 단위로 같을 때만 쓴다.
+   std::shared_ptr<const ProceduralMesh> mesh;      // 실패하면 nullptr (pick은 그대로 동작)
+   std::shared_ptr<const MeshSource> source;
+   WeldStats weld;
+   DirectX::XMFLOAT4X4 meshWorld;                    // 캐시를 만든 world (ReadStaticMesh가 읽은 것과 같은 nodeWorld[meshCBV])
+   std::string meshError;
+   ```
+
+2. **`UpdateStaticMeshCache`** (`CutController.cpp`)
+   - 첫 줄에서 `GetMeshWorld(target, mesh.meshCBV, world)`로 world를 읽는다. `ReadStaticMesh`는 같은 프레임의 같은 `nodeWorld[meshCBV]`를 읽으므로
+     이 값이 캐시 정점의 world와 비트 단위로 같다. 읽지 못하면 캐시를 만들지 않는다(pick만).
+   - 순서: `ReadStaticMesh` → **`ProceduralMesh::Build(copy, weld, &error)`** → pick용 `positions`·`indices` 추출.
+     지금 코드는 `copy.indices`를 pick으로 `std::move`하므로, `Build`를 그보다 먼저 부르거나 pick 쪽을 복사로 바꾼다(앞의 방식 권장).
+   - `Build`가 성공하면 `mesh.mesh = std::make_shared<const ProceduralMesh>(std::move(built))`, `mesh.source = std::make_shared<const MeshSource>(std::move(source))`,
+     `mesh.weld`, `mesh.meshWorld`를 채운다. 실패하면 `mesh.mesh`/`source`를 비우고 `meshError`만 남긴다.
+   - 결과는 `CopyProceduralMeshFromStaticMesh`(= `ReadStaticMesh` + `Build`)와 같은 함수·같은 입력이므로 같은 world에서 비트 단위로 같다.
+
+3. **`ExtractJob`** (`CutController.cpp`)
+   - 스태틱 작업이면 `target->staticMeshes`에서 `meshIndex == job.key.a`인 항목을 찾는다.
+   - 항목에 `mesh`가 있고, `GetMeshWorld`로 읽은 지금 world가 `meshWorld`와 `memcmp`로 같으면:
+     `mesh = *cache.mesh;`(복사 대입. 검증 표시 `m_GeometryValidated`도 함께 복사되므로 단계 B의 ③ 생략이 그대로 적용된다),
+     `job.source = cache.source;`(같은 const 객체 공유), `job.weld = cache.weld;`, `job.patchStatus = Ok`, `job.patchTriangles`.
+   - 아니면 지금 경로(`CopyProceduralMeshFromStaticMesh`)를 그대로 쓴다.
+   - 어느 경로였는지 알 수 있게 `CutJob`에 `bool extractFromCache`를 두고, `CutFrameStats`에 `extractCached`(이번 프레임 캐시로 추출한 수)를 더한다.
+
+4. **`ConfirmJob`**: 바꾸지 않는다. 단계 C의 스태틱 분기(`SkinPatch` 생략, `BuildJobMatrices`로 행렬만)가 캐시 경로에도 그대로 맞다.
+
+5. **계약 주석**: `CutController::RegisterInstance`(헤더)와 `CutTarget::model` 주석을 "등록된 인스턴스의 모델을 바꾸려면 UnregisterInstance 후
+   다시 RegisterInstance한다(캐시와 작업은 자동으로 다시 만들지 않는다)"로 고친다.
+
+6. **표시** (`CutDebugView::DrawUI`): 기존 "extract ... (N extractions)" 줄에 `cached N`을 덧붙인다. 작업 줄의 정보는 바꾸지 않는다.
+
+7. **하지 않는 것**: world가 다를 때 캐시를 변환해 쓰기(5절 이유), 캐시 갱신·무효화 자동화, 로컬 공간 절단, 스켈레탈 경로.
+
+### 구현 상세 보완 (Codex 설계 검토 2, 2026-10-23, 7건 반영)
+
+- **[중간] 호출 계약**: `UpdateStaticMeshCache`와 `ExtractJob`은 모든 등록 인스턴스의 `ModelInstance::Update`가 끝난 뒤에 불리며,
+  world를 읽은 때부터 추출·절단이 끝날 때까지 모델과 자세를 바꾸지 않는다. 지금 `ModelViewer::Update`는 이를 지킨다.
+  `GetMeshWorld` 성공은 "자세가 계산됐다"는 뜻이 아니다(첫 `Update` 전에는 배열만 할당돼 있다).
+- **[중간] pick과 캐시는 독립**: `ReadStaticMesh`가 성공하면 `Build` 결과와 상관없이 pick용 `positions`·`indices`를 채운다.
+  `Build` 실패는 Enter 캐시만 비우고 `meshError`에 남기며(pick의 `error`와 따로), Enter는 지금 경로로 다시 시도한다. 상태는 `mesh == nullptr`로 판단하고 `meshStatus` 필드는 두지 않는다.
+- **[중간] 비용 위치**: 등록 뒤 첫 `CutController::Update`에서 **모든 대상의 스킨 없는 메시**에 `Build`가 돈다. 자르지 않는 메시에도 들고,
+  같은 모델을 여러 번 등록하면 인스턴스마다 캐시가 따로 생긴다. 첫 Update 총시간·메시별 시간·상주 메모리를 잰다.
+- **[낮음] 원본 불변 계약**: 등록 기간에는 모델의 CPU 기하·draw·정점 레이아웃·`meshCBV`가 바뀌지 않는다. 바꾸려면 먼저 `UnregisterInstance`하고 바꾼 뒤 다시 등록한다.
+  같은 모델의 다른 인스턴스는 각자 대상의 캐시와 world만 쓴다.
+- **[낮음] 렌더러**: 캐시와 절단 전 복사본은 렌더러에 등록하지 않는다. 확정 조각은 지금처럼 View가 보유하고 `ReleaseMesh`로 해제한다.
+- **[낮음] 표시**: `extractFromCache`는 `ExtractJob` 시작마다 false로 초기화한다. 캐시 경로도 기존 `extractMs`·`extractions`·`extractCount` 집계에 포함한다.
+  `extractCached`는 프레임 값이므로 누적값(`extractCount`) 옆이 아니라 프레임 개수 줄의 `extractions` 옆에 표시한다.
+
+### 임시 검증 방법 (커밋하지 않고 되돌림)
+
+- **값 대조**: `ExtractJob`의 캐시 경로에서, 같은 프레임에 지금 경로(`CopyProceduralMeshFromStaticMesh`)로도 한 번 더 만들어 필드별로 비교하고
+  결과를 `Utility::Printf`로 남긴다. 구조체 전체 `memcmp`는 패딩 때문에 쓰지 않는다.
+  - 정수·enum은 값, float는 성분마다 비트로, 배열은 순서대로 비교한다. `edgeTags`는 키로 정렬한 `(key, tag)` 목록으로 비교한다.
+  - 대상: `MeshGeometry`(정점 위치·origin·kind, corner, face, edgeTags, cut 기록, `skinStateId`), `Skinning` 표 내용, `ProceduralMeshData`(렌더 정점·인덱스·섹션·bindings),
+    bounds, 검증 표시, `MeshSource`, `WeldStats`. 주소·버전 번호·컨테이너 내부 표현은 제외한다.
+  - 두 메시를 **같은 평면·cap 옵션으로 각각 절단**해 상태·루프·양쪽 조각도 같은 방식으로 비교한다.
+- **성능**: 값 대조를 끈 별도 실행에서 잰다(대조가 Enter 시간에 섞이지 않게).
+- **경로 확인**: 후보가 남은 채 Ctrl+Z 후 다시 Enter, 후보가 사라진 뒤 Ctrl+Z, 절단 실패(평면 밖) 후 다시 Enter, cube·bunny 두 메시가 각자 캐시를 쓰는지.
+- **자동 Enter**: `Deliverables/측정/enter_probe.patch`(12회 자동 `RequestCut`, 평면 자동 배치, 구간 계측)를 임시로 적용해 Release로 실행한다.
+  패치가 C·B 이후 코드와 겹쳐 그대로 적용되지 않으면 필요한 부분(자동 평면·자동 Enter·`ExtractJob`/`ConfirmAll` 구간)만 손으로 넣는다.
+- 끝나면 임시 코드를 모두 되돌리고 `git diff`에 남지 않았는지 확인한다.
+
 ### 확인
 
 - 재측정: `ExtractJob` 약 79 ms → 복사 시간만, `ReadStaticMesh`·`BuildMeshGeometry`는 Enter 구간에서 사라진다.
@@ -230,6 +301,28 @@ cap 없는 사슬의 태그를 `Cut` → `OpenSurface`로 바꾸는 것은 경�
 - 캐시 경로와 지금 경로의 절단 결과를 **값으로** 대조한다: 정점 위치·origin, corner 법선·UV, 면, cap 기록, 에지 태그 (임시 코드, 커밋하지 않음).
 - world가 바뀐 경우(임시로 bunny를 회전·비균일 스케일한 뒤 Enter) 캐시를 쓰지 않고 지금 경로로 가며, 결과가 지금과 같다.
 - 절단이 실패한 뒤 평면을 옮겨 다시 Enter해도 캐시가 그대로이고 결과가 정상이다.
+
+### 결과 (2026-10-23, 커밋 전, Release, 임시 계측 코드는 되돌림)
+
+- **값 대조**: 캐시 경로와 지금 경로(`CopyProceduralMeshFromStaticMesh`)의 추출 결과(`MeshGeometry`·`Skinning`·`ProceduralMeshData`·bounds·검증 표시·`MeshSource`·`WeldStats`)와,
+  같은 평면·cap 옵션으로 각각 자른 상태·루프·양쪽 조각이 모두 같았다 (bunny 12회 + cube 6회, 불일치 필드 없음).
+- **world 변경**: bunny를 옮긴 뒤 Enter 6회는 캐시를 쓰지 않고 지금 경로로 갔다 (`cached=0`). 같은 때 옮겨서 평면에 걸린 cube는 캐시 경로로 갔다.
+- **Enter 구간 (중앙값, 같은 빌드에서 캐시 끄기/켜기를 번갈아 2회씩, 12회 Enter)**. 이 세션의 PC가 `fc1f739` 측정 때보다 느려서(캐시 없음 `ExtractJob`이 79 ms가 아니라 약 305 ms)
+  절댓값이 아니라 같은 세션 안의 비율로 본다.
+
+  | 구간 | 캐시 없음 | 캐시 |
+  | --- | --- | --- |
+  | `ExtractJob` | 312 / 303 ms | 6.8 / 7.0 ms |
+  | `ConfirmAll` | 636 / 612 ms | 346 / 338 ms |
+  | Enter 프레임 (Update 시작 간격) | 655 / 628 ms | 361 / 365 ms |
+
+  `ExtractJob`은 약 44분의 1로 줄었고 Enter 프레임은 약 0.57배다. 남은 약 7 ms는 `ProceduralMesh` 복사다 (추정 "수 ms"와 맞는다).
+- **로드 비용**: 첫 `CutController::Update`의 `InitCutStaticMesh`는 두 대상 합 약 180~210 ms였다 (bunny 177~205 ms, cube 0.1~0.3 ms).
+  이 안에 `ReadStaticMesh`가 원래 있었으므로, 캐시로 늘어난 몫은 `Build`다.
+- 측정하지 않은 것: 상주 캐시 크기와 Enter 중 임시 복사본 크기 (5절 "주의"의 메모리 항목은 아직 열려 있다), 경로 확인 중 Ctrl+Z 반복·절단 실패 후 재시도.
+- 구현 규모: `CutJob.h`, `CutController.h/.cpp`, `CutDebugView.cpp` +74/−12줄. Debug·Release 빌드 성공.
+- Codex 코드 리뷰: 이번 변경의 버그·명세 위반 없음. 참고 1건(낮음, 기존 동작): 추출이 실패해도 `ExtractJob`이 `job.source`를 비우지 않는다.
+  실패하면 `ConfirmJob`이 바로 돌아가므로 지금은 쓰이지 않는다. 확정 조각의 `source` 사용과 얽혀 있어 이번 범위에서는 바꾸지 않았다.
 
 ## 6. 다음에 남는 것
 
