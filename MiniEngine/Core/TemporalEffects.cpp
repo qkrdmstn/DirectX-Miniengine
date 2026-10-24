@@ -157,8 +157,12 @@ void TemporalEffects::ResolveImage( CommandContext& BaseContext )
         TriggerReset = false;
     }
 
-    uint32_t Src = s_FrameIndexMod2;
-    uint32_t Dst = Src ^ 1;
+    // Keep enable/reset bookkeeping above active while disabled, so re-enabling
+    // TAA clears stale history before the next temporal blend.
+    if (!EnableTAA)
+        return;
+
+    uint32_t Dst = s_FrameIndexMod2 ^ 1;
 
     {
         ApplyTemporalAA(Context);

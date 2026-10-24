@@ -29,6 +29,7 @@ Set-Location MiniEngine/ModelViewer
 
 ## Coding Style & Naming Conventions
 Match surrounding C++ and HLSL: four-space indentation, braces on separate lines, PascalCase types/functions, and existing `m_` member and `g_` global prefixes. Preserve license headers and local spacing. No repository-wide formatter or linter configuration is provided. Register source/shader files in the relevant `.vcxproj` and `.filters` files.
+- 함수를 추가하거나 수정할 때는 함수 바로 위에 역할을 설명하는 한글 주석을 1~2줄 작성한다.
 
 ## Testing Guidelines
 Build affected projects in Debug and Release. Run changed samples with DirectX validation enabled; check rendering, input, and diagnostics. Record GPU, driver, configuration, and reproduction steps.

@@ -155,8 +155,9 @@ void ModelViewer::Startup( void )
     if (!GameInput::SetMouseExclusive(false))
         Utility::Printf("Unable to enable the ModelViewer free cursor.\n");
     MotionBlur::Enable = false;
-    TemporalEffects::EnableTAA = true;
-    FXAA::Enable = false;
+    // Camera-only velocity cannot reproject independently moving objects or skins.
+    TemporalEffects::EnableTAA = false;
+    FXAA::Enable = true;
     PostEffects::EnableHDR = true;
     PostEffects::EnableAdaptation = true;
     SSAO::Enable = true;
