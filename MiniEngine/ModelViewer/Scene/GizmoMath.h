@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "VectorMath.h"
 #include <cmath>
@@ -83,12 +83,31 @@ namespace Viewer
             return std::atan2(float(Math::Dot(axis, Math::Cross(from, to))), float(Math::Dot(from, to)));
         }
 
+        // 표시·선택·드래그에 공통으로 쓰는 카메라 독립 축을 구한다.
+        inline void Basis(Math::Quaternion rotation, bool local, Math::Vector3 (&axes)[3])
+        {
+            const Math::Vector3 unit[] = { Math::Vector3(Math::kXUnitVector),
+                Math::Vector3(Math::kYUnitVector), Math::Vector3(Math::kZUnitVector) };
+            for (int i = 0; i < 3; ++i)
+                axes[i] = local ? rotation * unit[i] : unit[i];
+        }
+        // 드래그 배율을 양수 유한 범위로 제한한다.
         inline float UniformScale(float initialScale, float upwardPixels)
         {
             const float exponent = upwardPixels * 0.01f;
             const float bounded = exponent < -12.0f ? -12.0f : (exponent > 12.0f ? 12.0f : exponent);
             const float scale = initialScale * std::exp(bounded);
             return scale < 0.0001f ? 0.0001f : (scale > 1.0e8f ? 1.0e8f : scale);
+        }
+        // 허용된 축만 배율을 적용하며 중앙 핸들(-1)은 허용 축 전체를 조절한다.
+        inline Math::Vector3 ScaleComponents(Math::Vector3 initial, int axis, float drag, unsigned axisMask = 7)
+        {
+            Math::XMFLOAT3 values;
+            DirectX::XMStoreFloat3(&values, initial);
+            if ((axisMask & 1) && (axis == -1 || axis == 0)) values.x = UniformScale(values.x, drag);
+            if ((axisMask & 2) && (axis == -1 || axis == 1)) values.y = UniformScale(values.y, drag);
+            if ((axisMask & 4) && (axis == -1 || axis == 2)) values.z = UniformScale(values.z, drag);
+            return Math::Vector3(values);
         }
     }
 }

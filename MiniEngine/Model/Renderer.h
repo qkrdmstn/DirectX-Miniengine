@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -45,6 +45,8 @@ namespace Renderer
     extern DescriptorHeap s_SamplerHeap;
     extern DescriptorHandle m_CommonTextures;
 
+    enum class RenderMode { Solid, Wireframe, Vertices };
+
     enum RootBindings
     {
         kMeshConstants,
@@ -73,9 +75,11 @@ namespace Renderer
 		enum BatchType { kDefault, kShadows };
         enum DrawPass { kZPass, kOpaque, kTransparent, kNumPasses };
 
-		MeshSorter(BatchType type)
+        // 배치 종류와 메인 컬러 표시 모드를 보관하고 정렬 상태를 초기화한다.
+		MeshSorter(BatchType type, RenderMode mode = RenderMode::Solid)
 		{
 			m_BatchType = type;
+            m_RenderMode = mode;
 			m_Camera = nullptr;
 			m_Viewport = {};
 			m_Scissor = {};
@@ -141,6 +145,7 @@ namespace Renderer
         std::vector<SortObject> m_SortObjects;
         std::vector<uint64_t> m_SortKeys;
 		BatchType m_BatchType;
+        RenderMode m_RenderMode;
         uint32_t m_PassCounts[kNumPasses];
         DrawPass m_CurrentPass;
         uint32_t m_CurrentDraw;

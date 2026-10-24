@@ -1,4 +1,4 @@
-#include "Scene.h"
+﻿#include "Scene.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -13,23 +13,15 @@ namespace Viewer
             m_ModelInstance = std::make_unique<ModelInstance>(std::move(model));
     }
 
-    bool GameObject::SetTransform(const Math::UniformTransform& transform)
+    // 유효한 TRS를 저장하고 렌더러의 affine locator를 동기화한다.
+    bool GameObject::SetTransform(const SceneTransform& transform)
     {
-        using namespace DirectX;
-        const float scale = transform.GetScale();
-        const XMVECTOR position = transform.GetTranslation();
-        const XMVECTOR rotation = transform.GetRotation();
-        const float rotationLength = XMVectorGetX(XMQuaternionLengthSq(rotation));
-        if (!std::isfinite(scale) || scale <= 0.0f ||
-            XMVector3IsNaN(position) || XMVector3IsInfinite(position) ||
-            XMVector4IsNaN(rotation) || XMVector4IsInfinite(rotation) ||
-            !std::isfinite(rotationLength) || rotationLength < 1.0e-12f)
+        SceneTransform normalized = transform;
+        if (!normalized.Normalize())
             return false;
-
-        m_Transform = Math::UniformTransform(Math::Quaternion(XMQuaternionNormalize(rotation)),
-            scale, transform.GetTranslation());
+        m_Transform = normalized;
         if (m_ModelInstance)
-            m_ModelInstance->SetTransform(m_Transform);
+            m_ModelInstance->SetTransform(m_Transform.ToAffine());
         return true;
     }
 

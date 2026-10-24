@@ -237,8 +237,11 @@
     </ClCompile>
     <ClCompile Include="Scene\GizmoDraw.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Scene\TransformGizmo.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Scene\CutPlaneSystem.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Scene\CutPlaneRenderer.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Scene\SceneTransform.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\Scene.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -249,10 +252,15 @@
     <ClInclude Include="Scene\GizmoDraw.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\TransformGizmo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\TransformHistory.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\CutPlaneSystem.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\PickHit.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\CutPlaneRenderer.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Scene\Shaders\GizmoVS.hlsl" />
     <FxCompile Include="Scene\Shaders\GizmoPS.hlsl" />
+    <FxCompile Include="Scene\Shaders\CutPlaneVS.hlsl" />
+    <FxCompile Include="Scene\Shaders\CutPlanePS.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

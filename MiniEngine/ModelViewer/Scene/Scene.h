@@ -1,6 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "Model.h"
+#include "SceneTransform.h"
+#include "PickHit.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -8,20 +10,18 @@
 
 namespace Viewer
 {
-    using ObjectId = uint64_t;
-    constexpr ObjectId InvalidObjectId = 0;
-
     // Scene owns objects; an object's address remains stable until it is deleted.
     class GameObject
     {
     public:
         ObjectId GetId() const { return m_Id; }
         const std::string& GetName() const { return m_Name; }
-        const Math::UniformTransform& GetTransform() const { return m_Transform; }
+        // 객체의 편집용 TRS를 읽는다.
+        const SceneTransform& GetTransform() const { return m_Transform; }
         const ModelInstance* GetModelInstance() const { return m_ModelInstance.get(); }
 
         // Reject invalid transforms and keep the renderer's locator synchronized.
-        bool SetTransform(const Math::UniformTransform& transform);
+        bool SetTransform(const SceneTransform& transform);
         void LoopAllAnimations();
 
     private:
@@ -30,7 +30,7 @@ namespace Viewer
 
         ObjectId m_Id;
         std::string m_Name;
-        Math::UniformTransform m_Transform{ Math::kIdentity };
+        SceneTransform m_Transform{ Math::kIdentity };
         std::unique_ptr<ModelInstance> m_ModelInstance;
     };
 

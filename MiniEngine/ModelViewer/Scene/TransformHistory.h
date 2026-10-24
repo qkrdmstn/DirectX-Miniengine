@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "VectorMath.h"
+#include "SceneTransform.h"
 #include <cstdint>
 #include <cmath>
 #include <vector>
@@ -11,15 +11,15 @@ namespace Viewer
     class TransformHistory
     {
     public:
-        bool Record(uint64_t id, const Math::UniformTransform& before, const Math::UniformTransform& after)
+        // 축별 TRS의 변경 한 번을 기록한다.
+        bool Record(uint64_t id, const SceneTransform& before, const SceneTransform& after)
         {
             using namespace DirectX;
             const XMVECTOR tolerance = XMVectorReplicate(0.000001f);
-            const float a = before.GetScale(), b = after.GetScale();
             const bool sameRotation = XMVector4NearEqual(before.GetRotation(), after.GetRotation(), tolerance) ||
                 XMVector4NearEqual(before.GetRotation(), -after.GetRotation(), tolerance);
             if (id == 0 || (XMVector3NearEqual(before.GetTranslation(), after.GetTranslation(), tolerance) &&
-                sameRotation && std::abs(a - b) <= 0.000001f * (a > b ? a : b)))
+                sameRotation && XMVector3NearEqual(before.GetScale(), after.GetScale(), tolerance * Math::Max(before.GetScale(), after.GetScale()))))
                 return false;
             if (m_Commands.size() == 128)
                 m_Commands.erase(m_Commands.begin());
@@ -28,6 +28,7 @@ namespace Viewer
         }
 
         // The receiver returns false for deleted objects; continue to the next live command.
+        // 삭제된 객체를 건너뛰며 직전 TRS를 복구한다.
         template<class Apply>
         bool Undo(Apply&& apply)
         {
@@ -42,7 +43,7 @@ namespace Viewer
         }
 
     private:
-        struct Command { uint64_t Id; Math::UniformTransform Before; };
+        struct Command { uint64_t Id; SceneTransform Before; };
         std::vector<Command> m_Commands;
     };
 }

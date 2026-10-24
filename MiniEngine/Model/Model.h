@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -15,6 +15,7 @@
 
 #include "Animation.h"
 #include "ModelPose.h"
+#include "TransformBounds.h"
 #include "../Core/GpuBuffer.h"
 #include "../Core/VectorMath.h"
 #include "../Core/Camera.h"
@@ -137,8 +138,10 @@ public:
     void Render(Renderer::MeshSorter& sorter) const;
 
     void Resize(float newRadius);
-    void SetTransform(const Math::UniformTransform& transform) { m_Locator = transform; }
-    const Math::UniformTransform& GetTransform() const { return m_Locator; }
+    // 비균일 크기를 포함한 인스턴스 locator를 저장한다.
+    void SetTransform(const Math::AffineTransform& transform) { m_Locator = transform; }
+    // 렌더링에 적용할 affine locator를 읽는다.
+    const Math::AffineTransform& GetTransform() const { return m_Locator; }
     Math::Vector3 GetCenter() const;
     Math::Scalar GetRadius() const;
     Math::BoundingSphere GetBoundingSphere() const;
@@ -158,7 +161,7 @@ private:
     ByteAddressBuffer m_MeshConstantsGPU;
     std::unique_ptr<Math::AffineTransform[]> m_BoundingSphereTransforms;
     std::unique_ptr<Math::Matrix4[]> m_ModelSpaceTransforms;
-    Math::UniformTransform m_Locator;
+    Math::AffineTransform m_Locator;
 
     std::unique_ptr<GraphNode[]> m_AnimGraph;   // A copy of the scene graph when instancing animation
     std::vector<AnimationState> m_AnimState;    // Per-animation (not per-curve)

@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -41,6 +41,16 @@
 #include "CompiledShaders/CutoutDepthPS.h"
 #include "CompiledShaders/SkyboxVS.h"
 #include "CompiledShaders/SkyboxPS.h"
+#include "CompiledShaders/VertexPointsGS.h"
+#include "CompiledShaders/VertexPointsNoTangentGS.h"
+#include "CompiledShaders/VertexPointsNoTangentNoUV1GS.h"
+#include "CompiledShaders/VertexPointsNoUV1GS.h"
+#include "CompiledShaders/VertexPointsPS.h"
+#include "CompiledShaders/WireframePS.h"
+#include "CompiledShaders/WireframeNoUV1PS.h"
+#include "CompiledShaders/WireframeNoTangentPS.h"
+#include "CompiledShaders/WireframeNoTangentNoUV1PS.h"
+#include <cstddef>
 
 #pragma warning(disable:4319) // '~': zero extending 'uint32_t' to 'uint64_t' of greater size
 
@@ -57,6 +67,10 @@ namespace Renderer
     DescriptorHeap s_TextureHeap;
     DescriptorHeap s_SamplerHeap;
     std::vector<GraphicsPSO> sm_PSOs;
+    // 원본 인덱스를 공유하되 mesh.pso와 sort key의 범위를 늘리지 않는다.
+    std::vector<GraphicsPSO> s_WireframePSOs;
+    std::vector<GraphicsPSO> s_VertexPSOs;
+    static_assert(offsetof(GlobalConstants, InvViewportSize) == 184, "GS b1 c11.zw layout");
 
     TextureRef s_RadianceCubeMap;
     TextureRef s_IrradianceCubeMap;
@@ -310,6 +324,7 @@ void Renderer::Shutdown(void)
     s_SamplerHeap.Destroy();
 }
 
+// 원본 컬러 PSO 쌍과 동일한 입력·스키닝을 사용하는 표시 모드별 캐시를 만든다.
 uint8_t Renderer::GetPSO(uint16_t psoFlags)
 {
     using namespace PSOFlags;
@@ -431,6 +446,50 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
 #endif
     sm_PSOs.push_back(ColorPSO);
 
+    s_WireframePSOs.resize(sm_PSOs.size());
+    s_VertexPSOs.resize(sm_PSOs.size());
+    const size_t base = sm_PSOs.size() - 2;
+    for (size_t i = base; i < sm_PSOs.size(); ++i)
+    {
+        GraphicsPSO wire = sm_PSOs[i];
+        auto rasterizer = (psoFlags & kTwoSided) ? RasterizerTwoSided : RasterizerDefault;
+        rasterizer.FillMode = D3D12_FILL_MODE_WIREFRAME;
+        wire.SetRasterizerState(rasterizer);
+        // VS의 tangent/UV 배치에 맞는 흰색 전용 PS를 선택한다. Solid 재질 PS는 유지한다.
+        if (psoFlags & kHasTangent)
+        {
+            wire.SetPixelShader((psoFlags & kHasUV1) ? g_pWireframePS : g_pWireframeNoUV1PS,
+                (psoFlags & kHasUV1) ? sizeof(g_pWireframePS) : sizeof(g_pWireframeNoUV1PS));
+        }
+        else
+        {
+            wire.SetPixelShader((psoFlags & kHasUV1) ? g_pWireframeNoTangentPS : g_pWireframeNoTangentNoUV1PS,
+                (psoFlags & kHasUV1) ? sizeof(g_pWireframeNoTangentPS) : sizeof(g_pWireframeNoTangentNoUV1PS));
+        }
+        wire.Finalize();
+        s_WireframePSOs[i] = wire;
+
+        GraphicsPSO points = sm_PSOs[i];
+        points.SetPrimitiveTopologyType(D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
+        // VS 출력의 tangent/UV 배치와 동일한 GS 입력 레지스터·마스크를 선택한다.
+        if (psoFlags & kHasTangent)
+        {
+            points.SetGeometryShader((psoFlags & kHasUV1) ? g_pVertexPointsGS : g_pVertexPointsNoUV1GS,
+                (psoFlags & kHasUV1) ? sizeof(g_pVertexPointsGS) : sizeof(g_pVertexPointsNoUV1GS));
+        }
+        else
+        {
+            points.SetGeometryShader((psoFlags & kHasUV1) ? g_pVertexPointsNoTangentGS : g_pVertexPointsNoTangentNoUV1GS,
+                (psoFlags & kHasUV1) ? sizeof(g_pVertexPointsNoTangentGS) : sizeof(g_pVertexPointsNoTangentNoUV1GS));
+        }
+        points.SetPixelShader(g_pVertexPointsPS, sizeof(g_pVertexPointsPS));
+        points.SetRasterizerState(RasterizerTwoSided);
+        // 확대된 점은 solid 깊이와 같지 않을 수 있다. 역 Z 이상 비교만 하고 쓰지 않는다.
+        points.SetDepthStencilState(DepthStateReadOnly);
+        points.Finalize();
+        s_VertexPSOs[i] = points;
+    }
+
     ASSERT(sm_PSOs.size() <= 256, "Ran out of room for unique PSOs");
 
     return (uint8_t)sm_PSOs.size() - 2;
@@ -469,6 +528,7 @@ void Renderer::DrawSkybox( GraphicsContext& gfxContext, const Camera& Camera, co
     gfxContext.Draw(3);
 }
 
+// 메시를 기존 패스로 분류하며 정점 표시에는 solid 깊이 선행 패스를 보장한다.
 void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
@@ -505,7 +565,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_SortKeys.push_back(key.value);
         m_PassCounts[kTransparent]++;
     }
-    else if (SeparateZPass || alphaTest)
+    else if (SeparateZPass || alphaTest || m_RenderMode == RenderMode::Vertices)
     {
         key.passID = kZPass;
         key.psoIdx = depthPSO;
@@ -538,6 +598,7 @@ void MeshSorter::Sort()
     std::sort(m_SortKeys.begin(), m_SortKeys.end(), Cmp);
 }
 
+// 깊이·그림자는 원래 경로로 그리고 메인 컬러에만 표시 모드와 viewport 상수를 적용한다.
 void MeshSorter::RenderMeshes(
     DrawPass pass,
     GraphicsContext& context,
@@ -560,7 +621,6 @@ void MeshSorter::RenderMeshes(
 	globals.CameraPos = m_Camera->GetPosition();
     globals.IBLRange = s_SpecularIBLRange - s_SpecularIBLBias;
     globals.IBLBias = s_SpecularIBLBias;
-	context.SetDynamicConstantBufferView(kCommonCBV, sizeof(GlobalConstants), &globals);
 
 	if (m_BatchType == kShadows)
 	{
@@ -608,6 +668,10 @@ void MeshSorter::RenderMeshes(
 		}
 	}
 
+    globals.InvViewportSize[0] = 1.0f / m_Viewport.Width;
+    globals.InvViewportSize[1] = 1.0f / m_Viewport.Height;
+    context.SetDynamicConstantBufferView(kCommonCBV, sizeof(GlobalConstants), &globals);
+
     for ( ; m_CurrentPass <= pass; m_CurrentPass = (DrawPass)(m_CurrentPass + 1))
     {
         const uint32_t passCount = m_PassCounts[m_CurrentPass];
@@ -623,7 +687,7 @@ void MeshSorter::RenderMeshes(
 				context.SetDepthStencilTarget(m_DSV->GetDSV());
 				break;
 			case kOpaque:
-				if (SeparateZPass)
+				if (SeparateZPass || m_RenderMode == RenderMode::Vertices)
 				{
 					context.TransitionResource(*m_DSV, D3D12_RESOURCE_STATE_DEPTH_READ);
 					context.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -644,6 +708,9 @@ void MeshSorter::RenderMeshes(
 			}
 		}
 
+        const bool colorPass = m_BatchType == kDefault && m_CurrentPass != kZPass;
+        const bool points = colorPass && m_RenderMode == RenderMode::Vertices;
+        context.SetPrimitiveTopology(points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context.SetViewportAndScissor(m_Viewport, m_Scissor);
         context.FlushResourceBarriers();
 
@@ -665,7 +732,9 @@ void MeshSorter::RenderMeshes(
                 ASSERT(object.skeleton != nullptr, "Unspecified joint matrix array");
                 context.SetDynamicSRV(kSkinMatrices, sizeof(Joint) * mesh.numJoints, object.skeleton + mesh.startJoint);
             }
-            context.SetPipelineState(sm_PSOs[key.psoIdx]);
+            const auto& psos = points ? s_VertexPSOs :
+                (colorPass && m_RenderMode == RenderMode::Wireframe ? s_WireframePSOs : sm_PSOs);
+            context.SetPipelineState(psos[key.psoIdx]);
 
             if (m_CurrentPass == kZPass)
             {
@@ -689,6 +758,7 @@ void MeshSorter::RenderMeshes(
         }
     }
 
+    context.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	if (m_BatchType == kShadows)
 	{
 		context.TransitionResource(*m_DSV, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

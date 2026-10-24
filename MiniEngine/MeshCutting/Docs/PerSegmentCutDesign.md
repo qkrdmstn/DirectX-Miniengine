@@ -1,10 +1,12 @@
 # 선분별·인스턴스별 절단 작업 설계
 
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+
 > 작성: 2026-10-21 · 기준: 커밋 `0fc39fe` + 작업 트리(Geometry 통합, CutPlane 클래스, Skinning 클래스까지 반영된 상태)
 >
 > 상태: **구현** (`b606ba4`). 작업 식별(선분 → 작업)과 추출 기준(부모 joint 하나)은 `JointCutDesign.md`(설계안)로 대체 예정. 근거는 실제 소스의 경로·함수명이다.
 >
-> 참고: `Docs/NDC25Reference.md`(원본 기법), `Docs/ClassLayoutDesign.md`(클래스 정리 계획), `Docs/PlaneFirstCutDesign.md`(평면 우선 흐름)
+> 참고: `Docs/NDC25Reference.md`(원본 기법), `클래스 정리 설계(삭제된 과거 기록)`(클래스 정리 계획), `Docs/PlaneFirstCutDesign.md`(평면 우선 흐름)
 
 ## 0. 요약
 
@@ -44,8 +46,8 @@
 | --- | --- | --- |
 | `PlaneFirstCutDesign.md` 4절 | "하나의 패치, 한 번의 슬라이스" (절단 joint 집합으로 통합 추출) | 소스는 그대로지만 **이번 요구와 반대**. 이 문서가 대체한다 |
 | `PlaneFirstCutDesign.md` 5절 | OpenLoop 시 이웃 joint 합치기(P-3) | 구현 안 됨. 이번 요구(병합 금지)와 맞지 않아 폐기 |
-| `ClassLayoutDesign.md` K-3, K-5 | ProceduralMesh가 PatchPiece 위상을 흡수, PatchPiece가 BonePatch 흡수, 이름 `Mesh*` | 미구현. 소스 이름은 `Patch*`(Patch.h). 이 문서는 **현재 이름**을 쓴다 |
-| `ClassLayoutDesign.md` K-1, K-2 | CutPlane 클래스, Skinning 클래스 | 소스에 반영됨 (`Geometry/CutPlane.h`, `Geometry/Skinning.h`, `PatchPiece::skin`) |
+| `클래스 정리 설계(삭제된 과거 기록)` K-3, K-5 | ProceduralMesh가 PatchPiece 위상을 흡수, PatchPiece가 BonePatch 흡수, 이름 `Mesh*` | 미구현. 소스 이름은 `Patch*`(Patch.h). 이 문서는 **현재 이름**을 쓴다 |
+| `클래스 정리 설계(삭제된 과거 기록)` K-1, K-2 | CutPlane 클래스, Skinning 클래스 | 소스에 반영됨 (`Geometry/CutPlane.h`, `Geometry/Skinning.h`, `PatchPiece::skin`) |
 
 ### 1.3 요구 구조와의 차이
 
@@ -300,7 +302,7 @@ struct CutJobSource
     // StaticMesh: bone.meshes에 메시 1개, paletteId = kNoNode. 스킨은 강체 스킨 (4.5절)
 };
 ```
-- 새 자료형을 늘리지 않으려고 `BonePatchSource`를 그대로 쓴다. 이름은 스켈레탈 쪽이지만 `meshes`, `triangles`는 스태틱에도 그대로 맞는다. 이름 정리는 `ClassLayoutDesign.md` K-5(`PatchSource`)에서 한다.
+- 새 자료형을 늘리지 않으려고 `BonePatchSource`를 그대로 쓴다. 이름은 스켈레탈 쪽이지만 `meshes`, `triangles`는 스태틱에도 그대로 맞는다. 이름 정리는 `클래스 정리 설계(삭제된 과거 기록)` K-5(`PatchSource`)에서 한다.
 
 ### 4.3 작업 하나
 
@@ -629,4 +631,4 @@ flowchart LR
 
 ### 11.4 아직 결정이 필요한 것
 1. **원본 교체 단계의 삼각형 소유권 정책**(6.3절)과 NDC식 병합 금지의 양립.
-2. **이름:** 이 문서는 현재 소스 이름(`Patch*`, `BonePatchSource`)을 쓴다. `ClassLayoutDesign.md`의 이름 규칙(`Mesh*`, `PatchSource`)과 맞출 시점.
+2. **이름:** 이 문서는 현재 소스 이름(`Patch*`, `BonePatchSource`)을 쓴다. `클래스 정리 설계(삭제된 과거 기록)`의 이름 규칙(`Mesh*`, `PatchSource`)과 맞출 시점.

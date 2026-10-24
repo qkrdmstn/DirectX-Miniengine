@@ -1,5 +1,7 @@
 상태: 진행 중 — 언리얼식 cap 정책과 BreakConstraint 서브트리 고정 구현, CPU 테스트·Debug/Release 빌드 통과 (커밋 전, 화면 확인 전)
 
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+
 # 언리얼 소스와의 비교 (SliceProceduralMesh, ProceduralMesh, BreakConstraint)
 
 근거: Unreal Engine `release` 브랜치 소스를 직접 읽었다. 함수 이름으로 적는다.

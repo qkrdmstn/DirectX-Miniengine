@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -29,6 +29,7 @@ void Model::Destroy()
     m_SceneGraph = nullptr;
 }
 
+// affine 경계 구를 뷰 공간으로 옮겨 컬링하고 정렬할 메시를 등록한다.
 void Model::Render(
     MeshSorter& sorter,
     const GpuBuffer& meshConstants,
@@ -46,13 +47,8 @@ void Model::Render(
         const Mesh& mesh = *(const Mesh*)pMesh;
 
         const AffineTransform& sphereXform = sphereTransforms[mesh.meshCBV];
-        Scalar scaleXSqr = LengthSquare((Vector3)sphereXform.GetX());
-        Scalar scaleYSqr = LengthSquare((Vector3)sphereXform.GetY());
-        Scalar scaleZSqr = LengthSquare((Vector3)sphereXform.GetZ());
-        Scalar sphereScale = Sqrt(Max(Max(scaleXSqr, scaleYSqr), scaleZSqr));
-
-		BoundingSphere sphereLS((const XMFLOAT4*)mesh.bounds);
-		BoundingSphere sphereWS = BoundingSphere(sphereXform * sphereLS.GetCenter(), sphereScale * sphereLS.GetRadius());
+        const BoundingSphere sphereLS((const XMFLOAT4*)mesh.bounds);
+        const BoundingSphere sphereWS = TransformBoundingSphere(sphereXform, sphereLS);
         BoundingSphere sphereVS = BoundingSphere(viewMat * sphereWS.GetCenter(), sphereWS.GetRadius());
 
         if (frustum.IntersectSphere(sphereVS))
@@ -120,10 +116,11 @@ ModelInstance::ModelInstance( const ModelInstance& modelInstance )
 {
 }
 
+// 모델을 교체하고 affine locator와 인스턴스 자원을 초기화한다.
 ModelInstance& ModelInstance::operator=( std::shared_ptr<const Model> sourceModel )
 {
     m_Model = sourceModel;
-    m_Locator = UniformTransform(kIdentity);
+    m_Locator = AffineTransform(kIdentity);
     if (sourceModel == nullptr)
     {
         m_MeshConstantsCPU.Destroy();
@@ -220,12 +217,15 @@ void ModelInstance::Update(GraphicsContext& gfxContext, float deltaTime)
     gfxContext.TransitionResource(m_MeshConstantsGPU, D3D12_RESOURCE_STATE_GENERIC_READ);
 }
 
+// 위치와 축 비율을 유지하며 요청한 경계 반지름에 맞춘다.
 void ModelInstance::Resize( float newRadius )
 {
     if (m_Model == nullptr)
         return;
 
-    m_Locator.SetScale(newRadius / m_Model->m_BoundingSphere.GetRadius());
+    const float radius = GetRadius();
+    if (std::isfinite(newRadius) && newRadius > 0.0f && radius > 0.0f)
+        m_Locator.SetBasis(m_Locator.GetBasis() * (newRadius / radius));
 }
 
 Vector3 ModelInstance::GetCenter() const
@@ -236,26 +236,29 @@ Vector3 ModelInstance::GetCenter() const
     return m_Locator * m_Model->m_BoundingSphere.GetCenter();
 }
 
+// affine 신장 상한을 반영한 월드 반지름을 반환한다.
 Scalar ModelInstance::GetRadius() const
 {
     if (m_Model == nullptr)
         return Scalar(kZero);
 
-    return m_Locator.GetScale() * m_Model->m_BoundingSphere.GetRadius();
+    return AffineRadiusScale(m_Locator) * m_Model->m_BoundingSphere.GetRadius();
 }
 
+// 전체 affine으로 중심과 보수적인 반지름을 변환한다.
 Math::BoundingSphere ModelInstance::GetBoundingSphere() const
 {
     if (m_Model == nullptr)
         return BoundingSphere(kZero);
 
-    return m_Locator * m_Model->m_BoundingSphere;
+    return TransformBoundingSphere(m_Locator, m_Model->m_BoundingSphere);
 }
 
+// affine locator로 원본 상자의 모서리와 기저를 변환한다.
 Math::OrientedBox ModelInstance::GetBoundingBox() const
 {
     if (m_Model == nullptr)
         return AxisAlignedBox(Vector3(kZero), Vector3(kZero));
 
-    return m_Locator * m_Model->m_BoundingBox;
+    return m_Locator * OrientedBox(m_Model->m_BoundingBox);
 }

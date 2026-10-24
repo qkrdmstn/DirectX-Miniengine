@@ -1,9 +1,11 @@
-상태: 완료 (채택한 U-1~U-5b 코드 경로) — 현재 공통 메시 API는 ProceduralMeshSimplification.md 기준. 아래는 과거 설계 이력이며 실제 물리는 미구현 (`d418fcd` 이후 작업 트리).
+상태: 완료 (채택한 U-1~U-5b 코드 경로) — 현재 공통 메시 API는 ProceduralMesh 통합 기록(삭제된 과거 기록) 기준. 아래는 과거 설계 이력이며 실제 물리는 미구현 (`d418fcd` 이후 작업 트리).
+
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
 
 # Unreal 방식 정렬 로드맵
 
 >
-> 목적: 절단 기능을 Unreal의 `ProceduralMeshComponent`, `UKismetProceduralMeshLibrary::SliceProceduralMesh`, `BreakConstraint` 흐름에 맞춘다. BVH는 쓰지 않는다. 근거: `NDC25Reference.md` 7절, 측정은 `PickPerformanceDesign.md`.
+> 목적: 절단 기능을 Unreal의 `ProceduralMeshComponent`, `UKismetProceduralMeshLibrary::SliceProceduralMesh`, `BreakConstraint` 흐름에 맞춘다. BVH는 쓰지 않는다. 근거: `NDC25Reference.md` 7절, 측정은 `후보 선택 성능 설계(삭제된 과거 기록)`.
 
 ## 1. Unreal 흐름과 지금 흐름의 차이
 
@@ -12,7 +14,7 @@ Unreal에서 절단은 **맞은 순간 한 번** 일어난다 **[확인: 공개 
 2. `SliceProceduralMesh(ProcMesh, 평면 위치, 법선, bCreateOtherHalf, OutOtherHalf, CapOption, CapMaterial)`로 자른다.
 3. 원본을 숨기고(스태틱: 컴포넌트 통째, 스켈레탈: 버텍스 컬러 마스크), 스켈레탈은 `BreakConstraint`로 본을 끊는다.
 
-지금 코드(`cd9a09e`)는 평면을 편집하는 동안 **후보마다 패치를 미리 추출·용접하고 매 프레임 스키닝**한다(`ApplyDiff` → `ExtractJob`, `SkinJobs`). 측정에서 가장 큰 비용이 이 미리 추출이다(Xbot 걷기 중 추출 1회 약 6 ms, 초당 약 35~40회, `PickPerformanceDesign.md` 2절). Unreal에는 이런 "자르기 전 패치"가 없다.
+지금 코드(`cd9a09e`)는 평면을 편집하는 동안 **후보마다 패치를 미리 추출·용접하고 매 프레임 스키닝**한다(`ApplyDiff` → `ExtractJob`, `SkinJobs`). 측정에서 가장 큰 비용이 이 미리 추출이다(Xbot 걷기 중 추출 1회 약 6 ms, 초당 약 35~40회, `후보 선택 성능 설계(삭제된 과거 기록)` 2절). Unreal에는 이런 "자르기 전 패치"가 없다.
 
 | 단계 | Unreal | 지금 | 정렬 후 |
 | --- | --- | --- | --- |
@@ -34,7 +36,7 @@ Unreal에서 절단은 **맞은 순간 한 번** 일어난다 **[확인: 공개 
 | **U-3c 정적 모델 표시 (구현, `762538f`)** | ModelViewer가 `Models/cube.glb`, `bunny.glb`를 캐릭터 +X 쪽에 띄우고(크기 = 캐릭터 반지름 0.6배, 중심 간격 4배·8배) 절단 대상으로 등록한다. `ModelInstance::SetPosition` 추가. 파일이 없으면 건너뛴다 | 화면 확인 |
 | U-4 원본 숨김 | 스켈레탈: 복사 범위 마스크(color/depth/shadow). 스태틱: 그 메시 그리기 끄기 | NDC 3단계 |
 | U-5 분리 | `BreakConstraint` 대응 디버그 분리(joint 서브트리를 따로 움직임), 남는 쪽 기여 교체 | NDC 2·5단계 |
-| (측정 후) 섹션 컬링 | `PickPerformanceDesign.md` 안 B. pick이 다시 병목일 때만 | pick 비용 |
+| (측정 후) 섹션 컬링 | `후보 선택 성능 설계(삭제된 과거 기록)` 안 B. pick이 다시 병목일 때만 | pick 비용 |
 
 ## 3. U-1 세부
 

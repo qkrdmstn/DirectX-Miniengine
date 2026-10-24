@@ -83,6 +83,9 @@
     <ClInclude Include="ModelH3D.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="TransformBounds.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
     <ClInclude Include="Model.h">
       <Filter>Source Files</Filter>
     </ClInclude>
@@ -114,6 +117,27 @@
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Shaders\DefaultVS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsGS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsNoUV1GS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframePS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframeNoUV1PS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframeNoTangentPS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframeNoTangentNoUV1PS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsPS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
     <FxCompile Include="Shaders\SkyboxPS.hlsl">
@@ -192,6 +216,14 @@
       <Filter>Shaders</Filter>
     </FxCompile>
     <FxCompile Include="Shaders\DefaultNoUV1SkinVS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Shaders\VertexPointsNoTangentGS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsNoTangentNoUV1GS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
   </ItemGroup>

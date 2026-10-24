@@ -1,5 +1,7 @@
 # Scene 뷰 조작 설계: 마우스 카메라와 평면 기즈모
 
+> 이력 문서: 아래는 과거 조작 설계다. 현재 키·마우스·기즈모 계약은 [Scene README](../../ModelViewer/Scene/README.md), 평면 구현은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+
 > 작성: 2026-10-21 · S-1(커서와 마우스 좌표), S-2(Scene 뷰 카메라), S-3(평면 기즈모), S-4(키와 화면 정리)
 >
 > 목적: 절단 평면을 키보드로 움직이던 디버그 조작을 Unity Scene 뷰 방식으로 바꾼다. 카메라는 마우스와 WASD, 평면은 마우스 기즈모, 커서는 항상 보인다.

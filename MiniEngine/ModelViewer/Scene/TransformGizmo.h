@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ObjectSelection.h"
 #include "GizmoMath.h"
@@ -10,13 +10,15 @@ namespace Viewer
     {
     public:
         enum Mode { View, Translate, Rotate, Scale };
-        // Returns true when the gizmo consumes this frame's pointer interaction.
-        bool Update(Scene& scene, ObjectId selection, const Math::Camera& camera, float width, float height);
+        // 허용된 크기 축을 표시·선택·드래그에 공통 적용하고 포인터 소비 여부를 반환한다.
+        bool Update(Scene& scene, ObjectId selection, const Math::Camera& camera, float width, float height,
+            unsigned scaleAxisMask = 7);
         void Render(GraphicsContext& context, const Scene& scene, ObjectId selection,
             const Math::Camera& camera, float width, float height) const;
         bool IsDragging() const { return m_DragId != InvalidObjectId; }
         Mode GetMode() const { return m_Mode; }
-        bool IsLocal() const { return m_Local; }
+        // 크기는 항상 로컬 축이며 나머지 모드는 선택한 좌표계를 따른다.
+        bool IsLocal() const { return m_Mode == Scale || m_Local; }
 
     private:
         enum Handle { None = -1, X, Y, Z, XY, YZ, ZX, Uniform };
@@ -24,12 +26,12 @@ namespace Viewer
         Handle HitTest(Math::Vector3 pivot, float size, const PickingRay& ray,
             GizmoMath::Point mouse, const Math::Camera& camera, float width, float height) const;
         void Cancel(Scene& scene);
-        void SetAxes(const Math::UniformTransform& transform);
+        void SetAxes(const SceneTransform& transform);
 
         ObjectId m_DragId = InvalidObjectId;
         Handle m_Active = None;
         Handle m_Hover = None;
-        Math::UniformTransform m_Start{ Math::kIdentity };
+        SceneTransform m_Start{ Math::kIdentity };
         Math::Vector3 m_Pivot{ Math::kZero };
         Math::Vector3 m_Normal{ Math::kZero };
         Math::Vector3 m_StartHit{ Math::kZero };
@@ -37,9 +39,11 @@ namespace Viewer
             Math::Vector3(Math::kYUnitVector), Math::Vector3(Math::kZUnitVector) };
         Mode m_Mode = Translate;
         bool m_Local = false;
+        unsigned m_ScaleAxisMask = 7;
         Math::Vector3 m_LastVector{ Math::kZero };
         float m_Angle = 0.0f;
         float m_StartY = 0.0f;
+        float m_StartSize = 1.0f;
         TransformHistory m_History;
     };
 }

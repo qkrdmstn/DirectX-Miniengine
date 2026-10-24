@@ -1,5 +1,7 @@
 상태: 설계안, 결정 확정 — 물리 엔진 도입과 실제 BreakConstraint를 받아들일 구조 개편 (기준 커밋 `9dfcc33`). Codex 설계 검토 12건 반영 (11절). 결정 D1~D8은 설계자 추천대로 확정 (9절, 2026-10-23). 구현 전
 
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+
 # 물리 기반 스켈레탈 절단으로의 확장 설계
 
 다음 작업은 물리 엔진을 넣고, 디버그 대체물 대신 실제 `BreakConstraint`로 스켈레탈 메시를 그럴듯하게 자르는 것이다.
@@ -10,7 +12,7 @@
 - 저장소 코드 (`9dfcc33`). 함수 이름으로 적는다.
 - Unreal Engine 소스: `EpicGames/UnrealEngine` `release` 브랜치 `f45729c`(2026-10-20). 읽은 파일은 `KismetProceduralMeshLibrary.cpp`, `ProceduralMeshComponent.cpp`,
   `SkeletalMeshComponentPhysics.cpp`, `PhysicsEngine/PhysAnim.cpp`, `Components/SkinnedMeshComponent.cpp/.h`, `Components/SkeletalMeshComponent.cpp/.h`, `GeomTools.cpp`.
-- 문서: `NDC25Reference.md`(NDC 기능과 근거 수준), `UnrealSourceComparison.md`, `CodeMap.md`, `RegionCutDesign.md`, `CutEnterCostReport.md`, `EnterCostReductionDesign.md`.
+- 문서: `NDC25Reference.md`(NDC 기능과 근거 수준), `UnrealSourceComparison.md`, `CodeMap.md`, `RegionCutDesign.md`, `Enter 비용 보고서(삭제된 과거 기록)`, `Enter 비용 절감 설계(삭제된 과거 기록)`.
 
 ## 1. 목표와 범위
 
@@ -236,7 +238,7 @@ AGENTS.md 규칙대로 한 단계 = 개념 하나, 약 300줄, 단계마다 멈�
 | P-2 | 물리 `ISkeletonBreaker`: 시뮬레이션 전환, 관절 제거, 충격량, `ApplyToPose` (4.2·4.3절 계약), 5.5절 조건 | 약 300줄 | **떨어진 부분이 물리로 움직임** | 팔 절단 → 낙하·바닥 충돌, 조각이 따라감, 남는 쪽 늘어남 없음 |
 | P-3 | 스태틱 조각 강체 (5.3절): 조각별 바디·hull·렌더 변환 | 약 250줄 | 스태틱 조각이 떨어짐 | 큐브·버니 절단 후 낙하 |
 | N-1 | 물리 `CutHitQuery`: ray/overlap → 바디 → 노드 → 작업 key (5.4절) | 약 200줄 | 입력 방식 추가 | 평면 pick과 결과 비교 |
-| N-2 | (예약) 물리 경로 Enter 비용 재측정과 `EnterCostReductionDesign.md` 반영 | — | — | 실측 |
+| N-2 | (예약) 물리 경로 Enter 비용 재측정과 `Enter 비용 절감 설계(삭제된 과거 기록)` 반영 | — | — | 실측 |
 | N-3 | 합친 뒤 자르기, 조각 재절단 계약 (6.3절), 혼합 영역 일반 해결 (5.5절), (선택) cap 본 부착 | 별도 설계 | 다중 본 절단 | — |
 | N-4 | 메시 아일랜드, 각도 보정 | 별도 설계 | — | — |
 
@@ -279,7 +281,7 @@ Jolt는 더 가볍지만 C++17이 필요하고 Unreal과의 대응이 한 단계
 - 4.2절 계약이 깨지면 조각이 원본에서 미끄러진다. P-2에서 정지 자세로 절단한 뒤 분리 직후 프레임의 조각과 원본 경계를 비교한다.
 - 물리 고정 간격과 화면 프레임이 다르면 떨어지는 조각이 떨린다 (D8).
 - 자손 관절을 유지하면 떨어진 팔이 휘고, 조각은 스키닝으로 따라 휜다. cap은 rim을 공유하므로 함께 휜다. 평면성이 얼마나 깨지는지 화면으로 확인한다.
-- Enter 비용(`CutEnterCostReport.md`)은 이 설계로 줄지 않는다. `EnterCostReductionDesign.md`는 독립적으로 진행한다.
+- Enter 비용(`Enter 비용 보고서(삭제된 과거 기록)`)은 이 설계로 줄지 않는다. `Enter 비용 절감 설계(삭제된 과거 기록)`는 독립적으로 진행한다.
 - 확인하지 않은 것: NDC가 Bone을 어떻게 골랐는지, 기여 교체의 정확한 식, cap 부착 방식 (`NDC25Reference.md` 10절).
 
 ## 11. Codex 설계 검토 대응 (12건)

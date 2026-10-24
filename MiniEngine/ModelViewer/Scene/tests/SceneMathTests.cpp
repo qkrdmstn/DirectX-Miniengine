@@ -1,11 +1,13 @@
-// Run from a VS Developer PowerShell at the repository root (outputs outside the repository):
+﻿// Run from a VS Developer PowerShell at the repository root (outputs outside the repository):
 // cl /nologo /std:c++17 /EHsc /W4 /I MiniEngine/Core /I MiniEngine/Model
 //    /Fo:<external-directory>/SceneMathTests.obj /Fe:<external-directory>/SceneMathTests.exe
 //    MiniEngine/ModelViewer/Scene/tests/SceneMathTests.cpp
 
 #include "../GizmoMath.h"
 #include "../TransformHistory.h"
+#include "../PickHit.h"
 #include "ModelPose.h"
+#include "TransformBounds.h"
 #include <cstdio>
 #include <stdexcept>
 
@@ -126,6 +128,7 @@ namespace
         return node;
     }
 
+    // 모델 공간 포즈와 비균일 locator 단일 적용을 검사한다.
     void PoseTests()
     {
         const Matrix4 identity(kIdentity);
@@ -149,8 +152,8 @@ namespace
         Check(!EvaluateModelPose(deep, 34, deepPoses), "parent stack overflow rejected");
 
         // Cesium-style explicit skeletonRoot and Xbot-style absent skin.skeleton.
-        const Matrix4 locator(AffineTransform(UniformTransform(Quaternion(Vector3(kYUnitVector), XM_PIDIV2),
-            2.0f, Vector3(4, 5, 6))));
+        const Matrix4 locator(SceneTransform(Quaternion(Vector3(kYUnitVector), XM_PIDIV2),
+            Vector3(2, 3, 5), Vector3(4, 5, 6)).ToAffine());
         for (const bool explicitRoot : { false, true })
         {
             const Matrix4 parent = explicitRoot ? Matrix4(AffineTransform(Quaternion(Vector3(kXUnitVector), XM_PIDIV2))) :
@@ -173,33 +176,147 @@ namespace
         }
     }
 
+    // 평면 크기 축 제한과 공통 월드 거리 선택을 검사한다.
+    void PlaneEditingTests()
+    {
+        const Vector3 initial(2, 3, 4);
+        Near(GizmoMath::ScaleComponents(initial, -1, 100, 5), Vector3(2 * std::exp(1.0f), 3, 4 * std::exp(1.0f)),
+            "plane center changes XZ and preserves Y");
+        Near(GizmoMath::ScaleComponents(initial, 1, 100, 5), initial, "plane Y scaling disabled");
+        const PickHit model{1, 5}, plane{2, 3};
+        Check(NearestPickHit(model, plane).Id == 2, "closer plane wins");
+        Check(NearestPickHit(plane, model).Id == 2, "farther model loses");
+        Check(NearestPickHit(model, {2, -1}).Id == 1, "behind candidate ignored");
+        Check(NearestPickHit(model, {0, 1}).Id == 1, "invalid object ignored");
+        Check(NearestPickHit(model, {2, 5}).Id == 1, "equal distance stable");
+    }
+
+    // 런타임 TRS·크기·경계·법선 도우미의 비균일 변환 계약을 검사한다.
+    void NonuniformTests()
+    {
+        const Quaternion rotation(Vector3(kZUnitVector), 0.7f);
+        SceneTransform start(rotation, Vector3(2, 3, 5), Vector3(7, -4, 2));
+        Check(start.Normalize(), "valid anisotropic TRS accepted");
+        const AffineTransform affine = start.ToAffine();
+        Near(affine * Vector3(1, 2, 3), rotation * Vector3(2, 6, 15) + Vector3(7, -4, 2),
+            "TRS applies independent scale before rotation and translation");
+        const Matrix3 normal = InverseTranspose(affine.GetBasis());
+        const Vector3 tangent = affine.GetBasis() * Vector3(1, 1, 0);
+        const Vector3 transformedNormal = normal * Vector3(1, -1, 0);
+        Check(std::abs(float(Dot(tangent, transformedNormal))) < 0.0001f,
+            "inverse transpose preserves tangent-normal orthogonality");
+        const BoundingSphere sphere(Vector3(1, -2, 3), 4);
+        const BoundingSphere world = TransformBoundingSphere(affine, sphere);
+        Near(world.GetCenter(), affine * sphere.GetCenter(), "off-origin sphere center uses complete TRS");
+        Check(std::abs(float(world.GetRadius()) - 20.0f) < 0.0001f, "TRS radius uses maximum scale");
+        const AffineTransform composed = affine * AffineTransform(Quaternion(Vector3(kYUnitVector), 0.8f));
+        const BoundingSphere conservative = TransformBoundingSphere(composed, sphere);
+        for (int i = 0; i < 180; ++i)
+        {
+            const float angle = float(i) * XM_2PI / 180.0f;
+            const Vector3 direction = Normalize(Vector3(std::cos(angle), std::sin(angle), std::cos(3 * angle)));
+            Check(float(Length(composed * (sphere.GetCenter() + direction * sphere.GetRadius()) -
+                conservative.GetCenter())) <= float(conservative.GetRadius()) + 0.0001f,
+                "composed shear boundary remains inside culling sphere");
+        }
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const Vector3 scaled = GizmoMath::ScaleComponents(start.GetScale(), axis, 100);
+            XMFLOAT3 original, changed;
+            XMStoreFloat3(&original, start.GetScale());
+            XMStoreFloat3(&changed, scaled);
+            Check(std::abs(changed.x - original.x * (axis == 0 ? std::exp(1.0f) : 1.0f)) < 0.0001f &&
+                std::abs(changed.y - original.y * (axis == 1 ? std::exp(1.0f) : 1.0f)) < 0.0001f &&
+                std::abs(changed.z - original.z * (axis == 2 ? std::exp(1.0f) : 1.0f)) < 0.0001f,
+                "selected axis changes exclusively");
+        }
+        Near(GizmoMath::ScaleComponents(start.GetScale(), -1, 100), start.GetScale() * std::exp(1.0f),
+            "center scales every component by same factor");
+        SceneTransform extreme = start;
+        extreme.SetScale(GizmoMath::ScaleComponents(Vector3(1.0e8f, 0.0001f, 5), -1, 100000));
+        Check(extreme.Normalize(), "maximum drag remains valid TRS");
+        Check(float(extreme.GetScale().GetX()) == 1.0e8f, "upper scale bound enforced");
+        const Vector3 minimum = GizmoMath::ScaleComponents(Vector3(0.0001f, 0.0001f, 0.0001f), -1, -100000);
+        Near(minimum, Vector3(0.0001f, 0.0001f, 0.0001f), "minimum positive clamp enforced");
+        TransformHistory history;
+        Check(history.Record(42, start, extreme), "anisotropic history records extreme drag");
+        // 실제 히스토리를 통해 세 축과 회전·위치를 복구한다.
+        // 기록된 TRS를 검사하거나 복구한다.
+        Check(history.Undo([&](uint64_t id, const SceneTransform& before)
+        {
+            extreme = before;
+            return id == 42;
+        }), "anisotropic history undoes extreme drag");
+        Near(extreme.GetScale(), start.GetScale(), "undo restores all scale components");
+        Near(extreme.GetTranslation(), start.GetTranslation(), "undo restores translation");
+        for (const Vector3 invalid : { Vector3(0, 1, 1), Vector3(-1, 1, 1), Vector3(1.0e9f, 1, 1),
+            Vector3(INFINITY, 1, 1), Vector3(NAN, 1, 1) })
+        {
+            extreme.SetScale(invalid);
+            Check(!extreme.Normalize(), "out-of-policy scale rejected");
+        }
+    }
+
+    // 카메라 위치·방향·투영이 바뀌어도 월드/로컬 기저는 유지되는지 검사한다.
+    void BasisTests()
+    {
+        const Quaternion rotation(Vector3(kZUnitVector), XM_PIDIV2);
+        const Matrix4 projection(XMMatrixPerspectiveFovRH(XM_PIDIV4, 1.5f, 0.1f, 100));
+        for (const bool local : { false, true })
+        {
+            Vector3 reference[3];
+            GizmoMath::Basis(rotation, local, reference);
+            Near(reference[0], local ? Vector3(kYUnitVector) : Vector3(kXUnitVector), "explicit coordinate mode");
+            GizmoMath::Point previous{};
+            int count = 0;
+            for (const Vector3 eye : { Vector3(5, 3, 8), Vector3(-6, 5, 7), Vector3(3, -4, 9) })
+            {
+                const Matrix4 view(XMMatrixLookAtRH(eye, Vector3(kZero), Vector3(kYUnitVector)));
+                Vector3 axes[3];
+                GizmoMath::Basis(rotation, local, axes);
+                for (int i = 0; i < 3; ++i)
+                    Near(axes[i], reference[i], "world/local axis independent of camera position and orientation");
+                GizmoMath::Point projected;
+                Check(GizmoMath::Project(axes[0], projection * view, 900, 600, projected), "ring point projects");
+                if (count++)
+                    Check(std::abs(projected.X - previous.X) + std::abs(projected.Y - previous.Y) > 1,
+                        "camera changes projection while 3D axes stay fixed");
+                previous = projected;
+            }
+        }
+    }
+    // TRS 히스토리의 복구와 삭제 대상 및 용량 정책을 검사한다.
     void HistoryTests()
     {
         TransformHistory history;
-        const UniformTransform start(kIdentity);
-        UniformTransform moved = start;
+        const SceneTransform start(kIdentity);
+        SceneTransform moved = start;
         moved.SetTranslation(Vector3(3, 2, 1));
         Check(!history.Record(1, start, start), "click without movement creates no command");
-        UniformTransform signedQuaternion = start;
+        SceneTransform signedQuaternion = start;
         signedQuaternion.SetRotation(-start.GetRotation());
         Check(!history.Record(1, start, signedQuaternion), "equivalent quaternion sign creates no command");
         int calls = 0;
-        Check(!history.Undo([&](uint64_t, const UniformTransform&) { ++calls; return true; }) && calls == 0,
+        // 기록된 TRS를 검사하거나 복구한다.
+        Check(!history.Undo([&](uint64_t, const SceneTransform&) { ++calls; return true; }) && calls == 0,
             "empty/canceled transaction cannot undo anything");
         Check(history.Record(1, start, moved), "completed drag records one command");
-        UniformTransform current = moved;
-        Check(history.Undo([&](uint64_t id, const UniformTransform& before)
+        SceneTransform current = moved;
+        // 기록된 TRS를 검사하거나 복구한다.
+        Check(history.Undo([&](uint64_t id, const SceneTransform& before)
         {
             Check(id == 1, "undo targets stable object ID");
             current = before;
             return true;
         }), "completed drag can undo");
         Near(current.GetTranslation(), Vector3(kZero), "one undo restores original transform");
-        Check(!history.Undo([](uint64_t, const UniformTransform&) { return true; }), "one drag produces only one command");
+        // 기록된 TRS를 검사하거나 복구한다.
+        Check(!history.Undo([](uint64_t, const SceneTransform&) { return true; }), "one drag produces only one command");
         history.Record(1, start, moved);
         history.Record(2, start, moved);
         calls = 0;
-        Check(history.Undo([&](uint64_t id, const UniformTransform&)
+        // 기록된 TRS를 검사하거나 복구한다.
+        Check(history.Undo([&](uint64_t id, const SceneTransform&)
         {
             ++calls;
             return id == 1; // Object 2 was deleted; object 1 is still live.
@@ -207,7 +324,8 @@ namespace
         for (uint64_t id = 1; id <= 129; ++id)
             history.Record(id, start, moved);
         calls = 0;
-        while (history.Undo([&](uint64_t id, const UniformTransform&)
+        // 기록된 TRS를 검사하거나 복구한다.
+        while (history.Undo([&](uint64_t id, const SceneTransform&)
         {
             Check(id >= 2, "history drops oldest command beyond capacity");
             ++calls;
@@ -217,6 +335,7 @@ namespace
     }
 }
 
+// 공통 런타임 도우미의 CPU 회귀 검사를 실행한다.
 int main()
 {
     try
@@ -225,6 +344,9 @@ int main()
         DragMathTests();
         PoseTests();
         HistoryTests();
+        NonuniformTests();
+        BasisTests();
+        PlaneEditingTests();
         std::printf("SceneMathTests: %d checks passed\n", Checks);
         return 0;
     }

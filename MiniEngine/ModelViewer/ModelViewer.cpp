@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -35,6 +35,8 @@
 #include "Display.h"
 #include "Scene/ObjectSelection.h"
 #include "Scene/TransformGizmo.h"
+#include "Scene/CutPlaneSystem.h"
+#include "Scene/CutPlaneRenderer.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -67,9 +69,12 @@ private:
     D3D12_RECT m_MainScissor;
 
     Viewer::Scene m_Scene;
+    Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
     Viewer::ObjectId m_SelectedObject = Viewer::InvalidObjectId;
     Viewer::TransformGizmo m_Gizmo;
     bool m_EscapeConsumed = false;
+    Renderer::RenderMode m_RenderMode = Renderer::RenderMode::Solid;
+    bool m_ViewDiagnosticPending = false;
     ShadowCamera m_SunShadowCamera;
 };
 
@@ -150,8 +155,17 @@ void LoadIBLTextures()
         g_IBLSet.Increment();
 }
 
+// 장면과 렌더러를 초기화하고 진단용 -view 값으로 시작 표시 모드를 선택한다.
 void ModelViewer::Startup( void )
 {
+    uint32_t viewMode;
+    if (CommandLineArgs::GetInteger(L"view", viewMode) && viewMode <= 2)
+    {
+        m_RenderMode = static_cast<Renderer::RenderMode>(viewMode);
+        m_ViewDiagnosticPending = true;
+        Utility::Printf("ModelViewer diagnostic: initial view=%u\n", viewMode);
+    }
+
     if (!GameInput::SetMouseExclusive(false))
         Utility::Printf("Unable to enable the ModelViewer free cursor.\n");
     MotionBlur::Enable = false;
@@ -194,6 +208,7 @@ void ModelViewer::Startup( void )
         object->SetTransform(UniformTransform(Quaternion(kIdentity), scale,
             Vector3(x, 0.0f, 0.0f) - model->GetCenter() * scale));
     }
+    m_CutPlanes.CreatePlane({4.0f, 4.0f}, Viewer::SceneTransform(kIdentity));
     m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
     m_Camera.SetZRange(0.1f, 1000.0f);
     auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
@@ -204,11 +219,15 @@ void ModelViewer::Startup( void )
         std::asin(float(forward.GetY())), m_Camera.GetPosition());
     m_CameraController = std::move(controller);
     m_Camera.Update();
+    if (m_ViewDiagnosticPending)
+        Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
 }
 
+// 장면을 지운 뒤 평면 설명을 정리하고 렌더러를 종료한다.
 void ModelViewer::Cleanup( void )
 {
     m_Scene.Clear();
+    m_CutPlanes.PruneStaleObjects();
 
     g_IBLTextures.clear();
 
@@ -220,9 +239,13 @@ namespace Graphics
     extern EnumVar DebugZoom;
 }
 
+// 입력·장면을 갱신하고 V 첫 입력마다 메인 컬러 표시 모드를 순환한다.
 void ModelViewer::Update( float deltaT )
 {
     ScopedTimer _prof(L"Update State");
+
+    if (GameInput::IsFirstPressed(GameInput::kKey_v))
+        m_RenderMode = static_cast<Renderer::RenderMode>((static_cast<unsigned>(m_RenderMode) + 1) % 3);
 
     if (GameInput::IsFirstPressed(GameInput::kLShoulder))
         DebugZoom.Decrement();
@@ -231,9 +254,10 @@ void ModelViewer::Update( float deltaT )
 
     m_Camera.SetAspectRatio(float(g_SceneColorBuffer.GetHeight()) / float(g_SceneColorBuffer.GetWidth()));
     m_Camera.Update();
+    m_CutPlanes.PruneStaleObjects();
     m_EscapeConsumed = m_Gizmo.IsDragging() && GameInput::IsFirstPressed(GameInput::kKey_escape);
     const bool gizmoInput = m_Gizmo.Update(m_Scene, m_SelectedObject, m_Camera,
-        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
+        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()), m_CutPlanes.Find(m_SelectedObject) ? 5u : 7u);
     // Hold the right button to navigate; the free cursor selects objects with the left button.
     if (!gizmoInput && !m_Gizmo.IsDragging() && GameInput::IsPressed(GameInput::kMouse1))
         m_CameraController->Update(deltaT);
@@ -241,7 +265,10 @@ void ModelViewer::Update( float deltaT )
     float mouseX, mouseY;
     if (!gizmoInput && GameInput::IsFirstPressed(GameInput::kMouse0) && !GameInput::IsPressed(GameInput::kMouse1) &&
         GameInput::GetMousePosition(mouseX, mouseY))
-        m_SelectedObject = Viewer::PickObject(m_Scene, Viewer::MakePickingRay(m_Camera, mouseX, mouseY));
+    {
+        const auto ray = Viewer::MakePickingRay(m_Camera, mouseX, mouseY);
+        m_SelectedObject = Viewer::NearestPickHit(Viewer::PickObject(m_Scene, ray), m_CutPlanes.Pick(ray)).Id;
+    }
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 
@@ -270,6 +297,9 @@ void ModelViewer::Update( float deltaT )
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
+// 메인 정렬기에 표시 모드를 전달하고 기존 깊이·그림자·후처리 순서를 유지한다.
+// 선택한 모드로 장면을 그리고 -view 진단의 첫 프레임만 GPU 완료를 기다려 기록한다.
+// 모델 뒤에 평면 선을 깊이 검사로 그린 뒤 기존 후처리를 수행한다.
 void ModelViewer::RenderScene( void )
 {
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
@@ -302,7 +332,7 @@ void ModelViewer::RenderScene( void )
         gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
         gfxContext.ClearDepth(g_SceneDepthBuffer);
 
-        MeshSorter sorter(MeshSorter::kDefault);
+        MeshSorter sorter(MeshSorter::kDefault, m_RenderMode);
 		sorter.SetCamera(m_Camera);
 		sorter.SetViewport(viewport);
 		sorter.SetScissor(scissor);
@@ -354,6 +384,10 @@ void ModelViewer::RenderScene( void )
             Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
 
             sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
+            const unsigned planeCount = Viewer::RenderCutPlanes(gfxContext, m_CutPlanes, m_SelectedObject,
+                m_Camera, viewport, scissor);
+            if (m_ViewDiagnosticPending)
+                Utility::Printf("ModelViewer diagnostic: plane draw queued, planes=%u, lines=%u\n", planeCount, planeCount * 22);
         }
     }
 
@@ -372,9 +406,15 @@ void ModelViewer::RenderScene( void )
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    gfxContext.Finish();
+    gfxContext.Finish(m_ViewDiagnosticPending);
+    if (m_ViewDiagnosticPending)
+    {
+        Utility::Printf("ModelViewer diagnostic: scene GPU work completed, view=%u\n", static_cast<unsigned>(m_RenderMode));
+        m_ViewDiagnosticPending = false;
+    }
 }
 
+// 기즈모와 조작 안내 및 현재 메시 표시 모드를 overlay에 그린다.
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
     m_Gizmo.Render(context, m_Scene, m_SelectedObject, m_Camera,
@@ -384,11 +424,15 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     text.SetTextSize(22.0f);
     text.ResetCursor(20.0f, 80.0f);
     text.DrawString("Left click: select object | Hold right mouse + WASD/QE: camera\n");
-    text.DrawString("Q: View/select (hide gizmo) | W: Move | E: Rotate | R: Uniform scale (drag up/down)\n");
+    text.DrawString("Q: View/select (hide gizmo) | W: Move | E: Rotate | R: Local axis/center scale\n");
+    text.DrawString("Cut Plane: cyan grid, click inside to select | Scale X/Z or center XZ (Y fixed)\n");
     text.DrawFormattedString("L: %s axes | Esc during drag: cancel | Mode: %s\n",
         m_Gizmo.IsLocal() ? "Local" : "World", m_Gizmo.GetMode() == Viewer::TransformGizmo::View ? "View" :
         (m_Gizmo.GetMode() == Viewer::TransformGizmo::Translate ? "Move" :
         (m_Gizmo.GetMode() == Viewer::TransformGizmo::Rotate ? "Rotate" : "Scale")));
+    text.DrawFormattedString("V: display = %s (Solid -> Wireframe -> Vertices)\n",
+        m_RenderMode == Renderer::RenderMode::Solid ? "Solid" :
+        (m_RenderMode == Renderer::RenderMode::Wireframe ? "Wireframe" : "Vertices"));
     text.DrawString("Ctrl+Z: undo last completed drag (128 commands)\n");
     const Viewer::GameObject* selected = m_Scene.FindObject(m_SelectedObject);
     if (selected)

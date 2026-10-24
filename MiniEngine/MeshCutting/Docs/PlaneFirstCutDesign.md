@@ -1,10 +1,12 @@
 # 디버그 흐름 변경 설계: 평면 우선 절단
 
+> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](CodeMap.md), 평면 계약은 [CutPlaneDesign.md](CutPlaneDesign.md)를 따른다.
+
 > 작성: 2026-10-20 · 대상 커밋: `6311352` (CutController/CutDebugView, D-0~D-3 반영 후)
 >
 > v2: 절단 평면을 **world에 정의된 유한 평면(이동·회전·크기 조절)**으로 바꾸고, 한 번에 여러 선분을 자를 수 있게 했다.
 >
-> 상태: P-1(CutPlane)과 P-2(SegmentPick, joint 집합 추출, 후보 패치)는 구현됨. S-1~S-4(마우스, Scene 뷰 카메라, 기즈모, 키 정리)로 조작 체계가 바뀌었다. P-3(OpenLoop 확장, 표시 변환 분리의 나머지)은 아직 없다. 구현하면서 달라진 점은 `CutDebugDesign.md` 8~9절.
+> 상태: P-1(CutPlane)과 P-2(SegmentPick, joint 집합 추출, 후보 패치)는 구현됨. S-1~S-4(마우스, Scene 뷰 카메라, 기즈모, 키 정리)로 조작 체계가 바뀌었다. P-3(OpenLoop 확장, 표시 변환 분리의 나머지)은 아직 없다. 구현하면서 달라진 점은 `CPU 절단 디버그 설계(삭제된 과거 기록)` 8~9절.
 
 ## 0. 왜 바꾸는가
 

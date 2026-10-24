@@ -1,4 +1,4 @@
-#include "TransformGizmo.h"
+﻿#include "TransformGizmo.h"
 #include "GizmoDraw.h"
 #include "GameInput.h"
 
@@ -7,17 +7,17 @@ namespace Viewer
     using namespace Math;
     namespace
     {
-        const Vector3 Axes[] = { Vector3(kXUnitVector), Vector3(kYUnitVector), Vector3(kZUnitVector) };
         const Color Colors[] = { Color(1.0f, 0.2f, 0.15f), Color(0.25f, 1.0f, 0.25f), Color(0.25f, 0.55f, 1.0f) };
         const int PlaneAxes[][2] = { {0, 1}, {1, 2}, {2, 0} };
     }
 
-    void TransformGizmo::SetAxes(const UniformTransform& transform)
+    // 선택 좌표계의 축을 구해 선택과 드래그가 공유하도록 저장한다.
+    void TransformGizmo::SetAxes(const SceneTransform& transform)
     {
-        for (int i = 0; i < 3; ++i)
-            m_Axes[i] = m_Local ? transform.GetRotation() * Axes[i] : Axes[i];
+        GizmoMath::Basis(transform.GetRotation(), IsLocal(), m_Axes);
     }
 
+    // 화면에서 일정한 크기를 유지하는 월드 핸들 길이를 구한다.
     float TransformGizmo::HandleSize(Vector3 pivot, const Camera& camera, float height) const
     {
         const float depth = Dot(pivot - camera.GetPosition(), camera.GetForwardVec());
@@ -26,6 +26,7 @@ namespace Viewer
         return 190.0f * depth / (height * float(camera.GetProjMatrix().GetY().GetY()));
     }
 
+    // 공유 기저의 축·평면·링을 투영하여 포인터에 가장 가까운 핸들을 찾는다.
     TransformGizmo::Handle TransformGizmo::HitTest(Vector3 pivot, float size, const PickingRay& ray,
         GizmoMath::Point mouse, const Camera& camera, float width, float height) const
     {
@@ -67,6 +68,8 @@ namespace Viewer
         // Thin axis handles take precedence over plane handles and scene selection.
         for (int axis = 0; axis < 3; ++axis)
         {
+            if (m_Mode == Scale && !(m_ScaleAxisMask & (1u << axis)))
+                continue;
             GizmoMath::Point a, b;
             Vector3 normal;
             if (!GizmoMath::AxisPlaneNormal(m_Axes[axis], ray.Direction, normal) ||
@@ -77,7 +80,7 @@ namespace Viewer
             if (distance < nearest)
             {
                 nearest = distance;
-                result = m_Mode == Scale ? Uniform : static_cast<Handle>(axis);
+                result = static_cast<Handle>(axis);
             }
         }
         if (result != None || m_Mode == Scale)
@@ -95,6 +98,7 @@ namespace Viewer
         return None;
     }
 
+    // 시작 TRS 전체를 복구하고 활성 드래그를 해제한다.
     void TransformGizmo::Cancel(Scene& scene)
     {
         if (GameObject* object = scene.FindObject(m_DragId))
@@ -103,8 +107,11 @@ namespace Viewer
         m_Active = None;
     }
 
-    bool TransformGizmo::Update(Scene& scene, ObjectId selection, const Camera& camera, float width, float height)
+    // 입력 게이트를 유지하며 축별 TRS 드래그와 취소·Undo를 처리한다.
+    bool TransformGizmo::Update(Scene& scene, ObjectId selection, const Camera& camera, float width, float height,
+        unsigned scaleAxisMask)
     {
+        m_ScaleAxisMask = scaleAxisMask;
         float x, y;
         const bool validMouse = GameInput::GetMousePosition(x, y);
         if (IsDragging())
@@ -116,10 +123,19 @@ namespace Viewer
                 return true;
             }
             const PickingRay ray = MakePickingRay(camera, x, y);
-            UniformTransform transform = m_Start;
+            SceneTransform transform = m_Start;
             if (m_Mode == Scale)
             {
-                transform.SetScale(GizmoMath::UniformScale(m_Start.GetScale(), m_StartY - y * height));
+                float drag = m_StartY - y * height;
+                if (m_Active != Uniform)
+                {
+                    Vector3 hit;
+                    if (!GizmoMath::IntersectPlane(ray.Origin, ray.Direction, m_Pivot, m_Normal, hit))
+                        hit = m_StartHit;
+                    drag = 100.0f * float(Dot(hit - m_StartHit, m_Axes[m_Active])) / m_StartSize;
+                }
+                transform.SetScale(GizmoMath::ScaleComponents(m_Start.GetScale(),
+                    m_Active == Uniform ? -1 : int(m_Active), drag, m_ScaleAxisMask));
                 scene.FindObject(m_DragId)->SetTransform(transform);
             }
             else
@@ -161,7 +177,8 @@ namespace Viewer
             GameInput::IsPressed(GameInput::kKey_rcontrol);
         if (control && GameInput::IsFirstPressed(GameInput::kKey_z))
         {
-            m_History.Undo([&scene](uint64_t id, const UniformTransform& transform)
+            // 살아 있는 객체에 기록된 TRS를 복구한다.
+            m_History.Undo([&scene](uint64_t id, const SceneTransform& transform)
             {
                 GameObject* object = scene.FindObject(id);
                 return object && object->SetTransform(transform);
@@ -190,8 +207,8 @@ namespace Viewer
         m_Hover = HitTest(pivot, size, ray, { x * width, y * height }, camera, width, height);
         if (m_Hover == None || !GameInput::IsFirstPressed(GameInput::kMouse0))
             return false;
-        bool canStart = m_Mode == Scale;
-        if (m_Mode == Scale)
+        bool canStart = m_Mode == Scale && m_Hover == Uniform;
+        if (canStart)
         {
             m_StartY = y * height;
         }
@@ -221,6 +238,7 @@ namespace Viewer
         }
         if (canStart)
         {
+            m_StartSize = size;
             m_Start = object->GetTransform();
             m_Pivot = pivot;
             m_DragId = selection;
@@ -229,6 +247,7 @@ namespace Viewer
         return true;
     }
 
+    // 공통 좌표계와 고정된 드래그 기저로 핸들을 화면에 그린다.
     void TransformGizmo::Render(GraphicsContext& context, const Scene& scene, ObjectId selection,
         const Camera& camera, float width, float height) const
     {
@@ -244,8 +263,10 @@ namespace Viewer
         GizmoDraw draw;
         const Handle highlight = IsDragging() ? m_Active : m_Hover;
         Vector3 axes[3];
-        for (int i = 0; i < 3; ++i)
-            axes[i] = m_Local ? object->GetTransform().GetRotation() * Axes[i] : Axes[i];
+        GizmoMath::Basis(object->GetTransform().GetRotation(), IsLocal(), axes);
+        if (IsDragging())
+            for (int i = 0; i < 3; ++i)
+                axes[i] = m_Axes[i];
         if (m_Mode == Rotate)
         {
             for (int axis = 0; axis < 3; ++axis)
@@ -286,6 +307,8 @@ namespace Viewer
         }
         for (int axis = 0; axis < 3; ++axis)
         {
+            if (m_Mode == Scale && !(m_ScaleAxisMask & (1u << axis)))
+                continue;
             GizmoMath::Point a, b;
             if (GizmoMath::Project(pivot, camera.GetViewProjMatrix(), width, height, a) &&
                 GizmoMath::Project(pivot + axes[axis] * size, camera.GetViewProjMatrix(), width, height, b))

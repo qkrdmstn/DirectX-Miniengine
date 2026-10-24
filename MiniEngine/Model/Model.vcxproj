@@ -80,6 +80,7 @@
     <ClInclude Include="LightManager.h" />
     <ClInclude Include="MeshConvert.h" />
     <ClInclude Include="Model.h" />
+    <ClInclude Include="TransformBounds.h" />
     <ClInclude Include="ModelPose.h" />
     <ClInclude Include="ModelLoader.h" />
     <ClInclude Include="ModelH3D.h" />
@@ -112,6 +113,33 @@
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Shaders\CutoutDepthPS.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsGS.hlsl">
+      <ShaderType>Geometry</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsNoTangentGS.hlsl">
+      <ShaderType>Geometry</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsNoTangentNoUV1GS.hlsl">
+      <ShaderType>Geometry</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsNoUV1GS.hlsl">
+      <ShaderType>Geometry</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframePS.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframeNoUV1PS.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframeNoTangentPS.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\WireframeNoTangentNoUV1PS.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\VertexPointsPS.hlsl">
       <ShaderType>Pixel</ShaderType>
     </FxCompile>
     <FxCompile Include="Shaders\CutoutDepthSkinVS.hlsl">
