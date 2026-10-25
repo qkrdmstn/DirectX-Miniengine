@@ -61,6 +61,7 @@ using namespace Renderer;
 namespace Renderer
 {
     BoolVar SeparateZPass("Renderer/Separate Z Pass", true);
+    bool UseComputePose = true;
 
     bool s_Initialized = false;
 
@@ -86,6 +87,7 @@ namespace Renderer
     DescriptorHandle m_CommonTextures;
 }
 
+// 공유 렌더 PSO와 원본·변형 정점 접근을 위한 루트 시그니처를 준비한다.
 void Renderer::Initialize(void)
 {
     if (s_Initialized)
@@ -108,6 +110,7 @@ void Renderer::Initialize(void)
     m_RootSig[kCommonSRVs].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 10, 10, D3D12_SHADER_VISIBILITY_PIXEL);
     m_RootSig[kCommonCBV].InitAsConstantBuffer(1);
     m_RootSig[kSkinMatrices].InitAsBufferSRV(20, D3D12_SHADER_VISIBILITY_VERTEX);
+    m_RootSig[kPosedVertices].InitAsBufferSRV(21, D3D12_SHADER_VISIBILITY_VERTEX);
     m_RootSig.Finalize(L"RootSig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     DXGI_FORMAT ColorFormat = g_SceneColorBuffer.GetFormat();
@@ -533,12 +536,12 @@ void Renderer::DrawSkybox( GraphicsContext& gfxContext, const Camera& Camera, co
     gfxContext.Draw(3);
 }
 
-// 메시를 기존 패스로 분류하며 선·점 표시에 solid 깊이 선행 패스를 보장한다.
+// 객체별 posed SRV를 보관하고 기존 깊이·그림자·선·점 패스 분류를 유지한다.
 void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
     D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
-    const Joint* skeleton)
+    const Joint* skeleton, const GpuBuffer* posedBuffer, uint32_t posedOffset)
 {
     SortKey key;
     key.value = m_SortObjects.size();
@@ -593,7 +596,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_PassCounts[kOpaque]++;
     }
 
-    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr };
+    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr, posedBuffer, posedOffset };
     m_SortObjects.push_back(object);
 }
 
@@ -603,7 +606,7 @@ void MeshSorter::Sort()
     std::sort(m_SortKeys.begin(), m_SortKeys.end(), Cmp);
 }
 
-// 깊이·그림자는 solid로 유지하고 선·점 컬러는 읽기 전용 표면 깊이로 차폐한다.
+// 모든 패스가 같은 posed 정점을 읽으며 깊이·그림자와 선·점 차폐 정책을 유지한다.
 void MeshSorter::RenderMeshes(
     DrawPass pass,
     GraphicsContext& context,
@@ -732,6 +735,8 @@ void MeshSorter::RenderMeshes(
             context.SetConstantBuffer(kMaterialConstants, object.materialCBV);
             context.SetDescriptorTable(kMaterialSRVs, s_TextureHeap[mesh.srvTable]);
             context.SetDescriptorTable(kMaterialSamplers, s_SamplerHeap[mesh.samplerTable]);
+            if (!object.posedBuffer)
+                context.GetCommandList()->SetGraphicsRootShaderResourceView(kPosedVertices, object.bufferPtr);
             if (mesh.numJoints > 0)
             {
                 ASSERT(object.skeleton != nullptr, "Unspecified joint matrix array");
@@ -757,7 +762,13 @@ void MeshSorter::RenderMeshes(
             context.SetIndexBuffer({object.bufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat});
 
             for (uint32_t i = 0; i < mesh.numDraws; ++i)
+            {
+                // SV_VertexID에는 baseVertex가 없으므로 RAW SRV의 시작점에 반영한다.
+                if (object.posedBuffer)
+                    context.SetBufferSRV(kPosedVertices, *object.posedBuffer,
+                        object.posedOffset + uint64_t(mesh.draw[i].baseVertex) * PosedGeometry::VertexStride);
                 context.DrawIndexed(mesh.draw[i].primCount, mesh.draw[i].startIndex, mesh.draw[i].baseVertex);
+            }
 
             ++m_CurrentDraw;
         }

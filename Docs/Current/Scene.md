@@ -1,16 +1,19 @@
+상태: 진행 중 — 기준 `4bc5cdf9` 이후 다중 MeshComponent 소유·렌더 구조 구현(미커밋); Static GPU 절단 구현; Skeletal 절단·물리 미구현
+
 # ModelViewer GameObject와 Gizmo
 
-`MiniEngine/ModelViewer`를 작업 디렉터리로 실행하면 Cube와 Bunny가 떨어져 배치된다.
+`MiniEngine/ModelViewer`를 작업 디렉터리로 실행하면 Cube·Bunny·Xbot이 각각 X=-5/0/5에 배치된다.
+Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::PlayAnimation`으로 클립 하나를 지정한다.
 원점의 4×4 청록색 격자는 모델 없는 Cut Plane 객체이며 시작 시 선택된 객체는 없다.
 평면 내부를 클릭하면 선택되고 테두리가 노란색으로 바뀐다. 이동·회전·TRS Undo는 모델과 같다.
 평면의 R 크기 모드는 X/Z만 표시하며 중앙 핸들도 XZ만 변경하고 Y는 보존한다.
-평면 선은 장면 깊이에 가려지고 깊이에는 쓰지 않으며, 교차 미리보기나 실제 절단은 수행하지 않는다.
+평면 선은 장면 깊이에 가려지고 깊이에는 쓰지 않는다. `C`는 현재 평면 영역의 Static 메시를 조회해 GPU 절단한다. 교차 미리보기는 없다.
 기존 `-model <경로>` 인수는 단일 모델을 열고 모든 애니메이션을 반복 재생한다.
 진단용 `-view 0|1|2`는 시작 표시 모드를 Solid/Wireframe/Vertices로 선택한다.
 생략하거나 범위 밖이면 기본 Solid이며, 실행 중 `V` 순환은 그대로 유지된다.
 예: `../Build/x64/Debug/Output/ModelViewer/ModelViewer.exe -debug 1 -view 2`.
 유효한 `-view` 실행만 시작 모드·PSO 준비·첫 장면 GPU 작업 완료를 debugger에 한 번씩 기록한다.
-마지막 표시는 첫 장면 명령 제출 후 fence 완료를 기다린 결과이며 화면의 시각적 정확성 검증은 아니다.
+이 debugger 로그 자체는 첫 장면 명령 제출 후 fence 완료를 확인하며 화면 정확성을 입증하지 않는다. 별도 GPU 캡처의 시각 확인·픽셀 비교는 GPU 설계 14.1절에 기록했다.
 
 ## 조작
 
@@ -23,6 +26,7 @@
 | `R` | Local 크기: X/Y/Z 축 방향으로 드래그하면 해당 성분만 변경; 중앙 사각형은 위/아래로 세 성분 배율 변경 |
 | `L` | 이동·회전의 World / Local 축 전환 (크기는 항상 Local) |
 | `V` | Solid → Wireframe → Vertices → Solid 순환 (현재 모드 overlay 표시) |
+| `C` | 현재 유한 평면 영역의 Static 컴포넌트 후보를 조회하고 실제 분할만 게시. 처리 중 재입력은 Busy 안내 |
 | 드래그 중 `Esc` | 시작 Transform으로 복구 |
 | `Ctrl+Z` | 마지막 완료 드래그 한 번 취소; 최근 128개 보관 |
 | 오른쪽 버튼 유지 + 마우스 | 카메라 회전 |
@@ -43,8 +47,13 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 - `ObjectId`는 Scene 안에서 증가하는 `uint64_t`이고 `0`은 invalid다. 삭제·`Clear()` 후 재사용하지 않는다.
 - `GameObject`는 모델 없이도 존재하며, 모델이 있으면 별도 `ModelInstance`를 소유한다.
 - `GetTransform()` / `SetTransform()`은 `SceneTransform`의 위치·Quaternion·양수 XYZ 크기를 다룬다. 각 성분은 `0.0001`~`1e8`이며 범위를 벗어난 값과 NaN/Inf를 거부하고 회전을 정규화한다.
-- 원본 `shared_ptr<const Model>`은 공유하고 객체별 TRS를 `R*S` 기저의 `AffineTransform`으로 변환하여 `ModelInstance` locator에 반영한다. 매 프레임 행렬 분해나 편집 TRS의 전단은 없다.
-- `ModelInstance::Update`는 모델 공간 pose와 joint palette를 계산한 뒤 렌더·컬링 행렬에 locator를 한 번 적용한다.
+- `ModelInstance` 하나는 공유 원본과 CPU 애니메이션·node·joint pose만 소유한다. 원본 모델은 최초 `MeshComponent` 하나로 표현한다.
+- `Scene::Update`는 owner마다 `ModelInstance::Update`를 한 번 호출하고 모든 메시 컴포넌트에 같은 읽기 전용 pose를 전달한다.
+- 각 `MeshComponent`는 자체 Transform·GeometryRevision·PosedGeometry·상수 버퍼를 소유한다. `Attached`는 `Wc=owner*component`, `WorldIndependent`는 component 월드 TRS를 사용한다.
+- 변형은 `Vc=inverse(SourceFrame)*node*skin(p)`를 Compute에 저장하고 VS에서 `Wc`를 한 번 적용한다. source 프레임과 target 이동은 독립이며, 기존 화면을 보존하려면 Attached target을 SourceFrame으로 맞춘다. `SetPlacement`는 둘을 함께 검증·게시한다.
+- 기본 정책 `FollowModel`은 공유 pose를 따라가고 `Frozen`은 다음 유효 Update의 node/joint snapshot을 고정한다. 선택 본 분리·기여 보정 정책은 아직 없다.
+- 렌더는 각 컴포넌트의 현재 revision section만 등록한다. Static node bound와 Skeletal 전체 본 변환 구의 합으로 컴포넌트 경계를 만들며, 스킨 경계는 보수적이지만 느슨할 수 있다. 첫 유효 pose 전·기준 변경 후·pose 실패 시 선택을 보류한다.
+- 컴포넌트 GPU 버퍼 삭제는 현재 전역 GPU 완료를 기다린다. 단계별 검증은 [GPU 설계 14절](../GPU/GPUCuttingSystemDesign.md)을 따른다.
 
 `Scene::CreateObject`, `FindObject`, `DeleteObject`, `Clear`로 객체를 관리한다.
 매 프레임 `Scene::Update` 후 기본·그림자 pass에서 각각 `Scene::Render`를 호출한다.
@@ -55,11 +64,10 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 표시 모드의 입력·PSO·깊이·알파·검증 계약은
 [RenderModes.md](RenderModes.md)를 따른다.
 
-선택은 모델의 CPU 경계 구와 가장 가까운 교차점을 이용한다. 삼각형 단위 선택이나
-애니메이션에 맞춘 경계 재계산은 없으므로 구가 겹치거나 빈 공간이 많은 모델에서는 근사 선택이다.
+선택은 각 메시 컴포넌트의 CPU 경계 구와 가장 가까운 교차점을 이용하고 `PickHit`에 ObjectId와 MeshId를 함께 반환한다. 구가 겹치거나 빈 공간이 많은 모델에서는 근사 선택이다. 기즈모와 Undo는 기존 GameObject 전체 TRS를 편집하며 컴포넌트 선택·편집 UI는 추가하지 않았다.
 Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하면 해당 축/회전 링 조작을 제한한다.
 크기는 각 축 `0.0001`부터 `1e8`까지의 양수다. 음수·영 크기, 계층 편집, Redo,
-장면 저장, 물리, GPU 절단은 구현하지 않는다.
+장면 저장과 실제 물리는 구현하지 않는다. Static 절단은 [구현 기록](../GPU/StaticCutImplementation.md)을 따른다.
 
 현재 velocity 셰이더는 카메라 이동만 반영하고 객체 Transform·스킨 애니메이션의 이전 위치는 반영하지 않는다.
 따라서 ModelViewer는 TAA를 끄고 FXAA를 사용하며 모션 블러도 끈다. TAA를 다시 켜면 움직이는 객체에
@@ -67,8 +75,8 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 
 후속 GPU 절단은 `GameObject::GetTransform()`을 객체 좌표와 월드 좌표 사이의 계약으로 사용해야 한다.
 절단 평면과 입력 정점은 같은 공간으로 변환한 뒤 교차 계산해야 한다. 공유 원본
-`Model::m_DataBuffer`는 수정하지 않고, 절단 결과 GPU 버퍼는 객체별로 소유하도록 연결한다.
-현재 구현에는 절단 결과 버퍼 API가 없다.
+`Model::m_DataBuffer`는 수정하지 않고, 절단 결과 GPU 버퍼는 대상 MeshComponent의 geometry로 소유하도록 연결한다.
+현재 `GeometryRevision`은 공유 원본 section과 생성 GPU geometry를 모두 지원한다. Static 절단·cap·재절단의 최신 흐름과 진단은 [StaticCutImplementation.md](../GPU/StaticCutImplementation.md)를 따른다.
 
 ## CPU 검증
 
@@ -97,11 +105,25 @@ Local은 객체 Quaternion만 사용한다. 드래그 중에는 시작 기저를
 이는 TRS에서 최대 축 크기이고, locator와 내부 회전 합성으로 생기는 전단에서도 보수적이다.
 메시 컬링·정렬에도 같은 도우미를 써서 극단적인 비균일 크기에서 구를 과소평가하지 않는다.
 전단에서는 구가 커져 선택·컬링이 느슨해질 수 있다. 원본 경계가 애니메이션을 감싸는지는 기존 한계다.
-`Resize`는 위치와 축 비율을 유지하며 경계 반지름을 맞춘다. 상자는 기존 affine×OrientedBox를 사용한다.
-정적·스킨 메시 모두 기존 WorldIT 역전치와 모델 공간 joint 법선 역전치를 유지하며,
-locator는 mesh World에 한 번만 곱한다. Solid/Wireframe/Vertices 표시 정책도 동일하다.
+시작 장면은 공유 원본 모델의 반지름으로 owner TRS를 정규화한다. ModelInstance의 locator·Resize·렌더 API는 제거했다.
+정적·스킨 메시 모두 모델 공간 joint 법선 역전치와 source-to-component/node 역전치를 Compute에 적용하고,
+컴포넌트 월드 역전치는 VS에서 한 번 적용한다. 비교용 기존 VS 경로는 전체 WorldIT를 유지한다.
+Solid/Wireframe/Vertices 표시 정책도 동일하다.
 
 CPU 회귀 검사는 공통 TRS·축 기저·축별 배율·히스토리·경계 도우미를 호출한다.
 비균일 점/법선 변환, 합성 전단 구, XYZ 독립/중앙 배율, 양수 상하한·무효값,
 비균일 Undo, 카메라 위치·회전 변화의 기저 불변성과 투영 차이,
 두 skeletonRoot 경우의 비균일 locator 단일 적용을 포함한다.
+
+
+## MeshComponent와 Collider 참조 API
+
+`GameObject::AddMeshComponent` / `FindMeshComponent` / `RemoveMeshComponent`는 같은 원본 pose를 사용하는 컴포넌트를 관리한다. ComponentId는 owner 내 mesh·collider 공용 증가 값이며 제거 후 재사용하지 않는다. 서로 다른 owner에서는 같은 ComponentId가 나올 수 있으므로 외부 참조는 항상 ObjectId와 함께 저장한다.
+
+`GeometryRevision::FromModel`은 loader가 만든 유효한 Model metadata를 전제로 원본 GPU VB/IB·재질·draw·SourceMesh를 참조한다. `SelectSections`는 기존 GPU 버퍼를 복사하지 않고 section 부분집합의 새 불변 revision을 만든다. `MeshComponent::SetGeometry`는 같은 원본만 허용하고 pose 준비를 무효화한다. 이 절은 컴포넌트 기반 구현 이력이다. 이후 추가한 `GeometryRevision::FromGenerated`는 Static 절단 VB/IB·parent provenance를 보관한다.
+
+`AddColliderComponent`는 MeshId와 GeometryRevisionId만 보관하는 후속 물리 연동용 설명이다. 실제 충돌 shape·body·solver는 생성하지 않는다. `IsColliderCurrent`는 geometry 교체로 오래된 참조를 거부한다. 메시 제거 시 대응 collider도 제거한다.
+
+생성·삭제·geometry/placement 변경은 프레임 입력 단계, 즉 `Scene::Update`의 GPU 명령 기록 전에 수행한다. Update부터 모든 Render pass의 명령 제출 사이에는 geometry/컴포넌트를 변경하지 않는다. 현재 GPU 대기 정책은 이미 제출된 명령의 수명을 보장하며, 아직 제출하지 않은 명령을 자동으로 제출하거나 보존하지 않는다. 공유 pose 배열은 해당 프레임 렌더 소비까지 유지되며 GameObject는 MeshComponent를 ModelInstance보다 먼저 파괴한다.
+
+진단 `-component-checks 1`은 각 모델에 메시 두 개를 만든다. 하단은 FollowModel, 상단은 source 프레임 보정·Frozen·WorldIndependent다. 구조/ID/revision/collider/TRS 검증과 첫 GPU 준비 검증을 수행하고 debugger에 결과를 기록한다. 기본 실행 장면은 기존 Cube·Bunny·Xbot을 유지한다.

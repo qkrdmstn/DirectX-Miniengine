@@ -1,10 +1,10 @@
-상태: 진행 중 — 언리얼식 cap 정책과 BreakConstraint 서브트리 고정 구현, CPU 테스트·Debug/Release 빌드 통과 (커밋 전, 화면 확인 전)
+상태: 진행 중 — 과거 CPU 비교 이력 보존; 기준 `4bc5cdf9` 이후 현행 GPU 접촉 판정 비교 추가 (미커밋, 2026-10-25)
 
 > 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../Current/CutPlaneDesign.md)를 따른다.
 
 # 언리얼 소스와의 비교 (SliceProceduralMesh, ProceduralMesh, BreakConstraint)
 
-근거: Unreal Engine `release` 브랜치 소스를 직접 읽었다. 함수 이름으로 적는다.
+근거: 아래 1~5절은 과거 Unreal Engine `release` 조사 기록이다. 현행 GPU 수정의 직접 확인 버전과 차이는 6절에 구분한다. 함수 이름으로 적는다.
 
 | 파일 | 본 함수 |
 | --- | --- |
@@ -66,3 +66,14 @@
 3. AABB로 미리 거르기 (`SliceProceduralMesh`의 `BoxPlaneCompare`).
 4. 부호 거리 병렬 계산 (`ParallelFor`). 측정 후 판단.
 5. 기존 cap을 지나는 재절단: 두 언리얼 방식 모두 cap 삼각형을 일반 삼각형처럼 자른다. 우리는 `CrossesCap`으로 거절한다.
+
+## 6. 현행 GPU 접촉·반복 절단 수정 (2026-10-25)
+
+UE 5.3.2 [GitHub 공개 미러](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Plugins/Runtime/ProceduralMeshComponent/Source/ProceduralMeshComponent/Private/KismetProceduralMeshLibrary.cpp)의 Epic 작성 소스를 직접 확인했다. 버전은 같은 브랜치의 [Build.version](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Build/Build.version)으로 확인했다. 최신 Epic 비공개 저장소의 구현을 확인했다고 주장하지 않는다.
+
+- `BoxPlaneCompare`는 section AABB가 완전히 한쪽이면 통째로 유지/이동하고 경계 접촉은 교차 후보로 남긴다.
+- `SliceProceduralMesh`는 정점의 부호 거리가 엄격히 양수인 경우와 나머지를 분류한다. 다른 쪽 section의 제거 조건은 정점 또는 인덱스 배열이 비었는지이며, 단면만 있는 결과를 걸러내는 별도 분할 증명은 확인되지 않았다.
+- 이는 소스 분석이다. 같은 버그를 Unreal 실행에서 재현한 결과는 아니다. Unreal의 단순 부호 분류를 복사하는 것만으로 우리 접촉 버그가 해결된다고 해석하지 않는다.
+- 현행 `CutJob::HasSplit`은 GPU 상태에 양쪽 비공면·비퇴화 표면 출력과 활성 교차 경계가 모두 있어야 참이다. `BuildResults`는 새 cap을 제외한 양쪽 surface count도 검사한다. 실패하면 입력 revision과 컴포넌트 수를 유지한다. 열린 버니를 지원하므로 닫힌 부피 검사는 조건에 넣지 않는다.
+- 평면 위 기존 모서리는 GPU 중점 해시와 양쪽 표면 지지로 접촉을 구별한다. 전역 원본 인접성은 구축하지 않는다. 기존 cap은 새 평면이 관통하면 일반 입력 표면처럼 처리한다.
+- Unreal 함수는 대상 컴포넌트를 입력으로 받는다. 우리의 `CuttingSystem::RequestAll`은 호출자 책임인 후보 조회를 추가하고 후보별로 `SubmitPending`을 통해 순차 GPU 작업을 시작한다. 실제 물리 collider query는 후속 범위다.

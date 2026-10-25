@@ -16,12 +16,20 @@
 #include "../Core/Math/Matrix3.h"
 #include "../Core/Math/Matrix4.h"
 #include <cstdint>
+#include <cstddef>
 
 __declspec(align(256)) struct MeshConstants
 {
     Math::Matrix4 World;         // Object to world
     Math::Matrix3 WorldIT;       // Object normal to world normal
+    Math::Matrix4 ObjectWorld;   // Posed local to world (node transform already applied)
+    Math::Matrix3 ObjectWorldIT;
+    uint32_t UsePosedVertices;
 };
+static_assert(sizeof(MeshConstants) == 256, "Mesh CBV stride must remain 256 bytes");
+static_assert(offsetof(MeshConstants, ObjectWorld) == 112, "VS b0 c7");
+static_assert(offsetof(MeshConstants, ObjectWorldIT) == 176, "VS b0 c11");
+static_assert(offsetof(MeshConstants, UsePosedVertices) == 224, "VS b0 c14.x");
 
 // The order of textures for PBR materials
 enum { kBaseColor, kMetallicRoughness, kOcclusion, kEmissive, kNormal, kNumTextures };

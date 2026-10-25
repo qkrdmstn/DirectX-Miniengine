@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <cstdint>
+#include "ComponentId.h"
 #include <limits>
 
 namespace Viewer
@@ -10,6 +11,7 @@ namespace Viewer
     {
         ObjectId Id = InvalidObjectId;
         float WorldT = std::numeric_limits<float>::max();
+        ComponentId MeshId = InvalidComponentId;
     };
     // 유효한 앞쪽 후보 중 더 가까운 결과를 선택하며 동률은 기존 결과를 유지한다.
     inline PickHit NearestPickHit(PickHit current, PickHit candidate)

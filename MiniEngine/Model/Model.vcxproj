@@ -80,6 +80,10 @@
     <ClInclude Include="LightManager.h" />
     <ClInclude Include="MeshConvert.h" />
     <ClInclude Include="Model.h" />
+    <ClInclude Include="PosedGeometry.h" />
+    <ClInclude Include="GeometryRevision.h" />
+    <ClInclude Include="GeometryBuffers.h" />
+    <ClCompile Include="GeometryBuffers.cpp" />
     <ClInclude Include="TransformBounds.h" />
     <ClInclude Include="ModelPose.h" />
     <ClInclude Include="ModelLoader.h" />
@@ -97,6 +101,7 @@
     <ClCompile Include="LightManager.cpp" />
     <ClCompile Include="MeshConvert.cpp" />
     <ClCompile Include="Model.cpp" />
+    <ClCompile Include="PosedGeometry.cpp" />
     <ClCompile Include="ModelConvert.cpp" />
     <ClCompile Include="ModelH3D.cpp" />
     <ClCompile Include="ModelLoader.cpp" />
@@ -107,11 +112,13 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Shaders\Common.hlsli" />
+    <None Include="Shaders\PosedVertices.hlsli" />
     <None Include="Shaders\FillLightGridCS.hlsli" />
     <None Include="Shaders\LightGrid.hlsli" />
     <None Include="Shaders\Lighting.hlsli" />
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="Shaders\PreparePoseCS.hlsl" />
     <FxCompile Include="Shaders\CutoutDepthPS.hlsl">
       <ShaderType>Pixel</ShaderType>
     </FxCompile>

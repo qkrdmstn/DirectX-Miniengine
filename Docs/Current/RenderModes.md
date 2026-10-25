@@ -1,4 +1,4 @@
-상태: 완료 — `527ed749` 기준 미커밋 렌더 수정 (2026-10-24). 검증 결과는 아래 참조.
+상태: 완료 — `4bc5cdf9` 이후 미커밋 Compute pose 렌더 연결 (2026-10-24). 기존 표시 정책과 아래 검증 이력을 유지하며 최신 pose 검증은 GPU 설계 11·14절, 생성 Static 절단 geometry 검증은 StaticCutImplementation.md 참조.
 
 # ModelViewer 표시 모드
 
@@ -9,14 +9,14 @@
 ## 렌더 계약
 
 - Solid는 원래 재질·조명·깊이 설정을 유지한다. 깊이·그림자는 모든 모드에서 solid다.
-- Wireframe은 원래 VS·스키닝·양면·알파 정책을 유지하고 흰색 선을 출력한다.
+- Wireframe은 공통 Compute pose·객체 TRS 및 기존 양면·알파 정책을 유지하고 흰색 선을 출력한다.
   `Renderer::GetPSO`의 선 PSO는 원래 인덱스 쌍을 공유하지만 둘 다 역 Z `GREATER_EQUAL`, 깊이 쓰기 금지다.
   선/면 커버리지·깊이 보간 차이를 보정하려고 DepthBias=2, SlopeScaledDepthBias=1, DepthBiasClamp=0.00001을 사용한다.
   큰 깊이 차이는 여전히 차폐되며, 이 허용치보다 가까운 면끼리는 선이 비칠 수 있다.
 - `MeshSorter::AddMesh`와 `RenderMeshes`는 Separate Z Pass가 꺼져 있어도 선·점의 불투명 solid prepass를 보장한다.
   깊이 검사를 끄거나 뒤쪽 선·점을 xray로 그리지 않는다.
-- Vertices는 원본 인덱스가 참조하는 정점을 POINTLIST로 그리고 GS가 약 3px 사각형으로 확장한다.
-  원본 VS의 스키닝 → World → ViewProj 계산과 tangent/UV1별 GS 입력 레지스터를 유지한다.
+- Vertices는 현재 원본/생성 section 인덱스가 참조하는 정점을 POINTLIST로 그리고 GS가 약 3px 사각형으로 확장한다.
+  공통 Compute pose → VS 객체 TRS → ViewProj와 tangent/UV1별 GS 입력 레지스터를 사용한다.
   공통 b1(ALL)의 c11.zw에 viewport 역수를 전달하며 b0 메시 상수는 VS 전용이다.
   점은 흰색, 역 Z `GREATER_EQUAL`, 깊이 쓰기 금지다. 경사진 면에서 사각형 일부가 잘리고 실루엣 밖으로 약 1.5px 나올 수 있다.
   중복 인덱스·UV seam 정점은 겹친다. Cube처럼 정점이 적은 모델의 면 내부는 대부분 검은 clear 색으로 남는다.
@@ -29,7 +29,9 @@
 ## 픽셀 검증과 재현
 
 ModelViewer를 작업 디렉터리로 실행한다. `-debug 1 -view 1 -capture <외부 경로 prefix>`는
-60번째 프레임에 `<prefix>-hdr.raw`와 `<prefix>-post.raw`를 한 번씩 저장한다.
+기본 60번째 프레임에 `<prefix>-hdr.raw`와 `<prefix>-post.raw`를 한 번씩 저장한다.
+`-capture-frame N`으로 시점을 바꾸고 `-animation-step-ms 16`으로 Scene 애니메이션의 고정 시간 갱신을 선택할 수 있다.
+`-compute-pose 0`은 비교용 기존 VS 스키닝·node 변환 경로다. 기본은 Compute 결과를 사용한다.
 상위 폴더는 미리 만들어야 한다. 기본 실행에는 파일 쓰기와 추가 GPU 대기가 없다.
 `PixelBuffer::ExportToFile`을 사용하고 COPY_SOURCE 상태를 shader resource 상태로 복원한다.
 HDR는 RenderScene 완료 시점, post는 PostEffects 이후 RenderUI 시작 시점의 scene color다.

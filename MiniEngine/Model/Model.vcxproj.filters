@@ -1,6 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="PosedGeometry.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="ModelH3D.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -86,6 +87,10 @@
     <ClInclude Include="TransformBounds.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="PosedGeometry.h" />
+    <ClInclude Include="GeometryRevision.h" />
+    <ClInclude Include="GeometryBuffers.h" />
+    <ClCompile Include="GeometryBuffers.cpp" />
     <ClInclude Include="Model.h">
       <Filter>Source Files</Filter>
     </ClInclude>
@@ -101,6 +106,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="Shaders\PosedVertices.hlsli"><Filter>Shaders</Filter></None>
     <None Include="Shaders\Common.hlsli">
       <Filter>Shaders</Filter>
     </None>
@@ -176,6 +182,7 @@
     <FxCompile Include="Shaders\DepthOnlyVS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
+    <FxCompile Include="Shaders\PreparePoseCS.hlsl"><Filter>Shaders</Filter></FxCompile>
     <FxCompile Include="Shaders\CutoutDepthPS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>

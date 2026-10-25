@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "Model.h"
+#include "MeshComponent.h"
 #include "SceneTransform.h"
 #include "PickHit.h"
 #include <cstdint>
@@ -20,18 +20,45 @@ namespace Viewer
         const SceneTransform& GetTransform() const { return m_Transform; }
         const ModelInstance* GetModelInstance() const { return m_ModelInstance.get(); }
 
-        // Reject invalid transforms and keep the renderer's locator synchronized.
+        // owner 안의 MeshComponent를 ID로 검색한다.
+        MeshComponent* FindMeshComponent(ComponentId id);
+        // owner 안의 MeshComponent를 읽기 전용으로 검색한다.
+        const MeshComponent* FindMeshComponent(ComponentId id) const;
+        // 같은 pose를 사용하는 독립 메시 컴포넌트를 추가한다.
+        MeshComponent& AddMeshComponent(std::shared_ptr<const GeometryRevision> geometry);
+        // 대응 collider와 함께 메시를 제거하며 ID는 재사용하지 않는다.
+        bool RemoveMeshComponent(ComponentId id);
+        // 컴포넌트별 geometry·pose·변환을 읽는다.
+        const std::vector<std::unique_ptr<MeshComponent>>& GetMeshComponents() const { return m_MeshComponents; }
+        // 현재 geometry revision에 대응하는 후속 물리 연동용 참조를 추가한다.
+        const ColliderComponent& AddColliderComponent(ComponentId meshId);
+        // collider 참조를 ID로 제거한다.
+        bool RemoveColliderComponent(ComponentId id);
+        // 물리 body가 아닌 collider 대응 설명 목록을 읽는다.
+        const std::vector<ColliderComponent>& GetColliderComponents() const { return m_ColliderComponents; }
+        // 삭제·geometry 교체로 오래된 collider 대응을 거부한다.
+        bool IsColliderCurrent(ComponentId id) const;
+
+        // 유효한 owner TRS를 저장한다. WorldIndependent 메시에는 곱하지 않는다.
         bool SetTransform(const SceneTransform& transform);
+        // 지정한 애니메이션 하나를 재생하며 기본값으로 반복한다.
+        void PlayAnimation(uint32_t animationIndex, bool loop = true);
         void LoopAllAnimations();
 
     private:
         friend class Scene;
         GameObject(ObjectId id, std::string name, std::shared_ptr<const Model> model);
 
+        // mesh·collider가 공유하는 owner 범위 ID를 고갈 검사 후 발급한다.
+        ComponentId AllocateComponentId();
+
         ObjectId m_Id;
         std::string m_Name;
         SceneTransform m_Transform{ Math::kIdentity };
         std::unique_ptr<ModelInstance> m_ModelInstance;
+        ComponentId m_NextComponentId = 1;
+        std::vector<std::unique_ptr<MeshComponent>> m_MeshComponents;
+        std::vector<ColliderComponent> m_ColliderComponents;
     };
 
     class Scene

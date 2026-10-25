@@ -232,6 +232,9 @@
     <ClCompile Include="Scene\Scene.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Scene\MeshComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Scene\ObjectSelection.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -243,6 +246,15 @@
   <ItemGroup>
     <ClInclude Include="Scene\SceneTransform.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\Scene.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Scene\ComponentId.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Scene\MeshComponent.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Scene\tests\MeshComponentChecks.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Scene\ObjectSelection.h">
@@ -266,5 +278,9 @@
     <None Include="packages.config" />
     <None Include="Scene\README.md" />
     <None Include="Scene\tests\SceneMathTests.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Scene\CuttingSystem.cpp" />
+    <ClInclude Include="Scene\CuttingSystem.h" />
   </ItemGroup>
 </Project>

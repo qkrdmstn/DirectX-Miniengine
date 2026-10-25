@@ -2,6 +2,8 @@
 
 # 유한 절단 평면
 
+현재 Static GPU 절단은 [StaticCutImplementation.md](../GPU/StaticCutImplementation.md)를 따른다. 아래는 평면 기하·편집·표시 단계의 구현 이력이다. 유한 사각형이 전체 절단 경계를 덮지 못하면 절단 후보 전체를 거절하며 부분 절개는 하지 않는다.
+
 `CutPlaneDesc`는 로컬 XZ, y=0의 Width/Height를 정의한다. `TryBuildCutPlaneData`는 affine 역변환과 +Y 역전치 법선을 사용해 `CutPlaneData`를 만든다. 반사·비균일 스케일·전단은 허용하고 비유한 크기·특이 변환은 거절한다. WorldPlane은 정규화된 `(normal.xyz, d)`이다.
 
 `IntersectCutPlaneRectangle`은 정규화된 월드 ray를 받아 경계를 포함하며 월드 거리 t를 보존한다. 평행·공면 ray와 뒤쪽 교점은 거절한다. `ClipCoplanarSegmentToCutPlaneRectangle`은 양 끝이 외부인 통과 선분도 [0,1] 구간으로 잘라낸다. 공면 허용 오차는 로컬 Y의 1e-5이다. 실패 시 출력 인자는 보존한다.

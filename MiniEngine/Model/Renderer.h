@@ -36,6 +36,7 @@ struct Joint;
 namespace Renderer
 {
     extern BoolVar SeparateZPass;
+    extern bool UseComputePose;
 
     using namespace Math;
 
@@ -56,6 +57,7 @@ namespace Renderer
         kCommonSRVs,
         kCommonCBV,
         kSkinMatrices,
+        kPosedVertices,
 
         kNumRootBindings
     };
@@ -106,11 +108,13 @@ namespace Renderer
         const Frustum& GetViewFrustum() const { return m_Camera->GetViewSpaceFrustum(); }
         const Matrix4& GetViewMatrix() const { return m_Camera->GetViewMatrix(); }
 
+        // 원본 draw와 객체별 posed SRV를 보관하고 렌더 패스별로 분류한다.
         void AddMesh( const Mesh& mesh, float distance,
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
-            const Joint* skeleton = nullptr);
+            const Joint* skeleton = nullptr, const GpuBuffer* posedBuffer = nullptr,
+            uint32_t posedOffset = 0);
 
         void Sort();
 
@@ -140,6 +144,8 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV;
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV;
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr;
+            const GpuBuffer* posedBuffer;
+            uint32_t posedOffset;
         };
 
         std::vector<SortObject> m_SortObjects;

@@ -71,6 +71,7 @@
   <ItemGroup>
     <ClCompile Include="ModelViewer.cpp" />
     <ClCompile Include="Scene\Scene.cpp" />
+    <ClCompile Include="Scene\MeshComponent.cpp" />
     <ClCompile Include="Scene\ObjectSelection.cpp" />
     <ClCompile Include="Scene\GizmoDraw.cpp" />
     <ClCompile Include="Scene\TransformGizmo.cpp" />
@@ -79,6 +80,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Scene\Scene.h" />
+    <ClInclude Include="Scene\ComponentId.h" />
+    <ClInclude Include="Scene\MeshComponent.h" />
+    <ClInclude Include="Scene\tests\MeshComponentChecks.h" />
     <ClInclude Include="Scene\SceneTransform.h" />
     <ClInclude Include="Scene\ObjectSelection.h" />
     <ClInclude Include="Scene\GizmoMath.h" />
@@ -422,4 +426,8 @@
     <Error Condition="!Exists('..\..\Packages\zlib-msvc-x64.1.2.11.8900\build\native\zlib-msvc-x64.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\..\Packages\zlib-msvc-x64.1.2.11.8900\build\native\zlib-msvc-x64.targets'))" />
     <Error Condition="!Exists('..\..\Packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\..\Packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets'))" />
   </Target>
+  <ItemGroup>
+    <ClCompile Include="Scene\CuttingSystem.cpp" />
+    <ClInclude Include="Scene\CuttingSystem.h" />
+  </ItemGroup>
 </Project>

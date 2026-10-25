@@ -37,6 +37,9 @@
 #include "Scene/TransformGizmo.h"
 #include "Scene/CutPlaneSystem.h"
 #include "Scene/CutPlaneRenderer.h"
+#include "Scene/CuttingSystem.h"
+#include <algorithm>
+#include "Scene/tests/MeshComponentChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -69,6 +72,20 @@ private:
     D3D12_RECT m_MainScissor;
 
     Viewer::Scene m_Scene;
+    Viewer::CuttingSystem m_Cutting{m_Scene};
+    Viewer::ObjectId m_CutOwner = Viewer::InvalidObjectId, m_ActiveCutPlane = Viewer::InvalidObjectId;
+    Viewer::ComponentId m_CutMesh = Viewer::InvalidComponentId;
+    uint32_t m_AutoCuts = 0, m_BenchmarkRemaining = 0, m_BenchmarkWarmup = 3, m_AutoCutIndex = 0;
+    float m_AutoCutY = 0, m_AutoCutWidth = 1000;
+    uint32_t m_CapMode = 0;
+    uint32_t m_RepeatCutPlane = 0;
+    uint32_t m_CutScene = 0, m_CutOther = 0;
+    float m_CutAngle = 0, m_CutStepY = 0;
+    float m_CutGap = 0.0f;
+    uint32_t m_ExpectedPublications = ~0u, m_Publications = 0;
+    std::vector<double> m_CutGpuSamples, m_CutReadySamples;
+    Math::Vector3 m_LastCutNormal{Math::kYUnitVector};
+    bool m_CaptureComplete = false;
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
     Viewer::ObjectId m_SelectedObject = Viewer::InvalidObjectId;
     Viewer::TransformGizmo m_Gizmo;
@@ -77,7 +94,10 @@ private:
     bool m_ViewDiagnosticPending = false;
     std::wstring m_CapturePath;
     uint32_t m_CaptureFrame = 0;
+    uint32_t m_CaptureTargetFrame = 60;
+    uint32_t m_AnimationStepMs = 0;
     bool m_CapturePostPending = false;
+    bool m_ComponentChecksPending = false;
     ShadowCamera m_SunShadowCamera;
 };
 
@@ -158,10 +178,22 @@ void LoadIBLTextures()
         g_IBLSet.Increment();
 }
 
-// 장면·렌더러를 초기화하고 opt-in 시작 모드와 픽셀 캡처 경로를 읽는다.
+// 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
     CommandLineArgs::GetString(L"capture", m_CapturePath);
+    uint32_t computePose;
+    if (CommandLineArgs::GetInteger(L"compute-pose", computePose))
+        Renderer::UseComputePose = computePose != 0;
+    if (!m_CapturePath.empty())
+    {
+        uint32_t targetFrame;
+        if (CommandLineArgs::GetInteger(L"capture-frame", targetFrame) && targetFrame > 0)
+            m_CaptureTargetFrame = targetFrame;
+        CommandLineArgs::GetInteger(L"animation-step-ms", m_AnimationStepMs);
+        Utility::Printf("ModelViewer capture: computePose=%u, frame=%u, animationStepMs=%u\n",
+            Renderer::UseComputePose ? 1u : 0u, m_CaptureTargetFrame, m_AnimationStepMs);
+    }
     uint32_t viewMode;
     if (CommandLineArgs::GetInteger(L"view", viewMode) && viewMode <= 2)
     {
@@ -195,24 +227,81 @@ void ModelViewer::Startup( void )
     {
         m_Scene.CreateObject("Cube", Renderer::LoadModel(L"Models/cube.glb", forceRebuild));
         m_Scene.CreateObject("Bunny", Renderer::LoadModel(L"Models/bunny.glb", forceRebuild));
+        m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
     }
     else
     {
         m_Scene.CreateObject("Model", Renderer::LoadModel(gltfFileName, forceRebuild)).LoopAllAnimations();
     }
 
+    // 생성 표면/cap의 렌더 PSO도 첫 결과 게시가 아닌 로딩 단계에 준비한다.
+    MeshCutting::GpuMeshCutter::Prepare();
+    Renderer::GetPSO(31);
+    for (const auto& object : m_Scene.GetObjects())
+        for (const auto& component : object->GetMeshComponents())
+            for (size_t section=0;section<component->GetGeometry()->GetSections().size();++section)
+            {
+                const uint16_t flags=component->GetGeometry()->GetMesh(section).psoFlags;
+                if (!(flags&PSOFlags::kHasSkin)) Renderer::GetPSO(uint16_t(flags|PSOFlags::kHasUV0));
+            }
     size_t index = 0;
     for (const auto& object : m_Scene.GetObjects())
     {
         const ModelInstance* model = object->GetModelInstance();
-        if (!model || float(model->GetRadius()) <= 0.0f)
+        if (!model || float(model->GetModel()->m_BoundingSphere.GetRadius()) <= 0.0f)
             continue;
-        const float scale = 2.0f / float(model->GetRadius());
-        const float x = m_Scene.GetObjects().size() == 1 ? 0.0f : (index++ == 0 ? -3.0f : 3.0f);
+        const float scale = 2.0f / float(model->GetModel()->m_BoundingSphere.GetRadius());
+        const float x = (float(index++) - 0.5f * float(m_Scene.GetObjects().size() - 1)) * 5.0f;
         object->SetTransform(UniformTransform(Quaternion(kIdentity), scale,
-            Vector3(x, 0.0f, 0.0f) - model->GetCenter() * scale));
+            Vector3(x, 0.0f, 0.0f) - model->GetModel()->m_BoundingSphere.GetCenter() * scale));
     }
-    m_CutPlanes.CreatePlane({4.0f, 4.0f}, Viewer::SceneTransform(kIdentity));
+    uint32_t componentChecks = 0;
+    if (CommandLineArgs::GetInteger(L"component-checks", componentChecks) && componentChecks == 1)
+    {
+        Viewer::PrepareMeshComponentChecks(m_Scene);
+        m_ComponentChecksPending = true;
+    }
+    m_ActiveCutPlane = m_CutPlanes.CreatePlane({4.0f, 4.0f}, Viewer::SceneTransform(kIdentity));
+    CommandLineArgs::GetInteger(L"cut", m_AutoCuts);
+    CommandLineArgs::GetInteger(L"cut-benchmark", m_BenchmarkRemaining);
+    CommandLineArgs::GetFloat(L"cut-y", m_AutoCutY);
+    CommandLineArgs::GetFloat(L"cut-width",m_AutoCutWidth);
+    CommandLineArgs::GetInteger(L"cut-repeat-plane",m_RepeatCutPlane);
+    CommandLineArgs::GetInteger(L"cut-scene",m_CutScene);
+    CommandLineArgs::GetInteger(L"cut-other",m_CutOther);
+    CommandLineArgs::GetFloat(L"cut-angle",m_CutAngle);
+    CommandLineArgs::GetFloat(L"cut-step-y",m_CutStepY);
+    CommandLineArgs::GetFloat(L"cut-gap",m_CutGap);
+    if (!std::isfinite(m_CutGap) || m_CutGap < 0)
+        throw std::invalid_argument("cut-gap must be finite and nonnegative");
+    CommandLineArgs::GetInteger(L"cut-expect-publications",m_ExpectedPublications);
+    uint32_t transformChecks = 0;
+    if (CommandLineArgs::GetInteger(L"cut-transform-checks",transformChecks) && transformChecks)
+    {
+        for (const auto& object : m_Scene.GetObjects())
+        {
+            if (object->GetMeshComponents().empty()) continue;
+            auto owner = object->GetTransform();
+            owner.SetRotation(Quaternion(Vector3(kYUnitVector),0.4f)*Quaternion(Vector3(kXUnitVector),0.2f));
+            owner.SetScale(owner.GetScale()*Vector3(0.8f,1.4f,0.6f));
+            object->SetTransform(owner);
+            Viewer::DeformBinding binding;
+            binding.SourceFrame = Viewer::SceneTransform(Quaternion(Vector3(kZUnitVector),0.3f),Vector3(1.2f,0.9f,1.1f),Vector3(0.1f,0.05f,-0.1f));
+            object->GetMeshComponents().front()->SetPlacement(binding.SourceFrame,Viewer::MeshTransformMode::Attached,binding);
+        }
+    }
+    uint32_t validateCut = 0;
+    CommandLineArgs::GetInteger(L"cut-validate", validateCut);
+    m_Cutting.ValidateResults = validateCut != 0;
+    CommandLineArgs::GetInteger(L"cut-expect-loops",m_Cutting.ExpectedMinimumLoops);
+    CommandLineArgs::GetInteger(L"cap-mode", m_CapMode);
+    m_CapMode = std::min(m_CapMode, 2u);
+    if (m_CutScene && m_BenchmarkRemaining)
+        throw std::invalid_argument("cut-scene and cut-benchmark cannot be combined");
+    if (m_BenchmarkRemaining) m_BenchmarkRemaining += m_BenchmarkWarmup;
+    for (const auto& object : m_Scene.GetObjects())
+        if (!object->GetMeshComponents().empty())
+        { m_CutOwner = object->GetId(); m_CutMesh = object->GetMeshComponents().front()->GetId(); break; }
     m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
     m_Camera.SetZRange(0.1f, 1000.0f);
     auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
@@ -230,6 +319,7 @@ void ModelViewer::Startup( void )
 // 장면을 지운 뒤 평면 설명을 정리하고 렌더러를 종료한다.
 void ModelViewer::Cleanup( void )
 {
+    m_Cutting.Clear();
     m_Scene.Clear();
     m_CutPlanes.PruneStaleObjects();
 
@@ -243,10 +333,53 @@ namespace Graphics
     extern EnumVar DebugZoom;
 }
 
-// 입력·장면을 갱신하고 V 첫 입력마다 메인 컬러 표시 모드를 순환한다.
+// 완료된 절단을 먼저 게시하고 최신 pose 준비 뒤 현재 평면의 후보를 제출한다.
 void ModelViewer::Update( float deltaT )
 {
     ScopedTimer _prof(L"Update State");
+    if (m_Cutting.Update())
+    {
+        if (m_BenchmarkRemaining)
+        {
+            if (m_BenchmarkWarmup) --m_BenchmarkWarmup;
+            else { m_CutGpuSamples.push_back(m_Cutting.LastGpuMs); m_CutReadySamples.push_back(m_Cutting.LastReadyMs); }
+            --m_BenchmarkRemaining;
+            if (!m_BenchmarkRemaining && !m_CutGpuSamples.empty())
+            {
+                std::sort(m_CutGpuSamples.begin(), m_CutGpuSamples.end());
+                std::sort(m_CutReadySamples.begin(),m_CutReadySamples.end());
+                Utility::Printf("Static cut benchmark: samples=%zu medianGpuMs=%.6f p95GpuMs=%.6f medianReadyMs=%.3f error=%u\n",
+                    m_CutGpuSamples.size(), m_CutGpuSamples[m_CutGpuSamples.size()/2],
+                    m_CutGpuSamples[std::min(m_CutGpuSamples.size()-1, size_t(m_CutGpuSamples.size()*0.95))],m_CutReadySamples[m_CutReadySamples.size()/2],m_Cutting.LastError);
+            }
+        }
+        else if (m_AutoCuts && !m_Cutting.IsBusy()) { --m_AutoCuts; ++m_AutoCutIndex; }
+        // 기본은 위치 보존이며, 명시한 진단 간격만 새 B의 실제 Transform에 적용한다.
+        if (m_Cutting.LastOther)
+        {
+            ++m_Publications;
+            auto* owner = m_Scene.FindObject(m_Cutting.LastOwner);
+            auto* piece = owner ? owner->FindMeshComponent(m_Cutting.LastOther) : nullptr;
+            if (piece)
+            {
+                auto transform = piece->GetTransform();
+                Vector3 delta = -m_LastCutNormal * m_CutGap;
+                if (piece->GetTransformMode() == Viewer::MeshTransformMode::Attached)
+                    delta = Vector3(Invert(Matrix4(owner->GetTransform().ToAffine())) * Vector4(delta, 0));
+                if (m_CutGap > 0)
+                {
+                    transform.SetTranslation(transform.GetTranslation() + delta);
+                    piece->SetTransform(transform, piece->GetTransformMode());
+                }
+                Utility::Printf("Static cut separation: owner=%llu mesh=%llu gap=%.6f delta=(%.6f,%.6f,%.6f) deltaSpace=%s\n",
+                    static_cast<unsigned long long>(m_Cutting.LastOwner),static_cast<unsigned long long>(m_Cutting.LastOther),
+                    m_CutGap,float(delta.GetX()),float(delta.GetY()),float(delta.GetZ()),
+                    piece->GetTransformMode() == Viewer::MeshTransformMode::Attached ? "owner-local" : "world");
+                if (m_CutOther) { m_CutOwner = m_Cutting.LastOwner; m_CutMesh = m_Cutting.LastOther; }
+            }
+        }
+    }
+    const bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
 
     if (GameInput::IsFirstPressed(GameInput::kKey_v))
         m_RenderMode = static_cast<Renderer::RenderMode>((static_cast<unsigned>(m_RenderMode) + 1) % 3);
@@ -271,14 +404,74 @@ void ModelViewer::Update( float deltaT )
         GameInput::GetMousePosition(mouseX, mouseY))
     {
         const auto ray = Viewer::MakePickingRay(m_Camera, mouseX, mouseY);
-        m_SelectedObject = Viewer::NearestPickHit(Viewer::PickObject(m_Scene, ray), m_CutPlanes.Pick(ray)).Id;
+        const Viewer::PickHit hit = Viewer::NearestPickHit(Viewer::PickObject(m_Scene, ray), m_CutPlanes.Pick(ray));
+        m_SelectedObject = hit.Id;
+        if (hit.MeshId) { m_CutOwner = hit.Id; m_CutMesh = hit.MeshId; }
+        if (m_CutPlanes.Find(hit.Id)) m_ActiveCutPlane = hit.Id;
     }
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 
-    m_Scene.Update(gfxContext, deltaT);
+    m_Scene.Update(gfxContext, m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
+    if (m_ComponentChecksPending)
+    {
+        Viewer::CheckPreparedMeshComponents(m_Scene, gfxContext);
+        m_ComponentChecksPending = false;
+    }
 
     gfxContext.Finish();
+    m_Cutting.SubmitPending();
+    if (cutKey)
+    {
+        MeshCutting::CutPlaneData plane;
+        if (m_CutPlanes.BuildData(m_ActiveCutPlane,plane))
+        {
+            if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
+        }
+    }
+    if (!m_Cutting.IsBusy() && (m_AutoCuts || m_BenchmarkRemaining))
+    {
+        MeshCutting::CutPlaneData plane;
+        bool valid = false;
+        float epsilon = 1.0e-5f;
+        if (m_AutoCuts || m_BenchmarkRemaining)
+        {
+            auto* owner = m_Scene.FindObject(m_CutOwner);
+            auto* mesh = owner ? owner->FindMeshComponent(m_CutMesh) : nullptr;
+            if (mesh)
+            {
+                const AffineTransform world = mesh->GetWorldTransform(owner->GetTransform());
+                const float angle = m_CutAngle * XM_PI / 180.0f + (!m_RepeatCutPlane && m_AutoCutIndex % 2 ? XM_PIDIV2 : 0.0f);
+                const Matrix3 rotation = Matrix3(Quaternion(Vector3(kZUnitVector),angle));
+                valid = MeshCutting::TryBuildCutPlaneData({m_AutoCutWidth,1000.0f},
+                    world * AffineTransform(rotation, Vector3(0,m_AutoCutY+m_CutStepY*m_AutoCutIndex,0)), plane);
+                epsilon = float(Length(world.GetY())) * 1.0e-5f;
+            }
+        }
+        else valid = m_CutPlanes.BuildData(m_ActiveCutPlane, plane);
+        if (!valid) { m_AutoCuts=m_BenchmarkRemaining=0; Utility::Printf("Static cut plane rejected\n"); }
+        const bool publish = !m_BenchmarkRemaining || m_BenchmarkRemaining == 1;
+        if (valid)
+        {
+            m_LastCutNormal = Vector3(plane.WorldPlane);
+            const bool accepted = m_CutScene ? m_Cutting.RequestAll(plane,m_CapMode) :
+                m_Cutting.Request(m_CutOwner, m_CutMesh, plane, publish, epsilon, m_CapMode);
+            if (!accepted)
+            {
+                Utility::Printf("Static cut request rejected: %s\n",m_Cutting.GetStatusText());
+                m_AutoCuts = m_BenchmarkRemaining = 0;
+            }
+        }
+    }
+
+    // GPU 작업이 없었던 후보 없음·제출 거절도 최종 게시 수 검증을 거친다.
+    if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_ExpectedPublications != ~0u)
+    {
+        if (m_Publications != m_ExpectedPublications)
+            throw std::runtime_error("Unexpected number of cut publications");
+        Utility::Printf("Static cut publication validation passed: count=%u\n",m_Publications);
+        m_ExpectedPublications = ~0u;
+    }
 
     // We use viewport offsets to jitter sample positions from frame to frame (for TAA.)
     // D3D has a design quirk with fractional offsets such that the implicit scissor
@@ -410,10 +603,12 @@ void ModelViewer::RenderScene( void )
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    const bool capture = !m_CapturePath.empty() && ++m_CaptureFrame == 60;
+    const bool capture = !m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= m_CaptureTargetFrame
+        && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy();
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
     {
+        m_CaptureComplete = true;
         g_SceneColorBuffer.ExportToFile(m_CapturePath + L"-hdr.raw");
         auto& restore = GraphicsContext::Begin(L"Restore capture state");
         restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -427,7 +622,7 @@ void ModelViewer::RenderScene( void )
     }
 }
 
-// opt-in 후처리 캡처 뒤 기즈모와 조작 안내 및 현재 표시 모드를 그린다.
+// 편집 안내와 절단 처리·거절 사유를 화면에 표시한다.
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
     if (m_CapturePostPending)
@@ -448,6 +643,8 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     text.DrawString("Left click: select object | Hold right mouse + WASD/QE: camera\n");
     text.DrawString("Q: View/select (hide gizmo) | W: Move | E: Rotate | R: Local axis/center scale\n");
     text.DrawString("Cut Plane: cyan grid, click inside to select | Scale X/Z or center XZ (Y fixed)\n");
+    text.DrawFormattedString("C: cut static meshes in plane area | %s\n",m_Cutting.GetStatusText());
+    if (m_CutGap > 0) text.DrawFormattedString("Diagnostic piece separation: %.3f\n",m_CutGap);
     text.DrawFormattedString("L: %s axes | Esc during drag: cancel | Mode: %s\n",
         m_Gizmo.IsLocal() ? "Local" : "World", m_Gizmo.GetMode() == Viewer::TransformGizmo::View ? "View" :
         (m_Gizmo.GetMode() == Viewer::TransformGizmo::Translate ? "Move" :

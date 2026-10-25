@@ -12,6 +12,7 @@
 //
 
 #include "Common.hlsli"
+#include "PosedVertices.hlsli"
 
 #ifdef ENABLE_SKINNING
 //#undef ENABLE_SKINNING
@@ -19,8 +20,11 @@
 
 cbuffer MeshConstants : register(b0)
 {
-    float4x4 WorldMatrix;   // Object to world
-    float3x3 WorldIT;       // Object normal to world normal
+    float4x4 WorldMatrix : packoffset(c0);   // Object to world
+    float3x3 WorldIT : packoffset(c4);       // Object normal to world normal
+    float4x4 ObjectWorldMatrix : packoffset(c7);
+    float3x3 ObjectWorldIT : packoffset(c11);
+    uint UsePosedVertices : packoffset(c14.x);
 };
 
 cbuffer GlobalConstants : register(b1)
@@ -75,7 +79,8 @@ struct VSOutput
 };
 
 [RootSignature(Renderer_RootSig)]
-VSOutput main(VSInput vsInput)
+// Compute 결과에는 객체 TRS·투영만 적용하고 기존 VS 경로는 비교용으로 유지한다.
+VSOutput main(VSInput vsInput, uint vertexId : SV_VertexID)
 {
     VSOutput vsOutput;
 
@@ -86,36 +91,49 @@ VSOutput main(VSInput vsInput)
 #endif
 
 #ifdef ENABLE_SKINNING
-    // I don't like this hack.  The weights should be normalized already, but something is fishy.
-    float4 weights = vsInput.jointWeights / dot(vsInput.jointWeights, 1);
+    if (UsePosedVertices == 0)
+    {
+        // I don't like this hack.  The weights should be normalized already, but something is fishy.
+        float4 weights = vsInput.jointWeights / dot(vsInput.jointWeights, 1);
 
-    float4x4 skinPosMat =
-        Joints[vsInput.jointIndices.x].PosMatrix * weights.x +
-        Joints[vsInput.jointIndices.y].PosMatrix * weights.y +
-        Joints[vsInput.jointIndices.z].PosMatrix * weights.z +
-        Joints[vsInput.jointIndices.w].PosMatrix * weights.w;
+        float4x4 skinPosMat =
+            Joints[vsInput.jointIndices.x].PosMatrix * weights.x +
+            Joints[vsInput.jointIndices.y].PosMatrix * weights.y +
+            Joints[vsInput.jointIndices.z].PosMatrix * weights.z +
+            Joints[vsInput.jointIndices.w].PosMatrix * weights.w;
 
-    position = mul(skinPosMat, position);
+        position = mul(skinPosMat, position);
 
-    float4x3 skinNrmMat =
-        Joints[vsInput.jointIndices.x].NrmMatrix * weights.x +
-        Joints[vsInput.jointIndices.y].NrmMatrix * weights.y +
-        Joints[vsInput.jointIndices.z].NrmMatrix * weights.z +
-        Joints[vsInput.jointIndices.w].NrmMatrix * weights.w;
+        float4x3 skinNrmMat =
+            Joints[vsInput.jointIndices.x].NrmMatrix * weights.x +
+            Joints[vsInput.jointIndices.y].NrmMatrix * weights.y +
+            Joints[vsInput.jointIndices.z].NrmMatrix * weights.z +
+            Joints[vsInput.jointIndices.w].NrmMatrix * weights.w;
 
-    normal = mul(skinNrmMat, normal).xyz;
+        normal = mul(skinNrmMat, normal).xyz;
 #ifndef NO_TANGENT_FRAME
-    tangent.xyz = mul(skinNrmMat, tangent.xyz).xyz;
+        tangent.xyz = mul(skinNrmMat, tangent.xyz).xyz;
 #endif
+    }
 
 #endif
 
-    vsOutput.worldPos = mul(WorldMatrix, position).xyz;
+    if (UsePosedVertices != 0)
+    {
+        position = float4(LoadPosedPosition(vertexId), 1);
+        normal = asfloat(PosedVertices.Load3(vertexId * 40 + 12));
+#ifndef NO_TANGENT_FRAME
+        tangent = asfloat(PosedVertices.Load4(vertexId * 40 + 24));
+#endif
+    }
+    float4x4 world = UsePosedVertices != 0 ? ObjectWorldMatrix : WorldMatrix;
+    float3x3 worldIT = UsePosedVertices != 0 ? ObjectWorldIT : WorldIT;
+    vsOutput.worldPos = mul(world, position).xyz;
     vsOutput.position = mul(ViewProjMatrix, float4(vsOutput.worldPos, 1.0));
     vsOutput.sunShadowCoord = mul(SunShadowMatrix, float4(vsOutput.worldPos, 1.0)).xyz;
-    vsOutput.normal = mul(WorldIT, normal);
+    vsOutput.normal = mul(worldIT, normal);
 #ifndef NO_TANGENT_FRAME
-    vsOutput.tangent = float4(mul(WorldIT, tangent.xyz), tangent.w);
+    vsOutput.tangent = float4(mul(worldIT, tangent.xyz), tangent.w);
 #endif
     vsOutput.uv0 = vsInput.uv0;
 #ifndef NO_SECOND_UV

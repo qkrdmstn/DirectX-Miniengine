@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -61,6 +61,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <AdditionalIncludeDirectories>..\Model;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeaderFile />
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
     </ClCompile>
@@ -74,4 +75,18 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
+  <ItemGroup>
+    <ClInclude Include="GPU\CutTypes.h" />
+    <ClInclude Include="GPU\GpuMeshCutter.h" />
+    <ClCompile Include="GPU\GpuMeshCutter.cpp" />
+    <ClCompile Include="tests\GpuCutValidation.cpp" />
+    <None Include="Shaders\CutCommon.hlsli" />
+    <FxCompile Include="Shaders\ClipTrianglesCS.hlsl" />
+    <FxCompile Include="Shaders\BoundaryKeysCS.hlsl" />
+    <FxCompile Include="Shaders\LinkBoundaryCS.hlsl" />
+    <FxCompile Include="Shaders\RankBoundaryCS.hlsl" />
+    <FxCompile Include="Shaders\CapEarsCS.hlsl" />
+    <FxCompile Include="Shaders\FinalizeCutCS.hlsl" />
+    <FxCompile Include="Shaders\CutBoundsCS.hlsl" />
+  </ItemGroup>
 </Project>

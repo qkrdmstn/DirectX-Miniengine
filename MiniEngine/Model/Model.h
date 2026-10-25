@@ -15,6 +15,7 @@
 
 #include "Animation.h"
 #include "ModelPose.h"
+#include "PosedGeometry.h"
 #include "TransformBounds.h"
 #include "../Core/GpuBuffer.h"
 #include "../Core/VectorMath.h"
@@ -93,11 +94,6 @@ public:
 
     ~Model() { Destroy(); }
 
-    void Render(Renderer::MeshSorter& sorter,
-        const GpuBuffer& meshConstants,
-        const Math::AffineTransform sphereTransforms[],
-        const Joint* skeleton) const;
-
     Math::BoundingSphere m_BoundingSphere; // Object-space bounding sphere
     Math::AxisAlignedBox m_BoundingBox;
     ByteAddressBuffer m_DataBuffer;
@@ -122,30 +118,22 @@ protected:
 class ModelInstance
 {
 public:
-    ModelInstance() {}
-    ~ModelInstance() {
-        m_MeshConstantsCPU.Destroy();
-        m_MeshConstantsGPU.Destroy();
-    }
-    ModelInstance( std::shared_ptr<const Model> sourceModel );
-    ModelInstance( const ModelInstance& modelInstance );
-
-    ModelInstance& operator=( std::shared_ptr<const Model> sourceModel );
-
-    bool IsNull(void) const { return m_Model == nullptr; }
-
-    void Update(GraphicsContext& gfxContext, float deltaTime);
-    void Render(Renderer::MeshSorter& sorter) const;
-
-    void Resize(float newRadius);
-    // 비균일 크기를 포함한 인스턴스 locator를 저장한다.
-    void SetTransform(const Math::AffineTransform& transform) { m_Locator = transform; }
-    // 렌더링에 적용할 affine locator를 읽는다.
-    const Math::AffineTransform& GetTransform() const { return m_Locator; }
-    Math::Vector3 GetCenter() const;
-    Math::Scalar GetRadius() const;
-    Math::BoundingSphere GetBoundingSphere() const;
-    Math::OrientedBox GetBoundingBox() const;
+    // 원본과 애니메이션 pose만 소유하며 GPU 렌더 자원은 MeshComponent가 소유한다.
+    explicit ModelInstance(std::shared_ptr<const Model> sourceModel);
+    // 애니메이션 상태의 암묵적인 복사·대입을 금지한다.
+    ModelInstance(const ModelInstance&) = delete;
+    // 원본 pose 소유자의 복사 대입을 금지한다.
+    ModelInstance& operator=(const ModelInstance&) = delete;
+    // 공유 원본의 소유권을 읽는다.
+    const std::shared_ptr<const Model>& GetModel() const { return m_Model; }
+    // 이 프레임에 평가된 node pose를 읽는다.
+    const Math::Matrix4* GetNodeTransforms() const { return m_ModelSpaceTransforms.get(); }
+    // 컴포넌트들이 읽기 전용으로 공유하는 본 팔레트를 읽는다.
+    const Joint* GetJoints() const { return m_Skeleton.get(); }
+    // 잘못된 node 그래프의 이전 pose를 렌더에 사용하지 않도록 검사한다.
+    bool HasValidPose() const { return m_PoseValid; }
+    // GameObject당 한 번 CPU 애니메이션·node·본 pose를 평가한다.
+    void Update(float deltaTime);
 
     size_t GetNumAnimations(void) const { return m_AnimState.size(); }
     void PlayAnimation(uint32_t animIdx, bool loop);
@@ -157,11 +145,8 @@ public:
 
 private:
     std::shared_ptr<const Model> m_Model;
-    UploadBuffer m_MeshConstantsCPU;
-    ByteAddressBuffer m_MeshConstantsGPU;
-    std::unique_ptr<Math::AffineTransform[]> m_BoundingSphereTransforms;
     std::unique_ptr<Math::Matrix4[]> m_ModelSpaceTransforms;
-    Math::AffineTransform m_Locator;
+    bool m_PoseValid = false;
 
     std::unique_ptr<GraphNode[]> m_AnimGraph;   // A copy of the scene graph when instancing animation
     std::vector<AnimationState> m_AnimState;    // Per-animation (not per-curve)
