@@ -1,4 +1,4 @@
-상태: 진행 중 — 기준 `4bc5cdf9` 이후 다중 MeshComponent 소유·렌더 구조 구현(미커밋); Static GPU 절단 구현; Skeletal 절단·물리 미구현
+상태: 진행 중 — `673b56b6` 다중 MeshComponent 소유·렌더·Static GPU 절단 구현; Skeletal 절단·물리 미구현
 
 # ModelViewer GameObject와 Gizmo
 

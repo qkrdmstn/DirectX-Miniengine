@@ -1,4 +1,4 @@
-상태: 완료 — `4bc5cdf9` 이후 미커밋 Compute pose 렌더 연결 (2026-10-24). 기존 표시 정책과 아래 검증 이력을 유지하며 최신 pose 검증은 GPU 설계 11·14절, 생성 Static 절단 geometry 검증은 StaticCutImplementation.md 참조.
+상태: 완료 — Compute pose 렌더 연결은 `673b56b6` (2026-10-25). 기존 표시 정책과 아래 검증 이력을 유지하며 최신 pose 검증은 GPU 설계 11·14절, 생성 Static 절단 geometry 검증은 StaticCutImplementation.md 참조.
 
 # ModelViewer 표시 모드
 

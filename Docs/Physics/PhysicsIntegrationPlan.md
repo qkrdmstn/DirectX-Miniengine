@@ -1,4 +1,4 @@
-상태: 설계안 — 기준 `4bc5cdf9` 이후 Jolt CPU 물리 도입으로 선정 갱신; 다중 MeshComponent/GPU 절단 연동 계획 (미구현, 2026-10-25)
+상태: 설계안 — `673b56b6` Jolt CPU 물리 선정·다중 MeshComponent/GPU 절단 연동 계획 (SDK 미구현, 2026-10-25)
 
 # 절단 조각 물리 도입 제안
 

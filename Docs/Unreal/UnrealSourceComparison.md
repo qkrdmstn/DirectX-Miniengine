@@ -1,4 +1,4 @@
-상태: 진행 중 — 과거 CPU 비교 이력 보존; 기준 `4bc5cdf9` 이후 현행 GPU 접촉 판정 비교 추가 (미커밋, 2026-10-25)
+상태: 진행 중 — 과거 CPU 비교 이력 보존; `673b56b6` 현행 GPU 접촉 판정 비교 추가 (2026-10-25)
 
 > 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../Current/CutPlaneDesign.md)를 따른다.
 

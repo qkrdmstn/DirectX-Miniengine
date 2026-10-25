@@ -9,16 +9,16 @@
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
 | [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — 현황문서 (`527ed749` 기준 미커밋 문서 정리, 구현 변경 없음) |
-| [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 단계 1·2·3 구현·리뷰 완료 (`527ed749` 기준 미커밋 문서 정리, 구현 변경 없음), 수동 시각 검증 미확인 |
-| [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `4bc5cdf9` 이후 미커밋 Compute pose 연결, 검증은 본문·GPU 설계 참조 |
-| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | 컴포넌트 기반·C 평면 후보 조회, 편집 UI는 owner TRS |
+| [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749` 기반, GPU 연결 `673b56b6`; 수동 입력 검증 범위는 본문 참조 |
+| [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `673b56b6` Compute pose 연결, 검증은 본문·GPU 설계 참조 |
+| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `673b56b6` 컴포넌트 기반·C 평면 후보 조회, 편집 UI는 owner TRS |
 
 ## GPU — 후속 절단 설계·문헌
 
 | 문서 | 용도 | 상태 / 읽을 때의 주의 |
 | --- | --- | --- |
-| [GPUCuttingSystemDesign.md](GPU/GPUCuttingSystemDesign.md) | GPU 절단 설계·다중 MeshComponent 기반 | Static 구현은 아래 구현 기록, Skeletal·물리는 설계 |
-| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | 자동 분리 이동 기본 해제·다중 절단 부모 보존 검증, 리뷰·Debug/Release 완료 (`4bc5cdf9` 이후 미커밋) |
+| [GPUCuttingSystemDesign.md](GPU/GPUCuttingSystemDesign.md) | GPU 절단 설계·다중 MeshComponent 기반 | `673b56b6` Static 구현, Skeletal·물리는 설계 |
+| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `673b56b6` 자동 분리 이동 기본 해제·다중 절단 부모 보존 검증, 리뷰·Debug/Release 완료 |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
@@ -32,7 +32,7 @@
 
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
-| [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | PhysX/Jolt/Bullet 비교, body 소유·충돌 proxy·절단 transaction | 설계안 — 사용자 논의 후 Jolt CPU 선정, SDK 연동 미구현 (`4bc5cdf9` 이후) |
+| [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | PhysX/Jolt/Bullet 비교, body 소유·충돌 proxy·절단 transaction | `673b56b6` 설계안 — 사용자 논의 후 Jolt CPU 선정, SDK 연동 미구현 |
 
 ## NDC — 기법 근거
 
