@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <JoltConfiguration Condition="'$(Configuration)'=='Profile'">Release</JoltConfiguration>
+    <JoltConfiguration Condition="'$(JoltConfiguration)'==''">$(Configuration)</JoltConfiguration>
+    <JoltLibraryPath>$(MSBuildThisFileDirectory)..\Build\ThirdParty\Jolt\build\lib\$(JoltConfiguration)</JoltLibraryPath>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <Link>
+      <AdditionalLibraryDirectories>$(JoltLibraryPath);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>MiniPhysics.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <Target Name="CheckPhysicsPlatform" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(Platform)'!='x64'" Text="The initial Jolt query adapter supports x64 only." />
+  </Target>
+</Project>
