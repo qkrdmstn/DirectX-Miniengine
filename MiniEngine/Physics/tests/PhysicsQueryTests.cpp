@@ -1,4 +1,4 @@
-#include "PhysicsWorld.h"
+#include "PhysicsWorldInternal.h"
 #include <algorithm>
 #include <cstdio>
 #include <limits>
@@ -108,6 +108,82 @@ static void TestConservativeQueries()
     Check(Contains(world.QueryAabb(point),pointHandle),"Zero extent conservative proxy");
 }
 
+// 계층 쌍 필터가 지정한 3x3 행렬과 정확히 같은지 검사한다.
+static void TestLayerMatrix()
+{
+    PhysicsLayers layers;
+    // 한정 호출은 가상 호출을 우회하므로 기반 클래스 참조로 호출한다.
+    const JPH::ObjectLayerPairFilter& pairFilter = layers;
+    const JPH::ObjectVsBroadPhaseLayerFilter& broadFilter = layers;
+    const JPH::ObjectLayer order[3] = { ObjectLayers::Query, ObjectLayers::Static, ObjectLayers::Moving };
+    // 행은 Query, Static, Moving 순이며 대칭 행렬이다.
+    const bool pair[3][3] = { {false,false,false}, {false,false,true}, {false,true,true} };
+    // 열은 Query, Static, Moving broadphase 계층 순이다.
+    const bool broad[3][3] = { {false,false,false}, {false,false,true}, {false,true,true} };
+    const JPH::BroadPhaseLayer broadOrder[3] = { BroadPhaseLayers::Query, BroadPhaseLayers::Static, BroadPhaseLayers::Moving };
+    for (size_t i = 0; i < 3; ++i)
+    {
+        Check(layers.GetBroadPhaseLayer(order[i]) == broadOrder[i], "Broadphase mapping");
+        for (size_t j = 0; j < 3; ++j)
+        {
+            Check(pairFilter.ShouldCollide(order[i], order[j]) == pair[i][j], "Pair filter matrix");
+            Check(broadFilter.ShouldCollide(order[i], broadOrder[j]) == broad[i][j], "Object vs broadphase matrix");
+        }
+    }
+    Check(layers.GetNumBroadPhaseLayers() == 3, "Broadphase layer count");
+}
+
+// Static·Moving 계층 body를 직접 추가해도 QueryAabb가 Query 계층만 반환하는지 검사한다.
+static void TestQueryIsolation()
+{
+    // world와 query body를 만들고 내부 Impl을 얻는다.
+    PhysicsWorld world;
+    world.Initialize(8);
+    const auto query = world.CreateQueryBox(Box(0,0,0));
+    auto* impl = PhysicsWorldAccess::GetImpl(world);
+    Check(impl != nullptr, "Impl access");
+    auto& bodies = impl->World.GetBodyInterface();
+
+    // Static과 Moving 계층 body를 직접 생성해 같은 위치에 추가한다.
+    JPH::BodyID extra[2];
+    const JPH::ObjectLayer layers[2] = { ObjectLayers::Static, ObjectLayers::Moving };
+    for (size_t i = 0; i < 2; ++i)
+    {
+        // 반복마다 하나의 body 설정을 만든다.
+        JPH::RVec3 center;
+        const auto shape = MakeBox(Box(0,0,0), center);
+        const auto motion = i == 0 ? JPH::EMotionType::Static : JPH::EMotionType::Dynamic;
+        JPH::BodyCreationSettings settings(shape, center, JPH::Quat::sIdentity(), motion, layers[i]);
+        settings.mUserData = 900 + i;
+        if (motion == JPH::EMotionType::Dynamic)
+        {
+            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+            settings.mMassPropertiesOverride.mMass = 1.0f;
+        }
+
+
+        // 설정한 body를 broadphase에 추가한다.
+        extra[i] = bodies.CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+        Check(!extra[i].IsInvalid(), "Extra body creation");
+    }
+
+    // 필터 없는 Jolt 질의에는 세 body가 모두 보여 테스트 전제가 맞는지 확인한다.
+    JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> all;
+    impl->World.GetBroadPhaseQuery().CollideAABox(JPH::AABox(JPH::Vec3(-1,-1,-1), JPH::Vec3(1,1,1)), all);
+    Check(all.mHits.size() == 3, "Unfiltered query sees all layers");
+
+    // QueryAabb는 Query 계층의 handle만 반환해야 한다.
+    const auto hits = world.QueryAabb(Box(0,0,0));
+    Check(hits.size() == 1 && hits[0] == query, "QueryAabb sees only Query layer");
+
+    // 직접 추가한 body를 제거한다.
+    for (const auto id : extra)
+    {
+        bodies.RemoveBody(id);
+        bodies.DestroyBody(id);
+    }
+}
+
 // 실제 SDK를 링크한 CPU 검증을 한 번에 실행한다.
 int main()
 {
@@ -116,6 +192,8 @@ int main()
         TestLifetime();
         TestCapacity();
         TestConservativeQueries();
+        TestLayerMatrix();
+        TestQueryIsolation();
         std::printf("PhysicsQueryTests: %zu checks passed\n",g_Checks);
         return 0;
     }

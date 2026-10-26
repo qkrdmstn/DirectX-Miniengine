@@ -28,6 +28,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ClInclude Include="PhysicsWorld.h" />
+    <ClInclude Include="PhysicsWorldInternal.h" />
     <ClInclude Include="Collision\CollisionUnits.h" />
     <ClInclude Include="Collision\ConvexElem.h" />
     <ClInclude Include="Collision\AggregateGeom.h" />

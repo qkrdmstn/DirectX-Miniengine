@@ -1,89 +1,54 @@
-#include <Jolt/Jolt.h>
-#include <Jolt/RegisterTypes.h>
-#include <Jolt/Core/Factory.h>
-#include <Jolt/Physics/PhysicsSystem.h>
-#include <Jolt/Physics/Body/BodyCreationSettings.h>
-#include <Jolt/Physics/Body/BodyLock.h>
-#include <Jolt/Physics/Collision/Shape/BoxShape.h>
-#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
-#include "PhysicsWorld.h"
+#include "PhysicsWorldInternal.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
-#include <unordered_map>
 
 namespace MiniPhysics
 {
-    namespace
+    // 여러 조회 world가 같은 Jolt 등록 정보를 공유하도록 초기화한다.
+    Runtime::Runtime()
     {
-        struct Runtime
-        {
-            // 여러 조회 world가 같은 Jolt 등록 정보를 공유하도록 초기화한다.
-            Runtime()
-            {
-                if (JPH::Factory::sInstance) throw std::runtime_error("Jolt runtime already owned externally");
-                JPH::RegisterDefaultAllocator();
-                JPH::Factory::sInstance = new JPH::Factory();
-                JPH::RegisterTypes();
-            }
-            // 마지막 world가 사라진 뒤 전역 형식 등록을 해제한다.
-            ~Runtime()
-            {
-                JPH::UnregisterTypes();
-                delete JPH::Factory::sInstance;
-                JPH::Factory::sInstance = nullptr;
-            }
-        };
-
-        // 기존 world가 살아 있으면 동일 runtime을 재사용한다.
-        std::shared_ptr<Runtime> AcquireRuntime()
-        {
-            static std::mutex mutex;
-            static std::weak_ptr<Runtime> weak;
-            std::lock_guard<std::mutex> guard(mutex);
-            auto runtime = weak.lock();
-            if (!runtime) { runtime = std::make_shared<Runtime>(); weak = runtime; }
-            return runtime;
-        }
-
-        struct QueryLayers final : JPH::BroadPhaseLayerInterface,
-            JPH::ObjectVsBroadPhaseLayerFilter, JPH::ObjectLayerPairFilter
-        {
-            // 조회 body는 하나의 broadphase 계층에 모은다.
-            JPH::uint GetNumBroadPhaseLayers() const override { return 1; }
-            // 모든 조회 body를 전용 계층에 대응한다.
-            JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer) const override { return JPH::BroadPhaseLayer(0); }
-            // 조회 body끼리 simulation 충돌 쌍을 생성하지 않는다.
-            bool ShouldCollide(JPH::ObjectLayer, JPH::BroadPhaseLayer) const override { return false; }
-            // 조회 body는 접촉 반응에 참여하지 않는다.
-            bool ShouldCollide(JPH::ObjectLayer, JPH::ObjectLayer) const override { return false; }
-        };
-
-        // 경계의 중심 반올림까지 포함하도록 Box 반크기를 보수적으로 만든다.
-        JPH::RefConst<JPH::Shape> MakeBox(const QueryBounds& bounds, JPH::RVec3& center)
-        {
-            float c[3], half[3];
-            for (size_t i = 0; i < 3; ++i)
-            {
-                const double mid = (double(bounds.Minimum[i]) + double(bounds.Maximum[i])) * 0.5;
-                c[i] = float(mid);
-                const double radius = (double(bounds.Maximum[i]) - double(bounds.Minimum[i])) * 0.5 + std::abs(double(c[i]) - mid);
-                half[i] = std::nextafter(std::max(1.0e-4f, float(radius)), std::numeric_limits<float>::infinity());
-            }
-            center = JPH::RVec3(c[0], c[1], c[2]);
-            return new JPH::BoxShape(JPH::Vec3(half[0], half[1], half[2]), 0.0f);
-        }
+        if (JPH::Factory::sInstance) throw std::runtime_error("Jolt runtime already owned externally");
+        JPH::RegisterDefaultAllocator();
+        JPH::Factory::sInstance = new JPH::Factory();
+        JPH::RegisterTypes();
     }
 
-    struct PhysicsWorld::Impl
+    // 마지막 world가 사라진 뒤 전역 형식 등록을 해제한다.
+    Runtime::~Runtime()
     {
-        std::shared_ptr<Runtime> RuntimeOwner = AcquireRuntime();
-        QueryLayers Layers;
-        JPH::PhysicsSystem World;
-        std::unordered_map<ColliderHandle, JPH::BodyID> Bodies;
-    };
+        JPH::UnregisterTypes();
+        delete JPH::Factory::sInstance;
+        JPH::Factory::sInstance = nullptr;
+    }
+
+    // 기존 world가 살아 있으면 동일 runtime을 재사용한다.
+    std::shared_ptr<Runtime> AcquireRuntime()
+    {
+        static std::mutex mutex;
+        static std::weak_ptr<Runtime> weak;
+        std::lock_guard<std::mutex> guard(mutex);
+        auto runtime = weak.lock();
+        if (!runtime) { runtime = std::make_shared<Runtime>(); weak = runtime; }
+        return runtime;
+    }
+
+    // 경계의 중심 반올림까지 포함하도록 Box 반크기를 보수적으로 만든다.
+    JPH::RefConst<JPH::Shape> MakeBox(const QueryBounds& bounds, JPH::RVec3& center)
+    {
+        float c[3], half[3];
+        for (size_t i = 0; i < 3; ++i)
+        {
+            const double mid = (double(bounds.Minimum[i]) + double(bounds.Maximum[i])) * 0.5;
+            c[i] = float(mid);
+            const double radius = (double(bounds.Maximum[i]) - double(bounds.Minimum[i])) * 0.5 + std::abs(double(c[i]) - mid);
+            half[i] = std::nextafter(std::max(1.0e-4f, float(radius)), std::numeric_limits<float>::infinity());
+        }
+        center = JPH::RVec3(c[0], c[1], c[2]);
+        return new JPH::BoxShape(JPH::Vec3(half[0], half[1], half[2]), 0.0f);
+    }
 
     // body 경계 계산이 오버플로하지 않는 유한 범위를 검사한다.
     bool QueryBounds::IsValid() const
@@ -118,7 +83,7 @@ namespace MiniPhysics
         if (!m_Impl || !bounds.IsValid() || m_NextHandle == std::numeric_limits<ColliderHandle>::max()) return InvalidCollider;
         JPH::RVec3 center;
         const auto shape = MakeBox(bounds, center);
-        JPH::BodyCreationSettings settings(shape, center, JPH::Quat::sIdentity(), JPH::EMotionType::Static, 0);
+        JPH::BodyCreationSettings settings(shape, center, JPH::Quat::sIdentity(), JPH::EMotionType::Static, ObjectLayers::Query);
         const ColliderHandle handle = m_NextHandle++;
         settings.mUserData = handle;
         auto& bodies = m_Impl->World.GetBodyInterface();
@@ -164,7 +129,7 @@ namespace MiniPhysics
         if (m_Impl) while (!m_Impl->Bodies.empty()) RemoveCollider(m_Impl->Bodies.begin()->first);
     }
 
-    // simulation pair filter와 별개인 query filter로 모든 조회 body를 검사한다.
+    // Query 계층의 body만 대상으로 broadphase와 객체 계층 필터를 함께 적용한다.
     std::vector<ColliderHandle> PhysicsWorld::QueryAabb(const QueryBounds& bounds) const
     {
         std::vector<ColliderHandle> result;
@@ -173,7 +138,9 @@ namespace MiniPhysics
         const JPH::AABox queryBox(
             JPH::Vec3(bounds.Minimum[0], bounds.Minimum[1], bounds.Minimum[2]),
             JPH::Vec3(bounds.Maximum[0], bounds.Maximum[1], bounds.Maximum[2]));
-        m_Impl->World.GetBroadPhaseQuery().CollideAABox(queryBox, collector);
+        const JPH::SpecifiedBroadPhaseLayerFilter broadPhaseFilter(BroadPhaseLayers::Query);
+        const JPH::SpecifiedObjectLayerFilter objectFilter(ObjectLayers::Query);
+        m_Impl->World.GetBroadPhaseQuery().CollideAABox(queryBox, collector, broadPhaseFilter, objectFilter);
         for (const auto& id : collector.mHits)
         {
             const JPH::BodyLockRead body(m_Impl->World.GetBodyLockInterface(),id);

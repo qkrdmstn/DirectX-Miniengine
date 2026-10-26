@@ -1,4 +1,4 @@
-상태: 진행 중 — 1·2단계·3단계(세대 분리) 구현 완료, 4a 이후 미구현 (2026-10-26)
+상태: 진행 중 — 1~3단계·4a(레이어·내부 경계) 구현 완료, 4b 이후 미구현 (2026-10-26)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -155,6 +155,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 ### R10 시뮬레이션
 
 - 고정 1/60 s, 프레임당 최대 4 step, 남은 시간은 버린다.
+- 실행 중 사용자가 시뮬레이션을 켜고 끌 수 있다(단축키 P와 디버그 UI 토글). 끄면 step을 돌리지 않아 모든 body가 그 자리에 멈추고 속도·sleep 상태는 보존되며, 다시 켜면 이어서 진행한다. `-physics-sim 0`(world 미생성)과는 다르다. 꺼진 동안에는 깨어 있는 body도 정지 상태로 보고 절단을 허용하며, 조각은 속도 0으로 시작한다.
 - `-physics-sim 0/1`(기본 1)은 `-physics-query`와 독립이다. 초기화 실패 시 경고하고 sim off.
 - 레이어 Query/Static/Moving. `QueryAabb`는 Query 레이어만 본다. query handle과 simulation body handle을 분리한다. query box는 크기가 같으면 위치만 갱신하고 sleep은 생략한다.
 - 프레임 순서: 게시 → 입력 → 오래된 body 정리/`SyncBodies` → step → pose 반영 → `Scene.Update` → Finish → `SyncColliders` → 제출/요청.
@@ -173,7 +174,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 
 ### R13 범위 밖
 
-움직이는 조각 재절단, 속도 전달, Skeletal, ExtractToGameObject, V-HACD, UCX, 다른 Model의 내부층, 일시정지 키.
+움직이는 조각 재절단, 속도 전달, Skeletal, ExtractToGameObject, V-HACD, UCX, 다른 Model의 내부층.
 
 ### R14 검증
 
@@ -213,7 +214,7 @@ CPU:
 | 4d | `SetBodyTransform` 순간이동·원자적 shape 교체 + 테스트 | `Physics/` | 리뷰 2~5분 + 빌드 약 90초 (+CPU 테스트 약 5초) |
 | 5a | Attached→WorldIndependent TRS 표현 가능성 검사 + CPU 검증 | `Scene/MeshComponent.*`, `SceneMathTests` | 리뷰 2~5분 + 빌드 약 90초 (+CPU 테스트 약 5초) |
 | 5b | `SyncBodies`·바닥 생성·Startup 순서·pose 반영 | `Scene/PhysicsSimulation.cpp`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
-| 5c | `-physics-sim`·누적기·프레임 순서(step 전 정리), 임시 제한(sim-on 절단·simulate 메시의 owner 기즈모/Undo·cut-gap 차단), 낙하·sleep 런타임 검증(`PhysicsSimChecks.h`) | `ModelViewer.cpp`, `Scene/tests/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
+| 5c | `-physics-sim`·시뮬레이션 켜기/끄기(P·UI)·누적기·프레임 순서(step 전 정리), 임시 제한(sim-on 절단·simulate 메시의 owner 기즈모/Undo·cut-gap 차단), 낙하·sleep 런타임 검증(`PhysicsSimChecks.h`) | `ModelViewer.cpp`, `Scene/tests/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6a | 물리 무관 게시 준비·교체: `PrepareGeometryReplacement`, 준비된 B 컴포넌트, 할당 없는 commit, `DrainResults` 결과 소비, 기존 소비자 이전 | `Scene/CuttingSystem.*`, `Scene.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6b | 물리 절단 transaction(준비→검증→교체→rollback)·예산, 절단 임시 제한 해제 | `Scene/CutTransaction.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6c | 실패 경로 런타임 검증(작업 중 깨어남·강제 cook 실패·빈 쪽) | `Scene/tests/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |

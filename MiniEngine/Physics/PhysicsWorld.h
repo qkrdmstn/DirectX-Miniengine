@@ -19,6 +19,10 @@ namespace MiniPhysics
     constexpr ColliderHandle InvalidCollider = 0;
     constexpr uint32_t MaxColliderCapacity = 65536;
 
+    // 조회용 collider handle과 simulation body handle은 서로 다른 번호 공간이다. 둘을 섞어 쓰지 않는다.
+    using BodyHandle = uint64_t;
+    constexpr BodyHandle InvalidBody = 0;
+
     // Jolt 타입과 body 수명을 감춘다. 변경과 조회는 같은 장면 스레드에서 수행한다.
     class PhysicsWorld
     {
@@ -48,7 +52,10 @@ namespace MiniPhysics
 
     private:
         struct Impl;
+        friend struct PhysicsWorldAccess;
         std::unique_ptr<Impl> m_Impl;
         ColliderHandle m_NextHandle = 1;
+        // simulation body 전용 handle 발급 번호이며 m_NextHandle과 별개다.
+        BodyHandle m_NextBodyHandle = 1;
     };
 }

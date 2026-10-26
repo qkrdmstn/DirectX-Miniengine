@@ -34,13 +34,17 @@ FetchContent_Declare(JoltSource
     SOURCE_SUBDIR Build)
 FetchContent_MakeAvailable(JoltSource)
 
-# Jolt와 무관한 순수 C++ 충돌 기하 라이브러리다. 아직 MiniPhysics에 연결하지 않는다.
+# Jolt와 무관한 순수 C++ 충돌 기하 라이브러리다.
 add_library(MiniCollision STATIC Collision/ConvexElem.cpp Collision/AggregateGeom.cpp)
 target_include_directories(MiniCollision PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(MiniCollision PRIVATE /utf-8 /W4)
 
-add_library(MiniPhysics STATIC PhysicsWorld.cpp)
-target_link_libraries(MiniPhysics PUBLIC Jolt)
+add_library(MiniPhysics STATIC PhysicsWorld.cpp PhysicsWorldInternal.h)
+# MiniPhysics가 AggregateGeom을 쓰도록 CMake 의존으로 연결한다.
+# 정적 라이브러리는 의존 대상을 포함하지 않으므로 MiniPhysics.lib에는 MiniCollision 객체가 없다.
+# ModelViewer는 Physics.props로 MiniPhysics.lib와 Jolt.lib만 링크하고 Model.lib가 이미 같은 소스를 컴파일하므로,
+# MiniCollision.lib까지 링크하면 중복 심볼이 생기니 viewer 링크에 추가하지 않는다.
+target_link_libraries(MiniPhysics PUBLIC Jolt MiniCollision)
 target_include_directories(MiniPhysics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(MiniPhysics PRIVATE /utf-8 /W4)
 
