@@ -49,6 +49,7 @@
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="..\PropertySheets\Build.props" />
+    <Import Project="..\PropertySheets\Physics.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Platform)'=='x64'" Label="PropertySheets">
     <Import Project="..\PropertySheets\Desktop.props" />
@@ -71,6 +72,7 @@
   <ItemGroup>
     <ClCompile Include="ModelViewer.cpp" />
     <ClCompile Include="Scene\Scene.cpp" />
+    <ClCompile Include="Scene\PhysicsSystem.cpp" />
     <ClCompile Include="Scene\MeshComponent.cpp" />
     <ClCompile Include="Scene\ObjectSelection.cpp" />
     <ClCompile Include="Scene\GizmoDraw.cpp" />
@@ -80,6 +82,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Scene\Scene.h" />
+    <ClInclude Include="Scene\PhysicsSystem.h" />
+    <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
     <ClInclude Include="Scene\ComponentId.h" />
     <ClInclude Include="Scene\MeshComponent.h" />
     <ClInclude Include="Scene\tests\MeshComponentChecks.h" />
@@ -111,6 +115,11 @@
     <ProjectReference Include="../Core/Core.vcxproj">
       <Project>{86A58508-0D6A-4786-A32F-01A301FDC6F3}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\Physics\Physics.vcxproj" Condition="'$(Platform)'=='x64'">
+      <Project>{b0ac4cd5-5600-4ba8-91b0-39e20d7e6381}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
     <ProjectReference Include="..\Model\Model.vcxproj">
       <Project>{5d3aeefb-8789-48e5-9bd9-09c667052d09}</Project>

@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "Scene.h"
+#include "PhysicsSystem.h"
 #include "../../MeshCutting/GPU/GpuMeshCutter.h"
 #include <deque>
 
@@ -10,7 +11,7 @@ namespace Viewer
     {
     public:
         // 절단 작업이 사용할 장면을 연결한다.
-        explicit CuttingSystem(Scene& scene) : m_Scene(scene) {}
+        explicit CuttingSystem(Scene& scene, PhysicsSystem& physics) : m_Scene(scene), m_Physics(physics) {}
         // 정점 준비가 끝난 Static 컴포넌트와 평면을 고정해 작업을 시작한다.
         bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0);
         // 현재 절단 영역의 Static 후보를 고정하고 이후 프레임에서 하나씩 제출한다.
@@ -40,21 +41,14 @@ namespace Viewer
         // 여러 후보 중 하나라도 성공했으면 마지막 비교차 후보가 성공 안내를 덮지 않는다.
         void FinishBatch();
         Scene& m_Scene;
+        PhysicsSystem& m_Physics;
         std::unique_ptr<MeshCutting::CutJob> m_Job;
         ObjectId m_Owner = InvalidObjectId;
         ComponentId m_Mesh = InvalidComponentId;
         Math::Matrix4 m_World;
         uint64_t m_StateVersion = 0;
         bool m_Publish = true;
-        struct Candidate
-        {
-            ObjectId Owner;
-            ComponentId Mesh;
-            std::shared_ptr<const GeometryRevision> Geometry;
-            uint64_t StateVersion;
-            Math::Matrix4 World;
-        };
-        std::deque<Candidate> m_Pending;
+        std::deque<CutCandidate> m_Pending;
         MeshCutting::CutPlaneData m_PendingPlane{};
         uint32_t m_PendingCapMode = 0;
         const char* m_StatusText = "Ready";

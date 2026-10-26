@@ -282,5 +282,8 @@
   <ItemGroup>
     <ClCompile Include="Scene\CuttingSystem.cpp" />
     <ClInclude Include="Scene\CuttingSystem.h" />
+    <ClCompile Include="Scene\PhysicsSystem.cpp" />
+    <ClInclude Include="Scene\PhysicsSystem.h" />
+    <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
   </ItemGroup>
 </Project>

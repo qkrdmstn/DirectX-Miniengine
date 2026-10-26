@@ -74,7 +74,7 @@ namespace Viewer
         return true;
     }
 
-    // 후속 physics 등록용으로 현재 revision과 대상 메시를 함께 기록한다.
+    // collider 등록용으로 현재 revision과 대상 메시를 함께 기록한다.
     const ColliderComponent& GameObject::AddColliderComponent(ComponentId meshId)
     {
         const MeshComponent* mesh = FindMeshComponent(meshId);
@@ -93,6 +93,15 @@ namespace Viewer
             if (collider.Id == id)
                 return mesh && mesh->GetGeometry()->GetId() == collider.GeometryRevisionId;
         }
+        return false;
+    }
+
+    // 현재 geometry에 속한 collider 참조에 SDK 비노출 handle을 기록한다.
+    bool GameObject::SetColliderQueryHandle(ComponentId id, uint64_t handle)
+    {
+        if (!IsColliderCurrent(id)) return false;
+        for (auto& collider : m_ColliderComponents)
+            if (collider.Id == id) { collider.QueryHandle = handle; return true; }
         return false;
     }
 

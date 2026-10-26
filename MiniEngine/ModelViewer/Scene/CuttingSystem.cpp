@@ -43,39 +43,12 @@ namespace Viewer
         return true;
     }
 
-    // 기억된 선택 대신 유한 평면의 보수적 범위와 겹치는 Static 컴포넌트를 찾는다.
+    // collider 조회 API가 반환한 Static 후보를 고정해 순차 GPU 절단을 요청한다.
     bool CuttingSystem::RequestAll(const MeshCutting::CutPlaneData& plane, uint32_t capMode)
     {
         if (IsBusy()) { m_StatusText = "Busy - wait for the current cut"; return false; }
-        Math::Vector3 minimum = plane.WorldCorners[0], maximum = minimum;
-        for (uint32_t i = 1; i < 4; ++i)
-        {
-            minimum = Math::Min(minimum, plane.WorldCorners[i]);
-            maximum = Math::Max(maximum, plane.WorldCorners[i]);
-        }
-        for (const auto& object : m_Scene.GetObjects())
-            for (const auto& mesh : object->GetMeshComponents())
-            {
-                if (!mesh->HasPoseBounds() || !mesh->GetPosedGeometry().IsReady()) continue;
-                const auto geometry = mesh->GetGeometry();
-                bool skeletal = false;
-                for (size_t i = 0; i < geometry->GetSections().size(); ++i)
-                    skeletal |= (geometry->GetMesh(i).psoFlags & PSOFlags::kHasSkin) != 0;
-                if (skeletal) continue;
-                const auto sphere = mesh->GetBoundingSphere(object->GetTransform());
-                const Math::Vector3 center = sphere.GetCenter();
-                const float radius = sphere.GetRadius() + 1.0e-5f;
-                if (std::abs(float(Math::Dot(plane.WorldPlane, Math::Vector4(center, 1)))) > radius) continue;
-                const float c[3] = {float(center.GetX()),float(center.GetY()),float(center.GetZ())};
-                const float lo[3] = {float(minimum.GetX()),float(minimum.GetY()),float(minimum.GetZ())};
-                const float hi[3] = {float(maximum.GetX()),float(maximum.GetY()),float(maximum.GetZ())};
-                bool outside = false;
-                for (uint32_t axis = 0; axis < 3; ++axis)
-                    outside |= c[axis] + radius < lo[axis] || c[axis] - radius > hi[axis];
-                if (outside) continue;
-                m_Pending.push_back({object->GetId(),mesh->GetId(),geometry,mesh->GetStateVersion(),
-                    Math::Matrix4(mesh->GetWorldTransform(object->GetTransform()))});
-            }
+        const auto candidates = m_Physics.QueryCutCandidates(plane);
+        m_Pending.assign(candidates.begin(),candidates.end());
         m_PendingPlane = plane; m_PendingCapMode = capMode;
         Utility::Printf("Static cut candidates: count=%zu\n",m_Pending.size());
         if (m_Pending.empty()) { m_StatusText = "No static mesh in the cut area"; return false; }
@@ -90,7 +63,7 @@ namespace Viewer
         if (m_Job) return;
         while (!m_Pending.empty())
         {
-            const Candidate candidate = m_Pending.front(); m_Pending.pop_front();
+            const CutCandidate candidate = m_Pending.front(); m_Pending.pop_front();
             GameObject* object = m_Scene.FindObject(candidate.Owner);
             MeshComponent* mesh = object ? object->FindMeshComponent(candidate.Mesh) : nullptr;
             if (!mesh || mesh->GetGeometry() != candidate.Geometry || mesh->GetStateVersion() != candidate.StateVersion)

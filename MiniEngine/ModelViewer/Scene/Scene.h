@@ -30,7 +30,7 @@ namespace Viewer
         bool RemoveMeshComponent(ComponentId id);
         // 컴포넌트별 geometry·pose·변환을 읽는다.
         const std::vector<std::unique_ptr<MeshComponent>>& GetMeshComponents() const { return m_MeshComponents; }
-        // 현재 geometry revision에 대응하는 후속 물리 연동용 참조를 추가한다.
+        // 현재 geometry revision에 대응하는 collider 참조를 추가한다.
         const ColliderComponent& AddColliderComponent(ComponentId meshId);
         // collider 참조를 ID로 제거한다.
         bool RemoveColliderComponent(ComponentId id);
@@ -38,6 +38,8 @@ namespace Viewer
         const std::vector<ColliderComponent>& GetColliderComponents() const { return m_ColliderComponents; }
         // 삭제·geometry 교체로 오래된 collider 대응을 거부한다.
         bool IsColliderCurrent(ComponentId id) const;
+        // 현재 geometry에 대응하는 collider의 조회 handle만 갱신한다.
+        bool SetColliderQueryHandle(ComponentId id, uint64_t handle);
 
         // 유효한 owner TRS를 저장한다. WorldIndependent 메시에는 곱하지 않는다.
         bool SetTransform(const SceneTransform& transform);

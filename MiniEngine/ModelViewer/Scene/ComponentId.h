@@ -7,11 +7,13 @@ namespace Viewer
     using ComponentId = uint64_t;
     constexpr ComponentId InvalidComponentId = 0;
 
-    // 실제 물리 body는 후속 PhysicsWorld가 소유한다. 여기에는 대응 관계만 둔다.
+    // 조회 body는 PhysicsWorld가 소유하며 여기에는 메시·revision·handle 대응만 둔다.
     struct ColliderComponent
     {
         ComponentId Id = InvalidComponentId;
         ComponentId MeshId = InvalidComponentId;
         uint64_t GeometryRevisionId = 0;
+        // SDK 포인터가 아닌 조회 전용 body handle이다. 0이면 경계 검사 fallback이다.
+        uint64_t QueryHandle = 0;
     };
 }

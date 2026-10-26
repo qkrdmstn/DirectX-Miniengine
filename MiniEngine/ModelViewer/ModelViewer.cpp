@@ -40,6 +40,7 @@
 #include "Scene/CuttingSystem.h"
 #include <algorithm>
 #include "Scene/tests/MeshComponentChecks.h"
+#include "Scene/tests/PhysicsQueryChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -61,7 +62,12 @@ public:
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
     virtual void RenderUI(GraphicsContext& context) override;
-    virtual bool IsDone() override { return !m_EscapeConsumed && IGameApp::IsDone(); }
+    // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
+    virtual bool IsDone() override
+    {
+        return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining)
+            || (!m_EscapeConsumed && IGameApp::IsDone());
+    }
 
 private:
 
@@ -72,7 +78,10 @@ private:
     D3D12_RECT m_MainScissor;
 
     Viewer::Scene m_Scene;
-    Viewer::CuttingSystem m_Cutting{m_Scene};
+    Viewer::PhysicsSystem m_Physics{m_Scene};
+    Viewer::CuttingSystem m_Cutting{m_Scene,m_Physics};
+    uint32_t m_UsePhysicsQuery = 1, m_PhysicsCapacity = 4096, m_QuerySelfTest = 0;
+    uint32_t m_QueryExitFrame = 0, m_QueryFrame = 0;
     Viewer::ObjectId m_CutOwner = Viewer::InvalidObjectId, m_ActiveCutPlane = Viewer::InvalidObjectId;
     Viewer::ComponentId m_CutMesh = Viewer::InvalidComponentId;
     uint32_t m_AutoCuts = 0, m_BenchmarkRemaining = 0, m_BenchmarkWarmup = 3, m_AutoCutIndex = 0;
@@ -181,6 +190,14 @@ void LoadIBLTextures()
 // 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
+    uint32_t physicsQueryChecks = 0;
+    CommandLineArgs::GetInteger(L"physics-query",m_UsePhysicsQuery);
+    CommandLineArgs::GetInteger(L"physics-query-checks",physicsQueryChecks);
+    CommandLineArgs::GetInteger(L"physics-query-capacity",m_PhysicsCapacity);
+    CommandLineArgs::GetInteger(L"physics-query-self-test",m_QuerySelfTest);
+    CommandLineArgs::GetInteger(L"physics-query-exit",m_QueryExitFrame);
+    m_Physics.Initialize(m_UsePhysicsQuery != 0,m_PhysicsCapacity);
+    m_Physics.ValidateQueries = physicsQueryChecks != 0;
     CommandLineArgs::GetString(L"capture", m_CapturePath);
     uint32_t computePose;
     if (CommandLineArgs::GetInteger(L"compute-pose", computePose))
@@ -316,10 +333,12 @@ void ModelViewer::Startup( void )
         Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
 }
 
-// 장면을 지운 뒤 평면 설명을 정리하고 렌더러를 종료한다.
+// GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.
 void ModelViewer::Cleanup( void )
 {
     m_Cutting.Clear();
+    m_Physics.Clear();
+    Utility::Printf("Physics query cleanup: registered=%zu fallback=%zu\n",m_Physics.GetColliderCount(),m_Physics.GetFallbackCount());
     m_Scene.Clear();
     m_CutPlanes.PruneStaleObjects();
 
@@ -333,10 +352,16 @@ namespace Graphics
     extern EnumVar DebugZoom;
 }
 
-// 완료된 절단을 먼저 게시하고 최신 pose 준비 뒤 현재 평면의 후보를 제출한다.
+// 완료된 절단을 게시하고 최신 pose의 collider를 동기화한 뒤 후보를 제출한다.
 void ModelViewer::Update( float deltaT )
 {
     ScopedTimer _prof(L"Update State");
+    ++m_QueryFrame;
+    if (m_QuerySelfTest)
+    {
+        Viewer::RunPhysicsQueryChecks(m_Scene,m_Physics,m_UsePhysicsQuery != 0,m_PhysicsCapacity);
+        m_QuerySelfTest = 0;
+    }
     if (m_Cutting.Update())
     {
         if (m_BenchmarkRemaining)
@@ -420,6 +445,7 @@ void ModelViewer::Update( float deltaT )
     }
 
     gfxContext.Finish();
+    m_Physics.SyncColliders();
     m_Cutting.SubmitPending();
     if (cutKey)
     {

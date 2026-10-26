@@ -15,6 +15,10 @@
   <Project Path="../MeshCutting/MeshCutting.vcxproj" Id="d475918a-9db5-4c0f-a439-34f384fe4d61">
     <Platform Solution="*|Windows" Project="x64" />
   </Project>
+  <Project Path="../Physics/Physics.vcxproj" Id="b0ac4cd5-5600-4ba8-91b0-39e20d7e6381">
+    <Platform Solution="*|Windows" Project="x64" />
+    <Build Solution="*|ARM64" Project="false" />
+  </Project>
   <Project Path="ModelViewer.vcxproj" Id="1813bd6e-e2af-4a3c-8c54-4e72119da993">
     <Platform Solution="*|Windows" Project="x64" />
   </Project>
