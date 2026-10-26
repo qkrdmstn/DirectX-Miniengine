@@ -1,6 +1,8 @@
-상태: 진행 중 — `feb35f23` 기반 미커밋 Jolt v5.6.0 연결·Static 평면 후보 조회 완료; 동적 조각·Skeletal 물리는 설계 (2026-10-25)
+상태: 진행 중 — `39db69f3` 커밋된 Jolt v5.6.0 연결·Static 평면 후보 조회 완료; 동적 조각·Skeletal 물리는 설계 (2026-10-25)
 
 # 절단 조각 물리 도입 제안
+
+> 참고: 동적 조각 물리(시작 시 낙하, sleep 대상 절단, 조각별 rigid body, 바닥)는 이제 [StaticPiecePhysics.md](StaticPiecePhysics.md)가 정의한다. 이 문서의 SDK 고정·조회 구현 기록과 Skeletal 방향은 유지하며, 아래 정지 kinematic 부모 우선 로드맵·움직이는 조각 절단·속도 전달·동적 body 단계표는 대체됐다.
 
 ## 추천과 범위
 
@@ -70,6 +72,8 @@ CollisionGeometry                     닫힌 단순 충돌 형상·CPU revision
 
 ### 움직이는 대상을 자를 때의 주의점
 
+> 대체됨: [StaticPiecePhysics.md](StaticPiecePhysics.md) 요구사항 v4·구현 계획 기준
+
 현 `CuttingSystem`은 요청 이후 Wc 또는 component StateVersion이 바뀌면 GPU 결과를 거절한다. 물리가 매 프레임 MeshComponent Transform을 바꾸면 이 검사가 거의 항상 취소시킬 수 있다. 그대로 연결하지 않는다.
 
 첫 통합 검증은 정지/kinematic Cube를 대상으로 한다. 움직이는 절단을 추가할 때는 사용자의 geometry/scale 편집 세대와 physics rigid-pose 세대를 구분한다. 순수한 body 이동이면 local 절단 결과를 최신 body pose에 배치하고, source geometry/편집 변경이면 취소한다. 그 전의 임시 프로토타입에서 대상을 고정한다면 고정/속도 복구를 명시적 transaction으로 관리한다. 일괄 후보 큐의 world snapshot도 같은 정책으로 갱신해야 한다.
@@ -99,6 +103,8 @@ body의 위치는 mesh 원점과 다를 수 있다. `BodyFromMesh`를 mesh-local
 | 기존 `ComponentId.h`, `Scene.*`, `CuttingSystem.*` | collider/body 참조와 절단 transaction 연결. SDK 수명은 PhysicsWorld에 위임 |
 
 ## 구현 순서와 완료 기준
+
+> 대체됨: [StaticPiecePhysics.md](StaticPiecePhysics.md) 요구사항 v4·구현 계획 기준
 
 1. **SDK/바닥/큐브:** CPU PhysicsWorld + fixed 60Hz + 정적 바닥 + 동적 Box. 낙하·정지·수명·Debug/Release 검증.
 2. **컴포넌트 동기화:** 같은 GameObject의 두 MeshComponent가 독립 body로 움직이는지 확인. 질량중심 offset과 scale, 삭제/scene clear 검증.
@@ -141,6 +147,8 @@ MSBuild 연결은 작은 `MiniEngine/Physics/Physics.vcxproj`를 Makefile/NMake 
 
 ## 좌표·수명·프레임 계약 확정안
 
+> 대체됨: 이 절의 Static 조각 물리 좌표·수명·프레임·handle 계약은 [StaticPiecePhysics.md](StaticPiecePhysics.md)의 R4~R11을 따른다. 아래 내용은 이전 설계 기록이다.
+
 ### body 원점과 COM
 
 최초 구현은 `BodyInterface::GetPositionAndRotation`의 **shape 생성 원점 기준 body pose**를 렌더 복원에 사용한다. `GetCenterOfMassPosition`은 속도 전달과 질량 검증에만 사용한다. Jolt 내부 COM 중심 재배치가 있어도 입력 hull 정점을 별도로 COM만큼 빼지 않는다. [Body 실제 구현](https://github.com/jrouwe/JoltPhysics/blob/v5.6.0/Jolt/Physics/Body/Body.h), [BodyInterface](https://github.com/jrouwe/JoltPhysics/blob/v5.6.0/Jolt/Physics/Body/BodyInterface.h)
@@ -161,6 +169,8 @@ MSBuild 연결은 작은 `MiniEngine/Physics/Physics.vcxproj`를 Makefile/NMake 
 - 기존 Gizmo/Undo는 owner 편집이므로 dynamic body에 그대로 적용하지 않는다. 첫 물리 데모에서 물리 owner의 편집은 상태 안내와 함께 제한하고, kinematic 편집·순간이동/Undo의 body 반영은 별도 단계로 구현한다. 진단 `cut-gap` 이동도 물리 활성 시 거절한다.
 
 ## 리뷰 단위별 구현 계획
+
+> 대체됨: [StaticPiecePhysics.md](StaticPiecePhysics.md) 요구사항 v4·구현 계획 기준
 
 아래 각 행은 최초 simulation 로드맵의 독립 변경 단위다. 한 개념·약 300줄의 리뷰 단위를 유지한다. 이번 조회 구현은 사용자가 단계별 자체 리뷰 후 최종 완료까지 진행하도록 지시해 계속 수행했으며 커밋하지 않았다. 새 함수/수정 함수 위에는 한글 역할 주석을 작성하고 source/project/filter 등록도 변경량에 포함한다.
 
@@ -183,6 +193,8 @@ MSBuild 연결은 작은 `MiniEngine/Physics/Physics.vcxproj`를 Makefile/NMake 
 4단계의 화면 검증은 기존 Cube 데모의 정합된 Box만 사용하고, 임의 hull·일반 scale 지원을 5·6단계에서 확장한다. 8단계의 함수명은 새 API 제안이며 현재 구현된 함수로 읽지 않는다. 한 변경이 300줄을 넘으면 다음 개념을 섞지 않고 더 나누므로 위 행 수가 최종 커밋 수의 상한은 아니다.
 
 ## 절단 transaction의 실제 데이터 흐름
+
+> 대체됨: [StaticPiecePhysics.md](StaticPiecePhysics.md) 요구사항 v4·구현 계획 기준
 
 ```text
 ObjectId + MeshId + RenderRevision + CollisionRevision + EditVersion
@@ -212,6 +224,6 @@ fixed Step → 원점 기준 body T/R → 각 WorldIndependent MeshComponent
 - 기존 절단 회귀는 `-model Models/cube.glb -cut 4 -cut-repeat-plane 1 -cut-step-y .25 -cut-validate 1 -cut-expect-publications 4 -cut-gap 0` 등 현재 옵션으로 실행한다. 물리 진단 옵션은 구현 단계에서 새로 정의하며 지금 존재한다고 가정하지 않는다.
 - AGENTS의 `MiniEngine/MeshCutting/tests/PlaneSlicerTests.cpp`는 현재 checkout에 없다. 현재 있는 것은 `CutPlaneTests.cpp`, `GpuCutValidation.cpp`다. `Geometry/`를 수정하게 되면 현행 CutPlaneTests와 관련 proxy 테스트를 외부 출력 디렉터리에서 실행하고 누락된 legacy 테스트 지침을 함께 정리한다. 이번 계획에서는 Geometry 변경이 없다.
 
-후속 사용자 요청에 따라 SDK 고정·재현 빌드와 엔진 링크를 넘어 **Static collider 자동 등록·평면 후보 조회**까지 우선 완료했다. 이 완료 범위와 리뷰·검증은 JoltQueryIntegration에 기록했다. Cube가 잘리고 실제로 낙하하는 simulation 완료점은 위 9단계이며 움직이는 재절단·Bunny compound·본 절단은 그 이후다.
+후속 사용자 요청에 따라 SDK 고정·재현 빌드와 엔진 링크를 넘어 **Static collider 자동 등록·평면 후보 조회**까지 우선 완료했다. 이 완료 범위와 리뷰·검증은 JoltQueryIntegration에 기록했다. Cube가 잘리고 실제로 낙하하는 simulation 완료점은 위 9단계이며 움직이는 재절단·Bunny compound·본 절단은 그 이후다. (이전 계획 기록 — 현행 단계는 [StaticPiecePhysics.md](StaticPiecePhysics.md) 구현 계획)
 
 개별 파편 기즈모 편집은 위 물리 구현과 분리된 후속 변경이다. Scene 관련 설계를 다시 확인한 뒤 선택 대상 → 컴포넌트 기즈모/Undo → 물리 body 동기화를 각각 약300줄의 리뷰 단위로 나눈다. body 없이 먼저 A만 이동·회전하고 B가 유지되는지 확인한 다음, 물리 활성 상태의 드래그·취소·Undo를 검증한다. 단계별 비용은 기존 리뷰·빌드 기준을 적용하고 입력 검증 시간은 실측한다.

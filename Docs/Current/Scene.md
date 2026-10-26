@@ -1,4 +1,4 @@
-상태: 진행 중 — `feb35f23` 기반 미커밋 Jolt collider 조회 연결; `673b56b6` 다중 MeshComponent·Static 절단 유지, Skeletal 절단·낙하/관절 미구현
+상태: 진행 중 — `39db69f3` 커밋된 Jolt collider 조회 연결; `673b56b6` 다중 MeshComponent·Static 절단 유지, Skeletal 절단·낙하/관절 미구현
 
 # ModelViewer GameObject와 Gizmo
 
@@ -73,7 +73,7 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 따라서 ModelViewer는 TAA를 끄고 FXAA를 사용하며 모션 블러도 끈다. TAA를 다시 켜면 움직이는 객체에
 이전 프레임 잔상이 재발할 수 있다. 객체별 이전 Transform·스킨 pose를 사용하는 velocity pass는 아직 없다.
 
-후속 GPU 절단은 `GameObject::GetTransform()`을 객체 좌표와 월드 좌표 사이의 계약으로 사용해야 한다.
+후속 GPU 절단은 대상 `MeshComponent::GetWorldTransform`(component 월드)을 로컬 좌표와 월드 좌표 사이의 계약으로 사용해야 한다.
 절단 평면과 입력 정점은 같은 공간으로 변환한 뒤 교차 계산해야 한다. 공유 원본
 `Model::m_DataBuffer`는 수정하지 않고, 절단 결과 GPU 버퍼는 대상 MeshComponent의 geometry로 소유하도록 연결한다.
 현재 `GeometryRevision`은 공유 원본 section과 생성 GPU geometry를 모두 지원한다. Static 절단·cap·재절단의 최신 흐름과 진단은 [StaticCutImplementation.md](../GPU/StaticCutImplementation.md)를 따른다.

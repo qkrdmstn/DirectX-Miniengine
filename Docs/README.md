@@ -8,7 +8,7 @@
 
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
-| [Weekend-2026-10-24-25.md](Handoff/Weekend-2026-10-24-25.md) | Claude용 주말 작업·최종 설계 결정·커밋/미커밋 구분·검증·다음 작업 주의점 | 완료 — `feb35f23` 및 `39db69f3` 커밋된 Jolt 조회 기준, 2026-10-26 확인 |
+| [Weekend-2026-10-24-25.md](Handoff/Weekend-2026-10-24-25.md) | Claude용 주말 작업·최종 설계 결정·커밋 구분·검증·다음 작업 주의점 | 완료 — `feb35f23` 및 `39db69f3` 커밋된 Jolt 조회 기준, 2026-10-26 확인 |
 
 ## Current — 현재 현황
 
@@ -17,14 +17,14 @@
 | [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — 현황문서 (`527ed749` 기준 미커밋 문서 정리, 구현 변경 없음) |
 | [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749` 기반, GPU 연결 `673b56b6`; 수동 입력 검증 범위는 본문 참조 |
 | [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `673b56b6` Compute pose 연결, 검증은 본문·GPU 설계 참조 |
-| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `feb35f23` 기반 미커밋 Jolt collider 후보 조회, 편집 UI는 owner TRS |
+| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `39db69f3` 커밋된 Jolt collider 후보 조회, 편집 UI는 owner TRS |
 
 ## GPU — 후속 절단 설계·문헌
 
 | 문서 | 용도 | 상태 / 읽을 때의 주의 |
 | --- | --- | --- |
 | [GPUCuttingSystemDesign.md](GPU/GPUCuttingSystemDesign.md) | GPU 절단 설계·다중 MeshComponent 기반 | `673b56b6` Static 구현, Skeletal·물리는 설계 |
-| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `673b56b6` GPU 절단 + `feb35f23` 기반 미커밋 Jolt 후보 조회·반복 절단 회귀 완료 |
+| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `673b56b6` GPU 절단 + `39db69f3` 커밋된 Jolt 후보 조회·반복 절단 회귀 완료 |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
@@ -39,7 +39,8 @@
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
 | [JoltQueryIntegration.md](Physics/JoltQueryIntegration.md) | 현재 SDK 빌드·collider 등록·평면 후보 API·실행 검증 | 완료 — `39db69f3` 커밋된 Jolt v5.6.0 조회 연결·Debug/Release/Profile 빌드·CPU/실행 검증 |
-| [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `feb35f23` 기반 조회 구현 완료, 낙하·Skeletal 물리는 후속 |
+| [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `39db69f3` 조회 구현 완료; 동적 조각 물리는 StaticPiecePhysics로 대체, Skeletal 물리는 후속 |
+| [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 설계안 — `2931cf87` 기준 미커밋 요구사항 v4·구현 계획 확정 (2026-10-26), 구현 전 |
 
 ## NDC — 기법 근거
 

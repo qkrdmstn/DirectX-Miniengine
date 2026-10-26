@@ -1,4 +1,4 @@
-상태: 완료 — `673b56b6` Static GPU 절단; `feb35f23` 기반 미커밋 Jolt collider 후보 조회 연결·반복 절단 회귀 검증 (2026-10-25)
+상태: 완료 — `673b56b6` Static GPU 절단; `39db69f3`에 커밋된 Jolt collider 후보 조회 연결·반복 절단 회귀 검증 (2026-10-25)
 
 # Static GPU 절단 구현
 
