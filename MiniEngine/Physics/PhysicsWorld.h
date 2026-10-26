@@ -34,6 +34,8 @@ namespace MiniPhysics
     struct BodyDesc
     {
         const MiniCollision::AggregateGeom* Geometry = nullptr;
+        // Geometry가 없고 Motion이 Static일 때만 쓰는 월드 단위 Box 반크기다. 이 경로는 Scale이 항등이어야 한다.
+        std::array<double, 3> StaticBoxHalfExtent{};
         std::array<double, 3> Scale{ 1, 1, 1 };
         std::array<double, 3> Position{};
         std::array<double, 4> Rotation{ 0, 0, 0, 1 };
@@ -105,6 +107,10 @@ namespace MiniPhysics
         bool AddBodyToWorld(BodyHandle handle, bool activate);
         // 필요하면 world에서 빼고 body를 파괴하며 handle을 등록 해제한다. handle 번호는 재사용하지 않는다.
         bool DestroyBody(BodyHandle handle);
+        // body 원점을 순간이동한다(Unreal SetBodyTransform). 속도는 그대로 두고 월드에 올라간 동적 body는 깨운다. 입력이나 handle이 무효면 false이며 body는 그대로다.
+        bool SetBodyTransform(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation);
+        // shape와 질량을 원자적으로 교체한다(scale 편집용). 실패하면 false를 반환하며 shape·질량·pose·속도는 그대로다. 성공하면 월드에 올라간 동적 body는 깨운다.
+        bool SetBodyShape(BodyHandle handle, const MiniCollision::AggregateGeom& geometry, const std::array<double, 3>& scale, double massScale, std::string* error = nullptr);
         // 게시된 simulation body 수를 반환한다.
         size_t GetBodyCount() const;
         // 조회 body, simulation body, 준비 중 body의 예약 합계를 반환한다. Initialize 용량을 넘지 않는다.

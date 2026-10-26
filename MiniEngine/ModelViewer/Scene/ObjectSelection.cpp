@@ -18,6 +18,10 @@ namespace Viewer
         PickHit result;
         for (const auto& object : scene.GetObjects())
         {
+            // 바닥과 임시 편집 제한 대상은 owner 기즈모 선택에서 제외한다.
+            if (!object->IsEditable()) continue;
+
+            // 준비된 메시 경계를 기존 ray와 대조한다.
             for (const auto& mesh : object->GetMeshComponents())
             {
                 if (mesh->GetGeometry()->GetSections().empty() || !mesh->HasPoseBounds())

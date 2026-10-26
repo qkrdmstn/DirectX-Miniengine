@@ -19,6 +19,14 @@ namespace Viewer
         // 객체의 편집용 TRS를 읽는다.
         const SceneTransform& GetTransform() const { return m_Transform; }
         const ModelInstance* GetModelInstance() const { return m_ModelInstance.get(); }
+        // 바닥 등 절단 대상에서 제외할 객체를 표시한다.
+        void SetNotCuttable(bool value) { m_NotCuttable = value; }
+        // 바닥 등 사용자 편집에서 제외할 객체를 표시한다.
+        void SetNotEditable(bool value) { m_NotEditable = value; }
+        // 절단 허용 여부를 읽는다. simulation body의 임시 제한은 별도로 검사한다.
+        bool IsCuttable() const { return !m_NotCuttable; }
+        // body 편집 연결 전까지 simulate 메시의 owner 기즈모와 Undo도 차단한다.
+        bool IsEditable() const;
 
         // owner 안의 MeshComponent를 ID로 검색한다.
         MeshComponent* FindMeshComponent(ComponentId id);
@@ -56,6 +64,7 @@ namespace Viewer
 
         ObjectId m_Id;
         std::string m_Name;
+        bool m_NotCuttable = false, m_NotEditable = false;
         SceneTransform m_Transform{ Math::kIdentity };
         std::unique_ptr<ModelInstance> m_ModelInstance;
         ComponentId m_NextComponentId = 1;

@@ -10,6 +10,7 @@
 #include "TransformBounds.h"
 #include <cstdio>
 #include <stdexcept>
+#include <limits>
 
 using namespace Math;
 using namespace Viewer;
@@ -31,6 +32,35 @@ namespace
     Vector3 Point(const Matrix4& matrix, Vector3 position)
     {
         return MakeHomogeneous(matrix * position);
+    }
+
+    // 합성 월드 행렬의 TRS 보존과 전단·반사·무효값 거절을 검사한다.
+    void WorldTransformTests()
+    {
+        // 양수 비균일 TRS와 균일 owner 합성은 점과 축을 보존한다.
+        const Quaternion rotation(Vector3(kYUnitVector), 0.7f);
+        const SceneTransform local(rotation, Vector3(2, 3, 4), Vector3(1, -2, 3));
+        const SceneTransform owner(Quaternion(Vector3(kZUnitVector), 0.3f), Vector3(2, 2, 2), Vector3(-5, 2, 4));
+        const AffineTransform world = owner.ToAffine() * local.ToAffine();
+        SceneTransform result;
+        Check(SceneTransform::TryFromAffine(world, result), "Uniform owner can detach without shear");
+        for (const Vector3 point : { Vector3(kZero), Vector3(1, 2, 3), Vector3(-2, 1, 4) })
+            Near(result.ToAffine() * point, world * point, "Detached TRS preserves world points");
+        Near(result.GetScale(), Vector3(4, 6, 8), "World scale composed");
+
+        // 비균일 owner와 회전한 component의 합성 전단은 출력까지 보존하며 거절한다.
+        const SceneTransform stretched(Quaternion(kIdentity), Vector3(2, 1, 3), Vector3(kZero));
+        const Matrix4 before(result.ToAffine());
+        Check(!SceneTransform::TryFromAffine(stretched.ToAffine() * local.ToAffine(), result), "Shear rejected");
+        Near(result.GetTranslation(), Vector3(before.GetW()), "Rejected conversion preserves output");
+        Check(!SceneTransform::TryFromAffine(AffineTransform(Matrix3::MakeScale(Vector3(-1, 1, 1))), result), "Reflection rejected");
+        Check(!SceneTransform::TryFromAffine(AffineTransform(Matrix3::MakeScale(Vector3(0, 1, 1))), result), "Zero axis rejected");
+
+        // 축과 위치의 NaN/Inf는 TRS로 게시하지 않는다.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+        Check(!SceneTransform::TryFromAffine(AffineTransform(Matrix3::MakeScale(Vector3(nan, 1, 1))), result), "NaN axis rejected");
+        Check(!SceneTransform::TryFromAffine(AffineTransform(Matrix3(kIdentity), Vector3(inf, 0, 0)), result), "Infinite position rejected");
     }
 
     void ProjectionTests()
@@ -347,6 +377,7 @@ int main()
         NonuniformTests();
         BasisTests();
         PlaneEditingTests();
+        WorldTransformTests();
         std::printf("SceneMathTests: %d checks passed\n", Checks);
         return 0;
     }

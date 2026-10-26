@@ -1,4 +1,4 @@
-상태: 진행 중 — `39db69f3` 커밋된 Jolt collider 조회 연결; `673b56b6` 다중 MeshComponent·Static 절단 유지, Skeletal 절단·낙하/관절 미구현
+상태: 진행 중 — `cccf6a3b` 기반 작업 트리에서 Jolt 낙하·바닥·pause(5a~5c) 연결; 물리 절단 transaction·관절 미구현 (2026-10-26)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -27,6 +27,7 @@ Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::P
 | `L` | 이동·회전의 World / Local 축 전환 (크기는 항상 Local) |
 | `V` | Solid → Wireframe → Vertices → Solid 순환 (현재 모드 overlay 표시) |
 | `C` | 현재 유한 평면 영역의 Static 컴포넌트 후보를 조회하고 실제 분할만 게시. 처리 중 재입력은 Busy 안내 |
+| `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태 |
 | 드래그 중 `Esc` | 시작 Transform으로 복구 |
 | `Ctrl+Z` | 마지막 완료 드래그 한 번 취소; 최근 128개 보관 |
 | 오른쪽 버튼 유지 + 마우스 | 카메라 회전 |
@@ -67,7 +68,7 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 선택은 각 메시 컴포넌트의 CPU 경계 구와 가장 가까운 교차점을 이용하고 `PickHit`에 ObjectId와 MeshId를 함께 반환한다. 구가 겹치거나 빈 공간이 많은 모델에서는 근사 선택이다. 기즈모와 Undo는 기존 GameObject 전체 TRS를 편집하며 컴포넌트 선택·편집 UI는 추가하지 않았다.
 Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하면 해당 축/회전 링 조작을 제한한다.
 크기는 각 축 `0.0001`부터 `1e8`까지의 양수다. 음수·영 크기, 계층 편집, Redo,
-장면 저장과 실제 물리는 구현하지 않는다. Static 절단은 [구현 기록](../GPU/StaticCutImplementation.md)을 따른다.
+장면 저장은 구현하지 않는다. 충돌 hull이 있는 Static 메시의 낙하·바닥 접촉·pause는 [물리 5단계](../Physics/StaticPiecePhysics.md)의 범위다. simulate 메시의 절단·owner 기즈모/Undo는 후속 transaction/편집 연결 전까지 임시 차단한다. `-physics-sim 0`은 기존 비물리 동작을 유지한다. Static 절단은 [구현 기록](../GPU/StaticCutImplementation.md)을 따른다.
 
 현재 velocity 셰이더는 카메라 이동만 반영하고 객체 Transform·스킨 애니메이션의 이전 위치는 반영하지 않는다.
 따라서 ModelViewer는 TAA를 끄고 FXAA를 사용하며 모션 블러도 끈다. TAA를 다시 켜면 움직이는 객체에
@@ -122,7 +123,9 @@ CPU 회귀 검사는 공통 TRS·축 기저·축별 배율·히스토리·경계
 
 `GeometryRevision::FromModel`은 loader가 만든 유효한 Model metadata를 전제로 원본 GPU VB/IB·재질·draw·SourceMesh를 참조한다. `SelectSections`는 기존 GPU 버퍼를 복사하지 않고 section 부분집합의 새 불변 revision을 만든다. `MeshComponent::SetGeometry`는 같은 원본만 허용하고 pose 준비를 무효화한다. 이 절은 컴포넌트 기반 구현 이력이다. 이후 추가한 `GeometryRevision::FromGenerated`는 Static 절단 VB/IB·parent provenance를 보관한다.
 
-`AddColliderComponent`는 MeshId·GeometryRevisionId와 SDK 비노출 QueryHandle을 보관한다. `PhysicsSystem::SyncColliders`가 준비된 Static 메시마다 참조와 조회 전용 Box/body를 자동 등록한다. `SetColliderQueryHandle`은 현재 revision의 참조만 갱신하고, 실제 SDK 수명은 PhysicsWorld가 소유한다. `IsColliderCurrent`는 geometry 교체로 오래된 참조를 거부한다. 메시 제거 시 대응 collider 참조를 제거하고 다음 SyncColliders에서 SDK body도 정리한다. 실제 낙하/접촉 반응용 body는 후속이다.
+`AddColliderComponent`는 MeshId·GeometryRevisionId와 SDK 비노출 QueryHandle을 보관한다. `PhysicsSystem::SyncColliders`가 준비된 Static 메시마다 참조와 조회 전용 Box/body를 자동 등록한다. `SetColliderQueryHandle`은 현재 revision의 참조만 갱신하고, 실제 SDK 수명은 PhysicsWorld가 소유한다. `IsColliderCurrent`는 geometry 교체로 오래된 참조를 거부한다. 메시 제거 시 대응 collider 참조를 제거하고 다음 SyncColliders에서 SDK body도 정리한다. 낙하 body는 같은 PhysicsWorld의 별도 layer/handle/map을 쓰며 `SyncBodies`가 GPU 준비와 무관하게 등록·정리한다.
+
+`MakeWorldIndependent`는 양수 TRS로 월드 배치를 재현할 수 있을 때만 분리한다. `AdvanceSimulation`은 입력 후 stale body 정리→고정 step→원점 pose 반영을 완료하고 그 뒤 GPU pose를 준비한다. 바닥은 NotCuttable/NotEditable이며 simulate 메시 owner도 임시 편집 불가다. 물리 세대·조회 옵션과 simulation 옵션·진단/검증 범위는 [StaticPiecePhysics](../Physics/StaticPiecePhysics.md)의 H절을 따른다.
 
 `ModelViewer::Update`는 Scene.Update/Finish 뒤 collider를 동기화하고 새 절단을 제출한다. `CuttingSystem::RequestAll`은 `PhysicsSystem::QueryCutCandidates`로 후보를 받아 기존 snapshot 큐에 넣는다. 같은 GameObject의 여러 MeshId를 독립 후보로 유지하며 SDK 미사용·용량 부족은 기존 경계 검사로 처리한다. 구현·진단·검증은 [JoltQueryIntegration.md](../Physics/JoltQueryIntegration.md)를 따른다. 기즈모·Undo는 여전히 owner 단위다.
 

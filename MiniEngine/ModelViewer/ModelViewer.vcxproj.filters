@@ -283,7 +283,12 @@
     <ClCompile Include="Scene\CuttingSystem.cpp" />
     <ClInclude Include="Scene\CuttingSystem.h" />
     <ClCompile Include="Scene\PhysicsSystem.cpp" />
+    <ClCompile Include="Scene\PhysicsSimulation.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Scene\PhysicsFloor.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClInclude Include="Scene\PhysicsSystem.h" />
+    <ClInclude Include="Scene\PhysicsStepClock.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\tests\PhysicsSimChecks.h"><Filter>Header Files</Filter></ClInclude>
+    <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
   </ItemGroup>
 </Project>

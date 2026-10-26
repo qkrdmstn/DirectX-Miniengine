@@ -83,3 +83,8 @@ add_executable(PhysicsStepTests tests/PhysicsStepTests.cpp)
 target_link_libraries(PhysicsStepTests PRIVATE MiniPhysics)
 target_compile_options(PhysicsStepTests PRIVATE /utf-8 /W4)
 add_test(NAME PhysicsStepTests COMMAND PhysicsStepTests)
+
+add_executable(PhysicsTransformTests tests/PhysicsTransformTests.cpp)
+target_link_libraries(PhysicsTransformTests PRIVATE MiniPhysics)
+target_compile_options(PhysicsTransformTests PRIVATE /utf-8 /W4)
+add_test(NAME PhysicsTransformTests COMMAND PhysicsTransformTests)

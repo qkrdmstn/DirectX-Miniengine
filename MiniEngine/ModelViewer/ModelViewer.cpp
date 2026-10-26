@@ -41,6 +41,7 @@
 #include <algorithm>
 #include "Scene/tests/MeshComponentChecks.h"
 #include "Scene/tests/PhysicsQueryChecks.h"
+#include "Scene/tests/PhysicsSimChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -81,6 +82,7 @@ private:
     Viewer::PhysicsSystem m_Physics{m_Scene};
     Viewer::CuttingSystem m_Cutting{m_Scene,m_Physics};
     uint32_t m_UsePhysicsQuery = 1, m_PhysicsCapacity = 4096, m_QuerySelfTest = 0;
+    uint32_t m_UsePhysicsSim = 1, m_PhysicsSimChecks = 0;
     uint32_t m_QueryExitFrame = 0, m_QueryFrame = 0;
     Viewer::ObjectId m_CutOwner = Viewer::InvalidObjectId, m_ActiveCutPlane = Viewer::InvalidObjectId;
     Viewer::ComponentId m_CutMesh = Viewer::InvalidComponentId;
@@ -115,6 +117,7 @@ CREATE_APPLICATION( ModelViewer )
 ExpVar g_SunLightIntensity("Viewer/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
 NumVar g_SunOrientation("Viewer/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f );
 NumVar g_SunInclination("Viewer/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f );
+BoolVar g_PhysicsRunning("Viewer/Physics/Running", true);
 
 void ChangeIBLSet(EngineVar::ActionType);
 void ChangeIBLBias(EngineVar::ActionType);
@@ -192,6 +195,8 @@ void ModelViewer::Startup( void )
 {
     uint32_t physicsQueryChecks = 0;
     CommandLineArgs::GetInteger(L"physics-query",m_UsePhysicsQuery);
+    CommandLineArgs::GetInteger(L"physics-sim",m_UsePhysicsSim);
+    CommandLineArgs::GetInteger(L"physics-sim-checks",m_PhysicsSimChecks);
     CommandLineArgs::GetInteger(L"physics-query-checks",physicsQueryChecks);
     CommandLineArgs::GetInteger(L"physics-query-capacity",m_PhysicsCapacity);
     CommandLineArgs::GetInteger(L"physics-query-self-test",m_QuerySelfTest);
@@ -329,6 +334,28 @@ void ModelViewer::Startup( void )
         std::asin(float(forward.GetY())), m_Camera.GetPosition());
     m_CameraController = std::move(controller);
     m_Camera.Update();
+
+    // 조회 자가검사는 world를 재초기화하므로 simulation 등록보다 먼저 완료한다.
+    if (m_QuerySelfTest)
+    {
+        Viewer::RunPhysicsQueryChecks(m_Scene, m_Physics, m_UsePhysicsQuery != 0, m_PhysicsCapacity);
+        m_QuerySelfTest = 0;
+    }
+
+    // 모든 시작 배치가 확정된 뒤 첫 step 전에 바닥과 메시 body를 준비한다.
+    if (m_UsePhysicsSim)
+    {
+        m_Physics.Initialize(m_UsePhysicsQuery != 0, m_PhysicsCapacity, true);
+        if (m_Physics.IsSimulationEnabled() && m_CutGap > 0)
+            throw std::invalid_argument("cut-gap requires physics-sim 0");
+        if (m_Physics.IsSimulationEnabled() && !m_Physics.CreateFloor(Renderer::LoadModel(L"Models/cube.glb", false)))
+        {
+            Utility::Printf("Physics simulation disabled: floor preparation failed\n");
+            m_Physics.Initialize(m_UsePhysicsQuery != 0, m_PhysicsCapacity, false);
+        }
+        m_Physics.SyncBodies();
+    }
+    if (m_PhysicsSimChecks) Viewer::RunPhysicsSimChecks(m_Scene, m_Physics);
     if (m_ViewDiagnosticPending)
         Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
 }
@@ -338,6 +365,7 @@ void ModelViewer::Cleanup( void )
 {
     m_Cutting.Clear();
     m_Physics.Clear();
+    Utility::Printf("Physics simulation cleanup: bodies=%zu\n", m_Physics.GetSimulationBodyCount());
     Utility::Printf("Physics query cleanup: registered=%zu fallback=%zu\n",m_Physics.GetColliderCount(),m_Physics.GetFallbackCount());
     m_Scene.Clear();
     m_CutPlanes.PruneStaleObjects();
@@ -406,6 +434,10 @@ void ModelViewer::Update( float deltaT )
     }
     const bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
 
+    // 키보드와 디버그 UI는 같은 실행 플래그를 사용하며 world를 재생성하지 않는다.
+    if (GameInput::IsFirstPressed(GameInput::kKey_p)) g_PhysicsRunning = !bool(g_PhysicsRunning);
+    m_Physics.SetSimulationRunning(g_PhysicsRunning);
+
     if (GameInput::IsFirstPressed(GameInput::kKey_v))
         m_RenderMode = static_cast<Renderer::RenderMode>((static_cast<unsigned>(m_RenderMode) + 1) % 3);
 
@@ -435,6 +467,10 @@ void ModelViewer::Update( float deltaT )
         if (m_CutPlanes.Find(hit.Id)) m_ActiveCutPlane = hit.Id;
     }
 
+    // 삭제되거나 교체된 body는 다음 simulation step보다 먼저 회수한다.
+    m_Physics.AdvanceSimulation(deltaT);
+
+    // 확정된 컴포넌트 배치로 한 번만 GPU pose를 준비한다.
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
 
     m_Scene.Update(gfxContext, m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
@@ -670,6 +706,9 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     text.DrawString("Q: View/select (hide gizmo) | W: Move | E: Rotate | R: Local axis/center scale\n");
     text.DrawString("Cut Plane: cyan grid, click inside to select | Scale X/Z or center XZ (Y fixed)\n");
     text.DrawFormattedString("C: cut static meshes in plane area | %s\n",m_Cutting.GetStatusText());
+    text.DrawFormattedString("P: physics %s | bodies: %zu\n",
+        !m_Physics.IsSimulationEnabled() ? "disabled" : (bool(g_PhysicsRunning) ? "running" : "paused"),
+        m_Physics.GetSimulationBodyCount());
     if (m_CutGap > 0) text.DrawFormattedString("Diagnostic piece separation: %.3f\n",m_CutGap);
     text.DrawFormattedString("L: %s axes | Esc during drag: cancel | Mode: %s\n",
         m_Gizmo.IsLocal() ? "Local" : "World", m_Gizmo.GetMode() == Viewer::TransformGizmo::View ? "View" :

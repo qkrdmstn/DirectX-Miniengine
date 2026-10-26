@@ -74,6 +74,13 @@ namespace Viewer
         if (m_Job) { m_StatusText = "Busy - wait for the current cut"; return false; }
         GameObject* object = m_Scene.FindObject(owner);
         MeshComponent* mesh = object ? object->FindMeshComponent(meshId) : nullptr;
+        // 바닥과 body 교체 transaction 미지원 메시의 직접 요청도 공통으로 거절한다.
+        if (object && !object->IsCuttable())
+        { m_StatusText = "Cut target is not cuttable"; return false; }
+        if (mesh && mesh->IsSimulating())
+        { m_StatusText = "Physics cutting awaits transaction support"; return false; }
+
+        // 기존 GPU 준비 및 section 지원 조건을 검사한다.
         if (!mesh || !mesh->HasPoseBounds() || !mesh->GetPosedGeometry().IsReady())
         { m_StatusText = "Cut target is not ready"; return false; }
         const auto geometry = mesh->GetGeometry();

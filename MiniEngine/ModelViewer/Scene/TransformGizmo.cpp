@@ -196,7 +196,7 @@ namespace Viewer
         }
         m_Hover = None;
         const GameObject* object = scene.FindObject(selection);
-        if (m_Mode == View || !object || !validMouse || GameInput::IsPressed(GameInput::kMouse1))
+        if (m_Mode == View || !object || !object->IsEditable() || !validMouse || GameInput::IsPressed(GameInput::kMouse1))
             return false;
         const Vector3 pivot = object->GetTransform().GetTranslation();
         SetAxes(object->GetTransform());
@@ -254,7 +254,7 @@ namespace Viewer
         if (m_Mode == View)
             return;
         const GameObject* object = scene.FindObject(selection);
-        if (!object)
+        if (!object || !object->IsEditable())
             return;
         const Vector3 pivot = object->GetTransform().GetTranslation();
         const float size = HandleSize(pivot, camera, height);

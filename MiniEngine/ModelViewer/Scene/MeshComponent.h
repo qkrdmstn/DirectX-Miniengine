@@ -56,6 +56,10 @@ namespace Viewer
         const DeformBinding& GetDeformBinding() const { return m_DeformBinding; }
         // 유효한 target TRS를 저장한다. WorldIndependent에서는 인수가 월드 TRS다.
         bool SetTransform(const SceneTransform& transform, MeshTransformMode mode);
+        // 현재 월드 배치를 보존하며 owner에서 분리한다. TRS로 표현할 수 없으면 아무것도 바꾸지 않는다.
+        bool MakeWorldIndependent(const SceneTransform& owner);
+        // physics가 소유한 body에 연결된 동안 임시 owner 편집·절단 차단에 쓴다.
+        bool IsSimulating() const { return m_Simulating; }
         // 물리 pose를 기록한다. WorldIndependent에서만 허용하며 위치·회전만 바꾸고 크기는 유지한다. 같은 pose면 아무것도 바꾸지 않는다.
         bool SetPhysicsPose(const Math::Vector3& position, const Math::Quaternion& rotation);
         // source 프레임과 pose 추종/고정 정책을 검증하고 적용한다.
@@ -99,6 +103,7 @@ namespace Viewer
         void Render(Renderer::MeshSorter& sorter) const;
 
     private:
+        friend class PhysicsSystem;
         // 현재 revision과 SourceFrame으로 컴포넌트 로컬 충돌을 다시 만든다.
         void RebuildCollision();
 
@@ -118,6 +123,7 @@ namespace Viewer
         std::vector<Joint> m_FrozenJoints;
         const Joint* m_RenderJoints = nullptr;
         bool m_Ready = false;
+        bool m_Simulating = false;
         MiniCollision::AggregateGeom m_Collision;   // 컴포넌트 로컬(SourceFrame⁻¹ × model-local) 충돌
         ComponentCollisionStatus m_CollisionStatus = ComponentCollisionStatus::None;
         std::string m_CollisionReason;

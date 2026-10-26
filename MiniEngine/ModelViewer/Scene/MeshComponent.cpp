@@ -215,6 +215,20 @@ namespace Viewer
         return true;
     }
 
+    // 월드 TRS를 먼저 검증한 뒤 같은 화면 배치로 owner 종속만 해제한다.
+    bool MeshComponent::MakeWorldIndependent(const SceneTransform& owner)
+    {
+        // 이미 독립 상태면 편집 세대나 준비 상태를 바꾸지 않는다.
+        if (m_TransformMode == MeshTransformMode::WorldIndependent)
+            return true;
+
+        // 전단을 버리지 않고 완전한 월드 TRS로 표현 가능한 경우에만 전환한다.
+        SceneTransform world;
+        if (!SceneTransform::TryFromAffine(GetWorldTransform(owner), world))
+            return false;
+        return SetTransform(world, MeshTransformMode::WorldIndependent);
+    }
+
     // 정의되지 않은 SIMD 칸을 제외하고 X/Y/Z 성분의 float 비트가 모두 같은지 비교한다.
     static bool SameBits3(Vector3 a, Vector3 b)
     {

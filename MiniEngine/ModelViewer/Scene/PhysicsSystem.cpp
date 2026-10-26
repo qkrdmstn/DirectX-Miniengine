@@ -12,16 +12,21 @@ namespace Viewer
     PhysicsSystem::~PhysicsSystem() { Clear(); }
 
     // 전용 broadphase world를 만들되 잘못된 용량이나 SDK 초기화 실패는 경고 후 경계 검사 fallback으로 전환한다.
-    void PhysicsSystem::Initialize(bool useJolt, uint32_t capacity)
+    void PhysicsSystem::Initialize(bool useJolt, uint32_t capacity, bool simulate)
     {
+        // 조회와 simulation은 옵션을 분리하되 같은 world와 용량을 공유한다.
         Clear();
         m_UseJolt = useJolt;
-        if (m_UseJolt && (capacity == 0 || capacity > MiniPhysics::MaxColliderCapacity))
+        m_SimulationEnabled = simulate;
+        if ((m_UseJolt || simulate) && (capacity == 0 || capacity > MiniPhysics::MaxColliderCapacity))
         {
             Utility::Printf("Physics query disabled: invalid capacity %u (1-%u)\n",capacity,MiniPhysics::MaxColliderCapacity);
             m_UseJolt = false;
+            m_SimulationEnabled = false;
         }
-        if (m_UseJolt)
+
+        // 어느 기능이든 SDK가 필요하면 초기화하고 실패는 두 기능 모두 fallback으로 처리한다.
+        if (m_UseJolt || m_SimulationEnabled)
         {
             try { m_World.Initialize(capacity); }
             catch (const std::exception& error)
@@ -29,6 +34,7 @@ namespace Viewer
                 Utility::Printf("Physics query disabled: %s\n",error.what());
                 m_World.Shutdown();
                 m_UseJolt = false;
+                m_SimulationEnabled = false;
             }
         }
         Utility::Printf("Physics query: backend=%s capacity=%u\n",m_UseJolt?"Jolt 5.6.0":"bounds fallback",capacity);
@@ -54,6 +60,8 @@ namespace Viewer
         for (const auto& object : m_Scene.GetObjects())
             for (const auto& mesh : object->GetMeshComponents())
             {
+                // 바닥 등 명시적 비절단 객체는 collider 후보에도 포함하지 않는다.
+                if (!object->IsCuttable()) continue;
                 if (!IsEligible(*mesh)) continue;
                 const Key key(object->GetId(),mesh->GetId());
                 Entry& entry = m_Entries[key];
@@ -117,7 +125,7 @@ namespace Viewer
         const auto& candidate = entry.Candidate;
         const auto* object = m_Scene.FindObject(candidate.Owner);
         const auto* mesh = object ? object->FindMeshComponent(candidate.Mesh) : nullptr;
-        if (!mesh || !IsEligible(*mesh) || mesh->GetGeometry() != candidate.Geometry ||
+        if (!mesh || !object->IsCuttable() || !IsEligible(*mesh) || mesh->GetGeometry() != candidate.Geometry ||
             mesh->GetEditGeneration() != candidate.EditGeneration || !object->IsColliderCurrent(entry.Collider)) return false;
         const Math::Matrix4 world(mesh->GetWorldTransform(object->GetTransform()));
         return std::memcmp(&world,&candidate.World,sizeof(world)) == 0;
@@ -199,6 +207,24 @@ namespace Viewer
     // Scene 대응과 SDK 자원을 종료 순서대로 정리한다.
     void PhysicsSystem::Clear()
     {
+        // 살아 있는 컴포넌트의 simulation 표시를 SDK world보다 먼저 해제한다.
+        for (const auto& entry : m_Bodies)
+        {
+            auto* object = m_Scene.FindObject(entry.first.first);
+            auto* mesh = object ? object->FindMeshComponent(entry.first.second) : nullptr;
+            if (mesh) mesh->m_Simulating = false;
+        }
+        m_Bodies.clear();
+        m_SimulationEnabled = false;
+        if (m_FloorOwner) m_Scene.DeleteObject(m_FloorOwner);
+        m_FloorBody = MiniPhysics::InvalidBody;
+        m_FloorOwner = InvalidObjectId;
+        m_FloorMesh = InvalidComponentId;
+        m_StepClock.Reset();
+        m_StepCount = 0;
+        m_Running = true;
+
+        // 조회 참조를 지운 뒤 준비 body와 simulation body까지 world에서 회수한다.
         for (auto& entry : m_Entries) RemoveEntry(entry.second);
         m_Entries.clear();
         m_Handles.clear();

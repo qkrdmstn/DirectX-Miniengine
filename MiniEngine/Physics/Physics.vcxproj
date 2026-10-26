@@ -42,6 +42,7 @@
     <None Include="ThirdParty.md" />
     <None Include="tests\PhysicsQueryTests.cpp" />
     <None Include="tests\PhysicsStepTests.cpp" />
+    <None Include="tests\PhysicsTransformTests.cpp" />
     <None Include="tests\ConvexElemTests.cpp" />
     <None Include="tests\AggregateGeomTests.cpp" />
     <None Include="tests\AggregateSliceTests.cpp" />

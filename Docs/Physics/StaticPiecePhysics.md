@@ -1,4 +1,4 @@
-상태: 진행 중 — 1~3단계·4a(레이어·내부 경계) 구현 완료, 4b 이후 미구현 (2026-10-26)
+상태: 진행 중 — `cccf6a3b` 기반 4d·5a~5c 작업 트리 구현·단계별 리뷰·Debug/Release 검증 완료, 6단계 transaction 미구현 (2026-10-26)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -197,7 +197,7 @@ CPU:
 
 ## F. 구현 계획
 
-단계마다 Sonnet 구현 → Codex 리뷰 → Debug/Release 빌드·테스트 → 사용자 검토·커밋 순서로 진행하며, 한 단계는 한 개념·약 300줄이다. 해당 문서와 README 상태를 단계마다 갱신한다.
+단계마다 구현 → 독립 리뷰 → Debug/Release 빌드·테스트 → 사용자 검토·커밋 순서로 진행하며, 한 단계는 한 개념·약 300줄이다. 해당 문서와 README 상태를 단계마다 갱신한다. 2026-10-26 사용자는 5a~5c의 자동 진행·병렬 작업과 단계별 필수 리뷰를 승인했다.
 
 | 단계 | 내용 | 주요 파일 | 대략 비용 |
 | --- | --- | --- | --- |
@@ -229,3 +229,52 @@ CPU:
 ## G. 이전 계획과의 관계
 
 [PhysicsIntegrationPlan.md](PhysicsIntegrationPlan.md)의 정지 kinematic 부모 우선, 움직이는 조각 절단, 속도 전달 로드맵은 이 문서로 대체한다. 움직이는 조각 재절단·속도 전달은 범위 밖(R13)으로 옮긴다. SDK 고정·조회 구현 기록은 [JoltQueryIntegration.md](JoltQueryIntegration.md)를 따른다.
+
+## H. 4단계 검증과 5단계 실행 단위 (2026-10-26)
+
+4a~4c는 `f5d60a6b`, `6d1a88b5`, `cccf6a3b`에 커밋되어 있다. 4d의 기존 스테이징 변경은 `SetBodyTransform`과 `SetBodyShape`, 공유 cook/질량 계산, PhysicsTransformTests다. 인계 리뷰에서 회전된 오프센터 원점/COM·선/각속도 보존, 제거된 body의 shape 교체·예약 유지·재등록 검증을 보강했다. Debug/Release CPU 8개 target 통과, PhysicsTransformTests 각각 544 checks 통과, ModelViewer 두 구성 빌드 성공. Debug 기존 조회·Cube 4회 절단은 D3D12 validation을 켜고 정상 종료했다. 기존 렌더/종료 경고는 남아 있다. 로그는 `%TEMP%/jolt-stage4-*.log`다.
+
+4d의 확대 접촉 검사는 Jolt 기본 관통 허용치로 가장 낮은 점 -0.0196 m를 측정했다. 이는 R14 최종 런타임 기준(-0.01 m)을 충족했다는 뜻이 아니다. Scene 연결 시 최종 낙하 검사는 별도로 수행한다.
+
+사용자는 5a~5c를 순서대로 자동 진행하되 각 단계 리뷰를 요구했다. 아래 단위마다 코드 diff 리뷰·검증·문서 갱신을 하고 6단계로 넘어가지 않는다. 기존 미커밋 변경과 스테이징은 보존하며 커밋은 만들지 않는다.
+
+| 단위 | 구현 / 리뷰 판정 | 검증 및 기존 측정 비용 |
+| --- | --- | --- |
+| 5a | 월드 affine→양수 TRS 검증과 KeepWorld 전환. 전단·반사·무효값은 변경 전에 거절 | SceneMathTests + Viewer Debug/Release. 리뷰 2~5분, 기존 빌드 합계 약90초 |
+| 5b-1 | 공통 PhysicsWorld에 Scene body 매핑, GPU 준비와 무관한 등록·stale 제거·pose 반영. 미완성 절단/owner 편집은 임시 차단 | Debug/Release 빌드 및 등록/해제 실행. 리뷰 2~5분 + 빌드 기준 |
+| 5b-2 | 정규화 이후 bounds 기반 Static 바닥 생성, NotCuttable/NotEditable 공통 검사, startup 등록 순서 | Debug/Release 빌드, 바닥/초기 배치 확인. 리뷰 2~5분 + 빌드 기준 |
+| 5c | 독립 sim/query 옵션, fixed 1/60·최대4 step·누적기 폐기, P/UI pause, 프레임 경계, 낙하/sleep·pause·삭제 회귀 | Debug/Release CPU/실행, 기존 실행 약8초/회(이번 debugger 초기화 포함 약40초). 리뷰 2~5분 + 빌드 기준 |
+
+신규 구현 시간은 미측정이다. 5단계 동안 body가 연결된 메시의 절단은 pause 중에도 거절하며, body 없는 비대상 메시의 기존 절단은 유지한다. pause 중 절단 허용은 6단계 transaction이 준비된 뒤 해제한다.
+
+### 5a~5c 구현과 리뷰 결과
+
+- **5a 완료**: `SceneTransform::TryFromAffine`가 양수 TRS·오른손 직교 기저·재현 오차를 검사한다. `MeshComponent::MakeWorldIndependent`는 성공할 때만 화면 배치를 보존하며 분리한다. 전단·반사·퇴화·NaN/Inf 거절을 CPU 검사에 추가했다. 독립 리뷰에서 수정 필요 결함 없음.
+- **5b-1 완료**: `PhysicsSystem::SyncBodies`는 GPU 준비 전에 CPU 충돌로 body를 준비하고, cook/용량 예약 성공 후 컴포넌트를 분리·게시한다. 삭제·geometry/편집 변경 body를 다음 step 전에 정리하고 `ApplyBodyPoses`는 COM이 아닌 원점 T/R만 반영한다. 리뷰에서 용량 부족 실패의 영구 캐시를 발견해 예약 수 변화 시 재시도하도록 수정했고, 재리뷰와 용량 1 회귀를 통과했다.
+- **5b-2 완료**: `CreateFloor`는 CPU 충돌 경계에서 XZ 여유와 높이를 계산하고 cube asset bounds를 실제 Jolt Static Box와 맞춘다. 가장 작은 물체 높이의 절반 아래에 바닥을 두고 초기 clearance 0.5 m를 확보한다. 바닥은 정규화 뒤 생성되며 절단 후보·직접 요청·pick·owner 편집/Undo에서 제외된다. 바닥 메시만 제거되어도 다음 step 전에 body를 회수한다. 독립 리뷰 뒤 수명 처리를 보강했다.
+- **5c 완료**: `PhysicsStepClock`와 `AdvanceSimulation`은 1/60 s·최대4 step·초과 잔량 폐기를 적용한다. P와 `Viewer/Physics/Running` BoolVar는 동일한 pause 상태를 사용하고 토글 시 시계만 초기화한다. pause/zero-step에서도 stale body를 정리하며 body pose/속도/sleep은 보존한다. `-physics-sim` 기본1과 `-physics-query`는 독립이고, simulation 초기화/바닥 준비 실패는 경고 후 비활성화한다. 독립 리뷰에서 추가 결함 없음.
+
+프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
+
+임시 제한: simulate 메시가 포함된 owner는 기즈모·Undo를 거절하며 pick에서 제외한다. simulate 메시 절단은 sleep/pause 여부와 무관하게 transaction 준비 전까지 거절한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다. 6단계·7단계는 구현하지 않았다.
+
+검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
+
+```powershell
+./Tools/BuildJolt.ps1 -Configuration Debug -Target MiniPhysics -RunTests
+./Tools/BuildJolt.ps1 -Configuration Release -Target MiniPhysics -RunTests
+msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Debug /p:Platform=Windows
+msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Release /p:Platform=Windows
+# 기본 혼합 장면: Cube/Bunny 낙하·sleep, Xbot 비시뮬레이션
+../Build/x64/Debug/Output/ModelViewer/ModelViewer.exe -debug 1 -physics-sim-checks 1 -physics-query-checks 1 -physics-query-exit 4
+# 조회와 simulation의 독립성
+../Build/x64/Release/Output/ModelViewer/ModelViewer.exe -debug 1 -model Models/cube.glb -physics-query 0 -physics-sim-checks 1 -physics-query-exit 4
+# 기존 비물리 GPU 절단 회귀
+../Build/x64/Debug/Output/ModelViewer/ModelViewer.exe -debug 1 -model Models/cube.glb -physics-sim 0 -physics-sim-checks 1 -physics-query-self-test 1 -physics-query-checks 1 -physics-query-exit 12 -cut 4 -cut-scene 1 -cut-repeat-plane 1 -cut-step-y .25 -cut-validate 1 -cut-expect-publications 4 -cut-gap 0
+```
+
+SceneMathTests는 Debug/Release 각각 468 checks, PhysicsStepClockTests는 각각 21 checks다. Static Box 별도 CPU smoke는 각각 48 checks를 통과했으며 TEMP에 소스/로그를 보관했다. 혼합 장면 진단은 360 fixed ticks 뒤 Cube/Bunny sleep, 최저점과 바닥 오차 약 0.000002 m로 R14 관통 제한을 충족했다. pause/resume·최대4 step·등록 전 GPU 비의존·삭제·용량 재등록도 검사한다.
+
+최종 CPU 회귀는 Debug/Release 각각 8 target 전부 통과했다(CTest 약1.07초/0.35초, 빌드 시간 제외). ModelViewer Debug/Release 빌드 성공. 위 3개 실행은 모두 exit 0, D3D12 ERROR/CORRUPTION 0이며 sim-off에서 실제 게시 4회를 확인했다. Release의 query-off에서도 simulation body 1개가 360 ticks 뒤 sleep했다. 마지막 바닥 소유자 검사 수정 뒤 두 구성 빌드도 재확인했다.
+
+GPU는 NVIDIA GeForce MX450, driver DLL version `32.0.15.9186`이다. D3D12 validation을 켠 실행 로그는 `%TEMP%/jolt-stage5-runtime-{debug,release,simoff}.log`, 빌드/CPU 로그는 `%TEMP%/jolt-stage5-*.log`, Box smoke는 `%TEMP%/jolt-stage5-static-box/`다. 기존 렌더 경고와 Debug 종료 LightGrid live-resource 경고는 남아 있다. 자동 진단으로 물리와 기존 GPU 절단 회귀를 검증했으며 실제 P/UI·마우스 조작은 수동 검증하지 않았다.

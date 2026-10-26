@@ -34,6 +34,38 @@ namespace Viewer
         {
             return Math::AffineTransform(Math::Matrix3(m_Rotation) * Math::Matrix3::MakeScale(m_Scale), m_Position);
         }
+        // 월드 행렬이 양수 TRS로 재현될 때만 out을 갱신한다. 전단·반사·퇴화는 거절한다.
+        static bool TryFromAffine(const Math::AffineTransform& world, SceneTransform& out)
+        {
+            // 축 길이를 크기로 분리하고 비유한 값과 허용 범위 밖 크기를 거절한다.
+            using namespace Math;
+            const Vector3 axes[] = { world.GetX(), world.GetY(), world.GetZ() };
+            float scale[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                scale[i] = Length(axes[i]);
+                if (!std::isfinite(scale[i]) || scale[i] < 0.0001f || scale[i] > 1e8f)
+                    return false;
+            }
+
+            // 정규화 축의 직교성과 오른손 기저를 검사해 전단과 반사를 걸러낸다.
+            const Vector3 x = axes[0] / scale[0], y = axes[1] / scale[1], z = axes[2] / scale[2];
+            if (std::abs(float(Dot(x, y))) > 1e-5f || std::abs(float(Dot(y, z))) > 1e-5f ||
+                std::abs(float(Dot(z, x))) > 1e-5f || float(Dot(Cross(x, y), z)) < 0.99999f)
+                return false;
+
+            // 쿼터니언 변환 뒤 기저 재현 오차까지 확인하고 성공한 값만 게시한다.
+            SceneTransform result(Quaternion(Matrix3(x, y, z)), Vector3(scale[0], scale[1], scale[2]), world.GetTranslation());
+            if (!result.Normalize())
+                return false;
+            const AffineTransform rebuilt = result.ToAffine();
+            const Vector3 rebuiltAxes[] = { rebuilt.GetX(), rebuilt.GetY(), rebuilt.GetZ() };
+            for (int i = 0; i < 3; ++i)
+                if (float(Length(rebuiltAxes[i] - axes[i])) > scale[i] * 2e-5f)
+                    return false;
+            out = result;
+            return true;
+        }
         // 잘못된 TRS를 거부하고 회전을 정규화한다.
         bool Normalize()
         {
