@@ -48,6 +48,18 @@ if ($CleanFirst) { $buildArgs += '--clean-first' }
 & cmake @buildArgs
 if ($LASTEXITCODE -ne 0) { throw 'Jolt build failed.' }
 if ($RunTests) {
-    & ctest --test-dir $buildRoot -C $sdkConfiguration --output-on-failure
+    # 목록의 테스트 target이면 그 테스트만 실행하고, 그 외 target이면 모든 테스트 target을 빌드한 뒤 전체를 실행한다.
+    $testTargets = @('PhysicsQueryTests', 'ConvexElemTests')
+    $ctestArgs = @('--test-dir', $buildRoot, '-C', $sdkConfiguration, '--output-on-failure')
+    if ($testTargets -contains $Target) {
+        $ctestArgs += @('-R', ('^' + [regex]::Escape($Target) + '$'))
+    }
+    else {
+        foreach ($testTarget in $testTargets) {
+            & cmake --build $buildRoot --config $sdkConfiguration --target $testTarget --parallel 4
+            if ($LASTEXITCODE -ne 0) { throw "Test target build failed: $testTarget" }
+        }
+    }
+    & ctest @ctestArgs
     if ($LASTEXITCODE -ne 0) { throw 'Physics tests failed.' }
 }

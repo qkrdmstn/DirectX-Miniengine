@@ -34,6 +34,11 @@ FetchContent_Declare(JoltSource
     SOURCE_SUBDIR Build)
 FetchContent_MakeAvailable(JoltSource)
 
+# Jolt와 무관한 순수 C++ 충돌 기하 라이브러리다. 아직 MiniPhysics에 연결하지 않는다.
+add_library(MiniCollision STATIC Collision/ConvexElem.cpp)
+target_include_directories(MiniCollision PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(MiniCollision PRIVATE /utf-8 /W4)
+
 add_library(MiniPhysics STATIC PhysicsWorld.cpp)
 target_link_libraries(MiniPhysics PUBLIC Jolt)
 target_include_directories(MiniPhysics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -44,3 +49,8 @@ add_executable(PhysicsQueryTests tests/PhysicsQueryTests.cpp)
 target_link_libraries(PhysicsQueryTests PRIVATE MiniPhysics)
 target_compile_options(PhysicsQueryTests PRIVATE /utf-8 /W4)
 add_test(NAME PhysicsQueryTests COMMAND PhysicsQueryTests)
+
+add_executable(ConvexElemTests tests/ConvexElemTests.cpp)
+target_link_libraries(ConvexElemTests PRIVATE MiniCollision)
+target_compile_options(ConvexElemTests PRIVATE /utf-8 /W4)
+add_test(NAME ConvexElemTests COMMAND ConvexElemTests)
