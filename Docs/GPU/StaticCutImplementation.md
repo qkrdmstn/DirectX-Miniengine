@@ -1,4 +1,4 @@
-상태: 완료 — `673b56b6` Static GPU 절단·접촉/대상 조회 수정; 자동 분리 이동 기본 해제·반복 절단의 부모 보존 검증 추가 (2026-10-25)
+상태: 진행 중 — `feb35f23` 기반 선표시 mark-and-cut 단일 경로 전환·빌드 완료, Bunny 재절단 검증의 최초 예외 원인 미확정 (2026-10-26)
 
 # Static GPU 절단 구현
 
@@ -32,7 +32,7 @@
 2. `ClipTrianglesCS`는 삼각형마다 A/B 표면과 enter→exit 방향의 교차 선분을 만든다. 표면의 UV·normal·tangent·재질을 유지한다. 원본 tangent/UV1 PSO 조합을 유지하고 UV0가 없으면 0인 UV0를 합성해 공통 생성 renderer 계약을 맞춘다. UV1-only 입력 offset도 구별한다. 공유 edge는 위치 사전순으로 산술 방향을 맞춰 반대 방향 계산의 오차를 줄인다.
 3. 평면 위 모서리는 양/음 표면의 후보를 중점 해시에 넣고 두 끝점의 실제 거리로 같은 모서리인지 비교한다. 양쪽 비공면 표면이 하나씩 붙은 모서리만 양의 표면 방향의 경계 하나로 유지한다. 같은 쪽 접촉·중복·비다양체 후보는 경계에서 제외한다. 해시를 초기화한 뒤 활성 경계 끝점을 주변 9셀과 실제 거리로 연결한다. 렌더 UV seam 정점을 합치거나 원본 전체 연결 표를 만들지 않는다.
 4. 앞뒤 연결 자체가 경계 순서다. 별도의 선형 정렬 배열 없이 double-buffer pointer jumping으로 대표·열린 상태를 전파한다.
-5. loop마다 한 threadgroup을 배정한다. 경계 안에서 convex/reflex 판정·귀 내부 검사·서로 세 점을 공유하지 않는 제거 집합·출력을 병렬 수행한다. 매 라운드의 읽기/쓰기 단계 사이에 barrier가 있다. ID 순서가 단조로울 때 하나씩만 제거되는 현상을 줄이기 위해 라운드별 우선순위를 해시한다.
+5. loop마다 한 threadgroup을 배정한다. convex/reflex 분류 후 한 스레드가 현재 경계를 순회해 볼록·공선 후보를 교대로 표시한다. 표시된 후보만 병렬 ear 검사하고 제거한다. 후보 중심의 인접 선택과 순환 경계 처음/끝 충돌을 제외하며, 단계 사이에 barrier를 둔다. 한 라운드의 제거 정점 수가 20 미만이면 GPU 한 스레드가 유효한 후보를 하나씩 찾아 마무리한다.
 6. 확실한 단순 loop는 reflex/collinear 점만 귀 내부 검사에 사용한다. 허용오차 안의 근접 접촉은 실제 자기 교차로 단정하지 않고 모든 점을 검사하는 보수적 경로를 쓴다. 확실한 crossing·잘못된 endpoint 연결은 그 cap만 생략한다.
 7. 성공 표시가 된 loop의 cap topology를 한 번 사용해 A/B에 반대 winding·법선·handedness로 출력한다. cap은 독립 주황색 재질과 평면 UV를 사용한다.
 8. 결과 위치 AABB는 그룹별 축소 후 합산한다. 결과 descriptor는 section별 실제 count와 side 전체의 보수적 bounds를 사용한다.
@@ -55,7 +55,7 @@ UE 5.3.2 [GitHub 공개 미러의 Epic 소스](https://github.com/chenyong2githu
 
 출력은 triangle-corner 방식이며 정점을 강제 용접하지 않는다. 정점 provenance는 parent revision의 현재 section/draw/vertex endpoint·보간 계수·현재 triangle을 기록한다. cap은 생성 cap marker와 loop 정보를 기록한다. Static 위치는 canonical geometry가 authoritative하며 이 출처를 skeletal skin 보간식으로 쓰지는 않는다.
 
-출력 vertex capacity는 side당 최대 1,000,000개, retained parent와 양쪽 출력 예상량은 branch당 512 MiB, generation은 32로 제한한다. 이 수치는 Scene 전체 메모리 예산이 아니다. 교차/평면 위 모서리 후보 4096개 초과 시 cap을 생략하며 표면은 유지한다. 기본 병렬 ear의 라운드는 최대 256회이고, 완료되지 못한 loop는 cap을 버린다. 작은 공유 메모리 cache는 전체 후보 1024개까지다. 로그의 segments는 비활성 접촉·음의 모서리 지지 후보도 포함하고 uncappedSegments는 활성 경계 중 cap을 만들지 못한 수다.
+출력 vertex capacity는 side당 최대 1,000,000개, retained parent와 양쪽 출력 예상량은 branch당 512 MiB, generation은 32로 제한한다. 이 수치는 Scene 전체 메모리 예산이 아니다. 교차/평면 위 모서리 후보 4096개 초과 시 cap을 생략하며 표면은 유지한다. ear 제거 라운드는 전체 후보 수와 4096 중 작은 값까지이며, 완료되지 못한 loop는 cap을 버린다. 작은 공유 메모리 cache는 전체 후보 1024개까지다. 로그의 segments는 비활성 접촉·음의 모서리 지지 후보도 포함하고 uncappedSegments는 활성 경계 중 cap을 만들지 못한 수다.
 
 surface overflow·잘못된 index·좌표 hash 범위 초과는 작업 전체 오류다. cap 실패는 부분 출력된 cap triangle까지 모두 버리며 surface-only 결과로 게시한다. 결과는 새 GPU 버퍼이므로 원본 공유 자산은 바뀌지 않는다.
 
@@ -72,12 +72,53 @@ surface overflow·잘못된 index·좌표 hash 범위 초과는 작업 전체 �
 - `-cut-width 0.25`: 유한 영역 초과를 거절하고 원본을 유지하는 진단에 사용한다.
 - `-cut-y -240`: 자동 절단 평면의 모델 기준 높이. 자동 평면은 모델 공간 1000×1000이고 기본 y=0이다.
 - `-cut-validate 1 -cut-expect-loops 1`: 실제 GPU Data/Pose/Provenance를 읽어 count·index·유한 값·법선·출처 범위·평면·cap winding/면적 및 최소 loop 수를 검사한다. 일반 실행에서는 이 전체 readback을 하지 않는다.
-- `-cap-mode 0|1|2`: 병렬 다중 귀 / GPU 순차 후보 검사·단일 제거 / 후보 병렬·단일 제거의 비교 경로다. 기본은 0이다.
+- cap은 선표시 mark-and-cut 단일 경로다. 기존 `-cap-mode` 선택과 해시 기반 선택·진단용 순차 비교 경로는 제거했다.
 - `-cut-benchmark 20`: 3회 warmup 후 20회 같은 원본을 자르고 마지막 결과만 게시한다. `-debug 0` Release 실행으로 성능을 측정하고 검증 실행은 별도로 한다.
 
 캡처는 자동 절단/벤치가 끝날 때까지 기다린다. `-capture <외부 prefix> -capture-frame 30 -animation-step-ms 16`을 기존 GPU 캡처 도구와 함께 사용할 수 있다.
 
 ## 검증·성능 기록
+
+### 경계 선표시 mark-and-cut 단일 경로 (2026-10-26)
+
+`CapEarsCS::MarkCandidates`와 `main`은 Eder/Held/Palfrader (2018) §2.3의 선표시 원리를 적용한다. 한 스레드가 현재 `Next` 경계를 따라 볼록 후보를 교대로 표시하고, 표시된 후보만 그룹의 64스레드가 ear 검사한다. 원래 정점 ID의 홀짝을 사용하지 않으며 순환 경계 끝/처음의 인접 선택도 제외한다. 검사 후 해시 우선순위 선택과 비교 모드는 제거했다. C++ 요청 API에서도 모드 인자·대기 상태·shader 전달을 제거했다.
+
+인접하지 않은 제거 중심은 끝점을 공유할 수 있다. 중심 v와 두 칸 뒤 중심 w가 공통 끝점 c를 가지면, v는 Prev[c], w는 Next[c]를 각각 갱신한다. 서로 다른 필드에 기록하고 후보 검사와 갱신 사이 barrier를 유지한다. 삭제한 해시 선택 경로는 세 정점 공유까지 제외했으므로 더 보수적인 집합이었다.
+
+아래 항목은 원문을 그대로 이식한 것이 아닌 GPU 적용 차이다.
+
+- 표시와 제거를 CPU/OpenMP처럼 중첩하지 않고 그룹 barrier로 분리한다.
+- 허용오차 내 공선 제거 후보도 교대 표시에 포함한다. 공선 제거는 삼각형을 생성하지 않는다.
+- 한 라운드의 제거 정점 수가 20 미만이면 `FinishSerial`을 켠다. 논문의 기준은 생성 삼각형 수이므로 공선점이 있으면 기준이 다르다. 20은 논문의 CPU 실험값을 가져온 비교 설정이며 GPU 최적값으로 검증하지 않았다.
+- 순차 마무리는 FIST 라이브러리가 아니다. 그룹의 한 스레드가 처음 유효한 ear/공선 후보를 찾아 하나씩 제거하는 기존 판정 기반 경로다. 그룹과 barrier는 그대로 유지한다.
+- 반복 상한은 전체 후보 수와 4096 중 작은 값이다. 완료하지 못하면 해당 loop의 cap을 최종 출력하지 않는다.
+
+98%의 convex 정점이 ear였다는 논문의 관찰은 우리 자산의 측정값이 아니다. 선표시는 비싼 ear 검사를 줄일 수 있지만 표시 순회와 순차 마무리 비용이 추가된다. CPU FIST의 공간 hash·품질 휴리스틱·CDT 후처리·hole bridge는 추가하지 않았다.
+
+진단 명령은 `-model Models/cube.glb -debug 1 -cut 1 -cap-mode 3 -cut-validate 1 -cut-expect-loops 1 -cut-expect-publications 1`이다. Debug/Release 빌드는 각각 약29초/97초, exit0이었다. Debug Cube는 MX450에서 양면 cap 면적·winding·부모 표면 면적/방향 적분 보존과 게시1을 통과했다. 첫 실행은 로딩 중 45초 제한으로 종료되어 검증으로 세지 않았고, 180초 제한 재실행에서 완료 marker를 확인했다. helper는 완료 후 자신이 실행한 프로세스를 종료하므로 정상 종료 검증은 아니다. 로그는 저장소 밖 `%TEMP%/mark-cut-validation/`, 빌드 로그는 `%TEMP%/mark-cut-{debug,release}-build.log`다.
+
+Release Bunny의 mode3 `-debug 1 -cut 2 -cut-validate 1 -cut-expect-loops 1 -cut-expect-publications 2`도 양면 cap 면적·winding·부모 표면/방향 적분 보존을 통과했다. 첫 절단은 segments370/loops1, 재절단은 segments193/loops2이며 둘 다 uncapped0/error0이다. 기존 DXGI #80 메시지는 있었고 새 D3D12 ERROR/CORRUPTION·assert·device loss는 관찰하지 않았다. 순환 후보 mask 32,741개(정점4~14, 비어 있지 않은 모든 조합)의 별도 CPU 모델 검사에서 표시 집합이 비어 있지 않고 경계 처음/끝을 포함한 인접 제거 중심을 만들지 않음을 확인했다. 이는 실제 GPU의 모든 수치 퇴화 사례 검증을 대신하지 않는다.
+
+같은 MX450, driver `32.0.15.9186`, Release `-debug 0 -model Models/bunny.glb -cut-benchmark 20 -cap-mode 0|3 -cut-expect-publications 1`의 순차 실행 비교다. 각 실행에서 첫 3회 warm-up을 제외한 20회를 사용했다. 모든 iteration은 segments370/loops1/uncapped0/error0이었다.
+
+| 경로 | cap 중앙값 ms | cap P95 ms | GPU 전체 중앙값 ms |
+| --- | --- | --- | --- |
+| mode0 검사 후 해시 선택 | 4.064080 | 10.081696 | 5.383952 |
+| mode3 선표시·검사·순차 마무리 | 5.481024 | 7.079936 | 6.808912 |
+
+위 비교 시점의 mode3 cap 중앙값은 약35% 느렸다. 사용자의 요청에 따라 선표시 방식을 유일한 경로로 남겼으며 성능 향상을 주장하지 않는다. 표의 mode0/3 옵션은 당시 측정용이며 현재 코드에서는 제거됐다. 표시 순회·검사 감소·선택 집합·순차 전환이 함께 달라진 비교이므로 순차 마무리만을 원인으로 단정하지 않는다. 순차 전환 조절, 비캐시 경로와 수치 퇴화의 추가 검증은 이번 단계에 포함하지 않았다. 실행 전후 Xbot/Bunny/Cube `.mini` SHA256은 유지됐다. 물리 연결 로직은 수정하지 않았고 절단 API의 모드 인자만 제거했다. 요약은 외부 로그 폴더의 `benchmark-summary.json`이다.
+
+
+### 단일 경로 전환 후 최종 확인
+
+원격 `feb35f23`에 이 작업의 변경만 옮긴 별도 작업 트리에서 확인했다. 앞의 비교 실험은 물리 연결이 추가된 로컬 기준에서 수행한 역사 기록이다. 최종 코드에는 해시 선택·단일 제거 비교 모드·`cap-mode` 명령행 및 API 인자가 없다.
+
+- Debug/Release 빌드 exit0. 새 작업 트리의 전체 컴파일은 약226초/265초이며, 의존성 설치 대기를 피하려 기존 NuGet/vcpkg 자원을 복사하고 `/p:VcpkgManifestInstall=false`를 사용했다. 빌드 로그는 `%TEMP%/mark-cut-only-{debug,release}-final.log`다.
+- Debug `-model Models/cube.glb -debug 1 -cut 3 -cut-repeat-plane 1 -cut-validate 1 -cut-expect-loops 1 -cut-expect-publications 1`: 첫 분할의 cap/부모 보존, 후속 동일 평면의 비교차, 최종 게시1을 통과했다.
+- Release `-model Models/bunny.glb -debug 1 -cut 2 -cut-validate 1 -cut-expect-loops 1 -cut-expect-publications 2`: 최초 실행은 재절단의 양면 cap 면적·winding 검사를 통과한 뒤 부모 보존 완료 메시지 전에 C++ 미처리 예외가 발생했다. 당시 메시지를 수집하지 못해 실패 조건은 미확정이다. 이를 성공으로 세지 않았다.
+- 같은 명령의 이후 4회는 모두 양면 cap·부모 보존·재절단 loop2·게시2 검증을 통과했다. 최초 예외의 원인이나 해소를 입증한 것은 아니며 간헐 실패 가능성은 후속 조사 사항이다. 진단 helper는 완료 marker 이후 자신이 만든 프로세스를 종료하므로 정상 종료·수동 조작 검증은 아니다.
+- 로그는 `%TEMP%/mark-cut-validation/only-debug-cube-repeat.txt`, `only-release-bunny-repeat.txt`(실패), `only-release-bunny-diagnose.txt`, `only-release-bunny-check1.txt`~`check3.txt`다. GPU는 MX450, driver `32.0.15.9186`이며 cap에 대한 D3D12 ERROR/CORRUPTION/device loss는 관찰하지 않았다.
+- 빌드·실행 중 생성된 모델 캐시와 다른 세션의 물리 변경은 커밋에서 제외한다. 원격에 없던 다른 14개 커밋도 이 브랜치에 포함하지 않는다.
 
 ### 반복 절단과 자동 분리 이동 확인
 

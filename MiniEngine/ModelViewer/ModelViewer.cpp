@@ -77,7 +77,6 @@ private:
     Viewer::ComponentId m_CutMesh = Viewer::InvalidComponentId;
     uint32_t m_AutoCuts = 0, m_BenchmarkRemaining = 0, m_BenchmarkWarmup = 3, m_AutoCutIndex = 0;
     float m_AutoCutY = 0, m_AutoCutWidth = 1000;
-    uint32_t m_CapMode = 0;
     uint32_t m_RepeatCutPlane = 0;
     uint32_t m_CutScene = 0, m_CutOther = 0;
     float m_CutAngle = 0, m_CutStepY = 0;
@@ -294,8 +293,6 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"cut-validate", validateCut);
     m_Cutting.ValidateResults = validateCut != 0;
     CommandLineArgs::GetInteger(L"cut-expect-loops",m_Cutting.ExpectedMinimumLoops);
-    CommandLineArgs::GetInteger(L"cap-mode", m_CapMode);
-    m_CapMode = std::min(m_CapMode, 2u);
     if (m_CutScene && m_BenchmarkRemaining)
         throw std::invalid_argument("cut-scene and cut-benchmark cannot be combined");
     if (m_BenchmarkRemaining) m_BenchmarkRemaining += m_BenchmarkWarmup;
@@ -426,7 +423,7 @@ void ModelViewer::Update( float deltaT )
         MeshCutting::CutPlaneData plane;
         if (m_CutPlanes.BuildData(m_ActiveCutPlane,plane))
         {
-            if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
+            if (m_Cutting.RequestAll(plane)) m_LastCutNormal = Vector3(plane.WorldPlane);
         }
     }
     if (!m_Cutting.IsBusy() && (m_AutoCuts || m_BenchmarkRemaining))
@@ -454,8 +451,8 @@ void ModelViewer::Update( float deltaT )
         if (valid)
         {
             m_LastCutNormal = Vector3(plane.WorldPlane);
-            const bool accepted = m_CutScene ? m_Cutting.RequestAll(plane,m_CapMode) :
-                m_Cutting.Request(m_CutOwner, m_CutMesh, plane, publish, epsilon, m_CapMode);
+            const bool accepted = m_CutScene ? m_Cutting.RequestAll(plane) :
+                m_Cutting.Request(m_CutOwner, m_CutMesh, plane, publish, epsilon);
             if (!accepted)
             {
                 Utility::Printf("Static cut request rejected: %s\n",m_Cutting.GetStatusText());

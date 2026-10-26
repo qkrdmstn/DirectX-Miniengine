@@ -12,9 +12,9 @@ namespace Viewer
         // 절단 작업이 사용할 장면을 연결한다.
         explicit CuttingSystem(Scene& scene) : m_Scene(scene) {}
         // 정점 준비가 끝난 Static 컴포넌트와 평면을 고정해 작업을 시작한다.
-        bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0);
+        bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f);
         // 현재 절단 영역의 Static 후보를 고정하고 이후 프레임에서 하나씩 제출한다.
-        bool RequestAll(const MeshCutting::CutPlaneData& plane, uint32_t capMode = 0);
+        bool RequestAll(const MeshCutting::CutPlaneData& plane);
         // Scene.Update 뒤 준비된 pose로 다음 후보를 제출하고 변경된 후보는 건너뛴다.
         void SubmitPending();
         // 작은 상태를 비동기로 수집하고 아직 같은 입력일 때만 A/B를 함께 적용한다.
@@ -36,7 +36,7 @@ namespace Viewer
     private:
         // 단일 요청과 대기열 내부 제출이 공유하는 GPU 작업 시작 경로다.
         bool Submit(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane,
-            bool publish, float worldEpsilon, uint32_t capMode);
+            bool publish, float worldEpsilon);
         // 여러 후보 중 하나라도 성공했으면 마지막 비교차 후보가 성공 안내를 덮지 않는다.
         void FinishBatch();
         Scene& m_Scene;
@@ -56,7 +56,6 @@ namespace Viewer
         };
         std::deque<Candidate> m_Pending;
         MeshCutting::CutPlaneData m_PendingPlane{};
-        uint32_t m_PendingCapMode = 0;
         const char* m_StatusText = "Ready";
         bool m_BatchActive = false;
         uint32_t m_BatchApplied = 0;

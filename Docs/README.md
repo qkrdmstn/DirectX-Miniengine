@@ -18,7 +18,7 @@
 | 문서 | 용도 | 상태 / 읽을 때의 주의 |
 | --- | --- | --- |
 | [GPUCuttingSystemDesign.md](GPU/GPUCuttingSystemDesign.md) | GPU 절단 설계·다중 MeshComponent 기반 | `673b56b6` Static 구현, Skeletal·물리는 설계 |
-| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `673b56b6` 자동 분리 이동 기본 해제·다중 절단 부모 보존 검증, 리뷰·Debug/Release 완료 |
+| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `feb35f23` 기반 mark-and-cut 단일 경로·빌드 완료; Bunny 최초 검증 예외는 원인 미확정 |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계

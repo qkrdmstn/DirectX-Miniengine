@@ -6,14 +6,14 @@
 namespace Viewer
 {
     // 단일 대상 요청이 진행 중인 일괄 절단에 끼어들지 않도록 검사한다.
-    bool CuttingSystem::Request(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
+    bool CuttingSystem::Request(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon)
     {
         if (IsBusy()) { m_StatusText = "Busy - wait for the current cut"; return false; }
-        return Submit(owner,meshId,plane,publish,worldEpsilon,capMode);
+        return Submit(owner,meshId,plane,publish,worldEpsilon);
     }
 
     // pose와 인덱스는 GPU에 유지하며 요청의 소유·revision·월드 배치만 고정한다.
-    bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
+    bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon)
     {
         if (m_Job) { m_StatusText = "Busy - wait for the current cut"; return false; }
         GameObject* object = m_Scene.FindObject(owner);
@@ -29,7 +29,7 @@ namespace Viewer
         {
             std::vector<Math::BoundingSphere> bounds;
             for (size_t i=0;i<geometry->GetSections().size();++i) bounds.push_back(mesh->GetLocalSectionBounds(i));
-            m_Job = MeshCutting::GpuMeshCutter::Submit(geometry, mesh->GetPosedGeometry(), world, plane, worldEpsilon, capMode,bounds,ValidateResults);
+            m_Job = MeshCutting::GpuMeshCutter::Submit(geometry, mesh->GetPosedGeometry(), world, plane, worldEpsilon,bounds,ValidateResults);
         }
         catch (const std::exception& error)
         {
@@ -44,7 +44,7 @@ namespace Viewer
     }
 
     // 기억된 선택 대신 유한 평면의 보수적 범위와 겹치는 Static 컴포넌트를 찾는다.
-    bool CuttingSystem::RequestAll(const MeshCutting::CutPlaneData& plane, uint32_t capMode)
+    bool CuttingSystem::RequestAll(const MeshCutting::CutPlaneData& plane)
     {
         if (IsBusy()) { m_StatusText = "Busy - wait for the current cut"; return false; }
         Math::Vector3 minimum = plane.WorldCorners[0], maximum = minimum;
@@ -76,7 +76,7 @@ namespace Viewer
                 m_Pending.push_back({object->GetId(),mesh->GetId(),geometry,mesh->GetStateVersion(),
                     Math::Matrix4(mesh->GetWorldTransform(object->GetTransform()))});
             }
-        m_PendingPlane = plane; m_PendingCapMode = capMode;
+        m_PendingPlane = plane;
         Utility::Printf("Static cut candidates: count=%zu\n",m_Pending.size());
         if (m_Pending.empty()) { m_StatusText = "No static mesh in the cut area"; return false; }
         m_BatchActive = true; m_BatchApplied = 0;
@@ -98,7 +98,7 @@ namespace Viewer
             const Math::Matrix4 world(mesh->GetWorldTransform(object->GetTransform()));
             if (std::memcmp(&world,&candidate.World,sizeof(world)) != 0)
             { m_StatusText = "Cancelled - cut target moved"; continue; }
-            if (Submit(candidate.Owner,candidate.Mesh,m_PendingPlane,true,1.0e-5f,m_PendingCapMode)) return;
+            if (Submit(candidate.Owner,candidate.Mesh,m_PendingPlane,true,1.0e-5f)) return;
         }
         FinishBatch();
     }

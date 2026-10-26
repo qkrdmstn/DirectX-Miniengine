@@ -146,7 +146,7 @@ namespace MeshCutting
 
     // GPU 절단을 제출하고 명시적 진단에서만 같은 시점의 부모 정점·인덱스를 보존한다.
     std::unique_ptr<CutJob> GpuMeshCutter::Submit(std::shared_ptr<const GeometryRevision> input,
-        const PosedGeometry& posed, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics)
+        const PosedGeometry& posed, const AffineTransform& world, const CutPlaneData& plane, float epsilon, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics)
     {
         if (!input || !posed.IsReady() || !std::isfinite(epsilon) || epsilon <= 0)
             throw std::invalid_argument("Static cut requires prepared geometry");
@@ -273,7 +273,6 @@ namespace MeshCutting
             compute.SetConstant(1, 0, 1); dispatch(3, c.MaxSegments);
         }
         graphics.InsertTimeStamp(job->Queries.Get(), 2);
-        compute.SetConstant(1, 0, capMode);
         compute.SetPipelineState(Pipelines[4]);
         // 모든 경계 대표를 처리하도록 큰 입력은 2D dispatch로 펼친다.
         compute.Dispatch(std::min(c.MaxSegments, 65535u), (c.MaxSegments + 65534) / 65535);

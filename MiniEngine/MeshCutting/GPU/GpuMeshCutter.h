@@ -50,7 +50,7 @@ namespace MeshCutting
         // 현재 posed GPU 정점을 입력으로 Static A/B 표면·경계·cap을 같은 queue에서 계산한다.
         static std::unique_ptr<CutJob> Submit(std::shared_ptr<const GeometryRevision> input,
             const PosedGeometry& posed, const Math::AffineTransform& world,
-            const CutPlaneData& plane, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0,
+            const CutPlaneData& plane, float worldEpsilon = 1.0e-5f,
             const std::vector<Math::BoundingSphere>& bounds = {}, bool snapshotDiagnostics = false);
     };
 }
