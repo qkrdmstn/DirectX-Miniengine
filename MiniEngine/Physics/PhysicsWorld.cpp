@@ -69,18 +69,35 @@ namespace MiniPhysics
     {
         if (m_Impl) return;
         if (capacity == 0 || capacity > MaxColliderCapacity) throw std::invalid_argument("Invalid collider capacity");
+
+        // Jolt world를 만든다.
         auto impl = std::make_unique<Impl>();
         impl->World.Init(capacity, 0, capacity, capacity, impl->Layers, impl->Layers, impl->Layers);
+
+        // 예약 상한을 기록하고 handle 맵을 용량만큼 미리 잡아 Commit이 재해시하지 않게 한다.
+        impl->Capacity = capacity;
+        impl->SimBodies.reserve(capacity);
+
+        // 완성된 상태를 공개한다.
         m_Impl = std::move(impl);
     }
 
-    // body를 제거한 뒤 마지막 runtime 참조를 해제한다.
-    void PhysicsWorld::Shutdown() { Clear(); m_Impl.reset(); }
+    // 남은 준비 body를 고아로 만들고 body를 모두 제거한 뒤 마지막 runtime 참조를 해제한다.
+    void PhysicsWorld::Shutdown()
+    {
+        // 살아 있는 PreparedBody가 해제된 world를 건드리지 않도록 소유 world 연결을 끊는다.
+        if (m_Impl) for (auto* data : m_Impl->Prepared) data->Owner = nullptr;
+
+        // 게시된 body를 비우고 world를 닫는다.
+        Clear();
+        m_Impl.reset();
+    }
 
     // 원본 메시와 별개인 보수적 조회 Box를 생성한다.
     ColliderHandle PhysicsWorld::CreateQueryBox(const QueryBounds& bounds)
     {
         if (!m_Impl || !bounds.IsValid() || m_NextHandle == std::numeric_limits<ColliderHandle>::max()) return InvalidCollider;
+        if (m_Impl->Reserved() >= m_Impl->Capacity) return InvalidCollider;
         JPH::RVec3 center;
         const auto shape = MakeBox(bounds, center);
         JPH::BodyCreationSettings settings(shape, center, JPH::Quat::sIdentity(), JPH::EMotionType::Static, ObjectLayers::Query);
@@ -123,10 +140,16 @@ namespace MiniPhysics
         return true;
     }
 
-    // 등록된 body를 모두 해제하며 stale handle을 무효로 유지한다.
+    // 조회와 simulation body를 모두 해제하며 stale handle을 무효로 유지한다. 준비만 된 body는 건드리지 않는다.
     void PhysicsWorld::Clear()
     {
-        if (m_Impl) while (!m_Impl->Bodies.empty()) RemoveCollider(m_Impl->Bodies.begin()->first);
+        if (!m_Impl) return;
+
+        // 조회 body를 모두 제거한다.
+        while (!m_Impl->Bodies.empty()) RemoveCollider(m_Impl->Bodies.begin()->first);
+
+        // simulation body를 모두 제거하고 파괴한다.
+        while (!m_Impl->SimBodies.empty()) DestroyBody(m_Impl->SimBodies.begin()->first);
     }
 
     // Query 계층의 body만 대상으로 broadphase와 객체 계층 필터를 함께 적용한다.

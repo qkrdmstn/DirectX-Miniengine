@@ -34,6 +34,7 @@
     <ClInclude Include="Collision\AggregateGeom.h" />
     <ClInclude Include="Collision\BodyMass.h" />
     <ClCompile Include="PhysicsWorld.cpp" />
+    <ClCompile Include="PhysicsWorldBodies.cpp" />
     <ClCompile Include="Collision\ConvexElem.cpp" />
     <ClCompile Include="Collision\AggregateGeom.cpp" />
     <None Include="CMakeLists.txt" />

@@ -8,10 +8,13 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include "PhysicsWorld.h"
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace MiniPhysics
 {
@@ -74,6 +77,9 @@ namespace MiniPhysics
     // 경계의 중심 반올림까지 포함하도록 Box 반크기를 보수적으로 만든다.
     JPH::RefConst<JPH::Shape> MakeBox(const QueryBounds& bounds, JPH::RVec3& center);
 
+    // simulation body handle과 Jolt BodyID의 대응이다. query handle 맵과 별개다.
+    using SimBodyMap = std::unordered_map<BodyHandle, JPH::BodyID>;
+
     // PhysicsWorld의 Jolt 상태다. Bodies는 query handle만 담고 body handle과 섞지 않는다.
     struct PhysicsWorld::Impl
     {
@@ -81,6 +87,14 @@ namespace MiniPhysics
         PhysicsLayers Layers;
         JPH::PhysicsSystem World;
         std::unordered_map<ColliderHandle, JPH::BodyID> Bodies;
+        // Initialize 용량이며 조회·simulation·준비 중 body 합계의 상한이다.
+        uint32_t Capacity = 0;
+        // 게시된 simulation body다. Initialize에서 용량만큼 예약해 Commit이 재해시하지 않는다.
+        SimBodyMap SimBodies;
+        // 준비되었지만 게시되지 않은 body 소유 정보다. Shutdown이 고아 처리한다.
+        std::unordered_set<PreparedBody::Data*> Prepared;
+        // 용량 예약 합계를 반환한다.
+        size_t Reserved() const { return Bodies.size() + SimBodies.size() + Prepared.size(); }
     };
 
     // 같은 Physics 내부 파일과 테스트가 비공개 Impl에 접근하는 통로다.
@@ -88,5 +102,16 @@ namespace MiniPhysics
     {
         // 초기화되지 않았다면 nullptr을 반환한다.
         static PhysicsWorld::Impl* GetImpl(PhysicsWorld& world) { return world.m_Impl.get(); }
+        // Jolt 비공개 구현 타입의 별칭이다.
+        using ImplType = PhysicsWorld::Impl;
+    };
+
+    // PreparedBody가 쥔 준비 상태다. Node는 Prepare에서 미리 할당해 Commit이 할당하지 않게 한다.
+    struct PreparedBody::Data
+    {
+        // 소속 world이며 Shutdown 이후에는 nullptr(고아)이다.
+        PhysicsWorldAccess::ImplType* Owner = nullptr;
+        JPH::BodyID Id;
+        SimBodyMap::node_type Node;
     };
 }
