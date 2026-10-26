@@ -30,12 +30,16 @@
     <ClInclude Include="PhysicsWorld.h" />
     <ClInclude Include="Collision\CollisionUnits.h" />
     <ClInclude Include="Collision\ConvexElem.h" />
+    <ClInclude Include="Collision\AggregateGeom.h" />
     <ClCompile Include="PhysicsWorld.cpp" />
     <ClCompile Include="Collision\ConvexElem.cpp" />
+    <ClCompile Include="Collision\AggregateGeom.cpp" />
     <None Include="CMakeLists.txt" />
     <None Include="ThirdParty.md" />
     <None Include="tests\PhysicsQueryTests.cpp" />
     <None Include="tests\ConvexElemTests.cpp" />
+    <None Include="tests\AggregateGeomTests.cpp" />
+    <None Include="tests\CollisionTestUtils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

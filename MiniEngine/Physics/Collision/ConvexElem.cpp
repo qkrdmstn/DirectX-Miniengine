@@ -84,6 +84,31 @@ namespace MiniCollision
             return nearestSq < snapDistSq ? nearest : v;
         }
 
+        // i번째 평면 위의 큰 사각형을 나머지 모든 평면의 안쪽으로 잘라 남은 다각형을 돌려준다.
+        std::vector<Vec3d> ClipPlanePolygon(const std::vector<Plane>& planes, size_t i, const HullTolerances& tol)
+        {
+            // 평면 위에 놓인 큰 사각형을 만든다.
+            Vec3d axisX;
+            Vec3d axisY;
+            MakeAxes(planes[i].Normal, axisX, axisY);
+            const Vec3d base = planes[i].Normal * planes[i].W;
+            const Vec3d x = axisX * tol.BigHalfExtent;
+            const Vec3d y = axisY * tol.BigHalfExtent;
+            std::vector<Vec3d> poly = { base + x + y, base - x + y, base - x - y, base + x - y };
+
+            // 다른 모든 평면의 안쪽으로 사각형을 자른다.
+            for (size_t j = 0; j < planes.size() && poly.size() >= 3; ++j)
+            {
+                if (i != j)
+                {
+                    poly = ClipPolygonInside(poly, planes[j], tol.EpsDistance);
+                }
+            }
+
+            // 잘린 다각형을 돌려준다.
+            return poly;
+        }
+
         // 면 평면 위 점들을 평면 좌표로 투영해 볼록 경계 다각형(반시계)을 구한다. 내부점·중복점·허용치 안의 공선점은 버린다.
         std::vector<uint32_t> FaceBoundary(const std::vector<Vec3d>& v, const Face& face, double tol)
         {
@@ -484,6 +509,22 @@ namespace MiniCollision
         return true;
     }
 
+    // 평면마다 큰 사각형을 나머지 평면으로 잘라 남은 다각형 정점을 snap·병합 없이 모은다(거의 같은 점만 제거).
+    void CollectPlanePolygonVertices(const std::vector<Plane>& planes, const HullTolerances& tol, std::vector<Vec3d>& out)
+    {
+        // 이전 결과를 비운다.
+        out.clear();
+
+        // 평면마다 잘린 다각형의 정점을 EpsDistance 안에서 중복 없이 추가한다.
+        for (size_t i = 0; i < planes.size(); ++i)
+        {
+            for (const Vec3d& p : ClipPlanePolygon(planes, i, tol))
+            {
+                AddVertexIfNotPresent(out, p, tol.EpsDistance);
+            }
+        }
+    }
+
     // Unreal FKConvexElem::HullFromPlanes와 같은 순서로 바깥 법선 평면들의 안쪽 교집합 hull을 만든다.
     bool ConvexElem::HullFromPlanes(
         const std::vector<Plane>& planes,
@@ -498,23 +539,8 @@ namespace MiniCollision
         double totalArea = 0.0;
         for (size_t i = 0; i < planes.size(); ++i)
         {
-            // 평면 위에 놓인 큰 사각형을 만든다.
-            Vec3d axisX;
-            Vec3d axisY;
-            MakeAxes(planes[i].Normal, axisX, axisY);
-            const Vec3d base = planes[i].Normal * planes[i].W;
-            const Vec3d x = axisX * tol.BigHalfExtent;
-            const Vec3d y = axisY * tol.BigHalfExtent;
-            std::vector<Vec3d> poly = { base + x + y, base - x + y, base - x - y, base + x - y };
-
-            // 다른 모든 평면의 안쪽으로 사각형을 자른다.
-            for (size_t j = 0; j < planes.size() && poly.size() >= 3; ++j)
-            {
-                if (i != j)
-                {
-                    poly = ClipPolygonInside(poly, planes[j], tol.EpsDistance);
-                }
-            }
+            // 평면 위의 큰 사각형을 나머지 평면으로 자른다.
+            const std::vector<Vec3d> poly = ClipPlanePolygon(planes, i, tol);
 
             // 면이 사라졌으면 다음 평면으로 넘어간다.
             if (poly.size() < 3)

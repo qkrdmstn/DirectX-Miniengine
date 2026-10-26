@@ -88,6 +88,9 @@ namespace MiniCollision
     // 다각형을 평면 안쪽(PlaneDot <= eps) 반쪽만 남기도록 자른다. 평면 위(|d| <= eps) 점은 안쪽으로 유지한다.
     std::vector<Vec3d> ClipPolygonInside(const std::vector<Vec3d>& poly, const Plane& plane, double eps);
 
+    // 평면마다 큰 사각형을 나머지 평면으로 잘라 남은 다각형 정점을 snap·병합 없이 out에 모은다(EpsDistance 안의 중복만 제거). HullFromPlanes와 같은 절단 경로를 쓴다.
+    void CollectPlanePolygonVertices(const std::vector<Plane>& planes, const HullTolerances& tol, std::vector<Vec3d>& out);
+
     // Unreal FKConvexElem 중 정점·삼각형·평면 교집합 기능만 옮긴 볼록 요소다. VertexData가 기준(인덱스 재구성 후에는 hull 모서리 정점만 남음)이고 삼각형은 바깥에서 볼 때 반시계다.
     struct ConvexElem
     {

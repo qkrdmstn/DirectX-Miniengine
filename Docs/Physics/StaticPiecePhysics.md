@@ -1,4 +1,4 @@
-상태: 설계안 — `2931cf87` 기준 미커밋 요구사항 v4·구현 계획 확정 (2026-10-26), 구현 전
+상태: 진행 중 — 1a(`0d29e37b`)·1b 구현 완료, 1c 이후 미구현 (2026-10-26)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -77,6 +77,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 - 로더가 geometry 바이트를 보관한 채 node/mesh metadata를 읽고, `EvaluateModelPose`·matrixIdx로 메시별 model-local 18-DOP를 CPU에서 1회 계산한 뒤 업로드한다. Model에 공유 보관한다.
 - 초기 hull snap: `snapDistSq = 0.000015·R_m`(m², 거리 제곱 비교; Unreal 0.0015·R_cm cm² 환산).
 - 18개 반공간 교집합과의 동일성은 정점 병합 전 다면체에만 적용한다. 최종 hull은 병합·snap이 반영된 근사이며 형상·부피 허용오차를 명시한다.
+- 정점 병합(0.001 m) 때문에 얇은 형상의 최종 hull 부피는 병합 전보다 줄 수 있다(두께 0.012 m 상자에서 약 10%, Unreal 0.1 cm 병합과 같은 성질). 일반 형상의 허용오차는 1%.
 - 노드 애니메이션 메시 판별은 메시별로 한다(모델에 애니메이션이 있다는 것만으로 단정하지 않는다). 스킨·노드 애니메이션 메시는 충돌 없음·비시뮬레이션이다.
 - 컴포넌트 충돌:
   - 원본 revision: 선택된 source section의 hull × SourceFrame⁻¹(항등이면 그대로 복사).

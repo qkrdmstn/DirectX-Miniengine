@@ -20,4 +20,10 @@ namespace MiniCollision
 
     // 평면별 초기 큰 사각형의 반변. Unreal UE_OLD_HALF_WORLD_MAX 1048576 cm (EngineDefines.h).
     constexpr double BigPolygonHalfExtent = 10485.76;
+
+    // 18-DOP 평면 상수 팽창량. Unreal GenerateKDopAsSimpleCollision의 MinSize 0.1 cm를 m로 환산한 값이다.
+    constexpr double KDopMinSize = 0.001;
+
+    // 18-DOP 초기 snap 거리제곱의 반지름당 계수. Unreal SuggestConvexVertexSnapDistance의 0.0015·R_cm를 cm² 비교에서 m²로 환산한 값이다.
+    constexpr double KDopSnapDistSqPerMeter = 0.000015;
 }
