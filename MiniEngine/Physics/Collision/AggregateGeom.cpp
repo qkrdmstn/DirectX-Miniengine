@@ -81,4 +81,88 @@ namespace MiniCollision
         out.ConvexElems.push_back(elem);
         return true;
     }
+
+    // 상자 중심의 부호 있는 거리와 법선 방향 반크기 투영을 비교해 걸침 여부를 정한다.
+    int BoxPlaneCompare(const Box& box, const Plane& plane)
+    {
+        // 상자 중심과 반크기를 구한다.
+        const Vec3d center = (box.Min + box.Max) * 0.5;
+        const Vec3d half = (box.Max - box.Min) * 0.5;
+
+        // 평면 법선 방향으로 상자가 뻗는 길이(BoxPushOut)를 구한다.
+        const double pushOut = std::fabs(plane.Normal.x) * half.x
+            + std::fabs(plane.Normal.y) * half.y
+            + std::fabs(plane.Normal.z) * half.z;
+
+        // 중심 거리가 투영 길이보다 크면 앞, 작으면 뒤, 아니면 걸침이다.
+        const double dist = plane.PlaneDot(center);
+        if (dist > pushOut)
+        {
+            return 1;
+        }
+        if (dist < -pushOut)
+        {
+            return -1;
+        }
+        return 0;
+    }
+
+    // 요소의 지지 평면에 뒤집은 절단 평면을 더해 양의 쪽 hull을 다시 만든다.
+    bool SliceConvexElem(const ConvexElem& in, const Plane& slicePlane, ConvexElem& out)
+    {
+        // 지지 평면이 4개 미만이면 절단할 수 없다.
+        std::vector<Plane> planes;
+        in.GetPlanes(planes);
+        if (planes.size() < 4)
+        {
+            out.Reset();
+            return false;
+        }
+
+        // 뒤집은 평면을 더해 양의 쪽만 안쪽이 되게 한다.
+        planes.push_back({ slicePlane.Normal * -1.0, -slicePlane.W });
+
+        // 원래 정점을 snap 후보로 hull을 만들고 정점 4개 미만이면 실패다.
+        if (!out.HullFromPlanes(planes, in.VertexData) || out.VertexData.size() < 4)
+        {
+            out.Reset();
+            return false;
+        }
+        return true;
+    }
+
+    // 요소마다 상자 판정으로 통째 전달하거나 걸치면 양쪽을 각각 잘라 담는다.
+    void SliceAggregateGeom(const AggregateGeom& in, const Plane& slicePlane, AggregateGeom& keep, AggregateGeom& other)
+    {
+        // 이전 결과를 비우고 음의 쪽 절단에 쓸 뒤집은 평면을 만든다.
+        keep.ConvexElems.clear();
+        other.ConvexElems.clear();
+        const Plane flipped = { slicePlane.Normal * -1.0, -slicePlane.W };
+
+        // 요소마다 상자 판정에 따라 통째 전달하거나 양쪽을 각각 자른다.
+        for (const ConvexElem& elem : in.ConvexElems)
+        {
+            const int side = BoxPlaneCompare(elem.ElemBox, slicePlane);
+            if (side > 0)
+            {
+                keep.ConvexElems.push_back(elem);
+            }
+            else if (side < 0)
+            {
+                other.ConvexElems.push_back(elem);
+            }
+            else
+            {
+                ConvexElem sliced;
+                if (SliceConvexElem(elem, slicePlane, sliced))
+                {
+                    keep.ConvexElems.push_back(sliced);
+                }
+                if (SliceConvexElem(elem, flipped, sliced))
+                {
+                    other.ConvexElems.push_back(sliced);
+                }
+            }
+        }
+    }
 }

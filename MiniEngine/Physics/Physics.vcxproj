@@ -39,6 +39,7 @@
     <None Include="tests\PhysicsQueryTests.cpp" />
     <None Include="tests\ConvexElemTests.cpp" />
     <None Include="tests\AggregateGeomTests.cpp" />
+    <None Include="tests\AggregateSliceTests.cpp" />
     <None Include="tests\CollisionTestUtils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

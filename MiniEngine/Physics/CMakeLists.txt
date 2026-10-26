@@ -59,3 +59,8 @@ add_executable(AggregateGeomTests tests/AggregateGeomTests.cpp)
 target_link_libraries(AggregateGeomTests PRIVATE MiniCollision)
 target_compile_options(AggregateGeomTests PRIVATE /utf-8 /W4)
 add_test(NAME AggregateGeomTests COMMAND AggregateGeomTests)
+
+add_executable(AggregateSliceTests tests/AggregateSliceTests.cpp)
+target_link_libraries(AggregateSliceTests PRIVATE MiniCollision)
+target_compile_options(AggregateSliceTests PRIVATE /utf-8 /W4)
+add_test(NAME AggregateSliceTests COMMAND AggregateSliceTests)
