@@ -93,7 +93,8 @@ namespace Viewer
             m_StatusText = "Cut rejected - unsupported input or resource limit";
             return false;
         }
-        m_StateVersion = mesh->GetStateVersion();
+        m_EditGeneration = mesh->GetEditGeneration();
+        m_PhysicsPoseGeneration = mesh->GetPhysicsPoseGeneration();
         m_Owner = owner; m_Mesh = meshId; m_World = Math::Matrix4(world); m_Publish = publish;
         m_StatusText = "Cutting";
         return true;
@@ -122,7 +123,7 @@ namespace Viewer
             const CutCandidate candidate = m_Pending.front(); m_Pending.pop_front();
             GameObject* object = m_Scene.FindObject(candidate.Owner);
             MeshComponent* mesh = object ? object->FindMeshComponent(candidate.Mesh) : nullptr;
-            if (!mesh || mesh->GetGeometry() != candidate.Geometry || mesh->GetStateVersion() != candidate.StateVersion)
+            if (!mesh || mesh->GetGeometry() != candidate.Geometry || mesh->GetEditGeneration() != candidate.EditGeneration)
             { m_StatusText = "Cancelled - cut target changed"; continue; }
             const Math::Matrix4 world(mesh->GetWorldTransform(object->GetTransform()));
             if (std::memcmp(&world,&candidate.World,sizeof(world)) != 0)
@@ -182,7 +183,7 @@ namespace Viewer
             m_Job->ValidateDiagnostics();
         }
 
-        if (mesh && m_Publish && mesh->GetGeometry() == m_Job->Input && mesh->GetStateVersion() == m_StateVersion)
+        if (mesh && m_Publish && mesh->GetGeometry() == m_Job->Input && mesh->GetEditGeneration() == m_EditGeneration)
         {
             const Math::Matrix4 current(mesh->GetWorldTransform(object->GetTransform()));
             if (std::memcmp(&current, &m_World, sizeof(current)) == 0)

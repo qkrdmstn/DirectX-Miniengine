@@ -13,7 +13,8 @@ namespace Viewer
         ObjectId Owner;
         ComponentId Mesh;
         std::shared_ptr<const GeometryRevision> Geometry;
-        uint64_t StateVersion;
+        uint64_t EditGeneration;
+        uint64_t PhysicsPoseGeneration;   // 6단계에서 simulate 대상 재확인에 쓴다. 지금은 비교하지 않는다.
         Math::Matrix4 World;
     };
 

@@ -150,6 +150,79 @@ namespace Viewer
             && out.ConvexElems.empty(), "Out of range section unavailable");
     }
 
+    // 편집·물리 pose 두 세대의 증가 규칙을 setter별로 검사한다. attached는 Attached, independent는 WorldIndependent여야 한다.
+    inline void CheckGenerationRules(GameObject& object, MeshComponent& attached, MeshComponent& independent)
+    {
+        using namespace Math;
+
+        // 편집·물리 세대가 기준값에서 각각 edit, pose만큼 늘었는지 확인하는 도우미다.
+        auto expect = [](const MeshComponent& mesh, uint64_t edit, uint64_t pose, uint64_t baseEdit, uint64_t basePose, const char* message)
+        {
+            CheckComponent(mesh.GetEditGeneration() == baseEdit + edit && mesh.GetPhysicsPoseGeneration() == basePose + pose, message);
+        };
+
+        // 검사가 이후 장면을 바꾸지 않도록 원래 배치를 기억한다.
+        const SceneTransform original = independent.GetTransform();
+
+        // 명시적 배치·source frame·geometry 교체는 편집 세대만 올린다.
+        uint64_t e = independent.GetEditGeneration(), p = independent.GetPhysicsPoseGeneration();
+        SceneTransform placed = independent.GetTransform();
+        placed.SetScale(placed.GetScale() * Vector3(1.0f, 1.5f, 1.0f));
+        CheckComponent(independent.SetTransform(placed, MeshTransformMode::WorldIndependent), "Generation SetTransform");
+        expect(independent, 1, 0, e, p, "SetTransform bumps edit only");
+        e = independent.GetEditGeneration();
+        CheckComponent(independent.SetDeformBinding(independent.GetDeformBinding()), "Generation SetDeformBinding");
+        expect(independent, 1, 0, e, p, "SetDeformBinding bumps edit only");
+        e = independent.GetEditGeneration();
+        CheckComponent(independent.SetGeometry(independent.GetGeometry()), "Generation SetGeometry");
+        expect(independent, 1, 0, e, p, "SetGeometry bumps edit only");
+
+        // 실패한 설정은 어느 세대도 올리지 않는다.
+        e = independent.GetEditGeneration();
+        SceneTransform invalid;
+        invalid.SetScale(Vector3(0.0f, 1.0f, 1.0f));
+        CheckComponent(!independent.SetTransform(invalid, MeshTransformMode::WorldIndependent), "Generation invalid TRS");
+        expect(independent, 0, 0, e, p, "Rejected setter keeps generations");
+
+        // SetPhysicsPose는 물리 세대만 올리고, 같은 pose는 올리지 않으며, 크기를 보존한다.
+        const Vector3 scale = independent.GetTransform().GetScale();
+        const Vector3 position = independent.GetTransform().GetTranslation() + Vector3(0.0f, 0.25f, 0.0f);
+        const Quaternion rotation = Quaternion(Vector3(kYUnitVector), 0.3f);
+        CheckComponent(independent.SetPhysicsPose(position, rotation), "SetPhysicsPose");
+        expect(independent, 0, 1, e, p, "SetPhysicsPose bumps pose only");
+        p = independent.GetPhysicsPoseGeneration();
+        CheckComponent(independent.SetPhysicsPose(position, rotation), "SetPhysicsPose same");
+        expect(independent, 0, 0, e, p, "Same pose keeps generations");
+        CheckComponent(float(Length(independent.GetTransform().GetScale() - scale)) == 0.0f, "Pose keeps scale");
+        const Vector3 point(0.3f, 0.7f, -0.2f);
+        const Vector3 world = independent.GetWorldTransform(object.GetTransform()) * point;
+        const Vector3 manual = AffineTransform(Matrix3(rotation) * Matrix3::MakeScale(scale), position) * point;
+        CheckComponent(float(Length(world - manual)) < 0.0001f, "Pose world is T*R*S");
+
+        // Attached에는 물리 pose를 적용할 수 없고 세대도 그대로여야 한다.
+        const uint64_t ae = attached.GetEditGeneration(), ap = attached.GetPhysicsPoseGeneration();
+        CheckComponent(!attached.SetPhysicsPose(position, rotation), "Attached rejects physics pose");
+        expect(attached, 0, 0, ae, ap, "Rejected pose keeps generations");
+
+        // 같은 pose를 다른 경로로 만든 Vector3(XMFLOAT3)로 넣어도 세대가 오르지 않는다.
+        DirectX::XMFLOAT3 raw;
+        XMStoreFloat3(&raw, position);
+        CheckComponent(independent.SetPhysicsPose(Vector3(DirectX::XMFLOAT3(raw.x, raw.y, raw.z)), rotation), "SetPhysicsPose rebuilt");
+        expect(independent, 0, 0, e, p, "Rebuilt same pose keeps generations");
+
+        // owner 편집은 어느 컴포넌트의 편집 세대도 올리지 않는다(Attached는 world 행렬 비교로 검출).
+        const SceneTransform ownerBefore = object.GetTransform();
+        e = independent.GetEditGeneration();
+        SceneTransform moved = ownerBefore;
+        moved.SetTranslation(ownerBefore.GetTranslation() + Vector3(1.0f, 0.0f, 0.0f));
+        CheckComponent(object.SetTransform(moved), "Owner edit");
+        expect(attached, 0, 0, ae, ap, "Owner edit keeps Attached generation");
+        expect(independent, 0, 0, e, p, "Owner edit ignored by WorldIndependent");
+        CheckComponent(object.SetTransform(ownerBefore), "Owner restore");
+        expect(attached, 0, 0, ae, ap, "Owner A-B-A keeps generations");
+        CheckComponent(independent.SetTransform(original, MeshTransformMode::WorldIndependent), "Placement restore");
+    }
+
     // ID·revision·collider·변환 계약을 검사하고 같은 owner 아래 두 번째 메시를 배치한다.
     inline void PrepareMeshComponentChecks(Scene& scene)
     {
@@ -268,6 +341,9 @@ namespace Viewer
             const Vector3 independent = second.GetWorldTransform(changed) * point;
             const Vector3 unchanged = second.GetWorldTransform(object->GetTransform()) * point;
             CheckComponent(float(Length(independent - unchanged)) < 0.0001f, "Detached ignores owner");
+
+            // 두 세대의 증가 규칙을 검사한다.
+            CheckGenerationRules(*object, first, second);
 
             // 두 컴포넌트에 collider를 붙여 이후 프레임 검사를 준비한다.
             object->AddColliderComponent(firstId);

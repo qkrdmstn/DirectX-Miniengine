@@ -46,7 +46,8 @@ namespace Viewer
         ObjectId m_Owner = InvalidObjectId;
         ComponentId m_Mesh = InvalidComponentId;
         Math::Matrix4 m_World;
-        uint64_t m_StateVersion = 0;
+        uint64_t m_EditGeneration = 0;
+        uint64_t m_PhysicsPoseGeneration = 0;   // 6단계에서 simulate 대상 게시 직전 재확인에 쓴다
         bool m_Publish = true;
         std::deque<CutCandidate> m_Pending;
         MeshCutting::CutPlaneData m_PendingPlane{};

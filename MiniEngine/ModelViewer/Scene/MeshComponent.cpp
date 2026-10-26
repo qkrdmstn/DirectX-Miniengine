@@ -5,6 +5,7 @@
 #include "GraphicsCore.h"
 #include "Util/CommandLineArg.h"
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -207,12 +208,52 @@ namespace Viewer
         SceneTransform normalized = transform;
         if (!normalized.Normalize())
             return false;
-        ++m_StateVersion;
+        ++m_EditGeneration;
         m_Transform = normalized;
         m_TransformMode = mode;
         m_Ready = false;
         return true;
     }
+
+    // 정의되지 않은 SIMD 칸을 제외하고 X/Y/Z 성분의 float 비트가 모두 같은지 비교한다.
+    static bool SameBits3(Vector3 a, Vector3 b)
+    {
+        DirectX::XMFLOAT3 fa, fb;
+        XMStoreFloat3(&fa, a);
+        XMStoreFloat3(&fb, b);
+        return std::memcmp(&fa, &fb, sizeof(fa)) == 0;
+    }
+
+    // X/Y/Z/W 네 성분의 float 비트가 모두 같은지 비교한다.
+    static bool SameBits4(Quaternion a, Quaternion b)
+    {
+        DirectX::XMFLOAT4 fa, fb;
+        XMStoreFloat4(&fa, a);
+        XMStoreFloat4(&fb, b);
+        return std::memcmp(&fa, &fb, sizeof(fa)) == 0;
+    }
+
+    // WorldIndependent의 위치·회전만 갱신하고 실제로 바뀐 경우에만 물리 pose 세대를 올린다.
+    bool MeshComponent::SetPhysicsPose(const Vector3& position, const Quaternion& rotation)
+    {
+        // WorldIndependent가 아니거나 값이 유효하지 않으면 거절한다.
+        if (m_TransformMode != MeshTransformMode::WorldIndependent)
+            return false;
+        SceneTransform next(rotation, m_Transform.GetScale(), position);
+        if (!next.Normalize())
+            return false;
+
+        // 정규화된 T/R의 사용 성분(X/Y/Z, W)이 비트까지 같으면 세대와 준비 상태를 건드리지 않는다.
+        if (SameBits3(next.GetTranslation(), m_Transform.GetTranslation()) && SameBits4(next.GetRotation(), m_Transform.GetRotation()))
+            return true;
+
+        // 크기는 유지한 채 pose만 저장하고 준비 상태를 무효화한다. EditGeneration은 올리지 않는다.
+        ++m_PhysicsPoseGeneration;
+        m_Transform = next;
+        m_Ready = false;
+        return true;
+    }
+
 
     // 변형 기준을 바꾸면 고정 pose snapshot도 다음 Update에서 다시 잡는다.
     bool MeshComponent::SetDeformBinding(const DeformBinding& binding)
@@ -223,7 +264,7 @@ namespace Viewer
             return false;
 
         // 기준을 저장하고 pose 관련 캐시를 무효화한다.
-        ++m_StateVersion;
+        ++m_EditGeneration;
         m_DeformBinding = normalized;
         m_SectionBounds.clear();
         m_FrozenNodes.clear();
@@ -261,7 +302,7 @@ namespace Viewer
         m_PosedGeometry = std::move(posed);
 
         // revision을 교체하고 경계·준비 상태를 무효화한다.
-        ++m_StateVersion;
+        ++m_EditGeneration;
         m_Geometry = std::move(geometry);
         m_SectionBounds.clear();
         m_Ready = false;

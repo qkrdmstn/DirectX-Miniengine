@@ -96,7 +96,7 @@ namespace Viewer
                 if (!entry.Handle) m_FallbackKeys.push_back(key);
                 entry.Bounds = bounds;
                 entry.Sphere = sphere;
-                entry.Candidate = {object->GetId(),mesh->GetId(),geometry,mesh->GetStateVersion(),
+                entry.Candidate = {object->GetId(),mesh->GetId(),geometry,mesh->GetEditGeneration(),mesh->GetPhysicsPoseGeneration(),
                     Math::Matrix4(mesh->GetWorldTransform(object->GetTransform()))};
             }
         for (auto it = m_Entries.begin(); it != m_Entries.end();)
@@ -118,7 +118,7 @@ namespace Viewer
         const auto* object = m_Scene.FindObject(candidate.Owner);
         const auto* mesh = object ? object->FindMeshComponent(candidate.Mesh) : nullptr;
         if (!mesh || !IsEligible(*mesh) || mesh->GetGeometry() != candidate.Geometry ||
-            mesh->GetStateVersion() != candidate.StateVersion || !object->IsColliderCurrent(entry.Collider)) return false;
+            mesh->GetEditGeneration() != candidate.EditGeneration || !object->IsColliderCurrent(entry.Collider)) return false;
         const Math::Matrix4 world(mesh->GetWorldTransform(object->GetTransform()));
         return std::memcmp(&world,&candidate.World,sizeof(world)) == 0;
     }

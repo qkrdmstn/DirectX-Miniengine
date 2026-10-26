@@ -1,4 +1,4 @@
-상태: 진행 중 — 1단계·2단계(2a `4d3d393b`·2b-1 `e23e4945`·2b-2) 구현 완료, 3 이후 미구현 (2026-10-26)
+상태: 진행 중 — 1·2단계·3단계(세대 분리) 구현 완료, 4a 이후 미구현 (2026-10-26)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -125,7 +125,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 ### R6 세대
 
 - 두 세대를 분리한다.
-  - `EditGeneration`: geometry·scale·source frame·명시적 편집·teleport·Attached에 영향을 주는 owner 편집에서 증가.
+  - `EditGeneration`: geometry·scale·source frame·명시적 편집·teleport에서 증가. owner 편집은 EditGeneration을 올리지 않으며, Attached(비시뮬레이션) 대상은 기존 world 행렬 비교로 검출한다.
   - `PhysicsPoseGeneration`: T/R 변경에서 증가. 같은 pose를 다시 기록하면 증가하지 않는다.
 - `CuttingSystem::Update`·`SubmitPending`·`PhysicsSystem::IsCurrent`는 EditGeneration만 비교한다.
 - simulate 대상은 제출 시 (body, PhysicsPoseGeneration, sleeping)을 기록하고 게시 직전에 재확인한다. 깨어났거나 pose가 바뀌었으면 취소하고 부모를 유지한다.

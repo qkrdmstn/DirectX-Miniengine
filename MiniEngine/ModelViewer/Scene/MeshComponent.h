@@ -24,6 +24,13 @@ namespace Viewer
     bool GatherSectionHulls(const std::vector<MeshCollisionStatus>& statuses, const std::vector<MiniCollision::AggregateGeom>& hulls,
         const std::vector<GeometrySection>& sections, const double inverse[3][4], MiniCollision::AggregateGeom& out, std::string& reason);
 
+    // 세대 증가 규칙 (R6)
+    //  EditGeneration: SetGeometry, SetDeformBinding(source frame), SetTransform(배치·teleport·scale 포함),
+    //                  SetPlacement(위 둘의 합)에서 증가한다.
+    //                  owner 편집(GameObject::SetTransform)은 올리지 않는다. Attached(비시뮬레이션) 대상은
+    //                  기존 world 행렬 비교로 검출하고, WorldIndependent는 owner TRS를 쓰지 않는다.
+    //  PhysicsPoseGeneration: SetPhysicsPose에서만 증가하며, 정규화한 T/R의 X/Y/Z(, W) 성분 중 하나라도 float 비트가 달라질 때만
+    //                  증가한다(SIMD 4번째 칸은 비교하지 않으며, -0과 +0은 다른 pose로 본다). EditGeneration은 올리지 않는다.
     class MeshComponent
     {
     public:
@@ -33,8 +40,10 @@ namespace Viewer
         ~MeshComponent();
         // owner 안에서 재사용하지 않는 ID를 읽는다.
         ComponentId GetId() const { return m_Id; }
-        // 지연 절단 결과가 이전 편집 상태를 덮어쓰지 않도록 상태 세대를 읽는다.
-        uint64_t GetStateVersion() const { return m_StateVersion; }
+        // 지연 절단 결과가 이전 편집 상태를 덮어쓰지 않도록 편집 세대를 읽는다.
+        uint64_t GetEditGeneration() const { return m_EditGeneration; }
+        // 물리가 기록한 T/R 변경 세대를 읽는다. 편집 세대와 독립이다.
+        uint64_t GetPhysicsPoseGeneration() const { return m_PhysicsPoseGeneration; }
         // 현재 geometry의 강한 참조를 읽는다. 교체 전 snapshot도 별도 보관할 수 있다.
         const std::shared_ptr<const GeometryRevision>& GetGeometry() const { return m_Geometry; }
         // 이 컴포넌트에만 속한 현재 자세 버퍼를 읽는다.
@@ -47,6 +56,8 @@ namespace Viewer
         const DeformBinding& GetDeformBinding() const { return m_DeformBinding; }
         // 유효한 target TRS를 저장한다. WorldIndependent에서는 인수가 월드 TRS다.
         bool SetTransform(const SceneTransform& transform, MeshTransformMode mode);
+        // 물리 pose를 기록한다. WorldIndependent에서만 허용하며 위치·회전만 바꾸고 크기는 유지한다. 같은 pose면 아무것도 바꾸지 않는다.
+        bool SetPhysicsPose(const Math::Vector3& position, const Math::Quaternion& rotation);
         // source 프레임과 pose 추종/고정 정책을 검증하고 적용한다.
         bool SetDeformBinding(const DeformBinding& binding);
         // source 프레임과 target 배치를 한 번에 게시한다. 화면 보존 시 Attached의 target을 SourceFrame으로 맞춘다.
@@ -92,7 +103,8 @@ namespace Viewer
         void RebuildCollision();
 
         ComponentId m_Id;
-        uint64_t m_StateVersion = 1;
+        uint64_t m_EditGeneration = 1;
+        uint64_t m_PhysicsPoseGeneration = 1;
         SceneTransform m_Transform;
         MeshTransformMode m_TransformMode = MeshTransformMode::Attached;
         DeformBinding m_DeformBinding;
