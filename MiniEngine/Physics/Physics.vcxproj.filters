@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <ItemGroup><ClInclude Include="PhysicsWorld.h" /><ClInclude Include="Collision\CollisionUnits.h" /><ClInclude Include="Collision\ConvexElem.h" /><ClInclude Include="Collision\AggregateGeom.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="PhysicsWorld.h" /><ClInclude Include="Collision\CollisionUnits.h" /><ClInclude Include="Collision\ConvexElem.h" /><ClInclude Include="Collision\AggregateGeom.h" /><ClInclude Include="Collision\BodyMass.h" /></ItemGroup>
   <ItemGroup><ClCompile Include="PhysicsWorld.cpp" /><ClCompile Include="Collision\ConvexElem.cpp" /><ClCompile Include="Collision\AggregateGeom.cpp" /></ItemGroup>
-  <ItemGroup><None Include="CMakeLists.txt" /><None Include="ThirdParty.md" /><None Include="tests\PhysicsQueryTests.cpp" /><None Include="tests\ConvexElemTests.cpp" /><None Include="tests\AggregateGeomTests.cpp" /><None Include="tests\AggregateSliceTests.cpp" /><None Include="tests\CollisionTestUtils.h" /></ItemGroup>
+  <ItemGroup><None Include="CMakeLists.txt" /><None Include="ThirdParty.md" /><None Include="tests\PhysicsQueryTests.cpp" /><None Include="tests\ConvexElemTests.cpp" /><None Include="tests\AggregateGeomTests.cpp" /><None Include="tests\AggregateSliceTests.cpp" /><None Include="tests\BodyMassTests.cpp" /><None Include="tests\CollisionTestUtils.h" /></ItemGroup>
 </Project>

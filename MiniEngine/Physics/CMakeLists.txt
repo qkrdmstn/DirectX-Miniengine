@@ -64,3 +64,8 @@ add_executable(AggregateSliceTests tests/AggregateSliceTests.cpp)
 target_link_libraries(AggregateSliceTests PRIVATE MiniCollision)
 target_compile_options(AggregateSliceTests PRIVATE /utf-8 /W4)
 add_test(NAME AggregateSliceTests COMMAND AggregateSliceTests)
+
+add_executable(BodyMassTests tests/BodyMassTests.cpp)
+target_link_libraries(BodyMassTests PRIVATE MiniCollision)
+target_compile_options(BodyMassTests PRIVATE /utf-8 /W4)
+add_test(NAME BodyMassTests COMMAND BodyMassTests)
