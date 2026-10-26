@@ -4,6 +4,7 @@
 #include <limits>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 
 namespace MiniPhysics
 {
@@ -74,6 +75,15 @@ namespace MiniPhysics
         auto impl = std::make_unique<Impl>();
         impl->World.Init(capacity, 0, capacity, capacity, impl->Layers, impl->Layers, impl->Layers);
 
+        // Y-up 중력(Unreal -980 cm/s²를 m로 환산한 값)을 지정한다.
+        impl->World.SetGravity(JPH::Vec3(0.0f, -9.8f, 0.0f));
+
+        // Step용 임시 할당기와 작업 스레드 풀을 만든다. 할당기는 10 MB(Jolt 권장 크기)이고, 스레드는 메인 스레드를 제외한 코어 수(최소 1)다.
+        const unsigned cores = std::thread::hardware_concurrency();
+        const int workers = cores > 1 ? int(cores) - 1 : 1;
+        impl->TempAllocator = std::make_unique<JPH::TempAllocatorImpl>(10u * 1024u * 1024u);
+        impl->JobSystem = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, workers);
+
         // 예약 상한을 기록하고 handle 맵을 용량만큼 미리 잡아 Commit이 재해시하지 않게 한다.
         impl->Capacity = capacity;
         impl->SimBodies.reserve(capacity);
@@ -88,8 +98,15 @@ namespace MiniPhysics
         // 살아 있는 PreparedBody가 해제된 world를 건드리지 않도록 소유 world 연결을 끊는다.
         if (m_Impl) for (auto* data : m_Impl->Prepared) data->Owner = nullptr;
 
-        // 게시된 body를 비우고 world를 닫는다.
+        // 게시된 body를 비운다.
         Clear();
+
+        // 작업 스레드와 임시 할당기를 먼저 정리한 뒤 world를 닫는다.
+        if (m_Impl)
+        {
+            m_Impl->JobSystem.reset();
+            m_Impl->TempAllocator.reset();
+        }
         m_Impl.reset();
     }
 

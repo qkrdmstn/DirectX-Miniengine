@@ -110,6 +110,18 @@ namespace MiniPhysics
         // 조회 body, simulation body, 준비 중 body의 예약 합계를 반환한다. Initialize 용량을 넘지 않는다.
         size_t GetReservedCount() const;
 
+        // 고정 시간 deltaSeconds만큼 simulation을 한 번(충돌 step 1회) 진행한다. 중력은 Y-up (0, -9.8, 0) m/s²(Unreal -980 cm/s²)다.
+        // 초기화 전이거나 dt가 비유한·0 이하이거나 Jolt가 오류(접촉·body 쌍 용량 초과 등)를 보고하면 false를 반환하며, 오류여도 world는 계속 사용할 수 있다.
+        bool Step(float deltaSeconds);
+        // body 원점(컴포넌트 로컬 원점)의 월드 pose를 읽는다. 질량 중심이 아니다. handle이 무효이거나 제거된 body면 false다.
+        bool GetBodyPose(BodyHandle handle, std::array<double, 3>& position, std::array<double, 4>& rotation) const;
+        // body 질량 중심의 월드 위치를 읽는다. handle이 무효면 false다.
+        bool GetBodyCenterOfMass(BodyHandle handle, std::array<double, 3>& position) const;
+        // body가 깨어 있는지(Jolt IsActive) 읽는다. world에 올라가지 않았거나 handle이 무효면 false다.
+        bool IsBodyAwake(BodyHandle handle) const;
+        // body의 선속도(m/s)와 각속도(rad/s)를 읽는다. 정적 body는 0이다. handle이 무효면 false다.
+        bool GetBodyVelocity(BodyHandle handle, std::array<double, 3>& linear, std::array<double, 3>& angular) const;
+
     private:
         struct Impl;
         friend struct PhysicsWorldAccess;

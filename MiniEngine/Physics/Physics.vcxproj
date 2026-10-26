@@ -35,11 +35,13 @@
     <ClInclude Include="Collision\BodyMass.h" />
     <ClCompile Include="PhysicsWorld.cpp" />
     <ClCompile Include="PhysicsWorldBodies.cpp" />
+    <ClCompile Include="PhysicsWorldStep.cpp" />
     <ClCompile Include="Collision\ConvexElem.cpp" />
     <ClCompile Include="Collision\AggregateGeom.cpp" />
     <None Include="CMakeLists.txt" />
     <None Include="ThirdParty.md" />
     <None Include="tests\PhysicsQueryTests.cpp" />
+    <None Include="tests\PhysicsStepTests.cpp" />
     <None Include="tests\ConvexElemTests.cpp" />
     <None Include="tests\AggregateGeomTests.cpp" />
     <None Include="tests\AggregateSliceTests.cpp" />

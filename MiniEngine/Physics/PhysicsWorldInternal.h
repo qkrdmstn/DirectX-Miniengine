@@ -4,6 +4,8 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
+#include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -86,6 +88,9 @@ namespace MiniPhysics
         std::shared_ptr<Runtime> RuntimeOwner = AcquireRuntime();
         PhysicsLayers Layers;
         JPH::PhysicsSystem World;
+        // Step 전용 자원이다. World 뒤에 선언해 World보다 먼저 파괴되며, JobSystem 파괴가 작업 스레드를 모두 정지시킨다.
+        std::unique_ptr<JPH::TempAllocatorImpl> TempAllocator;
+        std::unique_ptr<JPH::JobSystemThreadPool> JobSystem;
         std::unordered_map<ColliderHandle, JPH::BodyID> Bodies;
         // Initialize 용량이며 조회·simulation·준비 중 body 합계의 상한이다.
         uint32_t Capacity = 0;
