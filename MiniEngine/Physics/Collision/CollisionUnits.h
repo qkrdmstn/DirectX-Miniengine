@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // Unreal은 cm, 이 프로젝트는 m이므로 Unreal 상수를 환산해 둔다.
 namespace MiniCollision

@@ -1,4 +1,4 @@
-상태: 진행 중 — 1단계(1a `0d29e37b`·1b `82e155a3`·1c) 구현 완료, 2a 이후 미구현 (2026-10-26)
+상태: 진행 중 — 1단계(`0d29e37b`·`82e155a3`·`44a4cb4c`·`367301ec`)·2a 구현 완료, 2b 이후 미구현 (2026-10-26)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -75,6 +75,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 ### R2 충돌 자산
 
 - 로더가 geometry 바이트를 보관한 채 node/mesh metadata를 읽고, `EvaluateModelPose`·matrixIdx로 메시별 model-local 18-DOP를 CPU에서 1회 계산한 뒤 업로드한다. Model에 공유 보관한다.
+- 충돌 hull과 허용오차(KDopMinSize·병합 0.001·snap)는 메시 로컬(asset) 단위로 적용된다. 컴포넌트 scale은 body 생성 시 정점에 반영되므로 월드 기준 오차는 scale에 비례한다. Unreal도 asset 단위(cm)로 충돌을 만들고 scale을 나중에 적용하므로 같은 성질이다. 문서의 m 표기는 1 asset unit = 1 m 가정의 수치다.
 - 초기 hull snap: `snapDistSq = 0.000015·R_m`(m², 거리 제곱 비교; Unreal 0.0015·R_cm cm² 환산).
 - 18개 반공간 교집합과의 동일성은 정점 병합 전 다면체에만 적용한다. 최종 hull은 병합·snap이 반영된 근사이며 형상·부피 허용오차를 명시한다.
 - 정점 병합(0.001 m) 때문에 얇은 형상의 최종 hull 부피는 병합 전보다 줄 수 있다(두께 0.012 m 상자에서 약 10%, Unreal 0.1 cm 병합과 같은 성질). 일반 형상의 허용오차는 1%.
@@ -90,6 +91,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 - GPU 평면(`transpose(world)·WorldPlane`, 비정규화)은 그대로 둔다. CPU는 같은 로컬 평면 사본의 법선·상수항을 함께 정규화한다.
 - 비균일 scale에서 Unreal `InverseTransformVectorNoScale`과 다르다. GPU 일치를 우선한다(문서화된 차이).
 - `BoxPlaneCompare`/`SliceConvexElem`/`HullFromPlanes`를 이식한다.
+- 아래 허용오차도 메시 로컬(asset) 단위로 적용되며 1 asset unit = 1 m 가정의 수치다(R2 단위 계약 참조).
 - 단위 환산:
 
 | 값 | Unreal(cm) | 이 프로젝트(m) |

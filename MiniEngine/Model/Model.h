@@ -26,6 +26,10 @@
 #include "../Core/Math/BoundingBox.h"
 #include "../Core/Math/BoundingSphere.h"
 #include <cstdint>
+#include <vector>
+// Model 모듈이 Jolt 없이 충돌 hull을 만들도록 순수 C++ 충돌 소스(ConvexElem/AggregateGeom)를 Model.vcxproj에 직접 컴파일한다.
+// MiniPhysics.lib에는 이 객체가 없으므로 중복 심볼이 생기지 않는다.
+#include "../Physics/Collision/AggregateGeom.h"
 
 namespace Renderer
 {
@@ -82,6 +86,16 @@ struct Mesh
     Draw draw[1];           // Actually 1 or more draws
 };
 
+// 메시별 임포트 시점 충돌 생성 결과 상태다.
+enum class MeshCollisionStatus : uint8_t
+{
+    Generated,      // hull 생성 성공
+    Skinned,        // 스킨 메시라 충돌 없음
+    NodeAnimated,   // 메시 노드나 조상 노드가 애니메이션 대상이라 충돌 없음
+    DecodeFailed,   // 정점 위치를 해석할 수 없음
+    GenerateFailed  // 18-DOP hull 생성 실패
+};
+
 struct Joint
 {
     Math::Matrix4 posXform;
@@ -110,6 +124,21 @@ public:
     std::unique_ptr<AnimationSet[]> m_Animations;
     std::unique_ptr<uint16_t[]> m_JointIndices;
     std::unique_ptr<Math::Matrix4[]> m_JointIBMs;
+    std::vector<MiniCollision::AggregateGeom> m_MeshCollision;   // m_MeshData 순서의 model-local 충돌(생성되지 않은 메시는 비어 있음)
+    std::vector<MeshCollisionStatus> m_MeshCollisionStatus;      // m_MeshData 순서의 충돌 생성 상태
+
+    // 메시 하나의 model-local 충돌 형상을 읽는다.
+    const MiniCollision::AggregateGeom& GetMeshCollision(uint32_t meshIndex) const
+    {
+        // 메시 순서의 충돌 형상을 돌려준다.
+        return m_MeshCollision[meshIndex];
+    }
+    // 메시 하나의 충돌 생성 상태를 읽는다.
+    MeshCollisionStatus GetMeshCollisionStatus(uint32_t meshIndex) const
+    {
+        // 메시 순서의 충돌 생성 상태를 돌려준다.
+        return m_MeshCollisionStatus[meshIndex];
+    }
 
 protected:
     void Destroy();
