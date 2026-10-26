@@ -3,7 +3,10 @@
 #include "Renderer.h"
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
+#include "Util/CommandLineArg.h"
+#include <cmath>
 #include <stdexcept>
+#include <string>
 
 using namespace Math;
 
@@ -13,16 +16,150 @@ namespace Viewer
     MeshComponent::MeshComponent(ComponentId id, std::shared_ptr<const GeometryRevision> geometry)
         : m_Id(id), m_Geometry(std::move(geometry))
     {
+        // ID와 원본이 유효한지 검증한다.
         if (id == InvalidComponentId || !m_Geometry)
             throw std::invalid_argument("Invalid mesh component");
         const Model& model = *m_Geometry->GetSource();
         if (model.m_NumNodes == 0)
             throw std::invalid_argument("Mesh component requires nodes");
+
+        // 컴포넌트 전용 pose 버퍼와 렌더 상수 버퍼를 만든다.
         m_PosedGeometry = m_Geometry->IsGenerated() ? std::make_unique<PosedGeometry>(*m_Geometry->GetGenerated())
             : std::make_unique<PosedGeometry>(model);
         m_ConstantsCPU.Create(L"Component constants upload", model.m_NumNodes * sizeof(MeshConstants));
         m_ConstantsGPU.Create(L"Component constants", model.m_NumNodes, sizeof(MeshConstants));
 
+        // 현재 revision의 충돌을 만든다.
+        RebuildCollision();
+    }
+
+    // 선택 section이 모두 Generated hull을 가져야 SourceFrame⁻¹를 적용해 out에 모은다. 하나라도 아니면 out을 비우고 이유를 남긴다.
+    // 정적 section과 스킨 section이 섞인 컴포넌트는 하나의 강체가 될 수 없으므로 전체를 Unavailable로 취급한다.
+    bool GatherSectionHulls(const std::vector<MeshCollisionStatus>& statuses, const std::vector<MiniCollision::AggregateGeom>& hulls,
+        const std::vector<GeometrySection>& sections, const double inverse[3][4], MiniCollision::AggregateGeom& out, std::string& reason)
+    {
+        // 이전 결과를 비운다.
+        static const char* names[] = { "Generated", "Skinned", "NodeAnimated", "DecodeFailed", "GenerateFailed" };
+        out.ConvexElems.clear();
+
+        // section이 없으면 쓸 수 있는 hull이 없다.
+        if (sections.empty())
+        {
+            reason = "no sections selected";
+            return false;
+        }
+
+        // section마다 범위와 상태를 검사하고 hull을 복사해 역변환한다.
+        for (const GeometrySection& section : sections)
+        {
+            if (section.SourceMesh >= statuses.size() || section.SourceMesh >= hulls.size())
+            {
+                out.ConvexElems.clear();
+                reason = "section " + std::to_string(section.SourceMesh) + " out of range";
+                return false;
+            }
+            if (statuses[section.SourceMesh] != MeshCollisionStatus::Generated || hulls[section.SourceMesh].ConvexElems.empty())
+            {
+                out.ConvexElems.clear();
+                reason = "section " + std::to_string(section.SourceMesh) + " has no hull ("
+                    + names[static_cast<int>(statuses[section.SourceMesh])] + ")";
+                return false;
+            }
+            for (MiniCollision::ConvexElem elem : hulls[section.SourceMesh].ConvexElems)
+            {
+                elem.ApplyAffine(inverse);
+                out.ConvexElems.push_back(std::move(elem));
+            }
+        }
+
+        // 모든 section의 hull을 모았다.
+        return true;
+    }
+
+    // 원본 revision은 선택 section의 Model hull에 SourceFrame⁻¹를 적용하고 생성 revision은 2b-2 전까지 Unavailable로 둔다.
+    void MeshComponent::RebuildCollision()
+    {
+        // 이전 revision의 hull을 지우고 현재 revision ID를 기록한다.
+        m_Collision.ConvexElems.clear();
+        m_CollisionStatus = ComponentCollisionStatus::Unavailable;
+        m_CollisionReason.clear();
+        m_CollisionRevisionId = m_Geometry->GetId();
+
+        // 생성 revision은 부모 계승(2b-2에서 Inherited로 채움) 전까지 쓸 수 없다.
+        if (m_Geometry->IsGenerated())
+        {
+            m_CollisionReason = "generated revision: inheritance not provided yet (2b-2)";
+            return;
+        }
+
+        // SourceFrame TRS의 역변환 x = S⁻¹·Rᵀ·(p − T)를 double 3x4로 만든다.
+        const Model& model = *m_Geometry->GetSource();
+        const SceneTransform& frame = m_DeformBinding.SourceFrame;
+        DirectX::XMFLOAT4 q;
+        DirectX::XMFLOAT3 scale, position;
+        XMStoreFloat4(&q, frame.GetRotation());
+        XMStoreFloat3(&scale, frame.GetScale());
+        XMStoreFloat3(&position, frame.GetTranslation());
+        const double qn = std::sqrt(double(q.x) * q.x + double(q.y) * q.y + double(q.z) * q.z + double(q.w) * q.w);
+        const double x = q.x / qn, y = q.y / qn, z = q.z / qn, w = q.w / qn;
+        const double rot[3][3] = {
+            { 1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w) },
+            { 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w) },
+            { 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y) } };
+        const double inverseScale[3] = { 1.0 / scale.x, 1.0 / scale.y, 1.0 / scale.z };
+        const double move[3] = { position.x, position.y, position.z };
+        double inverse[3][4];
+        for (int i = 0; i < 3; ++i)
+        {
+            inverse[i][3] = 0.0;
+            for (int j = 0; j < 3; ++j)
+            {
+                inverse[i][j] = rot[j][i] * inverseScale[i];
+                inverse[i][3] -= inverse[i][j] * move[j];
+            }
+        }
+
+        // 선택 section의 hull을 모아 역변환한다. 실패하면 이유를 남기고 Unavailable로 둔다.
+        std::string reason;
+        if (GatherSectionHulls(model.m_MeshCollisionStatus, model.m_MeshCollision, m_Geometry->GetSections(), inverse, m_Collision, reason))
+            m_CollisionStatus = ComponentCollisionStatus::FromModel;
+        else
+            m_CollisionReason = std::move(reason);
+    }
+
+    // revision이 현재와 같을 때만 저장된 충돌을 돌려준다.
+    const MiniCollision::AggregateGeom& MeshComponent::GetCollision() const
+    {
+        // revision 대응이 깨진 경우를 위한 빈 형상을 준비한다.
+        static const MiniCollision::AggregateGeom empty;
+
+        // 저장된 충돌이 현재 revision의 것일 때만 돌려준다.
+        return m_CollisionRevisionId == m_Geometry->GetId() ? m_Collision : empty;
+    }
+
+    // revision이 다르면 Unavailable로 취급한다.
+    ComponentCollisionStatus MeshComponent::GetCollisionStatus() const
+    {
+        // 저장된 상태가 현재 revision의 것일 때만 돌려주고 아니면 Unavailable로 본다.
+        return m_CollisionRevisionId == m_Geometry->GetId() ? m_CollisionStatus : ComponentCollisionStatus::Unavailable;
+    }
+
+    // -collision-log 1이면 owner·컴포넌트 ID·상태·convex 수·총 부피를 출력한다.
+    void MeshComponent::LogCollision(uint32_t ownerId) const
+    {
+        // 로그 옵션이 꺼져 있으면 아무것도 하지 않는다.
+        uint32_t enabled = 0;
+        if (!CommandLineArgs::GetInteger(L"collision-log", enabled) || enabled == 0)
+            return;
+
+        // 총 부피를 합산해 한 줄로 출력한다.
+        static const char* names[] = { "None", "FromModel", "Inherited", "Unavailable" };
+        double volume = 0.0;
+        for (const MiniCollision::ConvexElem& elem : GetCollision().ConvexElems)
+            volume += elem.GetVolume();
+        Utility::Printf("ComponentCollision: owner=%u mesh=%u status=%s convex=%u volume=%.4f reason=%s\n",
+            ownerId, (uint32_t)m_Id, names[(int)GetCollisionStatus()],
+            (uint32_t)GetCollision().ConvexElems.size(), volume, m_CollisionReason.c_str());
     }
 
     // PosedGeometry의 GPU 완료 대기 후 상수와 geometry 소유권을 해제한다.
@@ -50,15 +187,21 @@ namespace Viewer
     // 변형 기준을 바꾸면 고정 pose snapshot도 다음 Update에서 다시 잡는다.
     bool MeshComponent::SetDeformBinding(const DeformBinding& binding)
     {
+        // 새 기준을 검증한다.
         DeformBinding normalized = binding;
         if (!normalized.SourceFrame.Normalize())
             return false;
+
+        // 기준을 저장하고 pose 관련 캐시를 무효화한다.
         ++m_StateVersion;
         m_DeformBinding = normalized;
         m_SectionBounds.clear();
         m_FrozenNodes.clear();
         m_FrozenJoints.clear();
         m_Ready = false;
+
+        // 새 SourceFrame으로 충돌을 다시 만든다.
+        RebuildCollision();
         return true;
     }
 
@@ -77,16 +220,24 @@ namespace Viewer
     // 다른 원본의 pose와 혼합하지 않으며 이전 GPU 결과 사용 완료 후 교체한다.
     bool MeshComponent::SetGeometry(std::shared_ptr<const GeometryRevision> geometry)
     {
+        // 같은 원본의 geometry만 받는다.
         if (!geometry || geometry->GetSource() != m_Geometry->GetSource())
             return false;
+
+        // 새 pose 버퍼를 만들고 이전 버퍼를 교체한다.
         auto posed = geometry->IsGenerated() ? std::make_unique<PosedGeometry>(*geometry->GetGenerated())
             : std::make_unique<PosedGeometry>(*geometry->GetSource());
         m_PosedGeometry.reset();
         m_PosedGeometry = std::move(posed);
+
+        // revision을 교체하고 경계·준비 상태를 무효화한다.
         ++m_StateVersion;
         m_Geometry = std::move(geometry);
         m_SectionBounds.clear();
         m_Ready = false;
+
+        // 이전 revision의 hull을 버리고 새 revision의 충돌을 만든다.
+        RebuildCollision();
         return true;
     }
 

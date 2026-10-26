@@ -3,6 +3,7 @@
 #include "ComponentId.h"
 #include "SceneTransform.h"
 #include "GeometryRevision.h"
+#include <string>
 
 namespace Viewer
 {
@@ -15,6 +16,13 @@ namespace Viewer
         SceneTransform SourceFrame;
         PoseMode Pose = PoseMode::FollowModel;
     };
+
+    // 컴포넌트 충돌의 출처. Inherited는 2b-2에서 절단 결과 계승에 사용한다.
+    enum class ComponentCollisionStatus { None, FromModel, Inherited, Unavailable };
+
+    // 선택 section이 모두 Generated hull을 가질 때만 hull에 3x4 역변환을 적용해 out에 모은다. 아니면 out을 비우고 이유를 남긴다.
+    bool GatherSectionHulls(const std::vector<MeshCollisionStatus>& statuses, const std::vector<MiniCollision::AggregateGeom>& hulls,
+        const std::vector<GeometrySection>& sections, const double inverse[3][4], MiniCollision::AggregateGeom& out, std::string& reason);
 
     class MeshComponent
     {
@@ -45,6 +53,24 @@ namespace Viewer
         bool SetPlacement(const SceneTransform& transform, MeshTransformMode mode, const DeformBinding& binding);
         // 같은 Model의 새 geometry를 게시하고 이 컴포넌트의 pose 출력을 무효화한다.
         bool SetGeometry(std::shared_ptr<const GeometryRevision> geometry);
+        // 현재 revision에 대응하는 컴포넌트 로컬 충돌을 읽는다. revision이 다르면 빈 형상이다.
+        const MiniCollision::AggregateGeom& GetCollision() const;
+        // 충돌 출처를 읽는다. revision이 다르면 Unavailable이다.
+        ComponentCollisionStatus GetCollisionStatus() const;
+        // 충돌이 없거나 쓸 수 없는 이유를 읽는다.
+        const char* GetCollisionReason() const
+        {
+            // 저장된 이유 문자열을 돌려준다.
+            return m_CollisionReason.c_str();
+        }
+        // 충돌이 대응하는 GeometryRevision ID를 읽는다.
+        uint64_t GetCollisionRevisionId() const
+        {
+            // 충돌이 만들어진 revision ID를 돌려준다.
+            return m_CollisionRevisionId;
+        }
+        // -collision-log 1일 때 컴포넌트 충돌 요약을 출력한다.
+        void LogCollision(uint32_t ownerId) const;
         // 렌더·선택·후속 collider가 공통으로 사용할 월드 행렬을 계산한다.
         Math::AffineTransform GetWorldTransform(const SceneTransform& owner) const;
         // 첫 pose 준비 전이나 기준 변경 직후에는 선택을 보류한다.
@@ -59,6 +85,9 @@ namespace Viewer
         void Render(Renderer::MeshSorter& sorter) const;
 
     private:
+        // 현재 revision과 SourceFrame으로 컴포넌트 로컬 충돌을 다시 만든다.
+        void RebuildCollision();
+
         ComponentId m_Id;
         uint64_t m_StateVersion = 1;
         SceneTransform m_Transform;
@@ -74,5 +103,9 @@ namespace Viewer
         std::vector<Joint> m_FrozenJoints;
         const Joint* m_RenderJoints = nullptr;
         bool m_Ready = false;
+        MiniCollision::AggregateGeom m_Collision;   // 컴포넌트 로컬(SourceFrame⁻¹ × model-local) 충돌
+        ComponentCollisionStatus m_CollisionStatus = ComponentCollisionStatus::None;
+        std::string m_CollisionReason;
+        uint64_t m_CollisionRevisionId = 0;         // m_Collision이 만들어진 GeometryRevision ID
     };
 }

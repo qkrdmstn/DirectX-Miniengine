@@ -437,6 +437,40 @@ static void TestBumpPoints()
     Check(IsClosedSurface(e) && OutwardWinding(e), "Large bump closed and outward");
 }
 
+// ApplyAffine이 큰 스케일·거울·회전 이동에서 정점 수와 삼각형을 유지하는지 검사한다.
+static void TestApplyAffine()
+{
+    // 준비: 한 변 0.004 m 정육면체를 만든다.
+    ConvexElem base;
+    Check(base.HullFromPlanes(AlignedBox({0,0,0}, {0.002,0.002,0.002}), {}), "Small cube builds");
+    const double volume = base.GetVolume();
+
+    // 검사: 스케일 1e8에서도 정점 8개·삼각형 12개가 유지되고 부피는 s^3배다.
+    const double big[3][4] = { {1e8,0,0,0}, {0,1e8,0,0}, {0,0,1e8,0} };
+    ConvexElem scaled = base;
+    scaled.ApplyAffine(big);
+    Check(scaled.VertexData.size() == 8 && scaled.IndexData.size() == 36, "Scale 1e8 keeps topology");
+    CheckNear(scaled.GetVolume() / volume, 1e24, 1e-6, "Scale 1e8 volume s^3");
+    Check(OutwardWinding(scaled) && scaled.ElemBox.IsValid && std::fabs(scaled.ElemBox.Max.x - 2e5) < 1e-3, "Scale keeps winding and box");
+
+    // 검사: 거울 변환은 감김을 뒤집어 부피가 양수로 유지된다.
+    const double mirror[3][4] = { {-1,0,0,0}, {0,1,0,0}, {0,0,1,0} };
+    ConvexElem mirrored = base;
+    mirrored.ApplyAffine(mirror);
+    Check(mirrored.IndexData.size() == 36 && OutwardWinding(mirrored), "Mirror flips winding");
+    CheckNear(mirrored.GetVolume(), volume, 1e-18, "Mirror volume stays positive");
+
+    // 검사: 회전(z 90도)과 이동 후 부피가 같고 정점이 정확히 대응한다.
+    const double rot[3][4] = { {0,-1,0,5}, {1,0,0,-7}, {0,0,1,3} };
+    ConvexElem moved = base;
+    moved.ApplyAffine(rot);
+    CheckNear(moved.GetVolume(), volume, 1e-18, "Rotation volume");
+    Check(OutwardWinding(moved), "Rotation winding");
+    const Vec3d expected = { 5 - base.VertexData[0].y, -7 + base.VertexData[0].x, 3 + base.VertexData[0].z };
+    const Vec3d d = moved.VertexData[0] - expected;
+    Check(Dot(d, d) < 1e-24, "Rotation vertex maps");
+}
+
 // 모든 검사를 실행하고 실패 시 비정상 종료 코드를 돌려준다.
 int main()
 {
@@ -455,6 +489,7 @@ int main()
         TestClipperBoundary();
         TestRotatedAndFarBox();
         TestUnitConsistency();
+        TestApplyAffine();
     }
     catch (const std::exception& e)
     {

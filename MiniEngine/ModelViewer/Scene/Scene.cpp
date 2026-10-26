@@ -43,6 +43,9 @@ namespace Viewer
             throw std::invalid_argument("Component source differs from owner pose");
         auto component = std::make_unique<MeshComponent>(AllocateComponentId(), std::move(geometry));
         m_MeshComponents.push_back(std::move(component));
+
+        // -collision-log 1이면 새 컴포넌트의 충돌 요약을 출력한다.
+        m_MeshComponents.back()->LogCollision(static_cast<uint32_t>(m_Id));
         return *m_MeshComponents.back();
     }
 

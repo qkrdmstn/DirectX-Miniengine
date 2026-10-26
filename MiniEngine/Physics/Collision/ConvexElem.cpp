@@ -409,11 +409,25 @@ namespace MiniCollision
     // 현재 정점들의 최소·최대 좌표로 ElemBox를 다시 계산하고 인덱스를 재구성한다(Unreal UpdateElemBox와 같은 역할).
     void ConvexElem::UpdateElemBox(double faceTol)
     {
-        // 이전 상자와 인덱스를 지운다.
-        ElemBox = Box();
+        // 이전 인덱스를 지우고 경계 상자를 다시 계산한다.
         IndexData.clear();
+        UpdateBoundsOnly();
 
-        // 정점이 없으면 빈 상자로 끝낸다.
+        // 정점이 없으면 인덱스 재구성 없이 끝낸다.
+        if (VertexData.empty())
+        {
+            return;
+        }
+
+        // 인덱스를 재구성한다.
+        ComputeHullIndices(faceTol);
+    }
+
+    // 정점의 최소·최대 좌표로 ElemBox만 다시 계산한다(인덱스·정점은 건드리지 않는다).
+    void ConvexElem::UpdateBoundsOnly()
+    {
+        // 이전 상자를 지운다. 정점이 없으면 빈 상자로 끝낸다.
+        ElemBox = Box();
         if (VertexData.empty())
         {
             return;
@@ -427,9 +441,33 @@ namespace MiniCollision
             ElemBox.Max = { std::max(ElemBox.Max.x, v.x), std::max(ElemBox.Max.y, v.y), std::max(ElemBox.Max.z, v.z) };
         }
         ElemBox.IsValid = true;
+    }
 
-        // 인덱스를 재구성한다.
-        ComputeHullIndices(faceTol);
+    // 정점에 3x4 아핀(m[i][0..2]=선형 행, m[i][3]=이동)을 적용한다. 인덱스는 유지하고 행렬식이 음수면 삼각형 감김을 뒤집는다.
+    void ConvexElem::ApplyAffine(const double m[3][4])
+    {
+        // 모든 정점을 변환한다.
+        for (Vec3d& v : VertexData)
+        {
+            v = { m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z + m[0][3],
+                  m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z + m[1][3],
+                  m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z + m[2][3] };
+        }
+
+        // 선형부 행렬식이 음수(거울 변환)면 삼각형 감김을 뒤집어 바깥 방향을 유지한다.
+        const double det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        if (det < 0.0)
+        {
+            for (size_t t = 0; t + 2 < IndexData.size(); t += 3)
+            {
+                std::swap(IndexData[t + 1], IndexData[t + 2]);
+            }
+        }
+
+        // 경계 상자만 다시 계산한다.
+        UpdateBoundsOnly();
     }
 
     // VertexData에서 faceTol 이내 중복 정점을 정리한 뒤 볼록 껍질 면 경계 다각형을 fan으로 삼각화하고, 삼각형이 쓰지 않는 정점(면 내부·변 위 점)은 제거한다.

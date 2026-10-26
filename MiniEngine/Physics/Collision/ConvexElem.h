@@ -104,6 +104,12 @@ namespace MiniCollision
         // 정점의 최소·최대 좌표로 ElemBox를 다시 계산하고 인덱스를 재구성한다.
         void UpdateElemBox(double faceTol = LocalEpsDistance);
 
+        // 정점의 최소·최대 좌표로 ElemBox만 다시 계산한다(인덱스는 그대로).
+        void UpdateBoundsOnly();
+
+        // 정점에 3x4 아핀을 적용한다. 인덱스는 유지하고 행렬식이 음수면 삼각형 감김을 뒤집으며 ElemBox만 갱신한다. 병합·재구성은 하지 않는다.
+        void ApplyAffine(const double m[3][4]);
+
         // 중복 정점을 정리하고 볼록 껍질 면을 삼각화해 닫힌 곡면 IndexData를 만든다. 실패하면 IndexData를 비우고 false를 돌려준다.
         // 전제: VertexData는 HullFromPlanes 결과이거나 그 정확한 복사본이고, 정점끼리 서로 약 MinHullVertDistance(0.001 m) 이상 떨어져 있어야 한다.
         // 이보다 가까운 입력은 성공을 보장하지 않는다(false와 빈 IndexData로 실패할 뿐, 잘못된 곡면을 성공으로 보고하지는 않는다).
