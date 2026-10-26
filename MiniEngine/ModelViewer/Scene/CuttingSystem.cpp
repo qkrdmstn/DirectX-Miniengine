@@ -1,10 +1,66 @@
 ﻿#include "CuttingSystem.h"
 #include "Utility.h"
+#include "Util/CommandLineArg.h"
+#include <array>
 #include <cstring>
 #include <cmath>
 
 namespace Viewer
 {
+    namespace
+    {
+        // 볼록 요소 목록의 총 부피를 합산한다.
+        double TotalVolume(const MiniCollision::AggregateGeom& geom)
+        {
+            // 요소별 부피를 더한다.
+            double volume = 0.0;
+            for (const MiniCollision::ConvexElem& elem : geom.ConvexElems)
+                volume += elem.GetVolume();
+            return volume;
+        }
+
+        // 부모의 컴포넌트 로컬 충돌을 GPU가 쓴 로컬 평면으로 잘라 out[0]=A(양의 쪽), out[1]=B(음의 쪽)를 만든다. 부모 충돌을 쓸 수 없으면 false다.
+        // GpuMeshCutter::Submit의 Constants.Plane은 a·x+b·y+c·z+d이고 results[0]은 그 값이 양인 쪽이다(CutJob::ValidateDiagnostics side 0 검사). 그래서 A=양, B=음이다.
+        bool SliceParentCollision(const MeshComponent& parent, const MeshCutting::CutJob& job, std::array<MiniCollision::AggregateGeom, 2>& out)
+        {
+            // 부모 충돌이 이 작업의 입력 revision과 대응하는 FromModel/Inherited일 때만 진행한다.
+            const ComponentCollisionStatus status = parent.GetCollisionStatus();
+            if ((status != ComponentCollisionStatus::FromModel && status != ComponentCollisionStatus::Inherited)
+                || parent.GetCollisionRevisionId() != job.Input->GetId() || parent.GetCollision().ConvexElems.empty())
+                return false;
+
+            // GPU가 쓴 비정규화 평면의 법선과 상수항을 함께 정규화한다(PlaneDot = Dot(N,P) - W = (ax+by+cz+d)/|n|).
+            const double a = float(job.Constants.Plane.GetX()), b = float(job.Constants.Plane.GetY());
+            const double c = float(job.Constants.Plane.GetZ()), d = float(job.Constants.Plane.GetW());
+            const double length = std::sqrt(a * a + b * b + c * c);
+            if (!(length > 0.0) || !std::isfinite(length) || !std::isfinite(d))
+                return false;
+            const MiniCollision::Plane plane{ { a / length, b / length, c / length }, -d / length };
+
+            // 양의 쪽(A)과 음의 쪽(B)으로 나눈다. 빈 쪽은 호출자가 body 없는 조각으로 처리한다.
+            MiniCollision::SliceAggregateGeom(parent.GetCollision(), plane, out[0], out[1]);
+            return true;
+        }
+
+        // -collision-log 1이면 게시마다 부모/A/B 상태·convex 수·부피와 (A+B)/부모 비율을 출력한다.
+        void LogInheritance(ComponentCollisionStatus parentStatus, double parentVolume, uint32_t parentConvex, const MeshComponent& a, const MeshComponent& b)
+        {
+            // 로그 옵션이 꺼져 있으면 아무것도 하지 않는다.
+            uint32_t enabled = 0;
+            if (!CommandLineArgs::GetInteger(L"collision-log", enabled) || enabled == 0)
+                return;
+
+            // 두 조각의 부피를 합산해 부모 대비 비율과 함께 한 줄로 출력한다.
+            static const char* names[] = { "None", "FromModel", "Inherited", "Unavailable" };
+            const double volumeA = TotalVolume(a.GetCollision()), volumeB = TotalVolume(b.GetCollision());
+            const double ratio = parentVolume > 0.0 ? (volumeA + volumeB) / parentVolume : 0.0;
+            Utility::Printf("CutCollision: parent=%s convex=%u volume=%.6f | A=%s convex=%u volume=%.6f reason=%s | B=%s convex=%u volume=%.6f reason=%s | ratio=%.6f\n",
+                names[(int)parentStatus], parentConvex, parentVolume,
+                names[(int)a.GetCollisionStatus()], (uint32_t)a.GetCollision().ConvexElems.size(), volumeA, a.GetCollisionReason(),
+                names[(int)b.GetCollisionStatus()], (uint32_t)b.GetCollision().ConvexElems.size(), volumeB, b.GetCollisionReason(), ratio);
+        }
+    }
+
     // 단일 대상 요청이 진행 중인 일괄 절단에 끼어들지 않도록 검사한다.
     bool CuttingSystem::Request(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
     {
@@ -98,9 +154,34 @@ namespace Viewer
             m_Job->HasSplit() ? (m_Publish ? "Cancelled - cut target changed" : "Cut measured") : "No split - plane missed or only touched the mesh";
         if (m_Job->HasSplit() && LastCaps < ExpectedMinimumLoops)
             throw std::runtime_error("Expected closed cap loop was not generated");
-        if (ValidateResults && LastError == 0) m_Job->ValidateDiagnostics();
         GameObject* object = m_Scene.FindObject(m_Owner);
         MeshComponent* mesh = object ? object->FindMeshComponent(m_Mesh) : nullptr;
+
+        // 분할이 있고 입력이 그대로면 부모 충돌을 같은 로컬 평면으로 잘라 둔다. 게시 중 A의 geometry가 바뀌므로 부모 값도 지금 기록한다.
+        std::array<MiniCollision::AggregateGeom, 2> inherited;
+        bool hasInherited = false;
+        ComponentCollisionStatus parentStatus = ComponentCollisionStatus::None;
+        double parentVolume = 0.0;
+        uint32_t parentConvex = 0;
+        if (m_Job->HasSplit() && LastError == 0 && mesh && mesh->GetGeometry() == m_Job->Input)
+        {
+            parentStatus = mesh->GetCollisionStatus();
+            parentVolume = TotalVolume(mesh->GetCollision());
+            parentConvex = (uint32_t)mesh->GetCollision().ConvexElems.size();
+            hasInherited = SliceParentCollision(*mesh, *m_Job, inherited);
+        }
+
+        // 검증 모드에서는 A/B 정점이 계승 hull 안에 있는지도 함께 확인한다.
+        if (ValidateResults && LastError == 0)
+        {
+            if (hasInherited)
+            {
+                m_Job->ContainmentHulls = inherited;
+                m_Job->InheritanceActive = true;
+            }
+            m_Job->ValidateDiagnostics();
+        }
+
         if (mesh && m_Publish && mesh->GetGeometry() == m_Job->Input && mesh->GetStateVersion() == m_StateVersion)
         {
             const Math::Matrix4 current(mesh->GetWorldTransform(object->GetTransform()));
@@ -125,9 +206,13 @@ namespace Viewer
                         const ComponentId id = other.GetId();
                         pending = id;
                         other.SetPlacement(transform, mode, DeformBinding{});
+                        const char* emptyReason = hasInherited ? "no convex after slice" : "parent has no collision";
+                        other.SetInheritedCollision(std::move(inherited[1]), results[1]->GetId(), emptyReason);
                         if (mesh->SetGeometry(results[0]))
                         {
                             mesh->SetPlacement(transform, mode, DeformBinding{});
+                            mesh->SetInheritedCollision(std::move(inherited[0]), results[0]->GetId(), emptyReason);
+                            LogInheritance(parentStatus, parentVolume, parentConvex, *mesh, other);
                             LastOther = id;
                             m_StatusText = "Cut complete";
                         }

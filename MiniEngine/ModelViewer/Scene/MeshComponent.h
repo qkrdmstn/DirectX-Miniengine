@@ -57,6 +57,9 @@ namespace Viewer
         const MiniCollision::AggregateGeom& GetCollision() const;
         // 충돌 출처를 읽는다. revision이 다르면 Unavailable이다.
         ComponentCollisionStatus GetCollisionStatus() const;
+        // 생성 revision에 부모에서 잘라 계승한 충돌을 저장한다. revisionId가 현재 생성 geometry ID와 다르면 거절한다.
+        // geom이 비면 body 없는 조각으로 Unavailable이 되며 emptyReason을 이유로 남긴다.
+        bool SetInheritedCollision(MiniCollision::AggregateGeom geom, uint64_t revisionId, const char* emptyReason);
         // 충돌이 없거나 쓸 수 없는 이유를 읽는다.
         const char* GetCollisionReason() const
         {

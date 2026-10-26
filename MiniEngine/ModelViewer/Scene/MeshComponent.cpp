@@ -76,19 +76,24 @@ namespace Viewer
         return true;
     }
 
-    // 원본 revision은 선택 section의 Model hull에 SourceFrame⁻¹를 적용하고 생성 revision은 2b-2 전까지 Unavailable로 둔다.
+    // 원본 revision은 선택 section의 Model hull에 SourceFrame⁻¹를 적용하고, 생성 revision은 SetInheritedCollision이 채울 때까지 Unavailable로 둔다.
     void MeshComponent::RebuildCollision()
     {
+        // 생성 revision은 Update가 SourceFrame을 쓰지 않고 정점을 GPU 결과 프레임 그대로 그린다.
+        // 같은 revision에 이미 대응하는 계승 충돌은 SourceFrame이 바뀌어도 같은 프레임이므로 재기준화 없이 유지한다.
+        if (m_Geometry->IsGenerated() && m_CollisionRevisionId == m_Geometry->GetId())
+            return;
+
         // 이전 revision의 hull을 지우고 현재 revision ID를 기록한다.
         m_Collision.ConvexElems.clear();
         m_CollisionStatus = ComponentCollisionStatus::Unavailable;
         m_CollisionReason.clear();
         m_CollisionRevisionId = m_Geometry->GetId();
 
-        // 생성 revision은 부모 계승(2b-2에서 Inherited로 채움) 전까지 쓸 수 없다.
+        // 새 생성 revision은 부모 계승이 제공될 때까지 쓸 수 없다.
         if (m_Geometry->IsGenerated())
         {
-            m_CollisionReason = "generated revision: inheritance not provided yet (2b-2)";
+            m_CollisionReason = "generated revision: inheritance not provided";
             return;
         }
 
@@ -125,6 +130,31 @@ namespace Viewer
             m_CollisionStatus = ComponentCollisionStatus::FromModel;
         else
             m_CollisionReason = std::move(reason);
+    }
+
+    // 현재 생성 revision에 대응하는 계승 충돌만 받아 저장하고 빈 형상은 Unavailable로 둔다.
+    bool MeshComponent::SetInheritedCollision(MiniCollision::AggregateGeom geom, uint64_t revisionId, const char* emptyReason)
+    {
+        // 생성 revision이 아니거나 revision이 어긋나면 낡은 계승으로 보고 거절한다.
+        if (!m_Geometry->IsGenerated() || revisionId != m_Geometry->GetId())
+            return false;
+
+        // 현재 revision의 충돌로 저장한다.
+        m_CollisionRevisionId = revisionId;
+        m_Collision = std::move(geom);
+
+        // 비어 있으면 body 없는 조각, 아니면 Inherited로 표시한다.
+        if (m_Collision.ConvexElems.empty())
+        {
+            m_CollisionStatus = ComponentCollisionStatus::Unavailable;
+            m_CollisionReason = emptyReason;
+        }
+        else
+        {
+            m_CollisionStatus = ComponentCollisionStatus::Inherited;
+            m_CollisionReason.clear();
+        }
+        return true;
     }
 
     // revision이 현재와 같을 때만 저장된 충돌을 돌려준다.

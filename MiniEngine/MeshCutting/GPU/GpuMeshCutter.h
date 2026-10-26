@@ -22,6 +22,10 @@ namespace MeshCutting
         ReadbackBuffer StatusReadback, TimeReadback;
         ReadbackBuffer DiagnosticInputPose, DiagnosticInputData;
         bool HasDiagnosticInput = false;
+        // -cut-validate에서 A(0)/B(1) 정점이 안에 있어야 하는 계승 충돌이다. 비어 있으면 그 쪽 포함 검사를 생략한다.
+        std::array<MiniCollision::AggregateGeom, 2> ContainmentHulls;
+        // 부모 충돌 계승이 실행됐는지다. true인데 hull이 빈 쪽은 얇은 조각일 때만 허용한다.
+        bool InheritanceActive = false;
         Microsoft::WRL::ComPtr<ID3D12QueryHeap> Queries;
         uint64_t Fence = 0;
         CutConstants Constants;
