@@ -1,4 +1,4 @@
-상태: 진행 중 — `673b56b6` 다중 MeshComponent 소유·렌더·Static GPU 절단 구현; Skeletal 절단·물리 미구현
+상태: 진행 중 — `feb35f23` 기반 미커밋 Jolt collider 조회 연결; `673b56b6` 다중 MeshComponent·Static 절단 유지, Skeletal 절단·낙하/관절 미구현
 
 # ModelViewer GameObject와 Gizmo
 
@@ -122,7 +122,9 @@ CPU 회귀 검사는 공통 TRS·축 기저·축별 배율·히스토리·경계
 
 `GeometryRevision::FromModel`은 loader가 만든 유효한 Model metadata를 전제로 원본 GPU VB/IB·재질·draw·SourceMesh를 참조한다. `SelectSections`는 기존 GPU 버퍼를 복사하지 않고 section 부분집합의 새 불변 revision을 만든다. `MeshComponent::SetGeometry`는 같은 원본만 허용하고 pose 준비를 무효화한다. 이 절은 컴포넌트 기반 구현 이력이다. 이후 추가한 `GeometryRevision::FromGenerated`는 Static 절단 VB/IB·parent provenance를 보관한다.
 
-`AddColliderComponent`는 MeshId와 GeometryRevisionId만 보관하는 후속 물리 연동용 설명이다. 실제 충돌 shape·body·solver는 생성하지 않는다. `IsColliderCurrent`는 geometry 교체로 오래된 참조를 거부한다. 메시 제거 시 대응 collider도 제거한다.
+`AddColliderComponent`는 MeshId·GeometryRevisionId와 SDK 비노출 QueryHandle을 보관한다. `PhysicsSystem::SyncColliders`가 준비된 Static 메시마다 참조와 조회 전용 Box/body를 자동 등록한다. `SetColliderQueryHandle`은 현재 revision의 참조만 갱신하고, 실제 SDK 수명은 PhysicsWorld가 소유한다. `IsColliderCurrent`는 geometry 교체로 오래된 참조를 거부한다. 메시 제거 시 대응 collider 참조를 제거하고 다음 SyncColliders에서 SDK body도 정리한다. 실제 낙하/접촉 반응용 body는 후속이다.
+
+`ModelViewer::Update`는 Scene.Update/Finish 뒤 collider를 동기화하고 새 절단을 제출한다. `CuttingSystem::RequestAll`은 `PhysicsSystem::QueryCutCandidates`로 후보를 받아 기존 snapshot 큐에 넣는다. 같은 GameObject의 여러 MeshId를 독립 후보로 유지하며 SDK 미사용·용량 부족은 기존 경계 검사로 처리한다. 구현·진단·검증은 [JoltQueryIntegration.md](../Physics/JoltQueryIntegration.md)를 따른다. 기즈모·Undo는 여전히 owner 단위다.
 
 생성·삭제·geometry/placement 변경은 프레임 입력 단계, 즉 `Scene::Update`의 GPU 명령 기록 전에 수행한다. Update부터 모든 Render pass의 명령 제출 사이에는 geometry/컴포넌트를 변경하지 않는다. 현재 GPU 대기 정책은 이미 제출된 명령의 수명을 보장하며, 아직 제출하지 않은 명령을 자동으로 제출하거나 보존하지 않는다. 공유 pose 배열은 해당 프레임 렌더 소비까지 유지되며 GameObject는 MeshComponent를 ModelInstance보다 먼저 파괴한다.
 

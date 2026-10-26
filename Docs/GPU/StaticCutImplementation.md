@@ -1,4 +1,4 @@
-상태: 완료 — `673b56b6` Static GPU 절단·접촉/대상 조회 수정; 자동 분리 이동 기본 해제·반복 절단의 부모 보존 검증 추가 (2026-10-25)
+상태: 완료 — `673b56b6` Static GPU 절단; `feb35f23` 기반 미커밋 Jolt collider 후보 조회 연결·반복 절단 회귀 검증 (2026-10-25)
 
 # Static GPU 절단 구현
 
@@ -51,7 +51,7 @@ UE 5.3.2 [GitHub 공개 미러의 Epic 소스](https://github.com/chenyong2githu
 
 `CutJob`이 입력 revision과 GPU 후보·scratch·query·readback을 fence 완료까지 보관한다. 컴포넌트 pose 자원의 수명은 현재 컴포넌트 삭제/교체 시 GPU 대기로 보장한다. GPU 자원 지연 해제 큐는 아직 없으며 전역 대기 비용이 남는다.
 
-`CuttingSystem::Update`는 ObjectId+MeshId, revision, component state version, Wc가 요청 시점과 같은지 검사한다. B를 먼저 준비하고 A 교체가 실패하면 B를 제거한다. 정상 경로는 전체 geometry를 CPU로 가져오지 않고 count/status/bounds 및 timestamp만 비동기로 읽는다. 현재 physics collider는 설명·참조만 있고 shape/cooking은 구현하지 않는다. 기존 collider revision은 geometry 변경 후 stale 판정을 받는다.
+`CuttingSystem::Update`는 ObjectId+MeshId, revision, component state version, Wc가 요청 시점과 같은지 검사한다. B를 먼저 준비하고 A 교체가 실패하면 B를 제거한다. 정상 경로는 전체 geometry를 CPU로 가져오지 않고 count/status/bounds 및 timestamp만 비동기로 읽는다. 현재 `RequestAll`은 PhysicsSystem의 Jolt collider query로 후보 snapshot을 받는다. 준비된 Static 메시의 조회 Box/body는 Scene.Update/Finish 뒤 자동 동기화하며 geometry 변경 후 stale 참조도 교체한다. 이 Box는 보수적 조회용으로, 실제 조각 충돌 proxy·질량·낙하·cook transaction은 후속이다. [Jolt 조회 연결과 검증](../Physics/JoltQueryIntegration.md)을 따른다.
 
 출력은 triangle-corner 방식이며 정점을 강제 용접하지 않는다. 정점 provenance는 parent revision의 현재 section/draw/vertex endpoint·보간 계수·현재 triangle을 기록한다. cap은 생성 cap marker와 loop 정보를 기록한다. Static 위치는 canonical geometry가 authoritative하며 이 출처를 skeletal skin 보간식으로 쓰지는 않는다.
 
