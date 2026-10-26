@@ -1,6 +1,6 @@
-상태: 진행 중 — 과거 CPU 비교 이력 보존; `673b56b6` 현행 GPU 접촉 판정 비교 추가 (2026-10-25)
+상태: 진행 중 — `feb35f23` 기준; 과거 CPU 이력·현행 GPU 접촉 비교 보존, UE5.3.2 절단 물리·Actor/컴포넌트·Skeletal 충돌 조사 추가 (2026-10-25)
 
-> 이력 문서: 아래 상태·구현 설명은 과거 CPU 절단 경로의 설계·기록이다. 현재 구현 상태로 해석하지 않는다. 현행 흐름은 [CodeMap.md](../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../Current/CutPlaneDesign.md)를 따른다.
+> 1~5절은 과거 CPU 절단 경로의 설계·기록이며 현재 구현 상태로 해석하지 않는다. 6절은 현행 GPU 비교, 7절은 새 물리 조사다. 현행 흐름은 [CodeMap.md](../Current/CodeMap.md), 평면 계약은 [CutPlaneDesign.md](../Current/CutPlaneDesign.md)를 따른다.
 
 # 언리얼 소스와의 비교 (SliceProceduralMesh, ProceduralMesh, BreakConstraint)
 
@@ -77,3 +77,39 @@ UE 5.3.2 [GitHub 공개 미러](https://github.com/chenyong2github/UnrealEngine/
 - 현행 `CutJob::HasSplit`은 GPU 상태에 양쪽 비공면·비퇴화 표면 출력과 활성 교차 경계가 모두 있어야 참이다. `BuildResults`는 새 cap을 제외한 양쪽 surface count도 검사한다. 실패하면 입력 revision과 컴포넌트 수를 유지한다. 열린 버니를 지원하므로 닫힌 부피 검사는 조건에 넣지 않는다.
 - 평면 위 기존 모서리는 GPU 중점 해시와 양쪽 표면 지지로 접촉을 구별한다. 전역 원본 인접성은 구축하지 않는다. 기존 cap은 새 평면이 관통하면 일반 입력 표면처럼 처리한다.
 - Unreal 함수는 대상 컴포넌트를 입력으로 받는다. 우리의 `CuttingSystem::RequestAll`은 호출자 책임인 후보 조회를 추가하고 후보별로 `SubmitPending`을 통해 순차 GPU 작업을 시작한다. 실제 물리 collider query는 후속 범위다.
+
+## 7. 절단 이후 물리와 컴포넌트 구성 조사 (2026-10-25)
+
+직접 확인한 코드는 앞 절과 같은 UE5.3.2 공개 GitHub 미러의 Epic 작성 소스다. 최신 Epic 계정 전용 저장소를 조회하거나 Unreal 런타임을 실행한 결과가 아니다. 아래 공식 문서는 조회 시 UE5.8로 표시되므로 소스 버전과 구분한다.
+
+### 메시 자체의 충돌 기능과 별도 컴포넌트
+
+- `UPrimitiveComponent`는 `FBodyInstance BodyInstance`를 가진다. 일반적인 단일 강체 컴포넌트는 여러 shape를 한 body에 묶을 수 있다. [PrimitiveComponent.h](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h)
+- `UProceduralMeshComponent`는 `UMeshComponent`를 상속하며 `CollisionConvexElems`, `ProcMeshBodySetup`을 내부에 둔다. 별도 Box/Capsule 컴포넌트를 필수로 붙이는 구조가 아니다. 렌더 정점과 충돌용 convex 데이터는 별개다. [ProceduralMeshComponent.h](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Plugins/Runtime/ProceduralMeshComponent/Source/ProceduralMeshComponent/Public/ProceduralMeshComponent.h)
+- 별도 충돌 컴포넌트도 사용한다. `ACharacter` 생성자는 `CapsuleComponent`를 만들고 root로 지정한다. 이는 캐릭터 이동의 대표 충돌이며 SkeletalMesh의 본별 body와 함께 존재할 수 있다. [Character.cpp](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Source/Runtime/Engine/Private/Character.cpp), [공식 capsule/mesh 충돌 설정 예](https://dev.epicgames.com/documentation/en-us/unreal-engine/applying-a-physics-constraint-profile-in-unreal-engine)
+
+### SliceProceduralMesh가 하는 일과 호출자가 할 일
+
+- 기존 `BodySetup->AggGeom.ConvexElems`를 순회해 평면 양쪽으로 분류하거나 `SliceConvexElem`로 자른다. 렌더 cap에서 충돌체를 새로 추론하는 경로가 아니다. 원래 convex가 없으면 이 경로에서 convex가 자동 생성되지 않는다.
+- A에는 `SetCollisionConvexMeshes`를 적용한다. B는 원본과 같은 Outer로 새 ProceduralMeshComponent를 만들고 world transform·section·material·collision profile/enabled·complex-as-simple 설정과 잘린 convex를 전달한 뒤 등록한다. 새 Actor 생성이나 원본에 대한 Attach 호출은 없다.
+- 함수 안에는 새 B의 `SetSimulatePhysics`, 부모 선/각속도 전달, impulse 부여가 없다. 원본 body 재생성 시 상태 보존과 새 B에 대한 명시적 상태 복사는 구분한다. 자동 질량 합·운동량 보존까지 보장한다고 해석하지 않는다.
+
+위 근거: [KismetProceduralMeshLibrary.cpp의 SliceProceduralMesh](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Plugins/Runtime/ProceduralMeshComponent/Source/ProceduralMeshComponent/Private/KismetProceduralMeshLibrary.cpp). [공식 Slice 문서](https://dev.epicgames.com/documentation/unreal-engine/BlueprintAPI/Components/ProceduralMesh/SliceProceduralMesh)도 새 컴포넌트의 owner가 원본과 같다고 명시한다. 같은 Actor 소유와 parent attachment는 다른 관계다.
+
+`SetCollisionConvexMeshes` → `UpdateCollision`은 convex를 BodySetup에 넣어 cook하고 physics state를 재생성한다. 비동기 옵션에서는 cook 완료 시 새 BodySetup을 채택한다. [ProceduralMeshComponent.cpp](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Plugins/Runtime/ProceduralMeshComponent/Source/ProceduralMeshComponent/Private/ProceduralMeshComponent.cpp)
+
+동적 조각에는 유효한 simple convex와 simulation 설정이 필요하다. `UseComplexAsSimple`은 그 오브젝트 자체의 simulation을 지원하지 않는다고 [공식 simple/complex 설명](https://dev.epicgames.com/documentation/en-us/unreal-engine/simple-versus-complex-collision-in-unreal-engine)이 명시한다. 단일 body의 simulation 시작은 attachment를 해제하지만 Actor ownership을 바꾸는 작업은 아니다. Skeletal처럼 다중 body인 컴포넌트는 자동 detach하지 않는다. [공식 SetSimulatePhysics](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/Engine/UPrimitiveComponent/SetSimulatePhysics)
+
+### SkeletalMesh의 보통 경로
+
+Physics Asset은 본별 shape/body 정의와 관절 정의를 저장하는 자산이다. 각 SkeletalMeshComponent는 실행 상태인 `Bodies`·`Constraints` 배열을 가진다. 본마다 별도 UBoxComponent를 생성하는 구조가 아니며 모든 skin bone에 body가 필요하지도 않다. [SkeletalMeshComponent.h](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Source/Runtime/Engine/Classes/Components/SkeletalMeshComponent.h), [공식 Physics Asset](https://dev.epicgames.com/documentation/en-us/unreal-engine/physics-asset-editor-in-unreal-engine), [본과 body 대응](https://dev.epicgames.com/documentation/unreal-engine/constraints-user-guide?application_version=4.27)
+
+`InitArticulated/InstantiatePhysicsAsset`는 자산에서 body·constraint 인스턴스를 만든다. `BreakConstraint`는 관절 종료·자식 body simulation 활성화·하위 drive 해제·impulse를 처리하지만 렌더 삼각형이나 cap은 생성하지 않는다. 같은 SkeletalMeshComponent에 남아 있는 분리 body가 가능하다. 시각적인 피부 분리는 별도 geometry/masking 처리가 필요하다. [SkeletalMeshComponentPhysics.cpp](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Source/Runtime/Engine/Private/SkeletalMeshComponentPhysics.cpp)
+
+`UpdateKinematicBonesToAnim`은 비시뮬레이션 body를 애니메이션 본에 맞춘다. `PerformBlendPhysicsBones`는 물리 body 결과를 본 pose에 반영한다. 부분 simulation/blend로 일부 신체만 물리에 맡길 수 있다. `bEnablePerPolyCollision` 경로도 있지만 일반적인 ragdoll body/constraint 표현과 구분한다. [PhysAnim.cpp](https://github.com/chenyong2github/UnrealEngine/blob/5.3/Engine/Source/Runtime/Engine/Private/PhysicsEngine/PhysAnim.cpp), [공식 물리/애니메이션 혼합](https://dev.epicgames.com/documentation/en-us/unreal-engine/physics-driven-animation-in-unreal-engine)
+
+### 우리 설계에 대한 해석
+
+렌더와 충돌을 별도 데이터로 유지하고 같은 owner 아래 독립 body를 두는 방향은 참고할 수 있다. 다만 Unreal식 외부 API는 메시 컴포넌트에 통합되어 있으므로, 우리 `ColliderComponent`를 별도 타입으로 둔 것은 자체 설계 선택이다. 사용자가 별도 컴포넌트를 매번 수동 부착해야 한다는 요구로 연결하지 않는다. `EnablePhysics(meshId, proxy)` 같은 등록 API가 body/collider 참조를 내부 생성하는 방식도 가능하다.
+
+Skeletal 단계에서는 하나의 MeshComponent에 본별 body 여러 개가 대응할 수 있다. 첫 Static 단계의 mesh 1개↔body 1개 규칙을 전체 엔진의 영구 제약으로 만들지 않는다. GPU 렌더 절단과 CPU convex 분할의 일괄 게시·stale 검사·속도 전달은 우리 비동기 구조에 맞춰 별도 구현한다.

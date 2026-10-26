@@ -1,8 +1,14 @@
 # 프로젝트 문서 목차
 
-현재 Static GPU 절단·단면·재절단과 같은 GameObject의 조각 MeshComponent 관리가 연결되어 있다. 열린 경계는 cap만 생략한다. Skeletal 절단·실제 물리는 미구현이며 과거 CPU 경로는 Git 기록에서 비교한다.
+현재 Static GPU 절단·단면·재절단과 같은 GameObject의 조각 MeshComponent 관리가 연결되어 있다. Jolt v5.6.0의 조회용 collider를 자동 등록해 평면 후보를 찾는다. 열린 경계는 cap만 생략한다. Skeletal 절단·동적 낙하/접촉 반응은 미구현이며 과거 CPU 경로는 Git 기록에서 비교한다.
 
 작업 범위에 해당하는 문서만 연다. root AGENTS.md의 라우팅 표를 따르고, 이 목차는 문서를 찾을 때 필요한 항목만 확인한다. History는 해당 알고리즘·조작의 역사 추적 시에만 선택하며 일괄 읽지 않는다. 과거 설계의 완료 표기는 해당 시점의 기록이며 현재 구현 완료를 뜻하지 않는다.
+
+## 인수인계
+
+| 문서 | 용도 | 상태 |
+| --- | --- | --- |
+| [Weekend-2026-10-24-25.md](Handoff/Weekend-2026-10-24-25.md) | Claude용 주말 작업·최종 설계 결정·커밋/미커밋 구분·검증·다음 작업 주의점 | 완료 — `feb35f23` 및 `39db69f3` 커밋된 Jolt 조회 기준, 2026-10-26 확인 |
 
 ## Current — 현재 현황
 
@@ -11,28 +17,29 @@
 | [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — 현황문서 (`527ed749` 기준 미커밋 문서 정리, 구현 변경 없음) |
 | [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749` 기반, GPU 연결 `673b56b6`; 수동 입력 검증 범위는 본문 참조 |
 | [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `673b56b6` Compute pose 연결, 검증은 본문·GPU 설계 참조 |
-| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `673b56b6` 컴포넌트 기반·C 평면 후보 조회, 편집 UI는 owner TRS |
+| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `feb35f23` 기반 미커밋 Jolt collider 후보 조회, 편집 UI는 owner TRS |
 
 ## GPU — 후속 절단 설계·문헌
 
 | 문서 | 용도 | 상태 / 읽을 때의 주의 |
 | --- | --- | --- |
 | [GPUCuttingSystemDesign.md](GPU/GPUCuttingSystemDesign.md) | GPU 절단 설계·다중 MeshComponent 기반 | `673b56b6` Static 구현, Skeletal·물리는 설계 |
-| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `673b56b6` 자동 분리 이동 기본 해제·다중 절단 부모 보존 검증, 리뷰·Debug/Release 완료 |
+| [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `673b56b6` GPU 절단 + `feb35f23` 기반 미커밋 Jolt 후보 조회·반복 절단 회귀 완료 |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
 
 | 문서 | 용도 | 상태 / 읽을 때의 주의 |
 | --- | --- | --- |
-| [UnrealSourceComparison.md](Unreal/UnrealSourceComparison.md) | Slice·cap·BreakConstraint·FMeshPlaneCut 소스 비교 | 과거 CPU 이력 + UE5.3.2 GitHub 소스 기반 현행 GPU 접촉 판정 비교 |
+| [UnrealSourceComparison.md](Unreal/UnrealSourceComparison.md) | Slice·cap·물리·Actor/컴포넌트·Skeletal 충돌 소스 비교 | `feb35f23` 기준 조사 — 과거 CPU 이력 + UE5.3.2 GPU 접촉·절단 물리·Physics Asset 비교 |
 | [UnrealAlignmentDesign.md](Unreal/UnrealAlignmentDesign.md) | Unreal 정렬 로드맵과 채택한 U-1~U-5b 이력 | 과거 코드 경로 완료, 실제 물리는 미구현 |
 
 ## Physics — 후속 물리 도입
 
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
-| [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | PhysX/Jolt/Bullet 비교, body 소유·충돌 proxy·절단 transaction | `673b56b6` 설계안 — 사용자 논의 후 Jolt CPU 선정, SDK 연동 미구현 |
+| [JoltQueryIntegration.md](Physics/JoltQueryIntegration.md) | 현재 SDK 빌드·collider 등록·평면 후보 API·실행 검증 | 완료 — `39db69f3` 커밋된 Jolt v5.6.0 조회 연결·Debug/Release/Profile 빌드·CPU/실행 검증 |
+| [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `feb35f23` 기반 조회 구현 완료, 낙하·Skeletal 물리는 후속 |
 
 ## NDC — 기법 근거
 
