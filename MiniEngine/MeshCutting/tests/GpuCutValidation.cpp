@@ -131,9 +131,10 @@ namespace MeshCutting
         }
     }
 
-    // 명시적 진단에서만 전체 결과를 읽는다. 일반 절단/벤치마크는 작은 metadata만 읽는다.
+    // 전체 결과와 슬라이스·재맞춤 충돌의 포함을 같은 허용오차로 검사한다.
     void CutJob::ValidateDiagnostics()
     {
+        // GPU 완료 상태를 확인한다.
         Require(Collected && Status[0] == 0, "GPU cut status failed");
 
         // 분할 여부와 무관하게 출력이 있는 모든 면의 GPU 18-DOP을 CPU 기준과 비교한다.
@@ -215,17 +216,28 @@ namespace MeshCutting
 
             // 계승 hull의 요소별 지지 평면과 허용 오차를 준비한다. tol = 1e-4 x hull 최대 변 길이이며,
             // 18-DOP은 구성상 렌더 메시를 포함하고 cap 정점은 절단 평면 위에 있으므로 float 오차만 흡수하면 된다.
-            std::vector<std::vector<MiniCollision::Plane>> hullPlanes;
-            double hullTolerance = 0, hullExtent = 0, hullMaxExcess = -1.0e30;
+            std::array<std::vector<std::vector<MiniCollision::Plane>>, 2> hullPlanes;
+            double hullExtent = 0;
+            std::array<double, 2> hullMaxExcess{ -1.0e30, -1.0e30 };
             for (const MiniCollision::ConvexElem& elem : ContainmentHulls[side].ConvexElems)
             {
-                hullPlanes.emplace_back();
-                elem.GetPlanes(hullPlanes.back());
                 hullExtent = std::max({hullExtent, elem.ElemBox.Max.x - elem.ElemBox.Min.x,
                     elem.ElemBox.Max.y - elem.ElemBox.Min.y, elem.ElemBox.Max.z - elem.ElemBox.Min.z});
             }
-            hullTolerance = hullExtent * 1.0e-4;
-            uint32_t hullChecked = 0;
+            double hullTolerance = hullExtent * 1.0e-4;
+            std::array<uint32_t, 2> hullChecked{};
+
+            // 두 집합의 지지 평면을 준비하되 허용오차는 슬라이스 범위에서만 구한다.
+            for (uint32_t kind = 0; kind < 2; ++kind)
+            {
+                const auto& aggregate = kind == 0 ? ContainmentHulls[side] : RefitContainmentHulls[side];
+                for (const MiniCollision::ConvexElem& elem : aggregate.ConvexElems)
+                {
+                    hullPlanes[kind].emplace_back();
+                    elem.GetPlanes(hullPlanes[kind].back());
+                }
+            }
+
             // 이 쪽 정점의 절단 평면까지 최대 거리(로컬 단위)다. 평면을 정규화하려고 법선 길이로 나눈다.
             double thickness = 0;
             const double planeLength = std::sqrt(double(float(Constants.Plane.GetX()))*float(Constants.Plane.GetX()) +
@@ -276,18 +288,19 @@ namespace MeshCutting
                     thickness = std::max(thickness, std::abs(double(distance)) / planeLength);
 
                     // 정점이 계승 hull 요소 중 하나의 모든 지지 평면 안쪽(PlaneDot <= tol)에 있어야 한다.
-                    if (!hullPlanes.empty())
+                    for (uint32_t kind = 0; kind < 2; ++kind)
                     {
+                        if (hullPlanes[kind].empty()) continue;
                         double bestExcess = 1.0e30;
-                        for (const auto& planes : hullPlanes)
+                        for (const auto& planes : hullPlanes[kind])
                         {
                             double excess = -1.0e30;
                             for (const MiniCollision::Plane& plane : planes)
                                 excess = std::max(excess, plane.PlaneDot({ p.x, p.y, p.z }));
                             bestExcess = std::min(bestExcess, excess);
                         }
-                        hullMaxExcess = std::max(hullMaxExcess, bestExcess);
-                        ++hullChecked;
+                        hullMaxExcess[kind] = std::max(hullMaxExcess[kind], bestExcess);
+                        ++hullChecked[kind];
                     }
                 }
                 for (uint32_t tri = 0; tri < count; tri += 3)
@@ -322,23 +335,29 @@ namespace MeshCutting
             Utility::Printf("GPU cut validation passed: side=%u triangles=%u capArea=%.9f expected=%.9f signedVolume=%.9f\n",
                 side, triangles, capArea, expectedArea, volume);
             resultVolume += volume;
-            if (hullChecked)
+
+            // 기존 얇은 조각 규칙으로 확장한 허용오차를 두 집합에 동일하게 적용한다.
+            if (thickness <= 2.0 * MiniCollision::MinHullVertDistance)
+                hullTolerance = std::max(hullTolerance, 2.0 * MiniCollision::MinHullVertDistance);
+            for (uint32_t kind = 0; kind < 2; ++kind)
             {
-                // 두께가 병합 거리(0.001)의 2배 이하인 얇은 조각은 hull 정점 병합·snap이 형상을 최대 그 정도 옮기므로 허용 오차를 넓힌다.
-                if (thickness <= 2.0 * MiniCollision::MinHullVertDistance)
-                    hullTolerance = std::max(hullTolerance, 2.0 * MiniCollision::MinHullVertDistance);
-                Require(hullMaxExcess <= hullTolerance, "Result vertex lies outside inherited collision hull");
-                Utility::Printf("GPU cut hull containment passed: side=%u hulls=%zu vertices=%u maxExcess=%.9g tolerance=%.9g\n",
-                    side, hullPlanes.size(), hullChecked, hullMaxExcess, hullTolerance);
+                const char* name = kind == 0 ? "sliced" : "refit";
+                if (hullChecked[kind])
+                {
+                    Require(hullMaxExcess[kind] <= hullTolerance, "Result vertex lies outside collision hull");
+                    Utility::Printf("GPU cut hull containment passed: side=%u kind=%s hulls=%zu vertices=%u maxExcess=%.9g tolerance=%.9g\n",
+                        side, name, hullPlanes[kind].size(), hullChecked[kind], hullMaxExcess[kind], hullTolerance);
+                }
+                else if (InheritanceActive)
+                {
+                    // 충돌이 빈 쪽은 기존과 같이 병합 거리의 두 배 이하 두께일 때만 허용한다.
+                    Require(thickness <= 2.0 * MiniCollision::MinHullVertDistance, "Result side has geometry but collision hull is empty");
+                    Utility::Printf("GPU cut hull containment: side=%u kind=%s thin piece (thickness=%.9g) has no convex - body-less by policy (R3)\n",
+                        side, name, thickness);
+                }
+                else
+                    Utility::Printf("GPU cut hull containment skipped: side=%u kind=%s (parent has no collision)\n", side, name);
             }
-            else if (InheritanceActive)
-            {
-                // 계승이 실행됐는데 hull이 빈 쪽은 병합 거리(0.001)보다 얇아 슬라이스가 사라진 경우에만 허용한다(2배 여유).
-                Require(thickness <= 2.0 * MiniCollision::MinHullVertDistance, "Result side has geometry but inherited hull is empty");
-                Utility::Printf("GPU cut hull containment: side=%u thin piece (thickness=%.9g) has no convex - body-less by policy (R3)\n", side, thickness);
-            }
-            else
-                Utility::Printf("GPU cut hull containment skipped: side=%u (parent has no collision)\n", side);
         }
         DiagnosticInputPose.Unmap(); DiagnosticInputData.Unmap();
         double maximumAreaError = 0;

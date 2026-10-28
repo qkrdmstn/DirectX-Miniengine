@@ -22,15 +22,17 @@ namespace MeshCutting
         ReadbackBuffer StatusReadback, TimeReadback;
         ReadbackBuffer DiagnosticInputPose, DiagnosticInputData;
         bool HasDiagnosticInput = false;
-        // -cut-validate에서 A(0)/B(1) 정점이 안에 있어야 하는 계승 충돌이다. 비어 있으면 그 쪽 포함 검사를 생략한다.
+        // A(0)/B(1)의 포함 검증과 공통 허용오차 기준으로 쓰는 슬라이스 충돌이다.
         std::array<MiniCollision::AggregateGeom, 2> ContainmentHulls;
+        // 같은 출력 정점에 대해 별도로 포함을 검사할 재맞춤 충돌이다.
+        std::array<MiniCollision::AggregateGeom, 2> RefitContainmentHulls;
         // 부모 충돌 계승이 실행됐는지다. true인데 hull이 빈 쪽은 얇은 조각일 때만 허용한다.
         bool InheritanceActive = false;
         Microsoft::WRL::ComPtr<ID3D12QueryHeap> Queries;
         uint64_t Fence = 0;
         CutConstants Constants;
         std::vector<uint32_t> Status;
-        // 면(A/B)별 출력 정점의 GPU 18-DOP이며 SideDopValid가 거짓이면 출력 정점이 없어 값이 없다. 아직 게시에는 쓰지 않는다.
+        // 면(A/B)별 출력 정점의 GPU 18-DOP이며 SideDopValid가 거짓이면 값이 없다. 충돌 재맞춤에 사용한다.
         std::array<KDop18, 2> SideDop{};
         std::array<bool, 2> SideDopValid{};
         std::array<double, 4> StageMs{};

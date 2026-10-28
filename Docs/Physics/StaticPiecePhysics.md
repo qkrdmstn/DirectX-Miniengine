@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a~6d·6e-1·7a 완료, 6e-2 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6a~6e·7a 완료, 7b 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -224,8 +224,8 @@ CPU:
 | 6c | 실패 경로 런타임 검증(작업 중 깨어남·강제 cook 실패·빈 쪽) | `Scene/tests/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6d | 충돌 convex 디버그 표시(H·UI 토글), 조각별 색, 바닥 상자 | `Scene/CollisionDebugMath.h`, `Scene/CollisionDebugDraw.*`, `Scene/PhysicsSystem.*`, `Scene/GizmoDraw.h`, `ModelViewer.cpp`, `Scene/tests/CollisionDebugTests.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+CPU 테스트 약 5초, 런타임 약 8초/회) |
 | 6e-1 | GPU 조각별 18-DOP 측정·검증 | `MeshCutting/Shaders/CutBoundsCS.hlsl`, `GPU/CutTypes.h`, `GPU/GpuMeshCutter.*`, `tests/GpuCutValidation.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
-| 6e-2 | CPU convex 재맞춤 함수·테스트 | 미정 (Physics/Collision, CPU 테스트) | 미측정 |
-| 6e-3 | 절단 경로 연결·포함 검증·문서 | 미정 (Scene/CutTransaction, CuttingSystem) | 미측정 |
+| 6e-2 | CPU convex 재맞춤 함수·테스트 | `Physics/Collision/AggregateGeom.*`, `Physics/tests/HullRefitTests.cpp` | CPU 5621 checks/구성 |
+| 6e-3 | 절단 경로 연결·포함 검증·문서 | `Scene/CuttingSystem.cpp`, `GPU/GpuMeshCutter.h`, `tests/GpuCutValidation.cpp` | Debug 증분 빌드 약 7초, Release 약 135초; 런타임 아래 기록 |
 | 7a | EditTarget(Owner/Mesh) 선택 | `Scene/EditTarget.h`, `ObjectSelection.*`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7b | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `Scene/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7c | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
@@ -298,6 +298,18 @@ CPU:
   - 검증: `ValidateDiagnostics`가 분할 여부와 무관하게 `ValidateSideDop`으로 출력 Pose를 읽어 CPU double 기준과 비교한다(허용 `1e-6*extent+1e-7`, 유한 정점이 0이면 GPU도 비어야 함).
   - 결과(Debug/Release, 모두 exit 0, D3D12 ERROR/CORRUPTION 0): sim-off Cube 4회 절단 최대 오차 9.6e-8(허용 약 2.9e-6), 6b 30° 절단·6c `empty-a` 7.2e-8, Bunny 1.8e-5(좌표 약 250, 허용 약 4.4e-4). 샘플(Cube 첫 절단 A, 정점 54): 축0 [-1,1], 축1 [0,1], 축2 [-1,1.000001].
   - 미해결: Bunny 절단 출력 정점 수가 실행마다 다르다(A면 Debug 36576/36564, Release 36564). 구성이 아니라 실행 간 비결정일 수 있으며 원인은 조사하지 않았다.
+- **6e-2 완료 (`e1f2b855`, 2026-10-28)**: `MiniCollision::RefitElemToDop`·`RefitAggregateToDop`이 슬라이스 convex와 패딩한 `Dop18Bounds`의 교집합을 만든다. 기본 패딩 `RefitDopPad`는 0.002 asset unit이다.
+  - 결과는 `Refit`(교집합 채택), `Disjoint`(확실한 비겹침), `KeptUnrefit`(원본 유지)이며 집계는 `RefitStats`의 Refit·Disjoint·Kept·VolumeBefore·VolumeAfter다. 전부 Disjoint이면 aggregate 전체를 원본 유지한다.
+  - guard: 잘못된 입력·유한 다각형 생성 범위의 절반 초과 좌표·hull 생성 실패·정확한 교집합 포함 실패·부피 증가 시 원본을 유지한다. 병합·snap 뒤 후보가 정확한 교집합 정점을 포함해야 한다.
+  - `HullRefitTests`: Debug/Release 각각 5621 checks 통과(6e-3에서도 재실행). 상자·귀 모양 슬랩·얇은 조각·재맞춤 반복·비겹침·잘못된 입력·큰 좌표를 검사한다.
+- **6e-3 완료 (2026-10-28)**: `CuttingSystem::Update`가 부모 충돌 슬라이스 직후, 진단·`PrepareGeometryReplacement`·`CutTransaction::Prepare` 전에 A/B별 GPU DOP을 double로 변환해 재맞춘다. DOP 무효·정점 수 0·빈 충돌은 슬라이스를 유지한다. 재맞춤 결과가 조각 충돌과 물리 body 준비에 전달된다.
+  - `-collision-log 1`의 `CutCollision refit`은 면별 sliced·refit 부피, refit/sliced 비율, Refit·Disjoint·Kept 개수를 출력한다.
+  - `CutJob::ContainmentHulls`에 슬라이스, `RefitContainmentHulls`에 재맞춤 결과를 보관한다. `ValidateDiagnostics`가 각 출력 정점의 두 aggregate 합집합 포함을 따로 검사한다. 두 검사 모두 슬라이스 hull 최대 변의 1e-4를 쓰고 기존 얇은 조각 허용오차·빈 충돌 규칙을 유지한다. 실패 주입은 이 검증 뒤에 적용한다.
+  - 부피는 컴포넌트 로컬 asset unit³, 비율은 refit/sliced다. Cube 4회 절단에서 모두 비율 1.0(첫 A/B 각각 4.00731771 → 4.00731771). 같은 A의 재절단도 3.00590298 → 3.00590298, 1.00141473 → 1.00141473이며 두 포함 검증을 통과했다.
+  - Bunny `-cut-y .5`: A 27063937.5 → 22578457.3(0.834263577), B 36585107.6 → 29057425.6(0.794241907). 작은 귀 쪽을 남기는 `-cut-y 200`: A 2251178.75 → 1147730.03(0.509835140), B 61397866.4 → 59938047.1(0.976223616). 두 집합 포함 검증을 통과했다.
+  - 런타임(Debug/Release 각각 9회, `-debug 1 -collision-log 1 -cut-validate 1`): 섹션 H sim-off Cube 4회, Bunny 위 두 높이, 6b `-physics-cut-checks 1`, 6c `plain`·`empty-a`·`fail-a`·`paused`, 같은 Cube A 2회 재절단(`-cut 2 -physics-sim 0 -cut-repeat-plane 1 -cut-step-y .25 -cut-gap 0 -cut-expect-publications 2 -physics-query-exit 12`) 모두 exit 0, D3D12 ERROR 0·CORRUPTION 0이다. 6c는 기존 명령처럼 종료 프레임 1500, 6b는 1200을 사용했다.
+  - 6b 조각 최저점 Debug −1.155189/Release −1.155187, 바닥 −1.155179이며 두 조각 sleep을 확인했다. `empty-a`는 body 1·bodyless 1, `fail-a`는 Failed 0x200·원본/예약 복원, `paused`는 게시 위치 오차 0·재개 후 정착을 통과했다. 성공한 body 준비는 `BuildShapeAndMass`의 유한 양수 질량 검사를 통과한다(질량 수치를 별도로 읽지는 않음).
+  - 환경: NVIDIA GeForce MX450, 드라이버 DLL 32.0.15.9186. 실행당 약 31~73초. `%TEMP%/step2a/Dbg.cs`를 PowerShell `Add-Type`으로 프로세스 안에서 컴파일해 OutputDebugString을 수집했다. 빌드/실행 로그는 `%TEMP%/step6e3-*`, 재현 하네스는 `%TEMP%/step6e3-runtime.ps1`·`step6e3-small.ps1`이다. 기존 종료 시 LightGrid live-resource WARNING은 남아 있다.
 - **7a 완료 (2026-10-28)**: 편집 대상 선택만 구현했다(적용·History는 7b·7c).
   - `Scene/EditTarget.h`: `EditTarget{Kind, Object, Mesh}`와 `FromPick`(월드 독립이면 Mesh, 아니면 Owner)·동등 비교(GPU 무관, `SceneMathTests`에서 검사). `ObjectSelection`의 `ResolveEditTarget`·`IsEditTargetValid`·`TryGetEditTargetTransform`이 Scene과 연결한다. `GameObject::IsEditable`에서 simulate 소유 검사를 제거해 바닥 등 명시적 잠금만 남겼고, simulate 조각 pick 제외를 풀었다.
   - `TransformGizmo::Update/Render`는 `EditTarget`을 받아 대상의 월드 TRS 위치·축에 기즈모를 그린다. Mesh 대상의 핸들 누름과 `Ctrl+Z`는 편집 없이 거절하고 안내를 띄운다(`GetNotice`). ModelViewer는 `m_Target`을 쓰며 `IsEditTargetValid`가 거짓이면 매 프레임 선택을 해제한다.

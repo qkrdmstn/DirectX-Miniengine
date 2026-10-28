@@ -42,6 +42,37 @@ namespace Viewer
             return true;
         }
 
+        // GPU DOP을 double로 옮겨 슬라이스 충돌을 재맞추고 옵션에 따라 면별 통계를 출력한다.
+        void RefitSideCollision(const MeshCutting::CutJob& job, uint32_t side,
+            const MiniCollision::AggregateGeom& sliced, MiniCollision::AggregateGeom& out)
+        {
+            // DOP이 없거나 충돌이 빈 쪽은 슬라이스 결과를 그대로 유지한다.
+            out = sliced;
+            MiniCollision::RefitStats stats;
+            stats.VolumeBefore = TotalVolume(sliced);
+            stats.VolumeAfter = stats.VolumeBefore;
+            stats.Kept = static_cast<int>(sliced.ConvexElems.size());
+            if (job.SideDopValid[side] && job.SideDop[side].VertexCount != 0 && !sliced.ConvexElems.empty())
+            {
+                // 공유하는 9개 축의 투영 범위를 옮기고 로컬 단위 패딩을 적용한다.
+                MiniCollision::Dop18Bounds dop{};
+                for (uint32_t axis = 0; axis < 9; ++axis)
+                {
+                    dop.Min[axis] = double(job.SideDop[side].Min[axis]);
+                    dop.Max[axis] = double(job.SideDop[side].Max[axis]);
+                }
+                stats = MiniCollision::RefitAggregateToDop(sliced, dop, MiniCollision::RefitDopPad, out);
+            }
+
+            // 기존 충돌 로그와 같은 옵션으로 부피 비율과 결과 개수를 남긴다.
+            uint32_t enabled = 0;
+            if (!CommandLineArgs::GetInteger(L"collision-log", enabled) || enabled == 0)
+                return;
+            const double ratio = stats.VolumeBefore > 0.0 ? stats.VolumeAfter / stats.VolumeBefore : 0.0;
+            Utility::Printf("CutCollision refit: side=%u sliced=%.9g refit=%.9g ratio=%.9g Refit=%d Disjoint=%d Kept=%d\n",
+                side, stats.VolumeBefore, stats.VolumeAfter, ratio, stats.Refit, stats.Disjoint, stats.Kept);
+        }
+
         // -collision-log 1이면 게시마다 부모/A/B 상태·convex 수·부피와 (A+B)/부모 비율을 출력한다.
         void LogInheritance(ComponentCollisionStatus parentStatus, double parentVolume, uint32_t parentConvex, const MeshComponent& a, const MeshComponent& b)
         {
@@ -152,7 +183,7 @@ namespace Viewer
     }
 
     // 입력 변경·삭제·overflow는 원래 geometry를 유지하고 열린 경계는 cap 없이 게시한다.
-    // simulate 대상은 body 교체 transaction(CutTransaction)이 준비·검증을 통과할 때만 게시한다.
+    // GPU DOP으로 충돌을 재맞춘 뒤 simulate 대상은 body 교체 transaction 검증을 통과할 때만 게시한다.
     bool CuttingSystem::Update()
     {
         if (!m_Job || !m_Job->Poll()) return false;
@@ -172,6 +203,7 @@ namespace Viewer
         MeshComponent* mesh = object ? object->FindMeshComponent(m_Mesh) : nullptr;
 
         // 분할이 있고 입력이 그대로면 부모 충돌을 같은 로컬 평면으로 잘라 둔다. 게시 중 A의 geometry가 바뀌므로 부모 값도 지금 기록한다.
+        std::array<MiniCollision::AggregateGeom, 2> sliced;
         std::array<MiniCollision::AggregateGeom, 2> inherited;
         bool hasInherited = false;
         ComponentCollisionStatus parentStatus = ComponentCollisionStatus::None;
@@ -182,7 +214,14 @@ namespace Viewer
             parentStatus = mesh->GetCollisionStatus();
             parentVolume = TotalVolume(mesh->GetCollision());
             parentConvex = (uint32_t)mesh->GetCollision().ConvexElems.size();
-            hasInherited = SliceParentCollision(*mesh, *m_Job, inherited);
+            hasInherited = SliceParentCollision(*mesh, *m_Job, sliced);
+
+            // 진단과 게시 준비 전에 재맞추되 슬라이스 원본은 포함 검증용으로 보존한다.
+            if (hasInherited)
+            {
+                for (uint32_t side = 0; side < 2; ++side)
+                    RefitSideCollision(*m_Job, side, sliced[side], inherited[side]);
+            }
         }
 
         // 검증 모드에서는 A/B 정점이 계승 hull 안에 있는지도 함께 확인한다.
@@ -190,7 +229,8 @@ namespace Viewer
         {
             if (hasInherited)
             {
-                m_Job->ContainmentHulls = inherited;
+                m_Job->ContainmentHulls = sliced;
+                m_Job->RefitContainmentHulls = inherited;
                 m_Job->InheritanceActive = true;
             }
             m_Job->ValidateDiagnostics();
