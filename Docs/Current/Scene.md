@@ -1,4 +1,4 @@
-상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택·7b 조각 편집 적용 경로·7c 대상 종류 History·7d 조각/owner 삭제 완료; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반); 관절 미구현 (2026-10-28)
+상태: 진행 중 — 7a~7d 완료, `3dc5d6ba` 기반 생성 조각 hull 선택·중심 기즈모·노란 선택 모서리 구현; CPU·실행 진단 통과, 수동 화면 확인 미완료, 관절 미구현 (2026-10-28)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -67,7 +67,9 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 표시 모드의 입력·PSO·깊이·알파·검증 계약은
 [RenderModes.md](RenderModes.md)를 따른다.
 
-선택은 각 메시 컴포넌트의 CPU 경계 구와 가장 가까운 교차점을 이용하고 `PickHit`에 ObjectId와 MeshId를 함께 반환한다. 구가 겹치거나 빈 공간이 많은 모델에서는 근사 선택이다.
+`PickObject`는 CPU 경계 구로 후보를 줄인 뒤, 충돌 hull이 있는 생성 조각은 현재 로컬 hull 삼각형과 양면 ray 교차를 검사해 가장 가까운 월드 거리로 선택한다. 역변환한 ray를 정규화하지 않아 비균일 scale 조각끼리도 거리를 비교할 수 있다. 원본·충돌 없는 조각은 기존 경계 구 근사 선택을 유지한다. hull은 실제 렌더 삼각형과 다른 근사이므로 오목한 빈 공간까지 정확한 선택을 보장하지 않는다. `PickHit`에는 ObjectId와 MeshId를 함께 반환한다.
+
+`GetEditTargetPivot`는 생성 Mesh의 최신 경계 구 중심을 반환하고, 원본·Owner는 기존 편집 원점을 유지한다. `TryGetEditTargetTransform`의 실제 편집 TRS는 바꾸지 않는다. `TransformGizmo`는 표시·핸들 선택·드래그에 같은 피벗을 쓰며 `GizmoMath::KeepPivot`로 회전·크기 변경 시 중심 위치를 보존한다. Esc·Undo는 기존 실제 TRS 복구 경로를 따른다. 선택된 Mesh의 충돌 hull 모서리를 노란 2px overlay로 표시하며 View 도구에서도 유지한다. 표시에는 실제 렌더 실루엣과 다른 hull 근사 및 가려진 모서리가 포함된다.
 
 선택 결과는 `Scene/EditTarget.h`의 `EditTarget{Kind(Owner|Mesh), Object, Mesh}`다. `ResolveEditTarget`이 pick을 R8 규칙으로 바꾼다. `WorldIndependent` 컴포넌트(simulate 여부 무관)를 맞히면 Mesh 대상, `Attached` 컴포넌트나 모델 없는 객체(절단 평면)는 Owner 대상이다. 순수 규칙은 `EditTarget::FromPick`(CPU 테스트 가능)이고, `IsEditTargetValid`는 owner·컴포넌트 존재와 월드 독립 여부를 확인하며 ModelViewer가 매 프레임 무효 대상을 해제한다. `TryGetEditTargetTransform`은 기즈모 위치·축으로 쓰는 월드 TRS를 주는데 Owner는 `GameObject::GetTransform`, Mesh는 `MeshComponent::GetWorldTransform`을 TRS로 분해한 값이다. `GameObject::IsEditable`은 바닥 같은 명시적 편집 잠금만 보며, 잠긴 객체는 pick에서 제외한다. owner 기즈모는 `MeshComponent::GetWorldTransform`이 WorldIndependent에서 owner를 곱하지 않으므로 Attached 컴포넌트만 움직인다.
 
@@ -92,6 +94,10 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 양수 크기, Undo와 삭제된 대상, Mesh 대상 History의 대상·모드·Before/After 보관, DFS 부모 복원 및 skeletonRoot 유/무의 locator 단일 적용을 검사한다.
 VS Developer PowerShell에서 파일 머리말의 명령을 사용하고 `/Fo`, `/Fe`는 저장소 밖으로 지정한다.
 GPU 렌더링과 실제 마우스 조작은 별도 런타임 확인이 필요하다.
+
+2026-10-28 조각 편집 검증: SceneMathTests Debug/Release 각각 495 checks 통과(양면 ray·빈 삼각형 영역·역변환 ray 거리·비균일 scale/회전의 중심 보존 포함). `.slnx` Debug/Release 빌드를 확인했다. 각 구성에서 `-debug 1 -model Models/cube.glb -physics-running 1 -cut 1 -cut-angle 30 -cut-expect-publications 1 -edit-target-checks 1 -edit-apply-checks 1 -physics-query-exit 360`으로 실제 절단 조각 2개 pick·중심 피벗·편집·Undo와 선택 overlay 렌더 경로를 검사했다. 명시적 `-edit-target-checks`에서만 첫 생성 조각을 화면 선택으로 지정한다. 로그는 `%TEMP%/step7-<구성>-piece-selection-overlay.log`, 빌드는 `%TEMP%/piece-selection-<구성>-build.log`, CPU 결과는 `%TEMP%/step7c-scenemath/`에 있다.
+
+선택 GPU 로그는 NVIDIA GeForce MX450이며 드라이버 버전은 이번에 재조회하지 않았다. 기존 하이브리드 그래픽 초기화 메시지는 남는다. Computer Use가 뷰어 스크린샷 대상을 반환하지 않아 실제 클릭·드래그와 노란 표시의 시각 확인은 미완료다. 겹친 두 조각의 특정 MeshId를 고정한 별도 회귀 fixture도 아직 없으며 기존 26방향 pick 진단은 모든 조각을 적어도 한 방향에서 고를 수 있는지 검사한다.
 
 ## 비균일 변환과 회전 검토
 

@@ -35,6 +35,30 @@ namespace
         return MakeHomogeneous(matrix * position);
     }
 
+    // 양면 선택·빈 공간·비균일 scale 거리와 중심 회전·크기 변경을 회귀 검사한다.
+    void PieceSelectionTests()
+    {
+        // 역변환된 ray의 길이를 유지해야 서로 다른 크기의 조각도 월드 거리로 정렬된다.
+        const Vector3 a(-1, -1, 0), b(1, -1, 0), c(0, 1, 0);
+        float distance = 0;
+        Check(GizmoMath::IntersectTriangle(Vector3(0, 0, 2), Vector3(0, 0, -0.5f), a, b, c, distance), "Scaled ray hits hull");
+        Check(std::abs(distance - 4.0f) < 1e-5f, "Scaled ray preserves world parameter");
+        Check(GizmoMath::IntersectTriangle(Vector3(0, 0, -2), Vector3(0, 0, 1), a, b, c, distance), "Back face remains selectable");
+        Check(!GizmoMath::IntersectTriangle(Vector3(0.9f, 0.9f, 2), Vector3(0, 0, -1), a, b, c, distance), "Empty hull corner is not selected");
+        Check(!GizmoMath::IntersectTriangle(Vector3(0, 0, 2), Vector3(0, 0, 1), a, b, c, distance), "Behind camera triangle is rejected");
+        Check(!GizmoMath::IntersectTriangle(Vector3(0, 0, 2), Vector3(1, 0, 0), a, b, c, distance), "Parallel ray is rejected");
+
+        // 원점에서 떨어진 조각 중심은 회전과 비균일 크기를 함께 바꿔도 고정된다.
+        const SceneTransform start(Quaternion(Vector3(kYUnitVector), 0.3f), Vector3(2, 3, 4), Vector3(5, -2, 1));
+        const Vector3 localCenter(1, -0.5f, 2);
+        const Vector3 pivot = start.ToAffine() * localCenter;
+        SceneTransform changed(Quaternion(Vector3(kZUnitVector), 0.8f), Vector3(4, 2, 1), start.GetTranslation());
+        GizmoMath::KeepPivot(start, pivot, changed);
+        Near(changed.ToAffine() * localCenter, pivot, "Piece center stays fixed after rotation and scale");
+        GizmoMath::KeepPivot(start, start.GetTranslation(), changed);
+        Near(changed.GetTranslation(), start.GetTranslation(), "Original origin pivot stays compatible");
+    }
+
     // 합성 월드 행렬의 TRS 보존과 전단·반사·무효값 거절을 검사한다.
     void WorldTransformTests()
     {
@@ -475,6 +499,7 @@ int main()
         PlaneEditingTests();
         EditTargetTests();
         WorldTransformTests();
+        PieceSelectionTests();
         std::printf("SceneMathTests: %d checks passed\n", Checks);
         return 0;
     }

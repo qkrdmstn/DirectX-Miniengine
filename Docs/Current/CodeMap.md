@@ -1,4 +1,4 @@
-상태: 완료 — 현황문서 (기준 HEAD `527ed749`, 미커밋 문서 정리; 구현 변경 없음)
+상태: 완료 — `3dc5d6ba` 기반 생성 조각 선택·중심 기즈모·선택 표시 갱신; CPU·실행 검증과 수동 확인 한계는 Scene.md 참조 (2026-10-28)
 
 # 현재 Scene과 유한 평면 코드 지도
 
@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | 초기화 | `ModelViewer::Startup`, `CutPlaneSystem::CreatePlane` | Scene에 모델 객체와 원점의 4×4 XZ 평면을 만든다. 시작 선택은 없다. |
 | 갱신 | `Scene::Update`, `CutPlaneSystem::PruneStaleObjects` | 모델 자세를 갱신하고 일반 Scene 삭제로 남은 평면 설명을 정리한다. |
-| 선택 | `PickObject`, `CutPlaneSystem::Pick`, `NearestPickHit` | 모델 경계 구와 유한 직사각형의 앞쪽 교점을 월드 거리로 비교한다. |
-| 편집 | `TransformGizmo`, `GameObject::SetTransform` | 선택 객체의 TRS를 편집한다. 평면 크기 모드는 로컬 X/Z만 바꾼다. |
+| 선택 | `PickObject`, `CutPlaneSystem::Pick`, `NearestPickHit` | 생성 조각은 경계 구 뒤 충돌 hull 교점을 검사하고 원본 구·유한 직사각형과 월드 거리로 비교한다. |
+| 편집 | `TransformGizmo`, `GetEditTargetPivot`, `GizmoMath::KeepPivot` | 생성 Mesh의 경계 중심으로 기즈모를 표시·편집하고 노란 hull 모서리로 선택을 표시한다. 평면 크기 모드는 로컬 X/Z만 바꾼다. |
 | 스냅샷 | `CutPlaneSystem::BuildData`, `TryBuildCutPlaneData` | 평면 설명과 현재 GameObject TRS로 기하 데이터를 계산한다. |
 | 표시 | `Scene::Render`, `RenderCutPlanes` | 모델을 렌더하고 메인 투명 메시 뒤·후처리 전에 평면당 테두리·격자 22개 선을 그린다. 장면 깊이를 검사하며 깊이를 쓰지 않는다. |
 
@@ -22,7 +22,7 @@
 | 파일 / 자료형 | 소유 데이터와 책임 |
 | --- | --- |
 | `ModelViewer/Scene/Scene.*`의 `Scene`, `GameObject` | Scene이 객체를 소유한다. GameObject는 TRS의 원본이며 모델 없이도 존재한다. 모델이 있으면 ModelInstance를 가진다. |
-| `ModelViewer/Scene/ObjectSelection.*`, `PickHit.h` | 모델 경계 구 선택, 객체 ID와 `WorldT`, 가장 가까운 유효 후보 비교를 제공한다. |
+| `ModelViewer/Scene/ObjectSelection.*`, `PickHit.h` | 원본 경계 구·생성 조각 hull 선택, 조각 중심 피벗, 객체/조각 ID와 월드 거리 비교를 제공한다. |
 | `ModelViewer/Scene/TransformGizmo.*`, `SceneTransform.h` | 객체 TRS 편집과 입력 처리를 담당한다. 조작·Undo 계약은 [Scene.md](Scene.md)를 따른다. |
 | `ModelViewer/Scene/CutPlaneSystem.*` | Scene을 참조하고 ObjectId별 `CutPlaneDesc`를 소유한다. 별도 평면 TRS를 보관하지 않는다. `Find`는 삭제된 객체를 거절한다. |
 | `MeshCutting/Geometry/CutPlane.*`의 `CutPlaneDesc` | 로컬 XZ, y=0 직사각형의 `Width`와 `Height`를 정의한다. |

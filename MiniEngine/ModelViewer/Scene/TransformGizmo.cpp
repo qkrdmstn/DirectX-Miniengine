@@ -1,6 +1,7 @@
 ﻿#include "TransformGizmo.h"
 #include "GizmoDraw.h"
 #include "GameInput.h"
+#include "CollisionDebugMath.h"
 
 namespace Viewer
 {
@@ -9,6 +10,45 @@ namespace Viewer
     {
         const Color Colors[] = { Color(1.0f, 0.2f, 0.15f), Color(0.25f, 1.0f, 0.25f), Color(0.25f, 0.55f, 1.0f) };
         const int PlaneAxes[][2] = { {0, 1}, {1, 2}, {2, 0} };
+
+        // 선택된 조각의 충돌 hull 모서리를 노란 선으로 표시하며 근평면을 가로지르는 선도 보존한다.
+        void DrawSelection(GraphicsContext& context, const Scene& scene, const EditTarget& target,
+            const Camera& camera, float width, float height)
+        {
+            // Mesh 선택만 표시하고 삭제되거나 잠긴 대상은 그리지 않는다.
+            const auto* object = scene.FindObject(target.Object);
+            const auto* mesh = object && target.IsMesh() ? object->FindMeshComponent(target.Mesh) : nullptr;
+            if (!mesh || !object->IsEditable()) return;
+            const Matrix4 viewWorld = camera.GetViewMatrix() * Matrix4(mesh->GetWorldTransform(object->GetTransform()));
+            GizmoDraw draw;
+
+            // 평면 내부의 삼각화 대각선을 제외한 hull 모서리를 화면으로 투영한다.
+            for (const auto& hull : mesh->GetCollision().ConvexElems)
+            {
+                std::vector<CollisionDebug::HullEdge> edges;
+                CollisionDebug::ExtractHullEdges(hull.VertexData, hull.IndexData, edges);
+
+                // 각 로컬 정점을 뷰 공간으로 바꿔 카메라 뒤쪽 선분을 잘라낸다.
+                const auto toView = [&hull, &viewWorld](uint32_t index)
+                {
+                    const auto& v = hull.VertexData[index];
+                    const Vector3 p(viewWorld * Vector3(float(v.x), float(v.y), float(v.z)));
+                    return CollisionDebug::ViewPoint{ p.GetX(), p.GetY(), p.GetZ() };
+                };
+                for (const auto& edge : edges)
+                {
+                    auto a = toView(edge.A), b = toView(edge.B);
+                    if (!CollisionDebug::ClipSegmentToNearPlane(a, b, camera.GetNearClip())) continue;
+                    GizmoMath::Point pa, pb;
+                    if (GizmoMath::Project(Vector3(a.X, a.Y, a.Z), camera.GetProjMatrix(), width, height, pa) &&
+                        GizmoMath::Project(Vector3(b.X, b.Y, b.Z), camera.GetProjMatrix(), width, height, pb))
+                        draw.Line(pa, pb, Color(1.0f, 0.85f, 0.1f), 2.0f);
+                }
+            }
+
+            // 기즈모 도구와 무관하게 선택 표시를 overlay로 게시한다.
+            draw.Render(context, width, height);
+        }
     }
 
     // 선택 좌표계의 축을 구해 선택과 드래그가 공유하도록 저장한다.
@@ -144,6 +184,7 @@ namespace Viewer
                         drag = 100.0f * float(Dot(hit - m_StartHit, m_Axes[m_Active])) / m_StartSize;
                     transform.SetScale(GizmoMath::ScaleComponents(m_Start.GetScale(),
                         m_Active == Uniform ? -1 : int(m_Active), drag, m_ScaleAxisMask));
+                    GizmoMath::KeepPivot(m_Start, m_Pivot, transform);
                     m_LastDragTransform = transform;
                 }
             }
@@ -164,6 +205,7 @@ namespace Viewer
 
                             // 누적 회전을 시작 자세에 적용해 마지막 유효 변환으로 보관한다.
                             transform.SetRotation(Quaternion(m_Normal, m_Angle) * m_Start.GetRotation());
+                            GizmoMath::KeepPivot(m_Start, m_Pivot, transform);
                             m_LastDragTransform = transform;
                         }
                     }
@@ -240,7 +282,7 @@ namespace Viewer
         if (m_Mode == View || !object || !object->IsEditable() || !validMouse || GameInput::IsPressed(GameInput::kMouse1) ||
             !TryGetEditTargetTransform(scene, target, frame))
             return false;
-        const Vector3 pivot = frame.GetTranslation();
+        const Vector3 pivot = GetEditTargetPivot(scene, target, frame);
         SetAxes(frame);
         const float size = HandleSize(pivot, camera, height);
         if (size <= 0.0f)
@@ -294,17 +336,21 @@ namespace Viewer
         return true;
     }
 
-    // 대상의 월드 TRS 위치에 공통 좌표계와 고정된 드래그 기저로 핸들을 그린다.
+    // 선택 hull과 조각 중심의 기즈모를 그리고 드래그 중에는 시작 기저를 유지한다.
     void TransformGizmo::Render(GraphicsContext& context, const Scene& scene, const EditTarget& target,
         const Camera& camera, float width, float height) const
     {
+        // View 도구에서도 선택한 조각을 확인할 수 있게 테두리를 먼저 그린다.
+        DrawSelection(context, scene, target, camera, width, height);
+
+        // 편집 도구가 활성화된 대상의 중심에서 핸들을 구성한다.
         if (m_Mode == View)
             return;
         const GameObject* object = scene.FindObject(target.Object);
         SceneTransform frame;
         if (!object || !object->IsEditable() || !TryGetEditTargetTransform(scene, target, frame))
             return;
-        const Vector3 pivot = frame.GetTranslation();
+        const Vector3 pivot = GetEditTargetPivot(scene, target, frame);
         const float size = HandleSize(pivot, camera, height);
         if (size <= 0.0f)
             return;

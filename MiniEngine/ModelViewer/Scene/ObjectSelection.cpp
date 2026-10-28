@@ -67,7 +67,7 @@ namespace Viewer
         return { camera.GetPosition(), GizmoMath::RayDirection(camera.GetViewProjMatrix(), camera.GetPosition(), x, y) };
     }
 
-    // 모든 메시 컴포넌트를 월드 구로 검사하고 owner와 component ID를 함께 반환한다.
+    // 경계 구로 후보를 줄이고 생성 조각은 현재 충돌 hull의 가장 가까운 교점으로 선택한다.
     PickHit PickObject(const Scene& scene, const PickingRay& ray)
     {
         using namespace Math;
@@ -93,7 +93,34 @@ namespace Viewer
                 const float root = std::sqrt(discriminant);
                 const float entry = -b - root;
                 const float distance = entry >= 0.0f ? entry : -b + root;
-                result = NearestPickHit(result, {object->GetId(), distance, mesh->GetId()});
+
+                // 생성 조각의 겹치는 경계 구 대신 실제 계승 hull 표면을 검사한다.
+                float nearest = distance;
+                if (mesh->GetGeometry()->IsGenerated() && !mesh->GetCollision().ConvexElems.empty())
+                {
+                    const Matrix4 inverse = Invert(Matrix4(mesh->GetWorldTransform(object->GetTransform())));
+                    const Vector3 origin(inverse * ray.Origin);
+                    const Vector3 direction = Vector3(inverse * Vector4(ray.Direction, 0));
+                    nearest = std::numeric_limits<float>::max();
+                    for (const auto& hull : mesh->GetCollision().ConvexElems)
+                    {
+                        // 로컬 ray를 정규화하지 않아 서로 다른 scale의 조각도 월드 거리로 비교한다.
+                        // 충돌 hull의 배정밀도 정점을 선택 계산용 벡터로 변환한다.
+                        const auto point = [&hull](uint32_t index)
+                        {
+                            const auto& v = hull.VertexData[index];
+                            return Vector3(float(v.x), float(v.y), float(v.z));
+                        };
+                        for (size_t i = 0; i + 2 < hull.IndexData.size(); i += 3)
+                        {
+                            float hit;
+                            if (GizmoMath::IntersectTriangle(origin, direction, point(hull.IndexData[i]),
+                                point(hull.IndexData[i + 1]), point(hull.IndexData[i + 2]), hit))
+                                nearest = std::min(nearest, hit);
+                        }
+                    }
+                }
+                result = NearestPickHit(result, {object->GetId(), nearest, mesh->GetId()});
             }
         }
         return result;
@@ -146,5 +173,16 @@ namespace Viewer
         // Mesh 대상은 컴포넌트 월드 행렬을 TRS로 분해한다.
         const MeshComponent* mesh = object->FindMeshComponent(target.Mesh);
         return SceneTransform::TryFromAffine(mesh->GetWorldTransform(object->GetTransform()), out);
+    }
+
+    // 편집 TRS를 바꾸지 않고 생성 조각의 최신 경계 중심을 기즈모 피벗으로 구한다.
+    Math::Vector3 GetEditTargetPivot(const Scene& scene, const EditTarget& target, const SceneTransform& frame)
+    {
+        // 원본과 owner는 기존 원점을 유지하고 생성 Mesh만 조각별 중심을 쓴다.
+        const auto* object = scene.FindObject(target.Object);
+        const auto* mesh = object && target.IsMesh() ? object->FindMeshComponent(target.Mesh) : nullptr;
+        if (mesh && mesh->GetGeometry()->IsGenerated() && mesh->HasPoseBounds())
+            return mesh->GetBoundingSphere(object->GetTransform()).GetCenter();
+        return frame.GetTranslation();
     }
 }

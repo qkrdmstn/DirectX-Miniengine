@@ -623,10 +623,10 @@ void ModelViewer::Update( float deltaT )
     m_CutScenario.Poll(m_Scene, m_Physics);
     if (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame) m_CutScenario.RequireDone();
 
-    // GPU 절단이 모두 끝난 뒤 편집 대상 pick 규칙을 한 번 검사한다.
+    // GPU 절단 뒤 pick 규칙과 생성 조각 선택 overlay의 실제 렌더 경로를 검사한다.
     if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining)
     {
-        m_EditTargetChecks.Poll(m_Scene);
+        m_EditTargetChecks.Poll(m_Scene, &m_Target);
         m_EditApplyChecks.Poll(m_Scene, m_Physics);
 
         // 다른 편집 진단이 끝난 뒤 삭제하고 다음 프레임의 재생성 여부를 검사한다.
