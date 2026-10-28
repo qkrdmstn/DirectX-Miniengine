@@ -17,11 +17,12 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
+    <JoltVsInstallDir>$(VSInstallDir.TrimEnd('\'))</JoltVsInstallDir>
     <SdkConfiguration Condition="'$(Configuration)'=='Profile'">Release</SdkConfiguration>
     <SdkConfiguration Condition="'$(SdkConfiguration)'==''">$(Configuration)</SdkConfiguration>
-    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildThisFileDirectory)..\..\Tools\BuildJolt.ps1" -Configuration $(Configuration) -Target MiniPhysics</NMakeBuildCommandLine>
+    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildThisFileDirectory)..\..\Tools\BuildJolt.ps1" -Configuration $(Configuration) -Target MiniPhysics -VsVersion "$(VisualStudioVersion)" -VsInstallDir "$(JoltVsInstallDir)"</NMakeBuildCommandLine>
     <NMakeReBuildCommandLine>$(NMakeBuildCommandLine) -CleanFirst</NMakeReBuildCommandLine>
-    <NMakeCleanCommandLine>cmake --build "$(MSBuildThisFileDirectory)..\Build\ThirdParty\Jolt\build" --config $(SdkConfiguration) --target clean</NMakeCleanCommandLine>
+    <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildThisFileDirectory)..\..\Tools\BuildJolt.ps1" -Configuration $(Configuration) -Target MiniPhysics -Clean -VsVersion "$(VisualStudioVersion)" -VsInstallDir "$(JoltVsInstallDir)"</NMakeCleanCommandLine>
     <NMakeOutput>$(MSBuildThisFileDirectory)..\Build\ThirdParty\Jolt\build\lib\$(SdkConfiguration)\MiniPhysics.lib</NMakeOutput>
     <OutDir>$(MSBuildThisFileDirectory)..\Build\ThirdParty\Jolt\bridge\$(Configuration)\</OutDir>
     <IntDir>$(OutDir)</IntDir>
