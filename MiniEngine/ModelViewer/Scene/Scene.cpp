@@ -118,15 +118,19 @@ namespace Viewer
         return m_ColliderComponents.back();
     }
 
-    // 오래된 geometry의 cooking 결과를 적용하지 않도록 현재 revision을 비교한다.
+    // 지정한 collider를 찾은 뒤 현재 geometry revision과 비교해 오래된 참조를 거부한다.
     bool GameObject::IsColliderCurrent(ComponentId id) const
     {
+        // ID가 일치하는 collider에 대해서만 메시 목록을 검색한다.
         for (const ColliderComponent& collider : m_ColliderComponents)
         {
+            if (collider.Id != id)
+                continue;
             const MeshComponent* mesh = FindMeshComponent(collider.MeshId);
-            if (collider.Id == id)
-                return mesh && mesh->GetGeometry()->GetId() == collider.GeometryRevisionId;
+            return mesh && mesh->GetGeometry()->GetId() == collider.GeometryRevisionId;
         }
+
+        // 등록되지 않은 collider는 유효하지 않다.
         return false;
     }
 

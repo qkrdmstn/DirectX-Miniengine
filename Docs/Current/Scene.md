@@ -1,4 +1,4 @@
-상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택 완료; 조각 드래그·Undo(7b·7c)와 관절 미구현 (2026-10-28)
+상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택 완료; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반); 조각 드래그·Undo(7b·7c)와 관절 미구현 (2026-10-28)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -129,6 +129,10 @@ CPU 회귀 검사는 공통 TRS·축 기저·축별 배율·히스토리·경계
 `GeometryRevision::FromModel`은 loader가 만든 유효한 Model metadata를 전제로 원본 GPU VB/IB·재질·draw·SourceMesh를 참조한다. `SelectSections`는 기존 GPU 버퍼를 복사하지 않고 section 부분집합의 새 불변 revision을 만든다. `MeshComponent::SetGeometry`는 같은 원본만 허용하고 pose 준비를 무효화한다. 이 절은 컴포넌트 기반 구현 이력이다. 이후 추가한 `GeometryRevision::FromGenerated`는 Static 절단 VB/IB·parent provenance를 보관한다.
 
 `AddColliderComponent`는 MeshId·GeometryRevisionId와 SDK 비노출 QueryHandle을 보관한다. `PhysicsSystem::SyncColliders`가 준비된 Static 메시마다 참조와 조회 전용 Box/body를 자동 등록한다. `SetColliderQueryHandle`은 현재 revision의 참조만 갱신하고, 실제 SDK 수명은 PhysicsWorld가 소유한다. `IsColliderCurrent`는 geometry 교체로 오래된 참조를 거부한다. 메시 제거 시 대응 collider 참조를 제거하고 다음 SyncColliders에서 SDK body도 정리한다. 낙하 body는 같은 PhysicsWorld의 별도 layer/handle/map을 쓰며 `SyncBodies`가 GPU 준비와 무관하게 등록·정리한다.
+
+`IsColliderCurrent`는 collider ID가 일치하는 항목을 찾은 뒤에만 `FindMeshComponent`를 호출한다. 한 owner의 mesh·collider가 각각 N개일 때 유효성 검사 한 번은 O(N), 전체 `SyncColliders`의 해당 검색은 O(N²)이다. ID 비교 전에 모든 collider의 메시까지 검색하던 O(N³) 경로를 제거했으며, revision 판정과 수명 처리는 유지한다.
+
+2026-10-28 진단: 실제로 한 번 절단한 큐브 조각의 geometry·배치·충돌 hull을 같은 owner에 복제하고 물리 step을 정지한 body 378개에서 각 구간을 12회 평균 측정했다. `SyncColliders`는 Debug 52.23→1.75 ms, Release 7.29→0.23 ms였다. 사용자 원래 절단 장면이나 전체 프레임 시간의 계측은 아니다. CPU는 i5-1135G7, 감지 GPU/드라이버는 MX450/32.0.15.9186 및 Iris Xe/27.20.100.9415이며 활성 렌더 어댑터는 별도 기록하지 않았다. Debug·Release에서 `RunPhysicsQueryChecks`의 geometry 교체·복원 및 메시·owner 삭제 검증을 DirectX 검증 활성화(`-debug 1`) 상태로 통과했다. 임시 계측 코드는 제거했으며 재현용 임시 패치는 시스템 임시 폴더의 `modelviewer-cpu-measurement.patch`에 보관했다.
 
 `MakeWorldIndependent`는 양수 TRS로 월드 배치를 재현할 수 있을 때만 분리한다. `AdvanceSimulation`은 입력 후 stale body 정리→고정 step→원점 pose 반영을 완료하고 그 뒤 GPU pose를 준비한다. 바닥은 NotCuttable/NotEditable이며 simulate 조각은 Mesh 대상으로 선택되고 편집(드래그·Undo)은 7b·7c 전까지 거절하며, owner 편집은 Attached 컴포넌트만 움직인다. 물리 세대·조회 옵션과 simulation 옵션·진단/검증 범위는 [StaticPiecePhysics](../Physics/StaticPiecePhysics.md)의 H절을 따른다.
 

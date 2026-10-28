@@ -17,7 +17,7 @@
 | [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — 현황문서 (`527ed749` 기준 미커밋 문서 정리, 구현 변경 없음) |
 | [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749` 기반, GPU 연결 `673b56b6`; 수동 입력 검증 범위는 본문 참조 |
 | [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `673b56b6` Compute pose 연결, 검증은 본문·GPU 설계 참조 |
-| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `39db69f3` 커밋된 Jolt collider 후보 조회, 편집 UI는 owner TRS |
+| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `39db69f3` 커밋된 Jolt collider 후보 조회, 편집 UI는 owner TRS; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반) |
 
 ## GPU — 후속 절단 설계·문헌
 
