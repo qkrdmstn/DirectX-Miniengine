@@ -10,6 +10,15 @@ namespace MiniPhysics
 {
     namespace
     {
+        // 유한한 float 범위 속도를 double에서 먼저 제한해 Jolt의 float 길이 제곱 오버플로를 막는다.
+        JPH::Vec3 ClampPreparedVelocity(const std::array<double, 3>& velocity, float maximum)
+        {
+            // double 길이로 제한 비율을 구한 뒤 float 벡터를 만든다.
+            const double length = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+            const double factor = length > double(maximum) ? double(maximum) / length : 1.0;
+            return JPH::Vec3(float(velocity[0] * factor), float(velocity[1] * factor), float(velocity[2] * factor));
+        }
+
         // 실패 사유를 호출자 문자열에 남기고 false를 반환한다.
         bool Fail(std::string* error, const std::string& message)
         {
@@ -261,6 +270,43 @@ namespace MiniPhysics
         {
             return Fail(error, std::string("Exception: ") + e.what());
         }
+    }
+
+    // 준비된 body를 읽기 잠금으로 조회해 cook된 shape의 월드 질량 중심을 반환한다.
+    bool PhysicsWorld::GetPreparedCenterOfMass(const PreparedBody& body, std::array<double, 3>& worldCom) const
+    {
+        // 소유권을 먼저 검사해 고아나 다른 world의 BodyID에 접근하지 않는다.
+        if (!m_Impl || !body.m_Data || body.m_Data->Owner != m_Impl.get()) return false;
+        const JPH::BodyLockRead lock(m_Impl->World.GetBodyLockInterface(), body.m_Data->Id);
+        if (!lock.Succeeded()) return false;
+
+        // broadphase 등록 전에도 body에 저장된 월드 질량 중심을 읽을 수 있다.
+        const JPH::RVec3 com = lock.GetBody().GetCenterOfMassPosition();
+        worldCom = { double(com.GetX()), double(com.GetY()), double(com.GetZ()) };
+        return true;
+    }
+
+    // 미게시 동적 body의 속도를 설정해 CommitBody가 추가 작업 없이 그대로 게시하게 한다.
+    bool PhysicsWorld::SetPreparedVelocity(PreparedBody& body, const std::array<double, 3>& linear, const std::array<double, 3>& angular)
+    {
+        // 소유권과 모든 성분을 검사한 뒤에만 body를 변경한다.
+        if (!m_Impl || !body.m_Data || body.m_Data->Owner != m_Impl.get()) return false;
+        if (!AllFinite(linear) || !AllFinite(angular)) return false;
+        for (const double value : linear)
+            if (std::abs(value) > double(FLT_MAX)) return false;
+        for (const double value : angular)
+            if (std::abs(value) > double(FLT_MAX)) return false;
+
+        // 월드에 추가되지 않은 동적 body만 잠가서 속도를 쓴다 (Jolt 5.6.0의 Succeeded는 broadphase 등록을 요구하지 않음)
+        const JPH::BodyLockWrite lock(m_Impl->World.GetBodyLockInterface(), body.m_Data->Id);
+        if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return false;
+
+        // BodyInterface와 같은 제한 경로를 쓰되 아직 등록되지 않은 body는 활성화하지 않는다.
+        JPH::Body& prepared = lock.GetBody();
+        const JPH::MotionProperties* motion = prepared.GetMotionProperties();
+        prepared.SetLinearVelocityClamped(ClampPreparedVelocity(linear, motion->GetMaxLinearVelocity()));
+        prepared.SetAngularVelocityClamped(ClampPreparedVelocity(angular, motion->GetMaxAngularVelocity()));
+        return true;
     }
 
     // 준비된 body를 world에 올리고 Prepare에서 예약한 handle을 돌려준다. 맵 노드는 이미 할당되어 있어 유효한 body는 실패하지 않는다.

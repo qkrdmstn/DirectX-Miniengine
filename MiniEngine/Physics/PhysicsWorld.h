@@ -99,6 +99,10 @@ namespace MiniPhysics
         // 지오메트리를 cook해 world에 올리지 않은 body를 만든다. 실패하면 out을 비우고 false를 반환하며 아무것도 남기지 않는다.
         // 용량 예약 1개를 즉시 차지하며 PreparedBody가 파괴되거나 Commit될 때 정리된다.
         bool PrepareBody(const BodyDesc& desc, PreparedBody& out, std::string* error = nullptr);
+        // 준비된 shape와 pose의 월드 질량 중심을 읽는다. 무효·고아·다른 world이면 false이며 출력은 그대로다.
+        bool GetPreparedCenterOfMass(const PreparedBody& body, std::array<double, 3>& worldCom) const;
+        // 미게시 동적 body의 월드 선속도와 각속도를 설정한다(Jolt 최대 속도로 제한). 무효 입력이면 변경 없이 false다.
+        bool SetPreparedVelocity(PreparedBody& body, const std::array<double, 3>& linear, const std::array<double, 3>& angular);
         // 준비된 body를 world에 올리고 handle을 발급한다. 할당과 실패 경로가 없다(handle 맵은 Initialize에서 예약, 노드는 Prepare에서 할당). 다른 world이거나 고아면 InvalidBody를 반환하고 body는 그대로 둔다.
         BodyHandle CommitBody(PreparedBody&& body, bool activate);
         // body를 world에서만 빼고 살려 둔다. 이미 빠졌거나 handle이 무효면 false다.

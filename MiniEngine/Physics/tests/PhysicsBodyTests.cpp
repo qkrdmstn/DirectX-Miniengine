@@ -447,6 +447,217 @@ static void TestThinHull()
     }
 }
 
+// 세 축의 값을 같은 허용 오차로 비교한다.
+static void CheckVector(const std::array<double, 3>& actual, const std::array<double, 3>& expected, double tolerance)
+{
+    // 축마다 검사해 어느 성분도 빠뜨리지 않는다.
+    for (size_t axis = 0; axis < 3; ++axis)
+        CheckNear(actual[axis], expected[axis], tolerance, "Prepared vector component");
+}
+
+// 비대칭 오프셋 hull의 준비 COM과 커밋 후 속도·한 스텝 운동을 검사한다.
+static void TestPreparedMotion()
+{
+    // 비대칭 사면체를 회전해 원점에서 떨어진 위치에 준비한다.
+    PhysicsWorld world;
+    world.Initialize(4);
+    AggregateGeom geom;
+    geom.ConvexElems.resize(1);
+    geom.ConvexElems[0].VertexData = { {2,0,0}, {6,0,0}, {2,2,0}, {2,0,1} };
+    geom.ConvexElems[0].UpdateElemBox();
+    BodyDesc desc = MakeDesc(geom);
+    desc.Position = { 10, 20, 30 };
+    const double halfRotation = std::sqrt(0.5);
+    desc.Rotation = { 0, 0, halfRotation, halfRotation };
+    PreparedBody prepared;
+    Check(world.PrepareBody(desc, prepared), "Prepare asymmetric rotated hull");
+    std::array<double, 3> before{};
+    Check(world.GetPreparedCenterOfMass(prepared, before), "Read prepared COM");
+    CheckVector(before, { 9.5, 23, 30.25 }, 2e-3);
+
+    // 미게시 상태에서 속도를 설정하고 COM·예약·비활성 상태가 유지되는지 확인한다.
+    const std::array<double, 3> linear{ 3, 4, -2 };
+    const std::array<double, 3> angular{ 0, 0, 1.5 };
+    Check(world.SetPreparedVelocity(prepared, linear, angular), "Set prepared velocity");
+    auto* impl = PhysicsWorldAccess::GetImpl(world);
+    Check(world.GetBodyCount() == 0 && world.GetReservedCount() == 1, "Velocity preserves reservation");
+    Check(impl->World.GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0, "Prepared velocity does not activate");
+    std::array<double, 3> com{};
+    Check(world.GetPreparedCenterOfMass(prepared, com), "Read COM after setting velocity");
+    CheckVector(com, before, 0.0);
+    const BodyHandle handle = world.CommitBody(std::move(prepared), true);
+    Check(handle != InvalidBody && world.IsBodyAwake(handle), "Commit activates moving body");
+    Check(world.GetBodyCenterOfMass(handle, com), "Read committed COM");
+    CheckVector(com, before, 0.0);
+    std::array<double, 3> v{};
+    std::array<double, 3> w{};
+    Check(world.GetBodyVelocity(handle, v, w), "Read velocity before stepping");
+    CheckVector(v, linear, 1e-6);
+    CheckVector(w, angular, 1e-6);
+
+    // 회전하는 오프셋 hull은 원점 대신 COM 이동을 기본 감쇠·적분 오차 허용치 안에서 비교한다
+    constexpr float dt = 1.0f / 60.0f;
+    Check(world.Step(dt), "Step inherited velocity");
+    Check(world.GetBodyCenterOfMass(handle, com), "Read stepped COM");
+    CheckVector(com, { before[0] + linear[0] * dt, before[1] + linear[1] * dt - 4.9 * dt * dt,
+        before[2] + linear[2] * dt }, 0.002);
+    Check(world.GetBodyVelocity(handle, v, w), "Read stepped angular velocity");
+    CheckVector(w, angular, 0.003);
+    std::array<double, 3> position{};
+    std::array<double, 4> rotation{};
+    Check(world.GetBodyPose(handle, position, rotation), "Read stepped rotation");
+    Check(std::abs(rotation[2] - desc.Rotation[2]) > 0.001, "Prepared angular velocity rotates body");
+}
+
+// 부모의 월드 COM과 속도로 서로 다른 두 조각의 강체 속도 상속 공식을 검사한다.
+static void TestPreparedInheritance()
+{
+    // 부모의 속도와 COM을 실제 게시 body에서 읽는다.
+    PhysicsWorld world;
+    world.Initialize(4);
+    const AggregateGeom parentGeom = MakeBoxGeom({ 0, 0, 0 }, { 2, 1, 1 });
+    BodyDesc desc = MakeDesc(parentGeom);
+    desc.Position = { 10, 20, 30 };
+    const double halfRotation = std::sqrt(0.5);
+    desc.Rotation = { 0, 0, halfRotation, halfRotation };
+    PreparedBody parent;
+    Check(world.PrepareBody(desc, parent), "Prepare moving parent");
+    Check(world.SetPreparedVelocity(parent, { 2, -1, 3 }, { 0.5, -0.75, 2 }), "Set parent velocity");
+    const BodyHandle parentHandle = world.CommitBody(std::move(parent), true);
+    std::array<double, 3> parentCom{};
+    std::array<double, 3> v{};
+    std::array<double, 3> w{};
+    Check(world.GetBodyCenterOfMass(parentHandle, parentCom), "Read parent COM");
+    Check(world.GetBodyVelocity(parentHandle, v, w), "Read parent velocity");
+
+    // 서로 다른 로컬 중심을 가진 두 조각에 v + w x r을 커밋 전에 적용한다.
+    for (const double offset : { -1.0, 1.0 })
+    {
+        const AggregateGeom pieceGeom = MakeBoxGeom({ offset, 0, 0 }, { 0.5, 0.5, 0.5 });
+        desc.Geometry = &pieceGeom;
+        PreparedBody piece;
+        Check(world.PrepareBody(desc, piece), "Prepare offset piece");
+        std::array<double, 3> com{};
+        Check(world.GetPreparedCenterOfMass(piece, com), "Read piece COM");
+        CheckVector(com, { 10, 20 + offset, 30 }, 1e-3);
+        const std::array<double, 3> r{ com[0] - parentCom[0], com[1] - parentCom[1], com[2] - parentCom[2] };
+        const std::array<double, 3> inherited{ v[0] + w[1] * r[2] - w[2] * r[1],
+            v[1] + w[2] * r[0] - w[0] * r[2], v[2] + w[0] * r[1] - w[1] * r[0] };
+        Check(world.SetPreparedVelocity(piece, inherited, w), "Set inherited piece velocity");
+        const BodyHandle handle = world.CommitBody(std::move(piece), true);
+        std::array<double, 3> actualV{};
+        std::array<double, 3> actualW{};
+        Check(world.GetBodyVelocity(handle, actualV, actualW), "Read inherited piece velocity");
+        CheckVector(actualV, inherited, 1e-5);
+        CheckVector(actualW, w, 1e-6);
+    }
+}
+
+// float 최대 성분도 Jolt 내부 길이 제곱을 넘치게 하지 않고 방향을 보존해 제한하는지 검사한다.
+static void TestPreparedVelocityLimit()
+{
+    // 양수·음수 최대 성분을 가진 선속도와 각속도를 미게시 body에 설정한다.
+    PhysicsWorld world;
+    world.Initialize(4);
+    const AggregateGeom geom = MakeBoxGeom({ 0, 0, 0 }, { 1, 1, 1 });
+    PreparedBody prepared;
+    Check(world.PrepareBody(MakeDesc(geom), prepared), "Prepare float limit velocity");
+    const double maximum = double(std::numeric_limits<float>::max());
+    Check(world.SetPreparedVelocity(prepared, { maximum, -maximum, maximum }, { -maximum, maximum, -maximum }), "Float limit velocity accepted");
+    const BodyHandle handle = world.CommitBody(std::move(prepared), true);
+    std::array<double, 3> v{};
+    std::array<double, 3> w{};
+    Check(world.GetBodyVelocity(handle, v, w), "Read limited velocity");
+
+    // Jolt의 설정된 최대 길이와 단위 방향에 일치해야 한다.
+    const BodyReader reader(world, handle);
+    const JPH::BodyLockRead lock(reader.Locks(), reader.Id);
+    const auto* motion = lock.GetBody().GetMotionProperties();
+    const double linear = double(motion->GetMaxLinearVelocity()) / std::sqrt(3.0);
+    const double angular = double(motion->GetMaxAngularVelocity()) / std::sqrt(3.0);
+    CheckVector(v, { linear, -linear, linear }, 1e-3);
+    CheckVector(w, { -angular, angular, -angular }, 1e-4);
+}
+
+// 잘못된 입력·소유권·수명이 준비 상태와 기존 속도를 변경하지 않는지 검사한다.
+static void TestPreparedVelocityFailures()
+{
+    // 빈 객체와 초기화되지 않은 world는 출력도 건드리지 않는다.
+    PhysicsWorld world;
+    PreparedBody prepared;
+    const std::array<double, 3> sentinel{ 7, 8, 9 };
+    std::array<double, 3> com = sentinel;
+    Check(!world.GetPreparedCenterOfMass(prepared, com) && com == sentinel, "Uninitialized COM rejected");
+    Check(!world.SetPreparedVelocity(prepared, {}, {}), "Uninitialized velocity rejected");
+    world.Initialize(8);
+    Check(!world.GetPreparedCenterOfMass(prepared, com) && com == sentinel, "Empty prepared COM rejected");
+    Check(!world.SetPreparedVelocity(prepared, {}, {}), "Empty prepared velocity rejected");
+    const AggregateGeom geom = MakeBoxGeom({ 2, 0, 0 }, { 1, 1, 1 });
+    Check(world.PrepareBody(MakeDesc(geom), prepared), "Prepare failure survivor");
+    const std::array<double, 3> linear{ 1, 2, 3 };
+    const std::array<double, 3> angular{ -1, 0.5, 2 };
+    Check(world.SetPreparedVelocity(prepared, linear, angular), "Seed velocity before failures");
+    std::array<double, 3> originalCom{};
+    Check(world.GetPreparedCenterOfMass(prepared, originalCom), "Read original COM");
+
+    // 각 배열의 모든 성분에서 NaN·무한대·float 범위 초과를 거절한다.
+    for (const double invalid : { std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+        double(std::numeric_limits<float>::max()) * 2, -double(std::numeric_limits<float>::max()) * 2 })
+    {
+        for (size_t axis = 0; axis < 3; ++axis)
+        {
+            auto bad = linear;
+            bad[axis] = invalid;
+            Check(!world.SetPreparedVelocity(prepared, bad, {}), "Invalid linear rejected atomically");
+            Check(!world.SetPreparedVelocity(prepared, {}, bad), "Invalid angular rejected atomically");
+        }
+    }
+
+    // 다른 world에서는 접근을 거절하며 원래 소유자는 같은 COM과 속도로 커밋할 수 있다.
+    PhysicsWorld other;
+    other.Initialize(4);
+    Check(!other.GetPreparedCenterOfMass(prepared, com) && com == sentinel, "Other world COM rejected");
+    Check(!other.SetPreparedVelocity(prepared, {}, {}), "Other world velocity rejected");
+    Check(world.GetPreparedCenterOfMass(prepared, com), "Failure preserves prepared COM");
+    CheckVector(com, originalCom, 0.0);
+    const BodyHandle handle = world.CommitBody(std::move(prepared), true);
+    std::array<double, 3> v{};
+    std::array<double, 3> w{};
+    Check(world.GetBodyVelocity(handle, v, w), "Read unchanged velocity after failures");
+    CheckVector(v, linear, 1e-6);
+    CheckVector(w, angular, 1e-6);
+    Check(!world.SetPreparedVelocity(prepared, {}, {}), "Consumed prepared velocity rejected");
+
+    // 정적 준비 body는 COM 조회만 허용하고 속도 설정 후에도 영속도를 유지한다.
+    BodyDesc desc = MakeDesc(geom);
+    desc.Motion = BodyMotion::Static;
+    Check(world.PrepareBody(desc, prepared), "Prepare static failure survivor");
+    Check(world.GetPreparedCenterOfMass(prepared, com), "Static prepared COM readable");
+    Check(!world.SetPreparedVelocity(prepared, linear, angular), "Static velocity rejected");
+    Check(world.GetBodyVelocity(world.CommitBody(std::move(prepared), true), v, w), "Read unchanged static velocity");
+    CheckVector(v, {}, 0.0);
+    CheckVector(w, {}, 0.0);
+
+    // Shutdown과 재초기화 뒤에도 고아 객체는 그대로 남으며 새 world에 접근하지 않는다.
+    Check(world.PrepareBody(MakeDesc(geom), prepared), "Prepare shutdown orphan");
+    world.Shutdown();
+    com = sentinel;
+    Check(!world.GetPreparedCenterOfMass(prepared, com) && com == sentinel, "Shutdown COM rejected");
+    Check(!world.SetPreparedVelocity(prepared, linear, angular) && prepared.IsValid(), "Shutdown velocity rejected");
+    world.Initialize(4);
+    Check(!world.SetPreparedVelocity(prepared, linear, angular) && prepared.IsValid(), "Reinitialized orphan rejected");
+
+    // 소유 world가 파괴된 객체도 다른 살아 있는 world에서 안전하게 거절한다.
+    PreparedBody orphan;
+    {
+        PhysicsWorld owner;
+        owner.Initialize(4);
+        Check(owner.PrepareBody(MakeDesc(geom), orphan), "Prepare destroyed world orphan");
+    }
+    Check(!world.GetPreparedCenterOfMass(orphan, com) && com == sentinel, "Destroyed world COM rejected");
+    Check(!world.SetPreparedVelocity(orphan, linear, angular) && orphan.IsValid(), "Destroyed world velocity rejected");
+}
+
 // 실제 Jolt를 링크한 body 수명 검증을 한 번에 실행한다.
 int main()
 {
@@ -469,6 +680,12 @@ int main()
         TestOffCenter();
         TestHugeRotation();
         TestThinHull();
+
+        // 준비 COM과 커밋 전 속도 설정·상속·실패 보존을 검사한다.
+        TestPreparedMotion();
+        TestPreparedInheritance();
+        TestPreparedVelocityLimit();
+        TestPreparedVelocityFailures();
 
         // 통과한 검사 수를 출력한다.
         std::printf("PhysicsBodyTests: %zu checks passed\n", g_Checks);
