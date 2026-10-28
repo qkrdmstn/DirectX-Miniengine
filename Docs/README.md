@@ -47,6 +47,7 @@
 | 문서 | 용도 | 상태 / 읽을 때의 주의 |
 | --- | --- | --- |
 | [NDC25Reference.md](NDC/NDC25Reference.md) | 원본 NDC25 기법과 근거 등급 | 근거 문서. 8절의 프로젝트 대응은 과거 CPU 구현 기록 |
+| [NDC25WoundAndLayeredMesh.md](NDC/NDC25WoundAndLayeredMesh.md) | 상처 표현(클립·데칼·디폼·레퍼런스 포즈)과 Dead Island 2 이중 메시 분석 | 설계안 — `425491c5` 기준 슬라이드 근거 정리, 구현 전 (2026-10-28) |
 
 ## NDC/History — 과거 절단 알고리즘 설계
 
