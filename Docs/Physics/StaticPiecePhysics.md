@@ -294,7 +294,7 @@ CPU:
   - 검증: `Scene/tests/CollisionDebugTests.cpp` 24 checks 통과(빌드 명령은 파일 머리말; 실제 `ConvexElem`·`SliceAggregateGeom` 사용). 단위 상자 12개, 0.5도 꺾인 윗면 상자 15개(능선 유지), 상자 평면 절단 두 조각 각 12개, 대각 절단 삼각기둥 각 9개, 퇴화·범위 밖 삼각형, 근평면 자르기(걸침·반대 방향·완전 뒤·평면 위·평면에 걸친 선분·유한 화면 좌표).
   - 런타임(Debug/Release 빌드 오류 0, `-collision-draw 1 -collision-draw-log 1`, 모두 exit 0, D3D12 ERROR/CORRUPTION 0). 모서리 수는 초록/파랑/노랑/회색 순서다. 혼합 장면(Cube+Bunny): 시작 60/0/0/12 → 61프레임 12/48/0/12(Cube만 정착) → 70프레임 0/60/0/12. Cube 절단 `-physics-cut-checks 1`: 0/24/0/12(조각 둘 정착 뒤), 절단 직후 24/0/0/12. `paused` 시나리오 24/0/0/12 → 0/24/0/12. `-physics-sim 0` 4회 절단: 노랑만 12→60, 회색 0(바닥 없음). `empty-a/b`: 빈 쪽은 충돌이 없어 그려지지 않고 남은 hull만 12개(초록 → 파랑). `-physics-query-capacity 2`로 body 등록이 거절된 Bunny는 노랑 48이다. 바닥 12개는 sim-on 모든 실행에서 확인했다.
   - 비용(Release, 프레임당 CPU, 캐시 없음): Cube+Bunny 평균 0.13 ms, 조각 33개(396 모서리, `-physics-sim 0` 연속 절단) 0.28~0.36 ms. 첫 프레임의 PSO 생성과 일시 정지로 최대 수 ms~100 ms 수준의 이상치가 있다. 기존 5·6c 검증 실행(Debug/Release 8회)은 그대로 통과했다.
-  - 분량: 제품 코드가 약 450줄(테스트 제외)로 단계당 약 300줄 기준을 넘었다. `-cut 40` 연속 절단 스트레스 실행은 그리기를 꺼도 게시 40회에 도달하지 못해 멈추거나 예외로 끝난다(기존 현상, 원인 미조사. 8단계에서 조사한다).
+  - 분량: 제품 코드가 약 450줄(테스트 제외)로 단계당 약 300줄 기준을 넘었다. `-cut 40` 연속 절단 스트레스 실행은 그리기를 꺼도 게시 40회에 도달하지 못해 멈추거나 예외로 끝난다(기존 현상, 원인은 8c 기록 참조).
   - 한계: H 키 입력과 UI 토글은 같은 `BoolVar`를 읽고 쓰는 구조로 보장하며 자동 입력으로 실제 키는 검증하지 못했다(창 포커스 불가). 화면 캡처는 하지 않았다.
 
 - **6e-1 완료 (2026-10-28)**: 절단 각 쪽 출력 정점의 18-DOP을 GPU에서 측정해 읽어 온다(동작 변화 없음, 게시는 아직 쓰지 않는다).
@@ -302,7 +302,7 @@ CPU:
   - 구현: `CutBoundsCS`의 `ReduceDop`이 기존 AABB 축소 뒤 같은 순회(구간별 VertexStart·min(count, capacity), cap 포함)로 그룹 축소 후 전역 합산한다. 출력은 컴포넌트 로컬 Pose를 그대로 쓰며 SourceFrame은 적용하지 않는다. 비유한 정점은 제외하고 세지 않는다. `CutJob::Poll`이 `SideDop`/`SideDopValid`로 풀며(C++17이 아니라 optional 대신 배열+플래그) 개수 0인 면은 sentinel을 해석하지 않는다. 새 셰이더·PSO는 없다.
   - 검증: `ValidateDiagnostics`가 분할 여부와 무관하게 `ValidateSideDop`으로 출력 Pose를 읽어 CPU double 기준과 비교한다(허용 `1e-6*extent+1e-7`, 유한 정점이 0이면 GPU도 비어야 함).
   - 결과(Debug/Release, 모두 exit 0, D3D12 ERROR/CORRUPTION 0): sim-off Cube 4회 절단 최대 오차 9.6e-8(허용 약 2.9e-6), 6b 30° 절단·6c `empty-a` 7.2e-8, Bunny 1.8e-5(좌표 약 250, 허용 약 4.4e-4). 샘플(Cube 첫 절단 A, 정점 54): 축0 [-1,1], 축1 [0,1], 축2 [-1,1.000001].
-  - 미해결: Bunny 절단 출력 정점 수가 실행마다 다르다(A면 Debug 36576/36564, Release 36564). 구성이 아니라 실행 간 비결정일 수 있으며 원인은 조사하지 않았다.
+  - 미해결(8b에서 원인 기록): Bunny 절단 출력 정점 수가 실행마다 다르다(A면 Debug 36576/36564, Release 36564). 구성이 아니라 실행 간 비결정일 수 있으며 원인은 조사하지 않았다.
 - **6e-2 완료 (`e1f2b855`, 2026-10-28)**: `MiniCollision::RefitElemToDop`·`RefitAggregateToDop`이 슬라이스 convex와 패딩한 `Dop18Bounds`의 교집합을 만든다. 기본 패딩 `RefitDopPad`는 0.002 asset unit이다.
   - 결과는 `Refit`(교집합 채택), `Disjoint`(확실한 비겹침), `KeptUnrefit`(원본 유지)이며 집계는 `RefitStats`의 Refit·Disjoint·Kept·VolumeBefore·VolumeAfter다. 전부 Disjoint이면 aggregate 전체를 원본 유지한다.
   - guard: 잘못된 입력·유한 다각형 생성 범위의 절반 초과 좌표·hull 생성 실패·정확한 교집합 포함 실패·부피 증가 시 원본을 유지한다. 병합·snap 뒤 후보가 정확한 교집합 정점을 포함해야 한다.
@@ -380,7 +380,18 @@ CPU:
   - 재현: 수정 전 HEAD(`dfe84208`) Release 30°는 5회 모두 같은 값(관통 0.000314 m)으로 통과했고 10/20/60/75°도 0.00042 m 이하였다. 6f-2 이후 변경으로 접촉 이력이 달라져 재현되지 않았을 뿐 상한은 보장되지 않았다.
   - 결정·구현: `PhysicsWorld::Initialize`가 `mPenetrationSlop = 0.005f`(R14 한계의 절반)를 적용한다. 허용치는 완화하지 않았다. convex radius(기본 0.05 m)는 접촉 manifold가 원래 hull 면을 쓰므로 바꾸지 않았다. slop은 보정 시작 임계값이라 0.01 m 이하를 수학적으로 보장하지는 않으며 런타임 검사가 계속 확인한다.
   - 검증: MiniPhysics CPU 테스트 Debug/Release 9/9 통과, `.slnx` Debug/Release 빌드 오류 0. 혼합 장면(`-physics-sim-checks 1 -physics-query-checks 1`) Debug/Release 442 checks·360 ticks·관통 0.000002 m. Release `midair-settle` 30°/60° 82 checks·관통 0.000061/0.000072 m, `drop-no-cut` 19 checks. 모두 exit 0, D3D12 ERROR/CORRUPTION 0.
-  - 발견(8c에서 다룸): cube `-cut-angle 45`(절단면이 마주보는 두 모서리를 지남)는 수정 전후 모두 A쪽 hull 포함 검증에서 예외로 끝난다.
+  - 발견: cube `-cut-angle 45`(절단면이 마주보는 두 모서리를 지남)는 수정 전후 모두 A쪽 hull 포함 검증에서 예외로 끝난다. 8c 기록 참조.
+
+- **8b 원인 기록 (2026-10-28, 코드 변경 없음)**: bunny 절단 정점 수 변동.
+  - 실측: `-model Models/bunny.glb -physics-sim 0 -cut 1 -cut-y 0 -cap-mode 0 -cut-validate 1 -cut-expect-loops 1` Debug/Release 각 3회에서 A 삼각형 12196~12200, B 19606~19610이다. A와 B는 항상 같은 수만큼 함께 변한다. segment 370·루프 1·캡 면적 2.446770986은 6회 모두 같다.
+  - 원인: 출력 정점 수는 삼각형 corner 수(삼각형×3)이며, 양쪽이 같은 캡을 공유하므로 변동은 캡 삼각형 수다. `ClipTrianglesCS`가 경계 segment ID를 원자 카운터로 매기고, `CapEarsCS`의 귀 우선순위와 공선점 제거(`kind=2`, 삼각형 미출력)가 그 ID 순서에 의존한다. 그래서 같은 경계에서도 제거되는 공선점 수가 실행마다 다르다(최대 370−2=368개). 구성 차이가 아니라 실행 간 비결정이다.
+  - 판단: 형상(캡 면적·경계)은 같고, 제거되는 점은 경계 위에 있어 출력 18-DOP과 R15 재맞춤 convex도 같다. 물리 결과에는 영향이 없다. 개수까지 결정적으로 만들려면 segment ID를 원본 삼각형 순서로 고정해야 하며, 이는 GPU 절단 알고리즘 변경이라 이 계획의 범위 밖이다.
+
+- **8c 원인 기록 (2026-10-28, 코드 변경 없음)**: 40회 연속 절단 실패.
+  - 기본 `-cut 40 -physics-sim 0`(Release): 결과 40회 중 38회가 `split=0`이고 게시 2회에서 `-cut-expect-publications 40`이 실패한다. `-cut N`은 게시가 아니라 완료된 시도 수를 센다. `cut-repeat-plane 0`은 두 평면 방향을 번갈아 같은 위치에 다시 적용하므로 이미 잘린 A가 분할되지 않는다.
+  - `-cut 40 -cut-repeat-plane 1 -cut-step-y .02`: 32회 게시 후 33번째 제출이 `Cut retained history/output memory budget exceeded`로 거절된다. `GpuMeshCutter::Submit`의 생성 세대 상한 32(계보 메모리 512 MiB와 함께 검사)에 따른 설계된 거절이며 오류 없이 처리된다.
+  - 따라서 한 계보 40회 게시는 현재 예산으로 불가능하다. 반복 절단 검증은 `-cut 32 -cut-repeat-plane 1 -cut-step-y .02 -cut-validate 1 -cut-expect-publications 32`로 바꾼다. Debug/Release 모두 게시 32·exit 0·D3D12 ERROR 0이다. physics 실행 중 자동 절단이 awake body를 기다리는 동작은 이번 실행에서 문제가 되지 않았다.
+  - 별도 결함(미해결): cube `-cut-angle 45`는 `GpuCutValidation.cpp`의 A쪽 sliced hull 포함 검사에서 `std::runtime_error`로 끝난다. 양쪽 hull은 생성된다(sliced 4.00653514 / 4.0061456). 절단면이 hull 모서리 근처를 지날 때 CPU `SliceConvexElem`·`HullFromPlanes`의 snap·0.001 병합과 GPU 평면 위 판정의 차이로 추정하며, 초과량은 아직 측정하지 않았다. 검증을 끈 게시와 물리 동작은 확인하지 않았다.
 
 남은 제한: Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 8단계(전체 검증, Release `midair-settle` 관통 0.017 m, bunny 정점 수 변동, 40회 연속 절단 실패)는 진행하지 않았다.
 
