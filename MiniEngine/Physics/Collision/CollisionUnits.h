@@ -26,4 +26,7 @@ namespace MiniCollision
 
     // 18-DOP 초기 snap 거리제곱의 반지름당 계수. Unreal SuggestConvexVertexSnapDistance의 0.0015·R_cm를 cm² 비교에서 m²로 환산한 값이다.
     constexpr double KDopSnapDistSqPerMeter = 0.000015;
+
+    // 절단 후 convex 재맞춤용 18-DOP 평면 팽창량(asset-local m). GPU DOP 측정 오차(바니 1.8e-5)의 100배 이상이고 정점 병합 거리(MinHullVertDistance)의 2배다.
+    constexpr double RefitDopPad = 2.0 * MinHullVertDistance;
 }

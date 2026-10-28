@@ -165,4 +165,194 @@ namespace MiniCollision
             }
         }
     }
+
+    namespace
+    {
+        // 벡터 세 성분이 모두 유한한지 검사한다.
+        bool IsFiniteVec(const Vec3d& v)
+        {
+            // 세 성분이 모두 유한해야 참이다.
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        }
+
+        // DOP 값이 모두 유한하고 축마다 Min <= Max인지 검사한다.
+        bool IsValidDop(const Dop18Bounds& dop)
+        {
+            // 축마다 유한성과 순서를 확인한다.
+            for (int k = 0; k < 9; ++k)
+            {
+                if (!std::isfinite(dop.Min[k]) || !std::isfinite(dop.Max[k]) || dop.Min[k] > dop.Max[k])
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // 한 축에서 모든 정점이 DOP 범위 밖(margin 초과)이면 확실히 겹치지 않는다.
+        bool IsCertainlyDisjoint(const ConvexElem& elem, const Dop18Bounds& dop, double margin)
+        {
+            // 축마다 정점 투영의 최소·최대를 구해 범위 밖인지 본다.
+            for (int k = 0; k < 9; ++k)
+            {
+                double lo = Dot(KDopDirs18[2 * k], elem.VertexData[0]);
+                double hi = lo;
+                for (const Vec3d& v : elem.VertexData)
+                {
+                    const double d = Dot(KDopDirs18[2 * k], v);
+                    lo = std::min(lo, d);
+                    hi = std::max(hi, d);
+                }
+                if (lo > dop.Max[k] + margin || hi < dop.Min[k] - margin)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // 정확한 교집합 다면체 정점이 재맞춤 요소의 모든 면 안(허용 오차 내)에 있는지 검사한다.
+        bool ContainsAll(const std::vector<Vec3d>& points, const ConvexElem& refit, double tol)
+        {
+            // 재맞춤 요소의 지지 평면을 얻는다.
+            std::vector<Plane> planes;
+            refit.GetPlanes(planes);
+            if (planes.size() < 4)
+            {
+                return false;
+            }
+
+            // 모든 점이 모든 평면의 안쪽(PlaneDot <= tol)인지 확인한다.
+            for (const Vec3d& p : points)
+            {
+                for (const Plane& plane : planes)
+                {
+                    if (plane.PlaneDot(p) > tol)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    // 원본 면 평면과 pad를 더한 DOP 평면의 교집합을 만들고 포함·부피 검증을 통과할 때만 채택한다.
+    RefitOutcome RefitElemToDop(const ConvexElem& elem, const Dop18Bounds& dop, double pad, ConvexElem& out)
+    {
+        // 기본 결과를 원본 복사로 두고 입력을 검증한다.
+        out = elem;
+        bool valid = std::isfinite(pad) && pad >= 0.0 && IsValidDop(dop) && elem.VertexData.size() >= 4;
+        double scale = 0.0;
+        for (const Vec3d& v : elem.VertexData)
+        {
+            valid = valid && IsFiniteVec(v);
+            scale = std::max(scale, std::max(std::fabs(v.x), std::max(std::fabs(v.y), std::fabs(v.z))));
+        }
+        if (!valid)
+        {
+            return RefitOutcome::KeptUnrefit;
+        }
+
+        // 다각형은 원점 기준의 유한 사각형에서 시작하므로 요소와 패딩된 DOP 좌표를 절반 범위 안으로 제한한다.
+        // 이 여유가 없으면 실제 교집합 꼭짓점이 후보와 검증에서 함께 잘릴 수 있어 원본을 유지한다.
+        double maxCoordinate = scale;
+        for (int k = 0; k < 3; ++k)
+        {
+            const double lo = dop.Min[k] - pad;
+            const double hi = dop.Max[k] + pad;
+            if (!std::isfinite(lo) || !std::isfinite(hi))
+            {
+                return RefitOutcome::KeptUnrefit;
+            }
+            maxCoordinate = std::max(maxCoordinate, std::max(std::fabs(lo), std::fabs(hi)));
+        }
+        if (maxCoordinate > 0.5 * BigPolygonHalfExtent)
+        {
+            return RefitOutcome::KeptUnrefit;
+        }
+
+        // 한 축에서라도 모두 범위 밖이면 겹치지 않는다고 확정한다.
+        if (IsCertainlyDisjoint(elem, dop, pad))
+        {
+            return RefitOutcome::Disjoint;
+        }
+
+        // 원본 면 평면에 pad를 더한 DOP 평면 18개를 합친다.
+        std::vector<Plane> planes;
+        elem.GetPlanes(planes);
+        if (planes.size() < 4)
+        {
+            return RefitOutcome::KeptUnrefit;
+        }
+        for (int k = 0; k < 9; ++k)
+        {
+            planes.push_back({ KDopDirs18[2 * k], dop.Max[k] + pad });
+            planes.push_back({ KDopDirs18[2 * k] * -1.0, -(dop.Min[k] - pad) });
+        }
+
+        // 병합 전 정확한 교집합 정점을 모으고, 병합·snap이 반영된 임시 hull을 만든다.
+        std::vector<Vec3d> exact;
+        CollectPlanePolygonVertices(planes, HullTolerances(), exact);
+        ConvexElem refit;
+        if (exact.size() < 4 || !refit.HullFromPlanes(planes, {}))
+        {
+            return RefitOutcome::KeptUnrefit;
+        }
+
+        // 임시 hull이 정확한 교집합을 포함하고 원본보다 커지지 않을 때만 채택한다.
+        const double acceptTol = 1e-9 * scale + 1e-12;
+        const double volume = elem.GetVolume();
+        if (!ContainsAll(exact, refit, acceptTol) || refit.GetVolume() > volume * (1.0 + 1e-9) + 1e-18)
+        {
+            return RefitOutcome::KeptUnrefit;
+        }
+        out = refit;
+        return RefitOutcome::Refit;
+    }
+
+    // 요소마다 재맞춤하고, 하나라도 남는 경우에만 Disjoint 요소를 버린다.
+    RefitStats RefitAggregateToDop(const AggregateGeom& in, const Dop18Bounds& dop, double pad, AggregateGeom& out)
+    {
+        // 요소마다 재맞춤해 결과와 집계 전 부피를 모은다.
+        RefitStats stats;
+        std::vector<ConvexElem> results;
+        std::vector<RefitOutcome> outcomes;
+        for (const ConvexElem& elem : in.ConvexElems)
+        {
+            ConvexElem refit;
+            outcomes.push_back(RefitElemToDop(elem, dop, pad, refit));
+            results.push_back(refit);
+            stats.VolumeBefore += elem.GetVolume();
+        }
+
+        // 남는 요소가 하나도 없게 되면 Disjoint 요소를 원본으로 유지한다.
+        bool anyKept = false;
+        for (RefitOutcome outcome : outcomes)
+        {
+            anyKept = anyKept || outcome != RefitOutcome::Disjoint;
+        }
+
+        // 결과를 out에 모으며 개수와 부피를 집계한다.
+        out.ConvexElems.clear();
+        for (size_t i = 0; i < results.size(); ++i)
+        {
+            if (outcomes[i] == RefitOutcome::Disjoint && anyKept)
+            {
+                ++stats.Disjoint;
+                continue;
+            }
+            if (outcomes[i] == RefitOutcome::Refit)
+            {
+                ++stats.Refit;
+            }
+            else
+            {
+                ++stats.Kept;
+            }
+            stats.VolumeAfter += results[i].GetVolume();
+            out.ConvexElems.push_back(results[i]);
+        }
+        return stats;
+    }
 }

@@ -54,6 +54,7 @@ Build affected projects in Debug and Release. Run changed samples with DirectX v
 - Keep each implementation step to one concept and about 300 changed lines, then stop so the user can read and commit it before the next step. The user must be able to follow every line.
 - After changing `Geometry/`, run the CPU tests in `MiniEngine/MeshCutting/tests/PlaneSlicerTests.cpp` (build command in the file header); keep build output outside the repository.
 - When several sessions work at once, design sessions edit only `Docs/`, and only one session writes code at a time.
+- 역할 분담: 계획·설계는 Claude Opus가 맡는다. 구현과 각 단계 리뷰(요구사항·계획·구현)는 Codex가 맡는다.
 - At the start of multi-step work, list the steps with a rough time for each, based on measured costs (Codex review about 2-5 minutes, Debug/Release builds, CPU tests), not guesses.
 
 ## Commit & Pull Request Guidelines

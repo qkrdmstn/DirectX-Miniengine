@@ -188,7 +188,7 @@ if ($CleanFirst) { $buildArgs += '--clean-first' }
 if ($LASTEXITCODE -ne 0) { throw 'Jolt build failed.' }
 if ($RunTests) {
     # 목록의 테스트 target이면 그 테스트만 실행하고, 그 외 target이면 모든 테스트 target을 빌드한 뒤 전체를 실행한다.
-    $testTargets = @('PhysicsQueryTests', 'PhysicsBodyTests', 'PhysicsStepTests', 'PhysicsTransformTests', 'ConvexElemTests', 'AggregateGeomTests', 'AggregateSliceTests', 'BodyMassTests')
+    $testTargets = @('PhysicsQueryTests', 'PhysicsBodyTests', 'PhysicsStepTests', 'PhysicsTransformTests', 'ConvexElemTests', 'AggregateGeomTests', 'AggregateSliceTests', 'BodyMassTests', 'HullRefitTests')
     $ctestPath = Resolve-CTestPath $cmakePath
     $ctestArgs = @('--test-dir', $buildRoot, '-C', $sdkConfiguration, '--output-on-failure')
     if ($testTargets -contains $Target) {

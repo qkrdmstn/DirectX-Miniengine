@@ -88,3 +88,8 @@ add_executable(PhysicsTransformTests tests/PhysicsTransformTests.cpp)
 target_link_libraries(PhysicsTransformTests PRIVATE MiniPhysics)
 target_compile_options(PhysicsTransformTests PRIVATE /utf-8 /W4)
 add_test(NAME PhysicsTransformTests COMMAND PhysicsTransformTests)
+
+add_executable(HullRefitTests tests/HullRefitTests.cpp)
+target_link_libraries(HullRefitTests PRIVATE MiniCollision)
+target_compile_options(HullRefitTests PRIVATE /utf-8 /W4)
+add_test(NAME HullRefitTests COMMAND HullRefitTests)

@@ -28,4 +28,31 @@ namespace MiniCollision
     // 모든 볼록 요소를 평면 양의 쪽(keep)과 음의 쪽(other)으로 나눈다. 통째로 한쪽이면 요소를 그대로 옮기고, 걸치면 양쪽을 각각 자른다.
     // 실패하거나 빈 결과는 버리므로 어느 쪽이든 비어 있을 수 있다(정책은 호출자 몫). 전제는 SliceConvexElem과 같다.
     void SliceAggregateGeom(const AggregateGeom& in, const Plane& slicePlane, AggregateGeom& keep, AggregateGeom& other);
+
+    // 18-DOP 측정값. 축 k의 방향은 KDopDirs18[2k](앞의 6개 축과 대각 3개)이고 Min/Max는 그 방향 투영의 최소·최대다. MeshCutting의 KDop18과 같은 배치다.
+    struct Dop18Bounds
+    {
+        double Min[9];
+        double Max[9];
+    };
+
+    // 재맞춤 결과. Refit은 DOP으로 줄인 요소, Disjoint는 DOP과 확실히 안 겹침, KeptUnrefit은 검증 실패로 원본 유지다.
+    enum class RefitOutcome { Refit, Disjoint, KeptUnrefit };
+
+    // 요소를 pad만큼 키운 18-DOP과 교집합해 out에 만든다. 입력이 잘못되거나 포함 검증에 실패하면 out은 elem 복사본이고 KeptUnrefit이다.
+    // 정점 투영이 한 축에서 모두 DOP 밖(pad 초과)일 때만 Disjoint다. Refit 결과는 정확한 교집합 다면체를 항상 포함한다.
+    RefitOutcome RefitElemToDop(const ConvexElem& elem, const Dop18Bounds& dop, double pad, ConvexElem& out);
+
+    // 재맞춤 집계. 요소 수와 재맞춤 전후 부피 합이다.
+    struct RefitStats
+    {
+        int Refit = 0;
+        int Disjoint = 0;
+        int Kept = 0;
+        double VolumeBefore = 0.0;
+        double VolumeAfter = 0.0;
+    };
+
+    // 모든 요소를 DOP에 재맞춤한다. Disjoint 요소는 하나라도 남을 때만 버리고, 전부 Disjoint면 모두 원본으로 유지한다(Kept로 센다).
+    RefitStats RefitAggregateToDop(const AggregateGeom& in, const Dop18Bounds& dop, double pad, AggregateGeom& out);
 }
