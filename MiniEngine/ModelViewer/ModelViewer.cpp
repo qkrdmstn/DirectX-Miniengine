@@ -94,6 +94,11 @@ private:
     float m_CutAngle = 0, m_CutStepY = 0;
     float m_CutGap = 0.0f;
     uint32_t m_ExpectedPublications = ~0u, m_Publications = 0;
+    uint32_t m_PhysicsCutChecks = 0;
+    uint32_t m_CutWaitFrames = 0;
+    uint32_t m_CutSettleFrames = 0;
+    size_t m_BodiesBeforeCuts = 0;
+    bool m_PhysicsCutChecked = false;
     std::vector<double> m_CutGpuSamples, m_CutReadySamples;
     Math::Vector3 m_LastCutNormal{Math::kYUnitVector};
     bool m_CaptureComplete = false;
@@ -297,6 +302,7 @@ void ModelViewer::Startup( void )
     if (!std::isfinite(m_CutGap) || m_CutGap < 0)
         throw std::invalid_argument("cut-gap must be finite and nonnegative");
     CommandLineArgs::GetInteger(L"cut-expect-publications",m_ExpectedPublications);
+    CommandLineArgs::GetInteger(L"physics-cut-checks",m_PhysicsCutChecks);
     uint32_t transformChecks = 0;
     if (CommandLineArgs::GetInteger(L"cut-transform-checks",transformChecks) && transformChecks)
     {
@@ -354,6 +360,7 @@ void ModelViewer::Startup( void )
             m_Physics.Initialize(m_UsePhysicsQuery != 0, m_PhysicsCapacity, false);
         }
         m_Physics.SyncBodies();
+        m_BodiesBeforeCuts = m_Physics.GetSimulationBodyCount();
     }
     if (m_PhysicsSimChecks) Viewer::RunPhysicsSimChecks(m_Scene, m_Physics);
     if (m_ViewDiagnosticPending)
@@ -496,7 +503,22 @@ void ModelViewer::Update( float deltaT )
             if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
         }
     }
-    if (!m_Cutting.IsBusy() && (m_AutoCuts || m_BenchmarkRemaining))
+    // 시뮬레이션 중 자동 절단은 깨어 있는 body가 모두 sleep할 때까지 기다린다.
+    bool waitingForSleep = false;
+    if ((m_AutoCuts || m_BenchmarkRemaining) && m_Physics.IsSimulationEnabled() && m_Physics.IsSimulationRunning() &&
+        m_Physics.GetAwakeBodyCount())
+    {
+        // 진단 옵션이 있을 때만 시간 초과를 오류로 보고하고, 평소에는 한 번 경고한 뒤 계속 기다린다.
+        if (++m_CutWaitFrames == 3000)
+        {
+            if (m_PhysicsCutChecks)
+                throw std::runtime_error("Physics bodies did not sleep before the cut");
+            Utility::Printf("Physics bodies still awake after 3000 frames; auto cut keeps waiting\n");
+        }
+        waitingForSleep = true;
+    }
+    else m_CutWaitFrames = 0;
+    if (!m_Cutting.IsBusy() && !waitingForSleep && (m_AutoCuts || m_BenchmarkRemaining))
     {
         MeshCutting::CutPlaneData plane;
         bool valid = false;
@@ -538,6 +560,18 @@ void ModelViewer::Update( float deltaT )
             throw std::runtime_error("Unexpected number of cut publications");
         Utility::Printf("Static cut publication validation passed: count=%u\n",m_Publications);
         m_ExpectedPublications = ~0u;
+    }
+
+    // 절단 뒤 모든 조각이 sleep하면 body 수·정착 위치를 한 번 검사한다.
+    if (m_PhysicsCutChecks && !m_PhysicsCutChecked && m_Publications && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining)
+    {
+        if (m_Physics.GetAwakeBodyCount() == 0)
+        {
+            Viewer::RunPhysicsCutChecks(m_Scene, m_Physics, m_BodiesBeforeCuts, m_Publications);
+            m_PhysicsCutChecked = true;
+        }
+        else if (++m_CutSettleFrames == 3000)
+            throw std::runtime_error("Cut pieces did not sleep");
     }
 
     // We use viewport offsets to jitter sample positions from frame to frame (for TAA.)

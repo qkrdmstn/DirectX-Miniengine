@@ -74,11 +74,13 @@ namespace Viewer
         if (m_Job) { m_StatusText = "Busy - wait for the current cut"; return false; }
         GameObject* object = m_Scene.FindObject(owner);
         MeshComponent* mesh = object ? object->FindMeshComponent(meshId) : nullptr;
-        // 바닥과 body 교체 transaction 미지원 메시의 직접 요청도 공통으로 거절한다.
+        // 바닥 등 절단 제외 객체의 직접 요청도 공통으로 거절한다.
         if (object && !object->IsCuttable())
         { m_StatusText = "Cut target is not cuttable"; return false; }
-        if (mesh && mesh->IsSimulating())
-        { m_StatusText = "Physics cutting awaits transaction support"; return false; }
+        // simulate 메시는 body가 sleep이거나 일시정지일 때만 자른다.
+        const char* movingReason = nullptr;
+        if (mesh && mesh->IsSimulating() && !CutTransaction::CanCut(m_Physics, owner, meshId, movingReason))
+        { m_StatusText = movingReason; return false; }
 
         // 기존 GPU 준비 및 section 지원 조건을 검사한다.
         if (!mesh || !mesh->HasPoseBounds() || !mesh->GetPosedGeometry().IsReady())
@@ -150,6 +152,7 @@ namespace Viewer
     }
 
     // 입력 변경·삭제·overflow는 원래 geometry를 유지하고 열린 경계는 cap 없이 게시한다.
+    // simulate 대상은 body 교체 transaction(CutTransaction)이 준비·검증을 통과할 때만 게시한다.
     bool CuttingSystem::Update()
     {
         if (!m_Job || !m_Job->Poll()) return false;
@@ -193,6 +196,7 @@ namespace Viewer
             m_Job->ValidateDiagnostics();
         }
 
+        const char* failure = nullptr;
         if (mesh && m_Publish && mesh->GetGeometry() == m_Job->Input && mesh->GetEditGeneration() == m_EditGeneration)
         {
             const Math::Matrix4 current(mesh->GetWorldTransform(object->GetTransform()));
@@ -209,6 +213,8 @@ namespace Viewer
                 {
                     const SceneTransform transform = mesh->GetTransform();
                     const MeshTransformMode mode = mesh->GetTransformMode();
+                    const bool physical = mesh->IsSimulating();
+                    CutTransaction transaction;
                     // 준비 단계: 할당과 실패가 가능한 B 컴포넌트와 A 교체 자원을 모두 만든다. 실패하면 준비물만 해제되고 Scene은 그대로다.
                     try
                     {
@@ -219,11 +225,23 @@ namespace Viewer
                         const ComponentId id = preparedB->GetId();
                         auto preparedA = mesh->PrepareGeometryReplacement(results[0], transform, mode, DeformBinding{}, std::move(inherited[0]), emptyReason);
 
-                        // commit 단계: 할당 없이 A를 교체하고 B를 공개한다.
-                        if (preparedA)
+                        // simulate 대상이면 body 준비와 검증까지 끝내고, 실패하면 아무것도 바꾸지 않는다.
+                        if (preparedA && physical && !transaction.Prepare(m_Physics, m_Budget, *object, *mesh,
+                            m_PhysicsPoseGeneration, preparedA->Collision, preparedB->GetCollision(), id))
+                        {
+                            LastError = 0x200;
+                            failure = transaction.GetFailure();
+                            Utility::Printf("Cut physics transaction failed: owner=%llu mesh=%llu reason=%s\n",
+                                static_cast<unsigned long long>(m_Owner), static_cast<unsigned long long>(m_Mesh), failure);
+                        }
+
+                        // commit 단계: 할당 없이 A를 교체하고 B를 공개한 뒤 body를 교체한다.
+                        else if (preparedA)
                         {
                             mesh->CommitGeometryReplacement(*preparedA);
                             MeshComponent& other = object->CommitMeshComponent(std::move(preparedB));
+                            if (physical)
+                                transaction.Commit(*mesh, other);
                             LogInheritance(parentStatus, parentVolume, parentConvex, *mesh, other);
                             LastOther = id;
                             m_StatusText = "Cut complete";
@@ -259,6 +277,7 @@ namespace Viewer
         entry.Status = LastOther ? CutResultStatus::Published : LastError ? CutResultStatus::Failed :
             !m_Job->HasSplit() ? CutResultStatus::NoSplit : !m_Publish ? CutResultStatus::Measured : CutResultStatus::Cancelled;
         entry.Error = LastError;
+        entry.Reason = failure;
         entry.GpuMs = LastGpuMs;
         entry.ReadyMs = LastReadyMs;
         m_Results.push_back(entry);

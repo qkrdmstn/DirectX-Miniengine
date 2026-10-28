@@ -316,6 +316,13 @@ static void TestLifecycle()
     world.Clear();
     Check(world.GetBodyCount() == 0 && world.GetReservedCount() == 1 && prepared.IsValid(), "Clear removes simulation bodies only");
     Check(world.CommitBody(std::move(prepared), false) > next, "Prepared survives Clear");
+
+    // handle은 Prepare에서 예약되어 Commit 결과와 같고, 고갈되면 Prepare가 실패한다.
+    Check(world.PrepareBody(MakeDesc(geom), prepared), "Prepare reserves handle");
+    const BodyHandle reserved = PhysicsWorldAccess::NextBodyHandle(world) - 1;
+    Check(world.CommitBody(std::move(prepared), false) == reserved, "Committed handle equals reserved handle");
+    PhysicsWorldAccess::NextBodyHandle(world) = std::numeric_limits<BodyHandle>::max();
+    Check(!world.PrepareBody(MakeDesc(geom), prepared) && !prepared.IsValid(), "Handle exhaustion fails Prepare");
 }
 
 // 동적 body가 QueryAabb에 나타나지 않는지 검사한다.

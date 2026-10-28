@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "Scene.h"
 #include "PhysicsSystem.h"
+#include "CutTransaction.h"
 #include "../../MeshCutting/GPU/GpuMeshCutter.h"
 #include <deque>
 #include <utility>
@@ -20,6 +21,7 @@ namespace Viewer
         uint64_t RevisionId = 0;    // Published면 A의 새 revision, 아니면 입력 revision
         CutResultStatus Status = CutResultStatus::NoSplit;
         uint32_t Error = 0;
+        const char* Reason = nullptr;   // Failed일 때 정적 문자열 이유
         double GpuMs = 0;
         double ReadyMs = 0;
     };
@@ -70,7 +72,8 @@ namespace Viewer
         ComponentId m_Mesh = InvalidComponentId;
         Math::Matrix4 m_World;
         uint64_t m_EditGeneration = 0;
-        uint64_t m_PhysicsPoseGeneration = 0;   // 6단계에서 simulate 대상 게시 직전 재확인에 쓴다
+        uint64_t m_PhysicsPoseGeneration = 0;   // simulate 대상 게시 직전 재확인에 쓴다
+        CutBudget m_Budget;
         bool m_Publish = true;
         // 결과 목록에 한 칸을 확보한다. 가득 차 있으면 가장 오래된 결과를 버리며 게시 전에 호출해 이후 push가 할당하지 않게 한다.
         void ReserveResultSlot();

@@ -123,6 +123,7 @@ namespace Viewer
 
     private:
         friend class PhysicsSystem;
+        friend class CutTransaction;
         // 현재 revision과 SourceFrame으로 컴포넌트 로컬 충돌을 다시 만든다.
         void RebuildCollision();
 

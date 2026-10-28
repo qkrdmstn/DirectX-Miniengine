@@ -45,6 +45,10 @@ namespace Viewer
         uint64_t GetSimulationStepCount() const { return m_StepCount; }
         // 등록된 동적 메시 body 수를 읽는다.
         size_t GetSimulationBodyCount() const;
+        // 실행 중인지 읽는다. 일시정지 중에는 깨어 있는 body도 멈춘 것으로 본다.
+        bool IsSimulationRunning() const { return m_Running; }
+        // 등록된 메시 body 중 깨어 있는 수를 읽는다. 진단 절단이 모두 sleep할 때까지 기다리는 데 쓴다.
+        size_t GetAwakeBodyCount() const;
         // 등록된 메시 body가 깨어 있는지 읽는다.
         bool IsSimulationAwake(ObjectId owner, ComponentId mesh) const;
         // 시작 배치 이후 별도 표시용 객체와 고정 Box 바닥을 함께 만든다.
@@ -64,6 +68,7 @@ namespace Viewer
         bool ValidateQueries = false;
 
     private:
+        friend class CutTransaction;
         using Key = std::pair<ObjectId, ComponentId>;
         struct Entry
         {

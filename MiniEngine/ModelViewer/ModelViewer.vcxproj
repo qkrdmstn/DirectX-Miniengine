@@ -443,5 +443,7 @@
   <ItemGroup>
     <ClCompile Include="Scene\CuttingSystem.cpp" />
     <ClInclude Include="Scene\CuttingSystem.h" />
+    <ClCompile Include="Scene\CutTransaction.cpp" />
+    <ClInclude Include="Scene\CutTransaction.h" />
   </ItemGroup>
 </Project>

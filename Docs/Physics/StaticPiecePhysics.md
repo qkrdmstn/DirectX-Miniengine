@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a 완료(게시 준비·교체 분리, DrainResults), 6b 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6a·6b 완료(물리 절단 transaction), 6c 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -254,10 +254,24 @@ CPU:
 - **5b-2 완료**: `CreateFloor`는 CPU 충돌 경계에서 XZ 여유와 높이를 계산하고 cube asset bounds를 실제 Jolt Static Box와 맞춘다. 가장 작은 물체 높이의 절반 아래에 바닥을 두고 초기 clearance 0.5 m를 확보한다. 바닥은 정규화 뒤 생성되며 절단 후보·직접 요청·pick·owner 편집/Undo에서 제외된다. 바닥 메시만 제거되어도 다음 step 전에 body를 회수한다. 독립 리뷰 뒤 수명 처리를 보강했다.
 - **5c 완료**: `PhysicsStepClock`와 `AdvanceSimulation`은 1/60 s·최대4 step·초과 잔량 폐기를 적용한다. P와 `Viewer/Physics/Running` BoolVar는 동일한 pause 상태를 사용하고 토글 시 시계만 초기화한다. pause/zero-step에서도 stale body를 정리하며 body pose/속도/sleep은 보존한다. `-physics-sim` 기본1과 `-physics-query`는 독립이고, simulation 초기화/바닥 준비 실패는 경고 후 비활성화한다. 독립 리뷰에서 추가 결함 없음.
 - **6a 완료 (2026-10-28)**: 물리와 무관하게 절단 게시를 준비/commit으로 나눴다. `PrepareMeshComponent`·`PrepareGeometryReplacement`가 B 컴포넌트(ID·삽입 자리 예약)와 A 교체 자원을 만들고, `CommitGeometryReplacement`·`CommitMeshComponent`가 할당 없이 교체한다(세대 증가는 기존과 동일). 결과는 `CuttingSystem::DrainResults`(Owner/Mesh/Other/RevisionId/Status, 최대 256개·초과 시 오래된 것 폐기)로 소비하며 `ModelViewer`가 이전했고 `LastOther`는 진단용이다. 동작 변화 없음: Debug/Release 빌드, CPU 8 target·SceneMathTests 468·PhysicsStepClockTests 21 통과, 위 3개 실행 exit 0이며 sim-off 게시 4회와 D3D12 ERROR/CORRUPTION 0건을 OutputDebugString 수집으로 확인했다.
+- **6b 완료 (2026-10-28)**: simulate 메시 절단을 body 교체 transaction(`Scene/CutTransaction.*`)으로 게시한다.
+  - 흐름: 제출 시 `CutTransaction::CanCut`(실행 중 깨어 있는 body는 "Wait - object moving"으로 거절, sleep이거나 pause면 허용) → 게시 시 6a 준비 뒤 `Prepare`가 재확인(부모 body의 geometry·EditGeneration·PhysicsPoseGeneration, 깨어남 여부, 예산, A/B `PrepareBody`, B 매핑 칸 예약) → `CommitGeometryReplacement`·`CommitMeshComponent`·`CutTransaction::Commit`(부모 body 파괴 → A/B `CommitBody(activate)` → 매핑을 새 revision·편집 세대로 갱신). 조각은 속도 0으로 시작하며 중력·접촉으로 정착하도록 활성화한다. 충돌이 빈 쪽은 body 없는 렌더 조각이다.
+  - 실패(용량·cook·stale·깨어남·pose 변경·예산)는 파괴자 RAII로 준비물과 B 칸을 회수하고 부모를 유지하며, 결과는 `Failed`, `Error=0x200`, `CutResultEntry::Reason`에 이유를 남기고 한 번 로그한다. 기존 generic stale 검사(Input geometry·EditGeneration·월드 행렬)는 이전처럼 Cancelled다. 부모 body가 예약 한 칸을 쥔 채 A/B를 준비하므로 일시적으로 여유 두 칸이 필요하다.
+  - 예산: `CutBudget::MaxNewBodiesPerFrame = 4`. 시도 시점에 차감하고 실패해도 환불하지 않으며 프레임마다 초기화한다. 현재 `Update` 한 번에 GPU 작업이 하나만 끝나 평소에는 닿지 않는 안전 상한이다.
+  - `PhysicsWorld::PrepareBody`가 BodyHandle을 예약하므로 handle 고갈은 Prepare 실패이고 유효한 `PreparedBody`의 `CommitBody`는 실패하지 않는다(PhysicsBodyTests 보강).
+  - 해제: sleep이거나 pause인 simulate 메시의 절단. 유지: sim on의 `-cut-gap`(B를 바닥 아래로 옮겨 stale 재생성 경로로 관통하므로 7b의 `SetBodyTransform` 공통 경로 뒤에 해제), simulate 메시 owner의 기즈모·Undo(7단계).
+  - 진단: 시뮬레이션 중 자동 절단은 모든 body가 sleep할 때까지 기다린다(`-physics-cut-checks 1`일 때만 3000프레임 초과를 오류로 보고). 신규 옵션 `-physics-cut-checks 1`은 절단 뒤 전 조각 sleep 시 body 수·정착을 검사한다.
+
+    ```powershell
+    ../Build/x64/Debug/Output/ModelViewer/ModelViewer.exe -debug 1 -model Models/cube.glb -physics-sim-checks 1 -physics-cut-checks 1 -cut 1 -cut-angle 30 -cut-expect-publications 1 -physics-query-exit 1200
+    ```
+
+  - 측정(Debug/Release 빌드 오류 0, CPU 8 target·SceneMathTests 468·PhysicsStepClockTests 21 통과, 위 3개 실행과 신규 실행 exit 0, D3D12 ERROR/CORRUPTION 0): Cube 1개가 게시 1회로 body 2개(bodyless 0)가 되고 전 조각이 sleep, 최저점 −1.155189(Debug)/−1.155187(Release)로 바닥 −1.155179의 ±0.01 m 안이었다. `-physics-query-capacity 3` 용량 부족 실행은 Failed·원본 유지·게시 0이었다.
+  - 미검증(6c): 깨어 있는 body 직접 거절, 작업 중 깨어남·pose 변경 취소, 빈 쪽 bodyless, 예산 초과, pause 중 절단, 게시 직후 점프 ≤1e-5.
 
 프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
 
-임시 제한: simulate 메시가 포함된 owner는 기즈모·Undo를 거절하며 pick에서 제외한다. simulate 메시 절단은 sleep/pause 여부와 무관하게 transaction 준비 전까지 거절한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다. 6단계·7단계는 구현하지 않았다.
+임시 제한: simulate 메시가 포함된 owner는 기즈모·Undo를 거절하며 pick에서 제외한다(7단계에서 해제). simulate 메시 절단은 6b부터 body가 sleep이거나 pause일 때 허용하고 깨어 있으면 거절한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤 해제). 7단계는 구현하지 않았다.
 
 검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
 

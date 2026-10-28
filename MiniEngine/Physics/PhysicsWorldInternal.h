@@ -109,6 +109,8 @@ namespace MiniPhysics
         static PhysicsWorld::Impl* GetImpl(PhysicsWorld& world) { return world.m_Impl.get(); }
         // Jolt 비공개 구현 타입의 별칭이다.
         using ImplType = PhysicsWorld::Impl;
+        // 다음에 예약할 body handle 번호를 읽고 쓴다(고갈 시험용).
+        static BodyHandle& NextBodyHandle(PhysicsWorld& world) { return world.m_NextBodyHandle; }
     };
 
     // PreparedBody가 쥔 준비 상태다. Node는 Prepare에서 미리 할당해 Commit이 할당하지 않게 한다.
@@ -117,6 +119,8 @@ namespace MiniPhysics
         // 소속 world이며 Shutdown 이후에는 nullptr(고아)이다.
         PhysicsWorldAccess::ImplType* Owner = nullptr;
         JPH::BodyID Id;
+        // Prepare에서 예약한 handle이다. Commit은 이 값을 그대로 쓴다.
+        BodyHandle Handle = InvalidBody;
         SimBodyMap::node_type Node;
     };
 }

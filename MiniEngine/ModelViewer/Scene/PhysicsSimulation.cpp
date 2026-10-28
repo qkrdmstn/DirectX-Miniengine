@@ -151,6 +151,16 @@ namespace Viewer
         return count;
     }
 
+    // 등록된 메시 body 중 깨어 있는 것만 센다.
+    size_t PhysicsSystem::GetAwakeBodyCount() const
+    {
+        // 유효 handle 중 Jolt가 활성으로 보고하는 body를 합산한다.
+        size_t count = 0;
+        for (const auto& entry : m_Bodies)
+            if (entry.second.Handle && m_World.IsBodyAwake(entry.second.Handle)) ++count;
+        return count;
+    }
+
     // Scene ID로 대응하는 body의 sleep 상태를 읽는다.
     bool PhysicsSystem::IsSimulationAwake(ObjectId owner, ComponentId mesh) const
     {

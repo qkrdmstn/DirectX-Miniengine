@@ -242,7 +242,12 @@ namespace MiniPhysics
                 data->Node = holder.extract(InvalidBody);
                 data->Owner = m_Impl.get();
                 data->Id = id;
+
+                // handle을 이 시점에 예약해 Commit에는 실패 경로가 남지 않게 한다.
+                data->Handle = m_NextBodyHandle;
+                data->Node.key() = data->Handle;
                 m_Impl->Prepared.insert(data.get());
+                ++m_NextBodyHandle;
                 out.m_Data = std::move(data);
             }
             catch (...)
@@ -258,17 +263,15 @@ namespace MiniPhysics
         }
     }
 
-    // 준비된 body를 world에 올리고 handle을 발급한다. 맵 노드는 이미 할당되어 있어 실패하지 않는다.
+    // 준비된 body를 world에 올리고 Prepare에서 예약한 handle을 돌려준다. 맵 노드는 이미 할당되어 있어 유효한 body는 실패하지 않는다.
     BodyHandle PhysicsWorld::CommitBody(PreparedBody&& body, bool activate)
     {
         // 같은 world에서 준비된 body만 받는다.
         if (!m_Impl || !body.m_Data || body.m_Data->Owner != m_Impl.get()) return InvalidBody;
-        if (m_NextBodyHandle == std::numeric_limits<BodyHandle>::max()) return InvalidBody;
 
-        // 준비 목록에서 빼 handle을 부여하고 등록한다.
+        // 준비 목록에서 빼 Prepare에서 예약한 handle로 등록한다.
         auto data = std::move(body.m_Data);
-        const BodyHandle handle = m_NextBodyHandle++;
-        data->Node.key() = handle;
+        const BodyHandle handle = data->Handle;
         m_Impl->Prepared.erase(data.get());
         m_Impl->SimBodies.insert(std::move(data->Node));
 
