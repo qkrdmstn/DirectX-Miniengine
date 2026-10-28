@@ -42,7 +42,7 @@
 | [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `39db69f3` 조회 구현 완료; 동적 조각 물리는 StaticPiecePhysics로 대체, Skeletal 물리는 후속 |
 | [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — `cccf6a3b` 기반 4d·5a~5c 작업 트리 구현·리뷰·Debug/Release 검증 완료; 물리 절단 transaction은 6단계 (2026-10-26) |
 | [BreakConstraintDesign.md](Physics/BreakConstraintDesign.md) | UE5.3.2 관절 해제·Actor 유지·physics pose 반영 원리 | 설계안 — `5f56b93d` 재대조, 구현 계약은 아래 인계 문서 참조 (2026-10-28) |
-| [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트·첫 작업 지시 | 진행 중 — BC-00 구현 완료, branch `break-constraint` (uncommitted); Debug/Release 빌드 성공, Debug 실행 PASS, GPU validation 미확인 (2026-10-28) |
+| [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트·첫 작업 지시 | 진행 중 — BC-01 구현 완료, branch `break-constraint` (uncommitted, `d865c5ed` 기반); CPU 16/16 PASS, Debug 재빌드 Jolt junction 외부 캐시 쓰기 권한 차단으로 실패 (2026-10-28) |
 
 ## NDC — 기법 근거
 

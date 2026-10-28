@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-00 구현 완료, branch `break-constraint` (uncommitted, `0b1a395d` 기반); Debug/Release 빌드 성공, Debug 실행 PASS, GPU validation 미확인 (2026-10-28)
+상태: 진행 중 — BC-01 구현 완료, branch `break-constraint` (uncommitted, `d865c5ed` 기반); CPU 16/16 PASS, Debug 재빌드 Jolt junction 외부 캐시 쓰기 권한 차단으로 실패 (2026-10-28)
 
 # BreakConstraint 구현 인계
 
@@ -192,7 +192,7 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | 단계 | 변경 파일·한 개념 | 완료 증거 / 선행 | 기준 비용 |
 | --- | --- | --- | --- |
 | BC-00 | Xbot 진단 로그만 추가(동작 변경 없음): 왼팔 NodeId·parent, `E * Gnode` scale/shear, 본 길이(월드 m), 재생 중 손목 anchor·상대 자세 범위 | 로그 값을 이 문서 2·6·8절에 기록 / 지금 가능 | R+B+V |
-| BC-01 | SkeletonPose.h parent map + Model/tests/SkeletonPoseTests.cpp | shuffled matrixIdx, sibling, skeletonRoot, malformed graph / 지금 가능 | R+CPU 실측 |
+| BC-01 | SkeletonPose.h parent map + Model/tests/SkeletonPoseTests.cpp | 구현 완료(uncommitted): CPU 16/16 PASS, Debug 재빌드는 Jolt 외부 캐시 권한 차단 / 선행 00 완료 | R+CPU 1.19초 |
 | BC-02 | override evaluator + 같은 테스트 | 부모 이동에도 물리 본 world 유지, body 없는 자손 local 유지 / 01 | R+CPU 실측 |
 | BC-03a | ModelInstance animation/finalize 분리 | override=0 pose/palette 동등, 중복 palette node 갱신 / 02 | R+B+T |
 | BC-03b | Scene CPU/GPU 단계 분리·wrapper | 비물리 Debug/Release 실행·애니메이션 회귀 / 03a | R+B+V |
@@ -213,6 +213,12 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 M1은 BC-00~BC-13a다. BC-09·BC-14는 M2이며 이번 데모에 필요 없다.
 
 ## 12. 검증 명령과 판정
+
+BC-01 검증(2026-10-28): branch `break-constraint`, HEAD `d865c5ed` 기반의 미커밋 구현이다. `BuildPoseParents`는 임시 배열에서 유효성과 matrixIdx 유일성을 검증하고 정상 종료 때만 swap한다. `GraphNode`와 `EvaluateModelPose`는 변경하지 않았다. 형제 스택 32칸 경계·33번째 저장 거절·형제 없는 40노드 체인을 검사하여 기존 평가기의 스택 규칙을 보존했다.
+
+아래 명령으로 CPU 테스트 16/16 PASS, 종료 코드 0, 컴파일 경고 없이 빌드·실행 합계 1.19초를 확인했다. 산출물은 `$env:TEMP/BreakConstraintTests`이며 TEMP 쓰기는 차단되지 않았다. 개발자 환경 로드 시 PowerShell 실행 정책 때문에 첫 시도가 컴파일 전에 중단되어 프로세스 범위 Bypass로 재실행했다. 복원 옵션 없는 ModelViewer Debug 재빌드는 Jolt CMake가 `MiniEngine/Build/ThirdParty` junction 대상인 워크트리 밖 캐시에 쓰려다 Permission denied로 실패했다. junction 변경이나 외부 캐시 수정으로 우회하지 않았다. Debug 재빌드는 71.95초 후 종료 코드 1로 끝났으며 `Model.lib` 컴파일은 성공했다. 따라서 전체 Debug 빌드 성공은 미확인이다.
+
+후속 작업: `XbotArmChecks.h`의 인라인 부모 복원을 `BuildPoseParents` 호출로 교체한다. BC-01에서는 이 파일을 수정하지 않았다. BC-02 이후는 구현하지 않는다.
 
 BC-00 검증(2026-10-28): branch `break-constraint`에서 BC-00 구현 완료(uncommitted). Debug/Release 빌드 성공, Debug Viewer 실행의 `XbotArmChecks.log`에서 2 sections·3,601 samples와 PASS를 확인했다. 2·6·8절에 런타임 측정값을 반영했다. GPU validation은 확인하지 않았다. Geometry 코드는 변경하지 않아 CPU slicer 검사는 대상이 아니다.
 
