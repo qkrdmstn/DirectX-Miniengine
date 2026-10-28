@@ -1,4 +1,4 @@
-상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b(`5e0a5627`)·7c(`6fcccce9`)·7d 완료, `26302519` 기반 바닥 최소 1 km 확장, 8단계 미진행 (2026-10-28)
+상태: 진행 중 — 6a~6f-2·7a~7d 완료, 8a(정착 관통 slop) 완료, 8b~8d 진행 중 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -343,7 +343,7 @@ CPU:
   - 독립 리뷰 보완: `midair`는 commit 전용으로 유지한다. `midair-settle`은 같은 3 m 공중 절단 뒤 `Poll`에서 모든 조각 sleep·최저점 ≥ 바닥−0.01 m·적어도 한 조각 바닥 ±0.01 m를 검사한다. 수치를 모든 조각에 대해 출력한 뒤 관통 한계를 검사하며 실패를 통과 처리하지 않는다. `drop-no-cut`은 같은 3 m 상승 뒤 절단 없이 같은 정착 검사를 수행한다.
   - 회전 검사: `spin-paused`는 일시정지 중 부모에 v=(1,−2,0.5) m/s, w=(0,0,1) rad/s를 주입하고 기존 `CheckPublished`를 실행한다. 각 조각의 |w×r| > 0.01 m/s를 먼저 확인한 뒤 선속도 v+w×r·각속도 w를 1e−5 오차로 검사한다. Debug/Release 모두 두 조각의 |w×r|=0.559513 m/s, jumpA/B=0이며 46 checks·exit 0이다.
   - 공중 정착 비교: Debug `midair-settle`은 최저점 −0.943406 / −1.155896 m·두 조각 sleep·82 checks·exit 0이다. Debug/Release 무절단 3 m 낙하는 모두 최저점 −1.155180 m·sleep·19 checks·exit 0이다. 바닥 윗면은 두 구성 모두 −1.155179 m다.
-  - 미해결: Release `midair-settle`은 77번째 check에서 관통 한계 실패(exit 3765269347)다. 두 조각 모두 sleep이며 최저점 −1.172250 / −1.155216 m, 바닥 −1.155179 m로 첫 조각은 0.017071 m 관통한다. 같은 구성의 `drop-no-cut`은 최저점 −1.155180 m·sleep·19 checks·exit 0이다. 원본 낙하에서는 재현되지 않았지만 절단 후 shape·접촉과 속도 상속 중 원인을 분리하지 못했으므로 6f-2 속도 상속의 결함으로 단정하지 않고 물리 코드는 수정하지 않았다. 허용치는 완화하지 않았다.
+  - 미해결(8a에서 원인 확인·해결): Release `midair-settle`은 77번째 check에서 관통 한계 실패(exit 3765269347)다. 두 조각 모두 sleep이며 최저점 −1.172250 / −1.155216 m, 바닥 −1.155179 m로 첫 조각은 0.017071 m 관통한다. 같은 구성의 `drop-no-cut`은 최저점 −1.155180 m·sleep·19 checks·exit 0이다. 원본 낙하에서는 재현되지 않았지만 절단 후 shape·접촉과 속도 상속 중 원인을 분리하지 못했으므로 6f-2 속도 상속의 결함으로 단정하지 않고 물리 코드는 수정하지 않았다. 허용치는 완화하지 않았다.
   - 빌드 미완료: 지정된 `.slnx` 명령은 Debug/Release 모두 대기 후 재시도해도 `MiniCollision.lastbuildstate` 쓰기 거부(MSB3491→MSB3073)로 실패했다. 기존 물리 라이브러리를 사용한 `ModelViewer.vcxproj /m /p:Configuration=<Debug|Release> /p:Platform=x64 /p:BuildProjectReferences=false` 빌드는 각각 6.1초/15.5초·오류 0으로 통과했다. Debug exe 링크 잠금은 기존 실행 종료 후 재시도해 해결했다. 기존 LightGrid 종료 경고는 남아 있다.
   - 환경·근거: NVIDIA GeForce MX450, 드라이버 DLL 32.0.15.9186. 이번 실행은 회당 약 27~37초였다. 리뷰 보완 로그는 `%TEMP%/step6f2-review-{Debug,Release}-<시나리오>.log`, 하네스는 `%TEMP%/step6f2-review-runtime.ps1`이다. ModelViewer.cpp는 새 이름 등록이 필요 없어 수정하지 않았다. README·mini 파일 등 금지 파일도 직접 편집하지 않았고 stage·commit하지 않았다.
 
@@ -374,6 +374,13 @@ CPU:
   - 입력: 드래그 중이 아닐 때 `Delete` 키가 현재 편집 대상을 지우고 선택을 해제한다.
   - 진단 `-edit-delete-checks 1`(`Scene/tests/EditDeleteChecks.h`): cube 절단 뒤 B·A·다른 owner 대기 후보를 넣고 B 삭제 → B 후보만 취소, B body·query가 맵과 world에서 즉시 사라지고 A body 유지 → step 증가 뒤 재생성 없음 → 바닥 삭제 거절 → owner 삭제로 그 owner 후보·모든 body·query 제거, 다른 후보와 바닥 유지 → step 증가 뒤 재생성 없음.
   - 검증: `.slnx` Debug/Release 빌드 오류 0. `-model Models/cube.glb -physics-running 1 -cut 1 -cut-angle 30 -cut-validate 1 -cut-expect-publications 1 -edit-delete-checks 1 -physics-query-exit 1800` Debug/Release, 편집 진단 3종 동시 실행 Debug/Release, `-edit-apply-checks 1` Release, `-physics-sim-checks 1`, Release `awake`, sim-off 절단 회귀(게시 4) 모두 exit 0·D3D12 ERROR/CORRUPTION 0. 실제 Delete 키 입력은 자동 입력으로 확인하지 않았다.
+
+- **8a 완료 (2026-10-28)**: 정착 관통 상한을 Jolt 설정으로 보장.
+  - 원인: `LowestCollisionPoint`는 CPU 충돌 convex 꼭짓점의 최저 Y를 잰다. 엔진이 `JPH::PhysicsSettings`를 설정하지 않아 `mPenetrationSlop`이 기본 0.02 m였고, Jolt `ContactConstraintManager::sSolvePositionConstraint`는 slop 이내 관통을 위치 보정하지 않는다. R14 한계 0.01 m보다 큰 관통을 Jolt가 허용하는 구조였으므로 6f-2 Release의 0.017071 m와 4d의 0.0196 m는 이 범위 안의 잔류 관통이다. 속도 상속·R15 재맞춤 결함의 근거는 없다.
+  - 재현: 수정 전 HEAD(`dfe84208`) Release 30°는 5회 모두 같은 값(관통 0.000314 m)으로 통과했고 10/20/60/75°도 0.00042 m 이하였다. 6f-2 이후 변경으로 접촉 이력이 달라져 재현되지 않았을 뿐 상한은 보장되지 않았다.
+  - 결정·구현: `PhysicsWorld::Initialize`가 `mPenetrationSlop = 0.005f`(R14 한계의 절반)를 적용한다. 허용치는 완화하지 않았다. convex radius(기본 0.05 m)는 접촉 manifold가 원래 hull 면을 쓰므로 바꾸지 않았다. slop은 보정 시작 임계값이라 0.01 m 이하를 수학적으로 보장하지는 않으며 런타임 검사가 계속 확인한다.
+  - 검증: MiniPhysics CPU 테스트 Debug/Release 9/9 통과, `.slnx` Debug/Release 빌드 오류 0. 혼합 장면(`-physics-sim-checks 1 -physics-query-checks 1`) Debug/Release 442 checks·360 ticks·관통 0.000002 m. Release `midair-settle` 30°/60° 82 checks·관통 0.000061/0.000072 m, `drop-no-cut` 19 checks. 모두 exit 0, D3D12 ERROR/CORRUPTION 0.
+  - 발견(8c에서 다룸): cube `-cut-angle 45`(절단면이 마주보는 두 모서리를 지남)는 수정 전후 모두 A쪽 hull 포함 검증에서 예외로 끝난다.
 
 남은 제한: Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 8단계(전체 검증, Release `midair-settle` 관통 0.017 m, bunny 정점 수 변동, 40회 연속 절단 실패)는 진행하지 않았다.
 
