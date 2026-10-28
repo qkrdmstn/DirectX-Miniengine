@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a~6f-2·7a~7d 완료, 8a(정착 관통 slop) 완료, 8b~8d 진행 중 (2026-10-28)
+상태: 완료 — 6a~6f-2·7a~7d·8단계 완료(8a `4495d1f4`, 8b·8c 원인 기록 `0ef416dd`, 8d 전체 검증), 미해결: cube 45° hull 포함 검증 예외 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -235,7 +235,7 @@ CPU:
 | 7b 완료 | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `ObjectSelection.*`, `PhysicsSimulation.cpp`, `TransformGizmo.*`, `tests/EditApplyChecks.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7c 완료 | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h`, `ObjectSelection.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7d 완료 | 조각 삭제 vs owner 삭제·body 정리 | `ObjectSelection.*`, `PhysicsSystem.*`, `CuttingSystem.*`, `ModelViewer.cpp`, `tests/EditDeleteChecks.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
-| 8 | 전체 검증·문서 상태 최종 확인 | `Docs/` | 빌드 약 90초 + 전체 테스트·런타임 |
+| 8 완료 | 전체 검증·문서 상태 최종 확인. 8a 정착 관통 slop(`4495d1f4`), 8b bunny 정점 수·8c 40회 절단 원인 기록(`0ef416dd`), 8d R14 전체 검증 | `Physics/PhysicsWorld.cpp`, `Docs/` | 실측: CPU 테스트·빌드 수 분, 런타임 44회 약 20분 |
 
 각 코드 단계의 확인된 검토·빌드 기준 비용은 리뷰 2~5분 + Debug/Release 합계 약 90초로 약 3분 30초~6분 30초다. CPU 테스트는 기존 SDK 테스트 약 5초, 런타임은 기존 실행 약 8초를 참고한다. 구현·신규 검증 시간은 미측정이며 단계별 실측 후 갱신한다.
 
@@ -393,7 +393,14 @@ CPU:
   - 따라서 한 계보 40회 게시는 현재 예산으로 불가능하다. 반복 절단 검증은 `-cut 32 -cut-repeat-plane 1 -cut-step-y .02 -cut-validate 1 -cut-expect-publications 32`로 바꾼다. Debug/Release 모두 게시 32·exit 0·D3D12 ERROR 0이다. physics 실행 중 자동 절단이 awake body를 기다리는 동작은 이번 실행에서 문제가 되지 않았다.
   - 별도 결함(미해결): cube `-cut-angle 45`는 `GpuCutValidation.cpp`의 A쪽 sliced hull 포함 검사에서 `std::runtime_error`로 끝난다. 양쪽 hull은 생성된다(sliced 4.00653514 / 4.0061456). 절단면이 hull 모서리 근처를 지날 때 CPU `SliceConvexElem`·`HullFromPlanes`의 snap·0.001 병합과 GPU 평면 위 판정의 차이로 추정하며, 초과량은 아직 측정하지 않았다. 검증을 끈 게시와 물리 동작은 확인하지 않았다.
 
-남은 제한: Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 8단계(전체 검증, Release `midair-settle` 관통 0.017 m, bunny 정점 수 변동, 40회 연속 절단 실패)는 진행하지 않았다.
+- **8d R14 전체 검증 (2026-10-28, `0ef416dd` 기준)**: 모두 통과, 코드 변경 없음.
+  - CPU(Debug/Release 각각): SceneMathTests 495, PhysicsStepClockTests 21, CollisionDebugTests 24 checks, CutPlaneTests 통과, MiniPhysics CTest 9/9. 산출물은 `%TEMP%/step8/verify/`.
+  - 런타임(Debug/Release 각 22종, 모두 exit 0·D3D12 ERROR/CORRUPTION 0): 혼합 장면 442 checks, query-off 400, sim-off 절단 4회 게시, 연속 절단 32회 게시(`-cut 32 -cut-repeat-plane 1 -cut-step-y .02`), `-edit-apply-checks`·`-edit-delete-checks`·`-edit-target-checks`, `-physics-cut-scenario` 15종(midair 58, midair-settle 82, spin-paused 46, awake 52, woken·moved 295, empty-a·empty-b 278, paused 66, paused-asleep 298, plain 292, fail-a·fail-b·budget 260, drop-no-cut 19 checks; 두 구성 동일).
+  - 정착 관통: 모든 시나리오에서 최저점 ≥ −1.155251 m, 바닥 −1.155179 m로 최대 0.000072 m다. R14 한계 0.01 m 이내다.
+  - 실행 명령은 `%TEMP%/step8/verify.ps1`에 모아 두었다. 런타임 1회는 약 7~45초다. 환경은 NVIDIA GeForce MX450, 드라이버 DLL 32.0.15.9186이다.
+  - 미확인: 실제 마우스 드래그·Ctrl+Z·Delete 키·P/H 토글의 수동 조작. `Docs/README.md` 상태 행은 스테이징 금지 파일이라 갱신하지 않았다.
+
+남은 제한: Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 8단계 결과와 남은 결함(cube 45° hull 포함 검증 예외)은 8a~8d 기록을 따른다.
 
 검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
 
