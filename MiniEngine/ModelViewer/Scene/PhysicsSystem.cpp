@@ -206,6 +206,43 @@ namespace Viewer
         m_World.RemoveCollider(entry.Handle);
     }
 
+    // Scene 삭제 전에 대상의 simulation과 query 참조를 함께 제거한다.
+    void PhysicsSystem::RemoveTarget(ObjectId owner, ComponentId mesh)
+    {
+        // 바닥 owner는 직접 호출에서도 보호한다.
+        if (owner == m_FloorOwner) return;
+
+        // 해당 simulation body와 살아 있는 메시의 표시를 정리한다.
+        for (auto it = m_Bodies.begin(); it != m_Bodies.end();)
+            if (it->first.first == owner && (mesh == InvalidComponentId || it->first.second == mesh))
+            {
+                m_World.DestroyBody(it->second.Handle);
+                auto* object = m_Scene.FindObject(owner);
+                auto* component = object ? object->FindMeshComponent(it->first.second) : nullptr;
+                if (component) component->m_Simulating = false;
+                it = m_Bodies.erase(it);
+            }
+            else
+                ++it;
+
+        // 조회 body와 역방향 handle 및 fallback 키를 모두 회수한다.
+        for (auto it = m_Entries.begin(); it != m_Entries.end();)
+            if (it->first.first == owner && (mesh == InvalidComponentId || it->first.second == mesh))
+            {
+                RemoveEntry(it->second);
+                it = m_Entries.erase(it);
+            }
+            else
+                ++it;
+
+        // 삭제 대상의 fallback 키를 별도로 정리한다.
+        m_FallbackKeys.erase(std::remove_if(m_FallbackKeys.begin(), m_FallbackKeys.end(), [=](const Key& key)
+        {
+            // 삭제 대상의 fallback 후보도 다음 조회에서 제외한다.
+            return key.first == owner && (mesh == InvalidComponentId || key.second == mesh);
+        }), m_FallbackKeys.end());
+    }
+
     // Scene 대응과 SDK 자원을 종료 순서대로 정리한다.
     void PhysicsSystem::Clear()
     {

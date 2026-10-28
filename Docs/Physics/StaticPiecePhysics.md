@@ -1,4 +1,4 @@
-상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b(`5e0a5627`)·7c 완료, 7d 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b(`5e0a5627`)·7c(`6fcccce9`)·7d 완료, 8단계 미진행 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -232,7 +232,7 @@ CPU:
 | 7a | EditTarget(Owner/Mesh) 선택 | `Scene/EditTarget.h`, `ObjectSelection.*`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7b 완료 | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `ObjectSelection.*`, `PhysicsSimulation.cpp`, `TransformGizmo.*`, `tests/EditApplyChecks.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7c 완료 | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h`, `ObjectSelection.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
-| 7d | 조각 삭제 vs owner 삭제·body 정리 | `Scene.*`, `PhysicsSystem` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
+| 7d 완료 | 조각 삭제 vs owner 삭제·body 정리 | `ObjectSelection.*`, `PhysicsSystem.*`, `CuttingSystem.*`, `ModelViewer.cpp`, `tests/EditDeleteChecks.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 8 | 전체 검증·문서 상태 최종 확인 | `Docs/` | 빌드 약 90초 + 전체 테스트·런타임 |
 
 각 코드 단계의 확인된 검토·빌드 기준 비용은 리뷰 2~5분 + Debug/Release 합계 약 90초로 약 3분 30초~6분 30초다. CPU 테스트는 기존 SDK 테스트 약 5초, 런타임은 기존 실행 약 8초를 참고한다. 구현·신규 검증 시간은 미측정이며 단계별 실측 후 갱신한다.
@@ -366,7 +366,14 @@ CPU:
   - `ApplyHistoryCommand`(`ObjectSelection`)가 Undo 적용을 맡는다. 대상이 무효이거나 Mesh의 현재 모드가 기록과 다르면 건너뛴다. 그 외에는 After 일치 여부와 무관하게 `ApplyEditTransform`으로 Before를 복원해 body를 순간이동한다. Undo는 선택과 무관한 전역 History다.
   - 검증: SceneMathTests Debug/Release 각 487 checks 통과. `-edit-apply-checks 1`에 이동 기록 → Undo → 같은 body·Before 위치·EditGeneration +1 → 다음 프레임 같은 body 단계를 추가해 Debug/Release exit 0·D3D12 ERROR/CORRUPTION 0, `-edit-target-checks 1` 통과.
 
-임시 제한: 조각 삭제와 owner 삭제 분리는 7d다. Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 7d는 구현하지 않았다.
+- **7d 완료 (2026-10-28)**: 조각 삭제와 owner 삭제 분리.
+  - `DeleteEditTarget(Scene&, PhysicsSystem*, CuttingSystem*, EditTarget)`(`ObjectSelection`) 순서: 대상 유효·owner `IsEditable`(바닥 거절) → `CuttingSystem::CancelTarget`(대기 후보 즉시 제거, 결과 미기록, 상태 "Cancelled - cut target deleted") → `PhysicsSystem::RemoveTarget`(sim body `DestroyBody`, query 항목·역방향 handle·fallback 키 즉시 제거) → Mesh는 `RemoveMeshComponent`(마지막 조각이어도 owner 유지), Owner는 `Scene::DeleteObject`.
+  - 진행 중 GPU job은 기존 `CuttingSystem::Update`의 대상 재검색으로 Cancelled 처리되고 게시하지 않는다. 삭제 Undo는 범위 밖이며 삭제된 대상의 History는 `ApplyHistoryCommand`가 건너뛴다.
+  - 입력: 드래그 중이 아닐 때 `Delete` 키가 현재 편집 대상을 지우고 선택을 해제한다.
+  - 진단 `-edit-delete-checks 1`(`Scene/tests/EditDeleteChecks.h`): cube 절단 뒤 B·A·다른 owner 대기 후보를 넣고 B 삭제 → B 후보만 취소, B body·query가 맵과 world에서 즉시 사라지고 A body 유지 → step 증가 뒤 재생성 없음 → 바닥 삭제 거절 → owner 삭제로 그 owner 후보·모든 body·query 제거, 다른 후보와 바닥 유지 → step 증가 뒤 재생성 없음.
+  - 검증: `.slnx` Debug/Release 빌드 오류 0. `-model Models/cube.glb -physics-running 1 -cut 1 -cut-angle 30 -cut-validate 1 -cut-expect-publications 1 -edit-delete-checks 1 -physics-query-exit 1800` Debug/Release, 편집 진단 3종 동시 실행 Debug/Release, `-edit-apply-checks 1` Release, `-physics-sim-checks 1`, Release `awake`, sim-off 절단 회귀(게시 4) 모두 exit 0·D3D12 ERROR/CORRUPTION 0. 실제 Delete 키 입력은 자동 입력으로 확인하지 않았다.
+
+남은 제한: Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 8단계(전체 검증, Release `midair-settle` 관통 0.017 m, bunny 정점 수 변동, 40회 연속 절단 실패)는 진행하지 않았다.
 
 검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
 

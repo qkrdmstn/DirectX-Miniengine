@@ -1,4 +1,4 @@
-상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택·7b 조각 편집 적용 경로·7c 대상 종류 History 완료; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반); 조각 삭제(7d)와 관절 미구현 (2026-10-28)
+상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택·7b 조각 편집 적용 경로·7c 대상 종류 History·7d 조각/owner 삭제 완료; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반); 관절 미구현 (2026-10-28)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -29,6 +29,7 @@ Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::P
 | `C` | 현재 유한 평면 영역의 Static 컴포넌트 후보를 조회하고 실제 분할만 게시. 처리 중 재입력은 Busy 안내 |
 | `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태. 기본 정지 상태로 시작한다 |
 | `H` | 조각별 충돌 convex hull 모서리와 물리 바닥 상자 표시 켜기/끄기(기본 꺼짐). 디버그 UI `Viewer/Physics/ShowCollision`과 동일 상태. 깨어 있음 초록·잠듦 파랑·body 없음 노랑·바닥 회색 |
+| `Delete` | 드래그 밖에서 현재 편집 대상 삭제(Mesh는 조각만, Owner는 객체 전체). 바닥은 거절 |
 | 드래그 중 `Esc` | 시작 Transform으로 복구 |
 | `Ctrl+Z` | 마지막 완료 드래그 한 번 취소; 최근 128개 보관 |
 | 오른쪽 버튼 유지 + 마우스 | 카메라 회전 |
@@ -57,7 +58,7 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 - 렌더는 각 컴포넌트의 현재 revision section만 등록한다. Static node bound와 Skeletal 전체 본 변환 구의 합으로 컴포넌트 경계를 만들며, 스킨 경계는 보수적이지만 느슨할 수 있다. 첫 유효 pose 전·기준 변경 후·pose 실패 시 선택을 보류한다.
 - 컴포넌트 GPU 버퍼 삭제는 현재 전역 GPU 완료를 기다린다. 단계별 검증은 [GPU 설계 14절](../GPU/GPUCuttingSystemDesign.md)을 따른다.
 
-`Scene::CreateObject`, `FindObject`, `DeleteObject`, `Clear`로 객체를 관리한다.
+`Scene::CreateObject`, `FindObject`, `DeleteObject`, `Clear`로 객체를 관리한다. 사용자 삭제는 `DeleteEditTarget`(`ObjectSelection`)이 절단 대기 후보와 물리 body·query 매핑을 먼저 즉시 제거한 뒤 조각은 `GameObject::RemoveMeshComponent`, owner는 `DeleteObject`로 지운다.
 매 프레임 `Scene::Update` 후 기본·그림자 pass에서 각각 `Scene::Render`를 호출한다.
 `TransformGizmo`는 viewport 하나와 Scene 하나를 대상으로 입력·overlay를 처리한다.
 

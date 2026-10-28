@@ -1,11 +1,31 @@
 ﻿#include "ObjectSelection.h"
 #include "GizmoMath.h"
 #include "PhysicsSystem.h"
+#include "CuttingSystem.h"
 #include <cmath>
 #include <limits>
 
 namespace Viewer
 {
+    // 절단과 물리 참조를 먼저 정리하고 대상 종류에 맞게 소유물을 삭제한다.
+    bool DeleteEditTarget(Scene& scene, PhysicsSystem* physics, CuttingSystem* cutting, const EditTarget& target)
+    {
+        // a. 대상 유효성과 owner 편집 잠금을 먼저 검사한다.
+        if (!IsEditTargetValid(scene, target)) return false;
+        GameObject* object = scene.FindObject(target.Object);
+        if (!object->IsEditable()) return false;
+        const ComponentId mesh = target.IsMesh() ? target.Mesh : InvalidComponentId;
+
+        // b. 삭제될 대상의 절단 대기 후보를 제거한다.
+        if (cutting) cutting->CancelTarget(target.Object, mesh);
+
+        // c. 다음 step과 query 전에 물리 매핑을 제거한다.
+        if (physics) physics->RemoveTarget(target.Object, mesh);
+
+        // d. 조각 삭제는 owner를 유지하고 owner 삭제는 객체 전체를 제거한다.
+        return target.IsMesh() ? object->RemoveMeshComponent(mesh) : scene.DeleteObject(target.Object);
+    }
+
     // 대상 유효성과 기록한 변환 모드를 확인하고 이전 월드 TRS를 복구한다.
     bool ApplyHistoryCommand(Scene& scene, PhysicsSystem* physics, const TransformHistory::Command& command)
     {

@@ -7,6 +7,9 @@
 namespace Viewer
 {
     class PhysicsSystem;
+    class CuttingSystem;
+    // 절단 대기와 물리 참조를 먼저 끊고 편집 대상을 삭제한다.
+    bool DeleteEditTarget(Scene& scene, PhysicsSystem* physics, CuttingSystem* cutting, const EditTarget& target);
     // 편집 대상의 TRS와 물리 body를 함께 갱신한다.
     bool ApplyEditTransform(Scene& scene, PhysicsSystem* physics, const EditTarget& target, const SceneTransform& world);
     // 대상 유효성과 변환 모드를 확인한 뒤 공통 편집 경로로 이력을 복구한다.

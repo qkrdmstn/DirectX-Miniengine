@@ -210,6 +210,25 @@ namespace Viewer
         FinishBatch();
     }
 
+    // 삭제할 조각 또는 owner의 대기 후보를 완료 결과 없이 취소한다.
+    void CuttingSystem::CancelTarget(ObjectId owner, ComponentId mesh)
+    {
+        // 진행 중 GPU 작업은 기존 Update의 대상 재검색에 맡긴다.
+        bool removed = false;
+        for (auto it = m_Pending.begin(); it != m_Pending.end();)
+            if (it->Owner == owner && (mesh == InvalidComponentId || it->Mesh == mesh))
+            {
+                it = m_Pending.erase(it);
+                removed = true;
+            }
+            else
+                ++it;
+
+        // 일괄 상태를 닫은 뒤 사용자 삭제 안내를 마지막에 남긴다.
+        FinishBatch();
+        if (removed) m_StatusText = "Cancelled - cut target deleted";
+    }
+
     // 성공한 후보가 있으면 전체 요청의 완료 상태를 남긴다.
     void CuttingSystem::FinishBatch()
     {
