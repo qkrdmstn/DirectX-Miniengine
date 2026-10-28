@@ -51,6 +51,12 @@ namespace Viewer
         size_t GetAwakeBodyCount() const;
         // 등록된 메시 body가 깨어 있는지 읽는다.
         bool IsSimulationAwake(ObjectId owner, ComponentId mesh) const;
+        // 진단: 조회·simulation·준비 중 body의 용량 예약 합계를 읽는다.
+        size_t GetReservedBodyCount() const { return m_World.GetReservedCount(); }
+        // 진단: 등록된 메시 body의 선속도와 각속도를 읽는다.
+        bool GetSimulationVelocity(ObjectId owner, ComponentId mesh, std::array<double, 3>& linear, std::array<double, 3>& angular) const;
+        // 진단: body를 현재 pose에서 lift(m)만 위로 순간이동해 깨운다. lift가 0이면 깨우기만 한다.
+        bool NudgeBodyForDiagnostic(ObjectId owner, ComponentId mesh, double lift);
         // 시작 배치 이후 별도 표시용 객체와 고정 Box 바닥을 함께 만든다.
         bool CreateFloor(std::shared_ptr<const Model> model);
         // 준비된 Static 메시 경계를 등록·갱신하고 삭제된 body를 정리한다.

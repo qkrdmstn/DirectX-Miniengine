@@ -6,6 +6,9 @@
 
 namespace Viewer
 {
+    // 진단용 cook 실패 주입의 기본값(꺼짐)이다.
+    int CutTransaction::DiagFailSide = 0;
+
     // 현재 프레임이 바뀌었으면 사용량을 비우고, 남은 예산이 충분할 때만 차감한다.
     bool CutBudget::TryConsume(uint32_t bodies)
     {
@@ -18,7 +21,7 @@ namespace Viewer
         }
 
         // 초과하면 차감하지 않고 거절한다.
-        if (m_Used + bodies > MaxNewBodiesPerFrame)
+        if (m_Used + bodies > m_Limit)
             return false;
         m_Used += bodies;
         return true;
@@ -111,6 +114,7 @@ namespace Viewer
         }
 
         // GPU 작업 동안 움직였거나 깨어났으면 부모를 유지한다.
+        // pose 세대 검사는 월드 행렬이 같은 값으로 돌아왔지만 세대만 앞서간 경우를 막는 방어이며, 일반 stale 검사가 먼저 걸리는 보통 경로에서는 거의 도달하지 않는다.
         const char* reason = nullptr;
         if (parent.GetPhysicsPoseGeneration() != jobPoseGeneration)
         {
@@ -132,7 +136,19 @@ namespace Viewer
         }
 
         // A/B body를 준비하고 B의 매핑 칸을 미리 확보해 Commit이 할당하지 않게 한다.
-        if (!PrepareSide(owner, parent, collisionA, m_BodyA) || !PrepareSide(owner, parent, collisionB, m_BodyB))
+        if (DiagFailSide == 1)
+        {
+            m_Failure = "forced cook failure A (diagnostic)";
+            return false;
+        }
+        if (!PrepareSide(owner, parent, collisionA, m_BodyA))
+            return false;
+        if (DiagFailSide == 2)
+        {
+            m_Failure = "forced cook failure B (diagnostic)";
+            return false;
+        }
+        if (!PrepareSide(owner, parent, collisionB, m_BodyB))
             return false;
         try
         {

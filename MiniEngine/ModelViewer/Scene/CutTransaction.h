@@ -12,10 +12,13 @@ namespace Viewer
         static constexpr uint32_t MaxNewBodiesPerFrame = 4;
         // 현재 프레임의 남은 예산에서 bodies개를 차감한다. 초과하면 아무것도 차감하지 않고 false다.
         bool TryConsume(uint32_t bodies);
+        // 진단용으로 프레임당 상한을 낮춘다. 기본값은 MaxNewBodiesPerFrame이며 생산 경로는 호출하지 않는다.
+        void SetLimit(uint32_t limit) { m_Limit = limit; }
 
     private:
         uint64_t m_Frame = ~0ull;
         uint32_t m_Used = 0;
+        uint32_t m_Limit = MaxNewBodiesPerFrame;
     };
 
     // simulate 메시 절단의 body 교체 transaction이다: 준비 → 검증 → 교체(Commit) → 실패 시 파괴자에서 rollback.
@@ -35,6 +38,8 @@ namespace Viewer
         void Commit(MeshComponent& a, MeshComponent& b) noexcept;
         // 마지막 Prepare 실패 이유(정적 문자열)를 읽는다.
         const char* GetFailure() const { return m_Failure; }
+        // 진단용 cook 실패 주입이다: 0 꺼짐, 1 A, 2 B. 기본은 꺼져 있다.
+        static int DiagFailSide;
 
     private:
         // 조각 하나의 body를 준비한다. 충돌이 비면 body 없는 조각으로 성공 처리한다.

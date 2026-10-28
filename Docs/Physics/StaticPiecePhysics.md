@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a·6b 완료(물리 절단 transaction), 6c 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6a~6c 완료(물리 절단 transaction·실패 경로 검증), 6d 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -267,7 +267,11 @@ CPU:
     ```
 
   - 측정(Debug/Release 빌드 오류 0, CPU 8 target·SceneMathTests 468·PhysicsStepClockTests 21 통과, 위 3개 실행과 신규 실행 exit 0, D3D12 ERROR/CORRUPTION 0): Cube 1개가 게시 1회로 body 2개(bodyless 0)가 되고 전 조각이 sleep, 최저점 −1.155189(Debug)/−1.155187(Release)로 바닥 −1.155179의 ±0.01 m 안이었다. `-physics-query-capacity 3` 용량 부족 실행은 Failed·원본 유지·게시 0이었다.
-  - 미검증(6c): 깨어 있는 body 직접 거절, 작업 중 깨어남·pose 변경 취소, 빈 쪽 bodyless, 예산 초과, pause 중 절단, 게시 직후 점프 ≤1e-5.
+- **6c 완료 (2026-10-28)**: 6b에서 미검증이던 실패·예외 경로를 런타임 시나리오로 검증한다.
+  - 옵션: `-physics-cut-scenario <이름>`(기본 꺼짐). 이름은 `awake`(깨어 있는 body 제출 거절), `woken`(작업 중 깨움), `moved`(작업 중 0.001 m 이동), `fail-a`·`fail-b`(cook 실패 주입), `budget`(상한 1), `empty-a`·`empty-b`(빈 쪽 강제), `paused`(낙하 중 정지 뒤 절단), `paused-asleep`, `plain`이다. `-cut 1 -cut-angle 30 -cut-expect-publications <0|1> -physics-query-exit 1500`과 함께 Cube 단독(`-model Models/cube.glb`)으로 실행하며 `-physics-sim-checks`는 쓰지 않는다.
+  - 주입 지점은 기본값에서 비활성이다: `CutTransaction::DiagFailSide`, `CuttingSystem::DiagEmptySide`, `CutBudget::SetLimit`. 시나리오가 끝나거나 Cleanup되면 `PhysicsCutScenario`가 되돌리며, 선택한 시나리오가 끝나지 않은 채 종료하면 오류다. 진단 접근자는 `PhysicsSystem::GetReservedBodyCount`·`GetSimulationVelocity`·`NudgeBodyForDiagnostic`이다.
+  - 결과(Debug/Release 모두 exit 0, D3D12 ERROR/CORRUPTION 0): `awake`는 "Wait - object moving"으로 제출 거절·작업/게시 없음·부모 불변. `woken`은 Failed 0x200 "Wait - object moving". `fail-a`·`fail-b`·`budget`은 Failed 0x200과 이유, 부모 메시·body 수·예약 수(시작값) 복귀. `empty-a/b`는 빈 쪽이 bodyless이고 다른 쪽만 body를 가지며 SyncBodies가 재등록하지 않는다. `paused`·`paused-asleep`은 정지 중 절단이 허용되고 조각 속도는 0이며 재개 후 정착한다. 게시 프레임의 조각 월드 변환은 부모와 차이 0(허용 1e-5)이다. 정착은 모든 조각이 sleep하고 각 조각이 바닥−0.01 m 이상이며 적어도 하나가 바닥 ±0.01 m 안이다(30° 절단에서 위쪽 조각은 아래쪽 조각 위에 얹힌다, 예: 위쪽 −0.6676, 아래쪽 −1.155189, 바닥 −1.155179).
+  - 참고: `moved`는 월드 행렬이 바뀌므로 일반 stale 검사가 먼저 걸려 Cancelled가 된다. `CutTransaction::Prepare`의 pose 세대 검사는 행렬이 같은 값으로 돌아왔지만 세대만 앞선 경우를 막는 방어로 유지하며 현재 시나리오로는 직접 도달하지 못한다.
 
 프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
 

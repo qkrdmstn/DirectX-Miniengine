@@ -161,6 +161,35 @@ namespace Viewer
         return count;
     }
 
+    // Scene ID로 대응하는 body의 속도를 읽는다. 등록되지 않았으면 false다.
+    bool PhysicsSystem::GetSimulationVelocity(ObjectId owner, ComponentId mesh, std::array<double, 3>& linear, std::array<double, 3>& angular) const
+    {
+        // 유효 handle이 있을 때만 world에서 읽는다.
+        const auto entry = m_Bodies.find(Key(owner, mesh));
+        return entry != m_Bodies.end() && entry->second.Handle && m_World.GetBodyVelocity(entry->second.Handle, linear, angular);
+    }
+
+    // 진단용으로 현재 pose에서 위로 lift만큼 옮겨 body를 깨우고, 옮겼으면 컴포넌트 pose에도 바로 반영한다.
+    bool PhysicsSystem::NudgeBodyForDiagnostic(ObjectId owner, ComponentId mesh, double lift)
+    {
+        // 등록된 body의 현재 pose를 읽는다.
+        const auto entry = m_Bodies.find(Key(owner, mesh));
+        std::array<double, 3> position;
+        std::array<double, 4> rotation;
+        if (entry == m_Bodies.end() || !entry->second.Handle || !m_World.GetBodyPose(entry->second.Handle, position, rotation))
+            return false;
+
+        // 같은 pose 또는 lift만큼 올린 pose로 순간이동하면 body가 깨어난다.
+        position[1] += lift;
+        if (!m_World.SetBodyTransform(entry->second.Handle, position, rotation))
+            return false;
+
+        // 올렸다면 pose 세대가 바로 바뀌도록 컴포넌트에 반영한다.
+        if (lift != 0.0)
+            ApplyBodyPoses();
+        return true;
+    }
+
     // Scene ID로 대응하는 body의 sleep 상태를 읽는다.
     bool PhysicsSystem::IsSimulationAwake(ObjectId owner, ComponentId mesh) const
     {

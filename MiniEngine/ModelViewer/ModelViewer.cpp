@@ -95,6 +95,7 @@ private:
     float m_CutGap = 0.0f;
     uint32_t m_ExpectedPublications = ~0u, m_Publications = 0;
     uint32_t m_PhysicsCutChecks = 0;
+    Viewer::PhysicsCutScenario m_CutScenario;
     uint32_t m_CutWaitFrames = 0;
     uint32_t m_CutSettleFrames = 0;
     size_t m_BodiesBeforeCuts = 0;
@@ -303,6 +304,9 @@ void ModelViewer::Startup( void )
         throw std::invalid_argument("cut-gap must be finite and nonnegative");
     CommandLineArgs::GetInteger(L"cut-expect-publications",m_ExpectedPublications);
     CommandLineArgs::GetInteger(L"physics-cut-checks",m_PhysicsCutChecks);
+    std::wstring cutScenario;
+    if (CommandLineArgs::GetString(L"physics-cut-scenario",cutScenario))
+        m_CutScenario.Configure(cutScenario,m_Cutting);
     uint32_t transformChecks = 0;
     if (CommandLineArgs::GetInteger(L"cut-transform-checks",transformChecks) && transformChecks)
     {
@@ -371,6 +375,7 @@ void ModelViewer::Startup( void )
 void ModelViewer::Cleanup( void )
 {
     m_Cutting.Clear();
+    m_CutScenario.Shutdown();
     m_Physics.Clear();
     Utility::Printf("Physics simulation cleanup: bodies=%zu\n", m_Physics.GetSimulationBodyCount());
     Utility::Printf("Physics query cleanup: registered=%zu fallback=%zu\n",m_Physics.GetColliderCount(),m_Physics.GetFallbackCount());
@@ -400,6 +405,7 @@ void ModelViewer::Update( float deltaT )
     m_Cutting.Update();
     for (const Viewer::CutResultEntry& cutResult : m_Cutting.DrainResults())
     {
+        m_CutScenario.OnResult(m_Scene, m_Physics, cutResult, m_Publications);
         if (m_BenchmarkRemaining)
         {
             if (m_BenchmarkWarmup) --m_BenchmarkWarmup;
@@ -448,6 +454,8 @@ void ModelViewer::Update( float deltaT )
 
     // 키보드와 디버그 UI는 같은 실행 플래그를 사용하며 world를 재생성하지 않는다.
     if (GameInput::IsFirstPressed(GameInput::kKey_p)) g_PhysicsRunning = !bool(g_PhysicsRunning);
+    const int scenarioRunState = m_CutScenario.WantedRunState(m_Physics, m_CutOwner, m_CutMesh);
+    if (scenarioRunState >= 0) g_PhysicsRunning = scenarioRunState != 0;
     m_Physics.SetSimulationRunning(g_PhysicsRunning);
 
     if (GameInput::IsFirstPressed(GameInput::kKey_v))
@@ -518,6 +526,8 @@ void ModelViewer::Update( float deltaT )
         waitingForSleep = true;
     }
     else m_CutWaitFrames = 0;
+    if (m_CutScenario.Active()) waitingForSleep = !m_CutScenario.AllowSubmit(m_Physics);
+    m_CutScenario.Before(m_Scene, m_Physics, m_CutOwner, m_CutMesh);
     if (!m_Cutting.IsBusy() && !waitingForSleep && (m_AutoCuts || m_BenchmarkRemaining))
     {
         MeshCutting::CutPlaneData plane;
@@ -552,6 +562,11 @@ void ModelViewer::Update( float deltaT )
             }
         }
     }
+
+    // 실패 경로 시나리오는 제출 결과 확인, 정착 검사, 종료 시 완료 확인을 순서대로 한다.
+    m_CutScenario.After(m_Scene, m_Physics, m_Cutting, m_CutOwner, m_CutMesh, m_AutoCuts);
+    m_CutScenario.Poll(m_Scene, m_Physics);
+    if (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame) m_CutScenario.RequireDone();
 
     // GPU 작업이 없었던 후보 없음·제출 거절도 최종 게시 수 검증을 거친다.
     if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_ExpectedPublications != ~0u)

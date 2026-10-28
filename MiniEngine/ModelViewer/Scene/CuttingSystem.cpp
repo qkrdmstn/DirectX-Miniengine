@@ -196,6 +196,10 @@ namespace Viewer
             m_Job->ValidateDiagnostics();
         }
 
+        // 진단 주입이 켜져 있으면 지정한 쪽 충돌을 비운다.
+        if (hasInherited && DiagEmptySide >= 0)
+            inherited[DiagEmptySide].ConvexElems.clear();
+
         const char* failure = nullptr;
         if (mesh && m_Publish && mesh->GetGeometry() == m_Job->Input && mesh->GetEditGeneration() == m_EditGeneration)
         {

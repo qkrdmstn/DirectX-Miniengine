@@ -58,6 +58,10 @@ namespace Viewer
         // 진단 로그 전용이다. 결과 소비는 DrainResults를 쓴다.
         ComponentId LastOther = InvalidComponentId;
         ObjectId LastOwner = InvalidObjectId;
+        // 진단 전용 주입이다. 지정한 쪽(0 A, 1 B)의 계승 충돌을 비워 빈 쪽 게시를 강제한다. 기본은 -1(꺼짐)이다.
+        int DiagEmptySide = -1;
+        // 진단용으로 프레임당 새 body 상한을 낮출 수 있게 예산을 노출한다.
+        CutBudget& GetBudget() { return m_Budget; }
 
     private:
         // 단일 요청과 대기열 내부 제출이 공유하는 GPU 작업 시작 경로다.
