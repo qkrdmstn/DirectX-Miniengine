@@ -26,13 +26,15 @@ namespace Viewer
     class CutTransaction
     {
     public:
-        // 부모가 지금 잘릴 수 있는 body 상태인지 검사한다. 실행 중에 깨어 있으면 false이며 이유를 돌려준다.
+        // 실행·정지·sleep 여부와 무관하게 부모 body의 존재를 검사한다.
+        // 부모 body가 없으면 false와 거절 이유를 돌려준다.
         static bool CanCut(const PhysicsSystem& physics, ObjectId owner, ComponentId mesh, const char*& reason);
         // 미게시 자원과 B의 매핑 칸을 회수한다.
         ~CutTransaction();
-        // 부모 body를 검증하고 A/B body와 B 매핑 칸을 준비한다. 실패하면 이유를 남기고 false이며 아무것도 바꾸지 않는다.
+        // 부모 body를 검증하고 A/B body와 B 매핑 칸을 준비한다.
+        // 실패하면 이유를 남기고 false이며 아무것도 바꾸지 않는다.
         bool Prepare(PhysicsSystem& physics, CutBudget& budget, const GameObject& owner, const MeshComponent& parent,
-            uint64_t jobPoseGeneration, const MiniCollision::AggregateGeom& collisionA,
+            const MiniCollision::AggregateGeom& collisionA,
             const MiniCollision::AggregateGeom& collisionB, ComponentId pieceBId);
         // 부모 body를 파괴하고 준비한 body를 올리며 매핑을 A/B 새 revision으로 갱신한다. 메시 commit 직후에 호출하며 할당하지 않는다.
         void Commit(MeshComponent& a, MeshComponent& b) noexcept;
@@ -45,7 +47,8 @@ namespace Viewer
         // 조각 하나의 body를 준비한다. 충돌이 비면 body 없는 조각으로 성공 처리한다.
         bool PrepareSide(const GameObject& owner, const MeshComponent& parent, const MiniCollision::AggregateGeom& collision,
             MiniPhysics::PreparedBody& out);
-        // 준비된 body를 올리고 매핑 칸을 채운다. body가 없으면 칸을 지운다.
+        // 준비된 body를 올리고 매핑 칸을 채운다.
+        // body가 없으면 칸을 지운다.
         void CommitSide(MeshComponent& mesh, MiniPhysics::PreparedBody& prepared, PhysicsSystem::Key key) noexcept;
 
         PhysicsSystem* m_Physics = nullptr;

@@ -8,6 +8,8 @@
 
 namespace Viewer
 {
+    bool PhysicsSystem::DiagAllowBodyMutation = false;
+
     // Scene 소유자가 살아 있는 동안 대응 참조를 해제한다.
     PhysicsSystem::~PhysicsSystem() { Clear(); }
 
@@ -207,6 +209,9 @@ namespace Viewer
     // Scene 대응과 SDK 자원을 종료 순서대로 정리한다.
     void PhysicsSystem::Clear()
     {
+        // 종료하거나 재초기화할 때 진단용 body 변경 허용을 해제한다.
+        DiagAllowBodyMutation = false;
+
         // 살아 있는 컴포넌트의 simulation 표시를 SDK world보다 먼저 해제한다.
         for (const auto& entry : m_Bodies)
         {

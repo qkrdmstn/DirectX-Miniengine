@@ -27,7 +27,7 @@ namespace Viewer
         return true;
     }
 
-    // 실행 중인 world에서 깨어 있는 body는 거절하고, sleep이거나 일시정지면 허용한다(R10).
+    // 실행·정지·sleep 여부와 무관하게 교체할 부모 body가 있는지 확인한다.
     bool CutTransaction::CanCut(const PhysicsSystem& physics, ObjectId owner, ComponentId mesh, const char*& reason)
     {
         // body 매핑이 없는 simulate 메시는 교체할 부모 body가 없으므로 거절한다.
@@ -38,12 +38,7 @@ namespace Viewer
             return false;
         }
 
-        // 일시정지 중에는 깨어 있어도 멈춘 것으로 본다.
-        if (physics.m_Running && physics.m_World.IsBodyAwake(entry->second.Handle))
-        {
-            reason = "Wait - object moving";
-            return false;
-        }
+        // 유효한 부모 body는 현재 운동 상태와 무관하게 허용한다.
         return true;
     }
 
@@ -98,7 +93,7 @@ namespace Viewer
 
     // 부모 body의 최신 상태·예산·용량을 확인하고 A/B body와 B 매핑 칸을 모두 준비한다.
     bool CutTransaction::Prepare(PhysicsSystem& physics, CutBudget& budget, const GameObject& owner, const MeshComponent& parent,
-        uint64_t jobPoseGeneration, const MiniCollision::AggregateGeom& collisionA,
+        const MiniCollision::AggregateGeom& collisionA,
         const MiniCollision::AggregateGeom& collisionB, ComponentId pieceBId)
     {
         // 부모 body가 아직 같은 geometry·편집 세대로 등록되어 있는지 확인한다.
@@ -110,20 +105,6 @@ namespace Viewer
             entry->second.EditGeneration != parent.GetEditGeneration())
         {
             m_Failure = "parent body changed";
-            return false;
-        }
-
-        // GPU 작업 동안 움직였거나 깨어났으면 부모를 유지한다.
-        // pose 세대 검사는 월드 행렬이 같은 값으로 돌아왔지만 세대만 앞서간 경우를 막는 방어이며, 일반 stale 검사가 먼저 걸리는 보통 경로에서는 거의 도달하지 않는다.
-        const char* reason = nullptr;
-        if (parent.GetPhysicsPoseGeneration() != jobPoseGeneration)
-        {
-            m_Failure = "parent pose changed during cut";
-            return false;
-        }
-        if (!CanCut(physics, owner.GetId(), parent.GetId(), reason))
-        {
-            m_Failure = reason;
             return false;
         }
 
@@ -150,6 +131,43 @@ namespace Viewer
         }
         if (!PrepareSide(owner, parent, collisionB, m_BodyB))
             return false;
+
+        // 게시 직전 부모의 COM 속도를 각 조각 COM으로 옮겨 정지 중에도 계승한다.
+        std::array<double, 3> linear;
+        std::array<double, 3> angular;
+        std::array<double, 3> parentCom;
+        if (!physics.m_World.GetBodyVelocity(entry->second.Handle, linear, angular) ||
+            !physics.m_World.GetBodyCenterOfMass(entry->second.Handle, parentCom))
+        {
+            m_Failure = "parent velocity or COM unavailable";
+            return false;
+        }
+        for (auto* body : { &m_BodyA, &m_BodyB })
+        {
+            // 빈 충돌 조각에는 속도를 설정하지 않는다.
+            if (!body->IsValid())
+                continue;
+            std::array<double, 3> com;
+            if (!physics.m_World.GetPreparedCenterOfMass(*body, com))
+            {
+                m_Failure = "piece COM unavailable";
+                return false;
+            }
+
+            // 강체 회전이 조각 COM에 만드는 선속도를 더한다.
+            const std::array<double, 3> r = { com[0] - parentCom[0], com[1] - parentCom[1], com[2] - parentCom[2] };
+            const std::array<double, 3> velocity = {
+                linear[0] + angular[1] * r[2] - angular[2] * r[1],
+                linear[1] + angular[2] * r[0] - angular[0] * r[2],
+                linear[2] + angular[0] * r[1] - angular[1] * r[0] };
+            if (!physics.m_World.SetPreparedVelocity(*body, velocity, angular))
+            {
+                m_Failure = "piece velocity prepare failed";
+                return false;
+            }
+        }
+
+        // B 매핑 칸까지 예약해 commit에서 할당하지 않는다.
         try
         {
             m_PieceBKey = PhysicsSystem::Key(owner.GetId(), pieceBId);
@@ -167,7 +185,7 @@ namespace Viewer
     // 준비된 body가 있으면 올려 매핑을 현재 revision에 맞추고, 없으면 칸을 지워 body 없는 조각으로 둔다.
     void CutTransaction::CommitSide(MeshComponent& mesh, MiniPhysics::PreparedBody& prepared, PhysicsSystem::Key key) noexcept
     {
-        // 조각은 속도 0으로 시작하며 중력·접촉으로 정착하도록 활성화한다.
+        // 준비 단계에서 계승한 속도로 시작하며 중력·접촉을 받도록 활성화한다.
         auto entry = m_Physics->m_Bodies.find(key);
         const bool hadBody = prepared.IsValid();
         const MiniPhysics::BodyHandle handle = hadBody
@@ -176,7 +194,8 @@ namespace Viewer
         // 유효한 준비 body의 Commit은 실패하지 않으므로 InvalidBody는 프로그래밍 오류다.
         assert(!hadBody || handle != MiniPhysics::InvalidBody);
 
-        // body가 없으면 simulate 표시와 매핑을 제거한다. 다음 SyncBodies가 충돌이 있으면 다시 등록한다.
+        // body가 없으면 simulate 표시와 매핑을 제거한다.
+        // 다음 SyncBodies가 충돌이 있으면 다시 등록한다.
         mesh.m_Simulating = handle != MiniPhysics::InvalidBody;
         if (!mesh.m_Simulating)
         {

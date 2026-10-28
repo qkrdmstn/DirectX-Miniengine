@@ -102,29 +102,51 @@ namespace Viewer
     // pose와 인덱스는 GPU에 유지하며 요청의 소유·revision·월드 배치만 고정한다.
     bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
     {
-        if (m_Job) { m_StatusText = "Busy - wait for the current cut"; return false; }
+        // 기존 작업이 있으면 새 요청을 만들지 않는다.
+        if (m_Job)
+        {
+            m_StatusText = "Busy - wait for the current cut";
+            return false;
+        }
+
+        // 요청한 소유자와 메시를 찾는다.
         GameObject* object = m_Scene.FindObject(owner);
         MeshComponent* mesh = object ? object->FindMeshComponent(meshId) : nullptr;
+
         // 바닥 등 절단 제외 객체의 직접 요청도 공통으로 거절한다.
         if (object && !object->IsCuttable())
-        { m_StatusText = "Cut target is not cuttable"; return false; }
-        // simulate 메시는 body가 sleep이거나 일시정지일 때만 자른다.
+        {
+            m_StatusText = "Cut target is not cuttable";
+            return false;
+        }
+
+        // simulate 메시는 교체할 body가 있으면 움직이는 동안에도 자른다.
         const char* movingReason = nullptr;
         if (mesh && mesh->IsSimulating() && !CutTransaction::CanCut(m_Physics, owner, meshId, movingReason))
-        { m_StatusText = movingReason; return false; }
+        {
+            m_StatusText = movingReason;
+            return false;
+        }
 
         // 기존 GPU 준비 및 section 지원 조건을 검사한다.
         if (!mesh || !mesh->HasPoseBounds() || !mesh->GetPosedGeometry().IsReady())
-        { m_StatusText = "Cut target is not ready"; return false; }
+        {
+            m_StatusText = "Cut target is not ready";
+            return false;
+        }
         const auto geometry = mesh->GetGeometry();
         for (size_t i = 0; i < geometry->GetSections().size(); ++i)
             if (geometry->GetMesh(i).psoFlags & PSOFlags::kHasSkin)
-            { m_StatusText = "Skeletal cutting is not enabled"; return false; }
+            {
+                m_StatusText = "Skeletal cutting is not enabled";
+                return false;
+            }
         const Math::AffineTransform world = mesh->GetWorldTransform(object->GetTransform());
         try
         {
             std::vector<Math::BoundingSphere> bounds;
-            for (size_t i=0;i<geometry->GetSections().size();++i) bounds.push_back(mesh->GetLocalSectionBounds(i));
+            for (size_t i = 0; i < geometry->GetSections().size(); ++i)
+                bounds.push_back(mesh->GetLocalSectionBounds(i));
             m_Job = MeshCutting::GpuMeshCutter::Submit(geometry, mesh->GetPosedGeometry(), world, plane, worldEpsilon, capMode,bounds,ValidateResults);
         }
         catch (const std::exception& error)
@@ -133,9 +155,13 @@ namespace Viewer
             m_StatusText = "Cut rejected - unsupported input or resource limit";
             return false;
         }
+
+        // 편집 세대와 제출 배치를 고정하되 물리 pose 변화는 허용한다.
         m_EditGeneration = mesh->GetEditGeneration();
-        m_PhysicsPoseGeneration = mesh->GetPhysicsPoseGeneration();
-        m_Owner = owner; m_Mesh = meshId; m_World = Math::Matrix4(world); m_Publish = publish;
+        m_Owner = owner;
+        m_Mesh = meshId;
+        m_World = Math::Matrix4(world);
+        m_Publish = publish;
         m_StatusText = "Cutting";
         return true;
     }
@@ -157,18 +183,29 @@ namespace Viewer
     // 요청 시점 목록만 순회해 새로 생성한 B를 같은 입력으로 다시 자르지 않는다.
     void CuttingSystem::SubmitPending()
     {
-        if (m_Job) return;
+        // 기존 작업이 끝난 뒤 요청 당시의 대상 목록을 소비한다.
+        if (m_Job)
+            return;
         while (!m_Pending.empty())
         {
-            const CutCandidate candidate = m_Pending.front(); m_Pending.pop_front();
+            const CutCandidate candidate = m_Pending.front();
+            m_Pending.pop_front();
             GameObject* object = m_Scene.FindObject(candidate.Owner);
             MeshComponent* mesh = object ? object->FindMeshComponent(candidate.Mesh) : nullptr;
             if (!mesh || mesh->GetGeometry() != candidate.Geometry || mesh->GetEditGeneration() != candidate.EditGeneration)
-            { m_StatusText = "Cancelled - cut target changed"; continue; }
+            {
+                m_StatusText = "Cancelled - cut target changed";
+                continue;
+            }
             const Math::Matrix4 world(mesh->GetWorldTransform(object->GetTransform()));
-            if (std::memcmp(&world,&candidate.World,sizeof(world)) != 0)
-            { m_StatusText = "Cancelled - cut target moved"; continue; }
-            if (Submit(candidate.Owner,candidate.Mesh,m_PendingPlane,true,1.0e-5f,m_PendingCapMode)) return;
+            // simulate 대상의 물리 이동은 허용하고 일반 편집 대상의 배치는 엄격히 비교한다.
+            if (!mesh->IsSimulating() && std::memcmp(&world,&candidate.World,sizeof(world)) != 0)
+            {
+                m_StatusText = "Cancelled - cut target moved";
+                continue;
+            }
+            if (Submit(candidate.Owner,candidate.Mesh,m_PendingPlane,true,1.0e-5f,m_PendingCapMode))
+                return;
         }
         FinishBatch();
     }
@@ -186,10 +223,16 @@ namespace Viewer
     // GPU DOP으로 충돌을 재맞춘 뒤 simulate 대상은 body 교체 transaction 검증을 통과할 때만 게시한다.
     bool CuttingSystem::Update()
     {
-        if (!m_Job || !m_Job->Poll()) return false;
-        LastGpuMs = m_Job->GpuMilliseconds; LastReadyMs = m_Job->ReadyMilliseconds;
-        LastError = m_Job->Status[0]; LastSegments = m_Job->Status[1];
-        LastUncapped = m_Job->Status[2]; LastCaps = m_Job->Status[3]; LastOther = InvalidComponentId;
+        // GPU 완료를 기다린 뒤 진단 결과를 가져온다.
+        if (!m_Job || !m_Job->Poll())
+            return false;
+        LastGpuMs = m_Job->GpuMilliseconds;
+        LastReadyMs = m_Job->ReadyMilliseconds;
+        LastError = m_Job->Status[0];
+        LastSegments = m_Job->Status[1];
+        LastUncapped = m_Job->Status[2];
+        LastCaps = m_Job->Status[3];
+        LastOther = InvalidComponentId;
         LastOwner = m_Owner;
         m_StatusText = (LastError & 1) ? "Cut area is too small - enlarge the plane" :
             LastError ? "Cut failed - original mesh kept" :
@@ -202,7 +245,7 @@ namespace Viewer
         GameObject* object = m_Scene.FindObject(m_Owner);
         MeshComponent* mesh = object ? object->FindMeshComponent(m_Mesh) : nullptr;
 
-        // 분할이 있고 입력이 그대로면 부모 충돌을 같은 로컬 평면으로 잘라 둔다. 게시 중 A의 geometry가 바뀌므로 부모 값도 지금 기록한다.
+        // 분할이 있고 입력이 그대로면 부모 충돌과 게시 전 부모 값을 기록한다.
         std::array<MiniCollision::AggregateGeom, 2> sliced;
         std::array<MiniCollision::AggregateGeom, 2> inherited;
         bool hasInherited = false;
@@ -240,14 +283,19 @@ namespace Viewer
         if (hasInherited && DiagEmptySide >= 0)
             inherited[DiagEmptySide].ConvexElems.clear();
 
+        // 입력 자격을 다시 확인하고 현재 배치에 절단 결과를 게시한다.
         const char* failure = nullptr;
         if (mesh && m_Publish && mesh->GetGeometry() == m_Job->Input && mesh->GetEditGeneration() == m_EditGeneration)
         {
             const Math::Matrix4 current(mesh->GetWorldTransform(object->GetTransform()));
-            if (std::memcmp(&current, &m_World, sizeof(current)) == 0)
+            // 물리 이동은 로컬 결과를 무효화하지 않으며 현재 배치로 게시한다.
+            if (mesh->IsSimulating() || std::memcmp(&current, &m_World, sizeof(current)) == 0)
             {
                 std::array<std::shared_ptr<const GeometryRevision>, 2> results;
-                try { results = m_Job->BuildResults(); }
+                try
+                {
+                    results = m_Job->BuildResults();
+                }
                 catch (const std::exception& error)
                 {
                     LastError = 0x100;
@@ -259,7 +307,7 @@ namespace Viewer
                     const MeshTransformMode mode = mesh->GetTransformMode();
                     const bool physical = mesh->IsSimulating();
                     CutTransaction transaction;
-                    // 준비 단계: 할당과 실패가 가능한 B 컴포넌트와 A 교체 자원을 모두 만든다. 실패하면 준비물만 해제되고 Scene은 그대로다.
+                    // 준비 단계에서 B 컴포넌트와 A 교체 자원을 모두 만든다.
                     try
                     {
                         const char* emptyReason = hasInherited ? "no convex after slice" : "parent has no collision";
@@ -271,7 +319,7 @@ namespace Viewer
 
                         // simulate 대상이면 body 준비와 검증까지 끝내고, 실패하면 아무것도 바꾸지 않는다.
                         if (preparedA && physical && !transaction.Prepare(m_Physics, m_Budget, *object, *mesh,
-                            m_PhysicsPoseGeneration, preparedA->Collision, preparedB->GetCollision(), id))
+                            preparedA->Collision, preparedB->GetCollision(), id))
                         {
                             LastError = 0x200;
                             failure = transaction.GetFailure();
@@ -299,8 +347,11 @@ namespace Viewer
                 }
             }
         }
+
+        // 게시 여부와 GPU 진단 수치를 기록한다.
         LastAppliedMs = LastOther ? std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-m_Job->Started).count() : 0;
-        if (LastError) m_StatusText = (LastError & 1) ? "Cut area is too small - enlarge the plane" : "Cut failed - original mesh kept";
+        if (LastError)
+            m_StatusText = (LastError & 1) ? "Cut area is too small - enlarge the plane" : "Cut failed - original mesh kept";
         Utility::Printf("Static cut result: %s owner=%llu mesh=%llu\n",m_StatusText,
             static_cast<unsigned long long>(m_Owner),static_cast<unsigned long long>(m_Mesh));
         Utility::Printf("Static cut applied: elapsedMs=%.3f published=%u\n",LastAppliedMs,LastOther?1u:0u);
@@ -326,8 +377,10 @@ namespace Viewer
         entry.ReadyMs = LastReadyMs;
         m_Results.push_back(entry);
 
+        // 완료한 작업을 해제하고 묶음 진행 상태를 갱신한다.
         m_Job.reset();
-        if (m_BatchActive && LastOther) ++m_BatchApplied;
+        if (m_BatchActive && LastOther)
+            ++m_BatchApplied;
         FinishBatch();
         return true;
     }

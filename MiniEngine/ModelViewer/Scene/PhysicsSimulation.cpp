@@ -161,6 +161,14 @@ namespace Viewer
         return count;
     }
 
+    // Scene ID로 대응하는 body의 월드 질량 중심을 읽는다.
+    bool PhysicsSystem::GetSimulationCenterOfMass(ObjectId owner, ComponentId mesh, std::array<double, 3>& com) const
+    {
+        // 유효 handle이 있을 때만 world에서 읽는다.
+        const auto entry = m_Bodies.find(Key(owner, mesh));
+        return entry != m_Bodies.end() && entry->second.Handle && m_World.GetBodyCenterOfMass(entry->second.Handle, com);
+    }
+
     // Scene ID로 대응하는 body의 속도를 읽는다. 등록되지 않았으면 false다.
     bool PhysicsSystem::GetSimulationVelocity(ObjectId owner, ComponentId mesh, std::array<double, 3>& linear, std::array<double, 3>& angular) const
     {
@@ -169,9 +177,53 @@ namespace Viewer
         return entry != m_Bodies.end() && entry->second.Handle && m_World.GetBodyVelocity(entry->second.Handle, linear, angular);
     }
 
+    // 정지 중인 진단 부모를 기존 준비 API로 복제해 지정 속도를 부여한다.
+    bool PhysicsSystem::SeedVelocityForDiagnostic(ObjectId owner, ComponentId meshId,
+        const std::array<double, 3>& linear, const std::array<double, 3>& angular)
+    {
+        // 진단 시나리오가 허용하지 않았으면 body를 변경하지 않는다.
+        if (!DiagAllowBodyMutation)
+            return false;
+
+        // 정지된 유효 부모만 대상으로 삼고 기존 body를 보존한 채 준비한다.
+        const auto entry = m_Bodies.find(Key(owner, meshId));
+        const auto* object = m_Scene.FindObject(owner);
+        const auto* mesh = object ? object->FindMeshComponent(meshId) : nullptr;
+        if (IsSimulationRunning() || entry == m_Bodies.end() || !entry->second.Handle || !mesh)
+            return false;
+        SceneTransform world;
+        if (!SceneTransform::TryFromAffine(mesh->GetWorldTransform(object->GetTransform()), world))
+            return false;
+
+        // 원래 충돌과 월드 배치를 사용하고 미게시 body에만 속도를 쓴다.
+        DirectX::XMFLOAT3 p;
+        DirectX::XMFLOAT3 scale;
+        DirectX::XMFLOAT4 q;
+        DirectX::XMStoreFloat3(&p, world.GetTranslation());
+        DirectX::XMStoreFloat3(&scale, world.GetScale());
+        DirectX::XMStoreFloat4(&q, world.GetRotation());
+        MiniPhysics::BodyDesc desc;
+        desc.Geometry = &mesh->GetCollision();
+        desc.Position = { p.x, p.y, p.z };
+        desc.Scale = { scale.x, scale.y, scale.z };
+        desc.Rotation = { q.x, q.y, q.z, q.w };
+        MiniPhysics::PreparedBody prepared;
+        if (!m_World.PrepareBody(desc, prepared) || !m_World.SetPreparedVelocity(prepared, linear, angular))
+            return false;
+
+        // 준비가 성공한 뒤 부모 매핑의 body만 교체한다.
+        m_World.DestroyBody(entry->second.Handle);
+        entry->second.Handle = m_World.CommitBody(std::move(prepared), true);
+        return true;
+    }
+
     // 진단용으로 현재 pose에서 위로 lift만큼 옮겨 body를 깨우고, 옮겼으면 컴포넌트 pose에도 바로 반영한다.
     bool PhysicsSystem::NudgeBodyForDiagnostic(ObjectId owner, ComponentId mesh, double lift)
     {
+        // 진단 시나리오가 허용하지 않았으면 body를 변경하지 않는다.
+        if (!DiagAllowBodyMutation)
+            return false;
+
         // 등록된 body의 현재 pose를 읽는다.
         const auto entry = m_Bodies.find(Key(owner, mesh));
         std::array<double, 3> position;

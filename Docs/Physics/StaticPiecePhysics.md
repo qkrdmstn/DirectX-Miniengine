@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a~6e·7a 완료, 7b 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6f-2 구현 완료 / 검증 일부 미완료(미커밋: 공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a 완료, 7b 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -127,15 +127,15 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 - 두 세대를 분리한다.
   - `EditGeneration`: geometry·scale·source frame·명시적 편집·teleport에서 증가. owner 편집은 EditGeneration을 올리지 않으며, Attached(비시뮬레이션) 대상은 기존 world 행렬 비교로 검출한다.
   - `PhysicsPoseGeneration`: T/R 변경에서 증가. 같은 pose를 다시 기록하면 증가하지 않는다.
-- `CuttingSystem::Update`·`SubmitPending`·`PhysicsSystem::IsCurrent`는 EditGeneration만 비교한다.
-- simulate 대상은 제출 시 (body, PhysicsPoseGeneration, sleeping)을 기록하고 게시 직전에 재확인한다. 깨어났거나 pose가 바뀌었으면 취소하고 부모를 유지한다.
+- `CuttingSystem::Update`·`SubmitPending`·`PhysicsSystem::IsCurrent`는 세대 중에서는 EditGeneration만 비교한다(IsCurrent는 geometry·존재·자격·collider·world 행렬도 검사).
+- simulate 대상은 게시 직전에 geometry·EditGeneration과 대상·부모 body의 존재를 확인한다. PhysicsPoseGeneration·sleep 재검사는 제거하며 물리 이동과 깨어남은 취소 사유가 아니다.
 - 비simulate 대상은 기존 world 행렬 엄격 비교를 유지한다.
 
 ### R7 절단 자격
 
-- sim on: simulate 메시는 sleep일 때만 자른다. body 없는 조각·비대상 메시는 기존 GPU 경로를 쓴다.
+- sim on: simulate Static 메시는 실행·sleep·pause 여부와 무관하게 자른다. 움직이는 조각도 일반 simulate 메시이므로 같은 경로로 재절단한다. body 없는 조각·비대상 메시는 기존 GPU 경로를 쓴다.
 - sim off(`-physics-sim 0` 또는 초기화 실패): 전부 기존 경로.
-- 거절 문구는 "Wait - object moving". 속도 전달은 없다.
+- 조각은 commit 시점 부모 배치를 받는다. 준비 단계에서 부모 월드 COM의 선속도 v·각속도 w를 읽고 조각 COM에 v + w × (조각 COM − 부모 COM), w를 설정한다. 실패하면 Failed 0x200과 Reason을 남기고 부모를 유지한다.
 
 ### R8 편집
 
@@ -155,7 +155,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 ### R10 시뮬레이션
 
 - 고정 1/60 s, 프레임당 최대 4 step, 남은 시간은 버린다.
-- 실행 중 사용자가 시뮬레이션을 켜고 끌 수 있다(단축키 P와 디버그 UI 토글). 끄면 step을 돌리지 않아 모든 body가 그 자리에 멈추고 속도·sleep 상태는 보존되며, 다시 켜면 이어서 진행한다. `-physics-sim 0`(world 미생성)과는 다르다. 꺼진 동안에는 깨어 있는 body도 정지 상태로 보고 절단을 허용하며, 조각은 속도 0으로 시작한다.
+- 실행 중 사용자가 시뮬레이션을 켜고 끌 수 있다(단축키 P와 디버그 UI 토글). 끄면 step을 돌리지 않아 모든 body가 그 자리에 멈추고 속도·sleep 상태는 보존되며, 다시 켜면 이어서 진행한다. `-physics-sim 0`(world 미생성)과는 다르다. 꺼진 동안에도 절단을 허용하며, 조각은 부모의 선속도·각속도를 COM 기준으로 계승해 재개 후 이어서 움직인다.
 - `-physics-sim 0/1`(기본 1)은 `-physics-query`와 독립이다. 초기화 실패 시 경고하고 sim off.
 - 레이어 Query/Static/Moving. `QueryAabb`는 Query 레이어만 본다. query handle과 simulation body handle을 분리한다. query box는 크기가 같으면 위치만 갱신하고 sleep은 생략한다.
 - 프레임 순서: 게시 → 입력 → 오래된 body 정리/`SyncBodies` → step → pose 반영 → `Scene.Update` → Finish → `SyncColliders` → 제출/요청.
@@ -174,7 +174,7 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 
 ### R13 범위 밖
 
-움직이는 조각 재절단, 속도 전달, Skeletal, ExtractToGameObject, V-HACD, UCX, 다른 Model의 내부층.
+Skeletal, ExtractToGameObject, V-HACD, UCX, 다른 Model의 내부층. 움직이는 조각 재절단과 COM 기준 속도 전달은 범위에 포함한다.
 
 ### R14 검증
 
@@ -190,7 +190,7 @@ CPU:
 
 - 시작 낙하 후 바닥 위 sleep(가장 낮은 점 ≥ 바닥 윗면 − 0.01 m).
 - sleep Cube 절단 → 결과 2개, Unreal 질량, 게시 직후 점프 없음(≤1e-5), 조각 sleep.
-- GPU 작업 중 깨어남 → 취소. sim off 절단. 빈 쪽 body 없음.
+- 공중 낙하 Cube 절단 → 두 조각과 body, commit 시점 부모 배치와 차이 ≤1e-5, 각 조각의 선속도 v + w × r와 각속도 w 오차 ≤1e-5. 작업 중 깨어남·이동도 게시 성공. sim off 절단. 빈 쪽 body 없음.
 - 기즈모 순간이동·Esc·Undo, 조각/owner 삭제, 예산 거절, 강제 실패 rollback.
 - Debug/Release D3D12 ERROR 0.
 - `TransformHistory`를 바꾸면 `SceneMathTests`를 갱신한다.
@@ -226,6 +226,8 @@ CPU:
 | 6e-1 | GPU 조각별 18-DOP 측정·검증 | `MeshCutting/Shaders/CutBoundsCS.hlsl`, `GPU/CutTypes.h`, `GPU/GpuMeshCutter.*`, `tests/GpuCutValidation.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6e-2 | CPU convex 재맞춤 함수·테스트 | `Physics/Collision/AggregateGeom.*`, `Physics/tests/HullRefitTests.cpp` | CPU 5621 checks/구성 |
 | 6e-3 | 절단 경로 연결·포함 검증·문서 | `Scene/CuttingSystem.cpp`, `GPU/GpuMeshCutter.h`, `tests/GpuCutValidation.cpp` | Debug 증분 빌드 약 7초, Release 약 135초; 런타임 아래 기록 |
+| 6f-1 완료 (`7e007898`) | PreparedBody COM 조회·속도 설정, 회전 COM 계승 CPU 검증 | `Physics/PhysicsWorld*`, `Physics/tests/PhysicsBodyTests.cpp` | 기존 CPU 검증 기록 참조 |
+| 6f-2 구현 완료 / 검증 일부 미완료(미커밋) | 움직이는 Static 절단·commit 배치·COM 속도 계승 | `Scene/CutTransaction.*`, `CuttingSystem.*`, `PhysicsSimulation.cpp`, `PhysicsSystem.h`, `tests/PhysicsSimChecks.h` | 미완료: 공중 절단 후 정착 관통·솔루션 빌드. 기존 Debug 약 7초·Release 약 135초, 런타임 실측 32~123초/회 |
 | 7a | EditTarget(Owner/Mesh) 선택 | `Scene/EditTarget.h`, `ObjectSelection.*`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7b | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `Scene/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7c | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
@@ -236,7 +238,7 @@ CPU:
 
 ## G. 이전 계획과의 관계
 
-[PhysicsIntegrationPlan.md](PhysicsIntegrationPlan.md)의 정지 kinematic 부모 우선, 움직이는 조각 절단, 속도 전달 로드맵은 이 문서로 대체한다. 움직이는 조각 재절단·속도 전달은 범위 밖(R13)으로 옮긴다. SDK 고정·조회 구현 기록은 [JoltQueryIntegration.md](JoltQueryIntegration.md)를 따른다.
+[PhysicsIntegrationPlan.md](PhysicsIntegrationPlan.md)의 정지 kinematic 부모 우선, 움직이는 조각 절단, 속도 전달 로드맵은 이 문서로 대체한다. 움직이는 조각 재절단·속도 전달은 6f-2에서 구현한다. SDK 고정·조회 구현 기록은 [JoltQueryIntegration.md](JoltQueryIntegration.md)를 따른다.
 
 ## H. 4단계 검증과 5단계 실행 단위 (2026-10-26)
 
@@ -275,7 +277,7 @@ CPU:
     ```
 
   - 측정(Debug/Release 빌드 오류 0, CPU 8 target·SceneMathTests 468·PhysicsStepClockTests 21 통과, 위 3개 실행과 신규 실행 exit 0, D3D12 ERROR/CORRUPTION 0): Cube 1개가 게시 1회로 body 2개(bodyless 0)가 되고 전 조각이 sleep, 최저점 −1.155189(Debug)/−1.155187(Release)로 바닥 −1.155179의 ±0.01 m 안이었다. `-physics-query-capacity 3` 용량 부족 실행은 Failed·원본 유지·게시 0이었다.
-- **6c 완료 (2026-10-28)**: 6b에서 미검증이던 실패·예외 경로를 런타임 시나리오로 검증한다.
+- **6c 완료 (2026-10-28, 아래 결과는 6f-2 이전 정책의 기록)**: 6b에서 미검증이던 실패·예외 경로를 런타임 시나리오로 검증한다.
   - 옵션: `-physics-cut-scenario <이름>`(기본 꺼짐). 이름은 `awake`(깨어 있는 body 제출 거절), `woken`(작업 중 깨움), `moved`(작업 중 0.001 m 이동), `fail-a`·`fail-b`(cook 실패 주입), `budget`(상한 1), `empty-a`·`empty-b`(빈 쪽 강제), `paused`(낙하 중 정지 뒤 절단), `paused-asleep`, `plain`이다. `-cut 1 -cut-angle 30 -cut-expect-publications <0|1> -physics-query-exit 1500`과 함께 Cube 단독(`-model Models/cube.glb`)으로 실행하며 `-physics-sim-checks`는 쓰지 않는다.
   - 주입 지점은 기본값에서 비활성이다: `CutTransaction::DiagFailSide`, `CuttingSystem::DiagEmptySide`, `CutBudget::SetLimit`. 시나리오가 끝나거나 Cleanup되면 `PhysicsCutScenario`가 되돌리며, 선택한 시나리오가 끝나지 않은 채 종료하면 오류다. 진단 접근자는 `PhysicsSystem::GetReservedBodyCount`·`GetSimulationVelocity`·`NudgeBodyForDiagnostic`이다.
   - 결과(Debug/Release 모두 exit 0, D3D12 ERROR/CORRUPTION 0): `awake`는 "Wait - object moving"으로 제출 거절·작업/게시 없음·부모 불변. `woken`은 Failed 0x200 "Wait - object moving". `fail-a`·`fail-b`·`budget`은 Failed 0x200과 이유, 부모 메시·body 수·예약 수(시작값) 복귀. `empty-a/b`는 빈 쪽이 bodyless이고 다른 쪽만 body를 가지며 SyncBodies가 재등록하지 않는다. `paused`·`paused-asleep`은 정지 중 절단이 허용되고 조각 속도는 0이며 재개 후 정착한다. 게시 프레임의 조각 월드 변환은 부모와 차이 0(허용 1e-5)이다. 정착은 모든 조각이 sleep하고 각 조각이 바닥−0.01 m 이상이며 적어도 하나가 바닥 ±0.01 m 안이다(30° 절단에서 위쪽 조각은 아래쪽 조각 위에 얹힌다, 예: 위쪽 −0.6676, 아래쪽 −1.155189, 바닥 −1.155179).
@@ -310,6 +312,38 @@ CPU:
   - 런타임(Debug/Release 각각 9회, `-debug 1 -collision-log 1 -cut-validate 1`): 섹션 H sim-off Cube 4회, Bunny 위 두 높이, 6b `-physics-cut-checks 1`, 6c `plain`·`empty-a`·`fail-a`·`paused`, 같은 Cube A 2회 재절단(`-cut 2 -physics-sim 0 -cut-repeat-plane 1 -cut-step-y .25 -cut-gap 0 -cut-expect-publications 2 -physics-query-exit 12`) 모두 exit 0, D3D12 ERROR 0·CORRUPTION 0이다. 6c는 기존 명령처럼 종료 프레임 1500, 6b는 1200을 사용했다.
   - 6b 조각 최저점 Debug −1.155189/Release −1.155187, 바닥 −1.155179이며 두 조각 sleep을 확인했다. `empty-a`는 body 1·bodyless 1, `fail-a`는 Failed 0x200·원본/예약 복원, `paused`는 게시 위치 오차 0·재개 후 정착을 통과했다. 성공한 body 준비는 `BuildShapeAndMass`의 유한 양수 질량 검사를 통과한다(질량 수치를 별도로 읽지는 않음).
   - 환경: NVIDIA GeForce MX450, 드라이버 DLL 32.0.15.9186. 실행당 약 31~73초. `%TEMP%/step2a/Dbg.cs`를 PowerShell `Add-Type`으로 프로세스 안에서 컴파일해 OutputDebugString을 수집했다. 빌드/실행 로그는 `%TEMP%/step6e3-*`, 재현 하네스는 `%TEMP%/step6e3-runtime.ps1`·`step6e3-small.ps1`이다. 기존 종료 시 LightGrid live-resource WARNING은 남아 있다.
+- **6f-1 완료 (`7e007898`)**: PImpl 경계 안에서 준비 body의 월드 COM 조회와 선속도·각속도 설정을 제공한다. 회전하는 부모의 조각 COM 속도 계승은 기존 CPU 검증을 따른다.
+- **6f-2 구현 완료 / 검증 일부 미완료 (미커밋, 2026-10-28)**: awake·woken·moved도 게시하며 pose/sleep 재검사를 제거했다. geometry·EditGeneration·삭제 검사는 유지하고 `PhysicsSystem::IsCurrent`는 변경하지 않았다.
+  - 배치: `GpuMeshCutter::Submit`은 평면을 컴포넌트 로컬로 바꾸고 `CutJob::BuildResults`는 로컬 출력 geometry를 만든다. `CuttingSystem::Update`의 기존 현재 Transform 계승과 `CutTransaction::PrepareSide`의 현재 월드 TRS를 그대로 사용하며, simulate 대상의 제출 당시 월드 행렬 비교만 해제했다. Prepare부터 commit 사이에는 물리 step이 없다.
+  - 속도: Prepare에서 부모 v·w·월드 COM과 각 준비 body COM을 읽어 v + w × r, w를 설정한다. 조회·설정 실패는 기존 Failed 0x200·Reason과 RAII 회수 경로로 부모를 보존한다. pause도 동일하며 commit은 계속 할당·실패가 없다.
+  - 실행: 작업 디렉터리 `MiniEngine/ModelViewer`에서 `../Build/x64/<Debug|Release>/Output/ModelViewer/ModelViewer.exe -debug 1 -model Models/cube.glb -physics-cut-scenario <이름> -cut 1 -cut-angle 30 -cut-validate 1 -cut-expect-publications 1 -physics-query-exit 400`을 사용한다. fail-a/fail-b/budget은 기대 게시 0이며 drop-no-cut은 `-cut 0 -cut-expect-publications 0`이다. `midair`·`midair-settle`은 큐브를 3 m 올려 낙하시키고 GPU 제출 뒤 fixed step 한 번을 보장해 실제 이동 후 공중 commit·두 body·배치와 COM 속도 오차 ≤1e-5를 검사한다.
+  - 검증 결과: Debug 전체 15종은 총 2839 checks·전부 exit 0이다. Release 신규 4종은 아래와 같으며 `midair-settle`의 실패를 유지한다. 모든 실행에서 D3D12 ERROR/CORRUPTION은 0이고 모든 게시의 jumpA/B는 0이다. 검사 수는 매 프레임 상태 기록도 포함해 실행마다 달라질 수 있다. MiniEngine/Physics와 Geometry는 변경하지 않아 해당 CPU 재실행 대상이 아니다.
+
+    | 시나리오 | Debug checks | Release checks |
+    | --- | ---: | ---: |
+    | midair | 58 | 58 |
+    | midair-settle | 82 | 77 (관통 실패 시점) |
+    | drop-no-cut | 19 | 19 |
+    | spin-paused | 46 | 46 |
+    | awake | 52 | 미실행 |
+    | woken | 295 | 미실행 |
+    | moved | 295 | 미실행 |
+    | fail-a | 260 | 미실행 |
+    | fail-b | 260 | 미실행 |
+    | budget | 260 | 미실행 |
+    | empty-a | 278 | 미실행 |
+    | empty-b | 278 | 미실행 |
+    | paused | 66 | 미실행 |
+    | paused-asleep | 298 | 미실행 |
+    | plain | 292 | 미실행 |
+
+  - 독립 리뷰 보완: `midair`는 commit 전용으로 유지한다. `midair-settle`은 같은 3 m 공중 절단 뒤 `Poll`에서 모든 조각 sleep·최저점 ≥ 바닥−0.01 m·적어도 한 조각 바닥 ±0.01 m를 검사한다. 수치를 모든 조각에 대해 출력한 뒤 관통 한계를 검사하며 실패를 통과 처리하지 않는다. `drop-no-cut`은 같은 3 m 상승 뒤 절단 없이 같은 정착 검사를 수행한다.
+  - 회전 검사: `spin-paused`는 일시정지 중 부모에 v=(1,−2,0.5) m/s, w=(0,0,1) rad/s를 주입하고 기존 `CheckPublished`를 실행한다. 각 조각의 |w×r| > 0.01 m/s를 먼저 확인한 뒤 선속도 v+w×r·각속도 w를 1e−5 오차로 검사한다. Debug/Release 모두 두 조각의 |w×r|=0.559513 m/s, jumpA/B=0이며 46 checks·exit 0이다.
+  - 공중 정착 비교: Debug `midair-settle`은 최저점 −0.943406 / −1.155896 m·두 조각 sleep·82 checks·exit 0이다. Debug/Release 무절단 3 m 낙하는 모두 최저점 −1.155180 m·sleep·19 checks·exit 0이다. 바닥 윗면은 두 구성 모두 −1.155179 m다.
+  - 미해결: Release `midair-settle`은 77번째 check에서 관통 한계 실패(exit 3765269347)다. 두 조각 모두 sleep이며 최저점 −1.172250 / −1.155216 m, 바닥 −1.155179 m로 첫 조각은 0.017071 m 관통한다. 같은 구성의 `drop-no-cut`은 최저점 −1.155180 m·sleep·19 checks·exit 0이다. 원본 낙하에서는 재현되지 않았지만 절단 후 shape·접촉과 속도 상속 중 원인을 분리하지 못했으므로 6f-2 속도 상속의 결함으로 단정하지 않고 물리 코드는 수정하지 않았다. 허용치는 완화하지 않았다.
+  - 빌드 미완료: 지정된 `.slnx` 명령은 Debug/Release 모두 대기 후 재시도해도 `MiniCollision.lastbuildstate` 쓰기 거부(MSB3491→MSB3073)로 실패했다. 기존 물리 라이브러리를 사용한 `ModelViewer.vcxproj /m /p:Configuration=<Debug|Release> /p:Platform=x64 /p:BuildProjectReferences=false` 빌드는 각각 6.1초/15.5초·오류 0으로 통과했다. Debug exe 링크 잠금은 기존 실행 종료 후 재시도해 해결했다. 기존 LightGrid 종료 경고는 남아 있다.
+  - 환경·근거: NVIDIA GeForce MX450, 드라이버 DLL 32.0.15.9186. 이번 실행은 회당 약 27~37초였다. 리뷰 보완 로그는 `%TEMP%/step6f2-review-{Debug,Release}-<시나리오>.log`, 하네스는 `%TEMP%/step6f2-review-runtime.ps1`이다. ModelViewer.cpp는 새 이름 등록이 필요 없어 수정하지 않았다. README·mini 파일 등 금지 파일도 직접 편집하지 않았고 stage·commit하지 않았다.
+
 - **7a 완료 (2026-10-28)**: 편집 대상 선택만 구현했다(적용·History는 7b·7c).
   - `Scene/EditTarget.h`: `EditTarget{Kind, Object, Mesh}`와 `FromPick`(월드 독립이면 Mesh, 아니면 Owner)·동등 비교(GPU 무관, `SceneMathTests`에서 검사). `ObjectSelection`의 `ResolveEditTarget`·`IsEditTargetValid`·`TryGetEditTargetTransform`이 Scene과 연결한다. `GameObject::IsEditable`에서 simulate 소유 검사를 제거해 바닥 등 명시적 잠금만 남겼고, simulate 조각 pick 제외를 풀었다.
   - `TransformGizmo::Update/Render`는 `EditTarget`을 받아 대상의 월드 TRS 위치·축에 기즈모를 그린다. Mesh 대상의 핸들 누름과 `Ctrl+Z`는 편집 없이 거절하고 안내를 띄운다(`GetNotice`). ModelViewer는 `m_Target`을 쓰며 `IsEditTargetValid`가 거짓이면 매 프레임 선택을 해제한다.
@@ -318,7 +352,7 @@ CPU:
 
 프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
 
-임시 제한: simulate 조각은 pick에서 Mesh 대상이 되어 기즈모가 보이지만 드래그와 Undo는 "Piece editing not ready"로 거절한다(7b·7c에서 해제). Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6b부터 body가 sleep이거나 pause일 때 허용하고 깨어 있으면 거절한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤 해제). 7b~7d는 구현하지 않았다.
+임시 제한: simulate 조각은 pick에서 Mesh 대상이 되어 기즈모가 보이지만 드래그와 Undo는 "Piece editing not ready"로 거절한다(7b·7c에서 해제). Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤 해제). 7b~7d는 구현하지 않았다.
 
 검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
 

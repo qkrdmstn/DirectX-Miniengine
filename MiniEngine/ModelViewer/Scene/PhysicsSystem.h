@@ -15,7 +15,7 @@ namespace Viewer
         ComponentId Mesh;
         std::shared_ptr<const GeometryRevision> Geometry;
         uint64_t EditGeneration;
-        uint64_t PhysicsPoseGeneration;   // 6단계에서 simulate 대상 재확인에 쓴다. 지금은 비교하지 않는다.
+        uint64_t PhysicsPoseGeneration;   // 물리 pose 기록용이며 절단 자격이나 stale 판정에는 쓰지 않는다.
         Math::Matrix4 World;
     };
 
@@ -61,10 +61,18 @@ namespace Viewer
         bool GetFloorBox(std::array<double, 3>& center, std::array<double, 3>& half) const;
         // 진단: 조회·simulation·준비 중 body의 용량 예약 합계를 읽는다.
         size_t GetReservedBodyCount() const { return m_World.GetReservedCount(); }
-        // 진단: 등록된 메시 body의 선속도와 각속도를 읽는다.
+        // 등록된 메시 body의 월드 질량 중심을 읽는다.
+        bool GetSimulationCenterOfMass(ObjectId owner, ComponentId mesh, std::array<double, 3>& com) const;
+        // 등록된 메시 body의 선속도와 각속도를 읽는다.
         bool GetSimulationVelocity(ObjectId owner, ComponentId mesh, std::array<double, 3>& linear, std::array<double, 3>& angular) const;
-        // 진단: body를 현재 pose에서 lift(m)만 위로 순간이동해 깨운다. lift가 0이면 깨우기만 한다.
+        // 진단용 body 변경 허용 주입점이며 기본값은 꺼짐이다.
+        static bool DiagAllowBodyMutation;
+        // 진단이 허용되면 body를 lift(m)만 위로 순간이동해 깨운다.
+        // lift가 0이면 깨우기만 하며 진단이 꺼져 있으면 false다.
         bool NudgeBodyForDiagnostic(ObjectId owner, ComponentId mesh, double lift);
+        // 정지 중인 진단 부모를 같은 shape와 pose의 지정 속도 body로 교체한다.
+        // 진단이 꺼져 있으면 아무것도 바꾸지 않고 false를 반환한다.
+        bool SeedVelocityForDiagnostic(ObjectId owner, ComponentId mesh, const std::array<double, 3>& linear, const std::array<double, 3>& angular);
         // 시작 배치 이후 별도 표시용 객체와 고정 Box 바닥을 함께 만든다.
         bool CreateFloor(std::shared_ptr<const Model> model);
         // 준비된 Static 메시 경계를 등록·갱신하고 삭제된 body를 정리한다.
