@@ -25,7 +25,7 @@ namespace Viewer
         void SetNotEditable(bool value) { m_NotEditable = value; }
         // 절단 허용 여부를 읽는다. simulation body의 임시 제한은 별도로 검사한다.
         bool IsCuttable() const { return !m_NotCuttable; }
-        // body 편집 연결 전까지 simulate 메시의 owner 기즈모와 Undo도 차단한다.
+        // 바닥 등 명시적 편집 잠금이 없는지 읽는다. simulate 조각의 편집은 Mesh 대상 경로가 맡는다.
         bool IsEditable() const;
 
         // owner 안의 MeshComponent를 ID로 검색한다.

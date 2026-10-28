@@ -88,6 +88,7 @@
     <ClInclude Include="Scene\PhysicsSystem.h" />
     <ClInclude Include="Scene\PhysicsStepClock.h" />
     <ClInclude Include="Scene\tests\PhysicsSimChecks.h" />
+    <ClInclude Include="Scene\tests\EditTargetChecks.h" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
     <ClInclude Include="Scene\ComponentId.h" />
     <ClInclude Include="Scene\MeshComponent.h" />
@@ -102,6 +103,7 @@
     <ClInclude Include="Scene\TransformHistory.h" />
     <ClInclude Include="Scene\CutPlaneSystem.h" />
     <ClInclude Include="Scene\PickHit.h" />
+    <ClInclude Include="Scene\EditTarget.h" />
     <ClInclude Include="Scene\CutPlaneRenderer.h" />
   </ItemGroup>
   <ItemGroup>

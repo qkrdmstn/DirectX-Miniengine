@@ -43,6 +43,7 @@
 #include "Scene/tests/MeshComponentChecks.h"
 #include "Scene/tests/PhysicsQueryChecks.h"
 #include "Scene/tests/PhysicsSimChecks.h"
+#include "Scene/tests/EditTargetChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -67,7 +68,7 @@ public:
     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
     virtual bool IsDone() override
     {
-        return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining)
+        return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished())
             || (!m_EscapeConsumed && IGameApp::IsDone());
     }
 
@@ -105,7 +106,8 @@ private:
     Math::Vector3 m_LastCutNormal{Math::kYUnitVector};
     bool m_CaptureComplete = false;
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
-    Viewer::ObjectId m_SelectedObject = Viewer::InvalidObjectId;
+    Viewer::EditTarget m_Target;
+    Viewer::EditTargetChecks m_EditTargetChecks;
     Viewer::TransformGizmo m_Gizmo;
     Viewer::CollisionDebugDraw m_CollisionDraw;
     bool m_EscapeConsumed = false;
@@ -203,6 +205,13 @@ void LoadIBLTextures()
 void ModelViewer::Startup( void )
 {
     uint32_t physicsQueryChecks = 0;
+
+    // 편집 대상 pick 진단 옵션을 읽는다.
+    uint32_t editTargetChecks = 0;
+    CommandLineArgs::GetInteger(L"edit-target-checks",editTargetChecks);
+    m_EditTargetChecks.Enable(editTargetChecks != 0);
+
+    // 물리 조회·시뮬레이션 옵션을 읽는다.
     CommandLineArgs::GetInteger(L"physics-query",m_UsePhysicsQuery);
     CommandLineArgs::GetInteger(L"physics-sim",m_UsePhysicsSim);
     CommandLineArgs::GetInteger(L"physics-sim-checks",m_PhysicsSimChecks);
@@ -482,9 +491,14 @@ void ModelViewer::Update( float deltaT )
     m_Camera.SetAspectRatio(float(g_SceneColorBuffer.GetHeight()) / float(g_SceneColorBuffer.GetWidth()));
     m_Camera.Update();
     m_CutPlanes.PruneStaleObjects();
+
+    // 삭제되거나 모드가 바뀐 편집 대상은 선택에서 해제한다.
+    if (!m_Target.IsNone() && !Viewer::IsEditTargetValid(m_Scene, m_Target))
+        m_Target = Viewer::EditTarget();
+
     m_EscapeConsumed = m_Gizmo.IsDragging() && GameInput::IsFirstPressed(GameInput::kKey_escape);
-    const bool gizmoInput = m_Gizmo.Update(m_Scene, m_SelectedObject, m_Camera,
-        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()), m_CutPlanes.Find(m_SelectedObject) ? 5u : 7u);
+    const bool gizmoInput = m_Gizmo.Update(m_Scene, m_Target, m_Camera,
+        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()), m_CutPlanes.Find(m_Target.Object) ? 5u : 7u);
     // Hold the right button to navigate; the free cursor selects objects with the left button.
     if (!gizmoInput && !m_Gizmo.IsDragging() && GameInput::IsPressed(GameInput::kMouse1))
         m_CameraController->Update(deltaT);
@@ -495,7 +509,7 @@ void ModelViewer::Update( float deltaT )
     {
         const auto ray = Viewer::MakePickingRay(m_Camera, mouseX, mouseY);
         const Viewer::PickHit hit = Viewer::NearestPickHit(Viewer::PickObject(m_Scene, ray), m_CutPlanes.Pick(ray));
-        m_SelectedObject = hit.Id;
+        m_Target = Viewer::ResolveEditTarget(m_Scene, hit);
         if (hit.MeshId) { m_CutOwner = hit.Id; m_CutMesh = hit.MeshId; }
         if (m_CutPlanes.Find(hit.Id)) m_ActiveCutPlane = hit.Id;
     }
@@ -580,6 +594,12 @@ void ModelViewer::Update( float deltaT )
     m_CutScenario.After(m_Scene, m_Physics, m_Cutting, m_CutOwner, m_CutMesh, m_AutoCuts);
     m_CutScenario.Poll(m_Scene, m_Physics);
     if (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame) m_CutScenario.RequireDone();
+
+    // GPU 절단이 모두 끝난 뒤 편집 대상 pick 규칙을 한 번 검사한다.
+    if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining)
+        m_EditTargetChecks.Poll(m_Scene);
+    if (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_EditTargetChecks.Finished())
+        throw std::runtime_error("Edit target checks did not finish");
 
     // GPU 작업이 없었던 후보 없음·제출 거절도 최종 게시 수 검증을 거친다.
     if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_ExpectedPublications != ~0u)
@@ -710,7 +730,7 @@ void ModelViewer::RenderScene( void )
             }
 
             sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
-            const unsigned planeCount = Viewer::RenderCutPlanes(gfxContext, m_CutPlanes, m_SelectedObject,
+            const unsigned planeCount = Viewer::RenderCutPlanes(gfxContext, m_CutPlanes, m_Target.Object,
                 m_Camera, viewport, scissor);
             if (m_ViewDiagnosticPending)
                 Utility::Printf("ModelViewer diagnostic: plane draw queued, planes=%u, lines=%u\n", planeCount, planeCount * 22);
@@ -766,7 +786,7 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     if (g_ShowCollision)
         m_CollisionDraw.Draw(context, m_Scene, m_Physics, m_Camera,
             float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
-    m_Gizmo.Render(context, m_Scene, m_SelectedObject, m_Camera,
+    m_Gizmo.Render(context, m_Scene, m_Target, m_Camera,
         float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
     TextContext text(context);
     text.Begin();
@@ -789,11 +809,16 @@ void ModelViewer::RenderUI(GraphicsContext& context)
         m_RenderMode == Renderer::RenderMode::Solid ? "Solid" :
         (m_RenderMode == Renderer::RenderMode::Wireframe ? "Wireframe" : "Vertices"));
     text.DrawString("Ctrl+Z: undo last completed drag (128 commands)\n");
-    const Viewer::GameObject* selected = m_Scene.FindObject(m_SelectedObject);
-    if (selected)
+    const Viewer::GameObject* selected = m_Scene.FindObject(m_Target.Object);
+    if (selected && m_Target.IsMesh())
+        text.DrawFormattedString("Selected: %s (ID %llu) piece %llu\n", selected->GetName().c_str(),
+            static_cast<unsigned long long>(selected->GetId()), static_cast<unsigned long long>(m_Target.Mesh));
+    else if (selected)
         text.DrawFormattedString("Selected: %s (ID %llu)\n", selected->GetName().c_str(),
             static_cast<unsigned long long>(selected->GetId()));
     else
         text.DrawString("Selected: none\n");
+    if (const char* notice = m_Gizmo.GetNotice())
+        text.DrawFormattedString("%s\n", notice);
     text.End();
 }

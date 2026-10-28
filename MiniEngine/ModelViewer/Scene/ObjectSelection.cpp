@@ -18,7 +18,7 @@ namespace Viewer
         PickHit result;
         for (const auto& object : scene.GetObjects())
         {
-            // 바닥과 임시 편집 제한 대상은 owner 기즈모 선택에서 제외한다.
+            // 바닥처럼 편집 잠금된 객체는 선택에서 제외한다.
             if (!object->IsEditable()) continue;
 
             // 준비된 메시 경계를 기존 ray와 대조한다.
@@ -41,5 +41,54 @@ namespace Viewer
             }
         }
         return result;
+    }
+
+    // pick한 컴포넌트가 월드 독립이면 Mesh, 아니면 Owner 대상으로 만든다.
+    EditTarget ResolveEditTarget(const Scene& scene, const PickHit& hit)
+    {
+        // 컴포넌트를 찾아 월드 독립 여부를 읽는다.
+        const GameObject* object = scene.FindObject(hit.Id);
+        const MeshComponent* mesh = object ? object->FindMeshComponent(hit.MeshId) : nullptr;
+        const bool worldIndependent = mesh && mesh->GetTransformMode() == MeshTransformMode::WorldIndependent;
+
+        // 순수 규칙으로 대상을 정한다.
+        return EditTarget::FromPick(hit, worldIndependent);
+    }
+
+    // 삭제되거나 모드가 바뀐 대상은 무효로 판정한다.
+    bool IsEditTargetValid(const Scene& scene, const EditTarget& target)
+    {
+        // owner가 살아 있어야 한다.
+        const GameObject* object = scene.FindObject(target.Object);
+        if (!object)
+            return false;
+
+        // owner 대상은 owner만 있으면 된다.
+        if (target.Kind == EditTargetKind::Owner)
+            return true;
+
+        // Mesh 대상은 컴포넌트가 남아 있고 월드 독립이어야 한다.
+        const MeshComponent* mesh = object->FindMeshComponent(target.Mesh);
+        return mesh && mesh->GetTransformMode() == MeshTransformMode::WorldIndependent;
+    }
+
+    // 대상 종류에 맞는 월드 TRS를 구한다.
+    bool TryGetEditTargetTransform(const Scene& scene, const EditTarget& target, SceneTransform& out)
+    {
+        // 무효 대상은 거절한다.
+        if (!IsEditTargetValid(scene, target))
+            return false;
+
+        // owner 대상은 편집 TRS를 그대로 쓴다.
+        const GameObject* object = scene.FindObject(target.Object);
+        if (target.Kind == EditTargetKind::Owner)
+        {
+            out = object->GetTransform();
+            return true;
+        }
+
+        // Mesh 대상은 컴포넌트 월드 행렬을 TRS로 분해한다.
+        const MeshComponent* mesh = object->FindMeshComponent(target.Mesh);
+        return SceneTransform::TryFromAffine(mesh->GetWorldTransform(object->GetTransform()), out);
     }
 }

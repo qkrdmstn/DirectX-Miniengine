@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Scene.h"
+#include "EditTarget.h"
 
 namespace Viewer
 {
@@ -14,4 +15,10 @@ namespace Viewer
     PickingRay MakePickingRay(const Math::Camera& camera, float x, float y);
     // 모델 구의 교점을 월드 거리와 함께 반환한다.
     PickHit PickObject(const Scene& scene, const PickingRay& ray);
+    // pick 결과를 R8 규칙(월드 독립 컴포넌트는 Mesh, 그 외는 Owner)의 편집 대상으로 바꾼다.
+    EditTarget ResolveEditTarget(const Scene& scene, const PickHit& hit);
+    // 대상 객체와 컴포넌트가 살아 있고 종류와 맞는지 확인한다.
+    bool IsEditTargetValid(const Scene& scene, const EditTarget& target);
+    // 기즈모와 표시가 쓰는 대상의 월드 TRS를 구한다. owner는 편집 TRS, Mesh는 컴포넌트 월드 TRS다.
+    bool TryGetEditTargetTransform(const Scene& scene, const EditTarget& target, SceneTransform& out);
 }

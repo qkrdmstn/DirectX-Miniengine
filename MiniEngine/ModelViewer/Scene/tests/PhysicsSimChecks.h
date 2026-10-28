@@ -145,7 +145,16 @@ namespace Viewer
                 if (object->IsCuttable() && !mesh->GetCollision().ConvexElems.empty()) ++eligible;
                 if (!mesh->IsSimulating()) continue;
                 CheckPhysicsSim(mesh->GetTransformMode() == MeshTransformMode::WorldIndependent, "Physics mesh is world independent");
-                CheckPhysicsSim(!object->IsEditable(), "Simulating owner editing is temporarily blocked");
+                // owner를 옮겨도 월드 독립 조각의 월드 위치는 변하지 않아야 한다.
+                CheckPhysicsSim(object->IsEditable(), "Simulating owner stays editable");
+                const SceneTransform ownerBefore = object->GetTransform();
+                const Math::Vector3 worldBefore = mesh->GetWorldTransform(ownerBefore).GetTranslation();
+                SceneTransform ownerMoved = ownerBefore;
+                ownerMoved.SetTranslation(ownerBefore.GetTranslation() + Math::Vector3(1.0f, 2.0f, 3.0f));
+                CheckPhysicsSim(object->SetTransform(ownerMoved), "Owner edit is accepted");
+                CheckPhysicsSim(float(Math::Length(mesh->GetWorldTransform(object->GetTransform()).GetTranslation() - worldBefore)) < 1e-6f,
+                    "Owner edit does not move world independent pieces");
+                CheckPhysicsSim(object->SetTransform(ownerBefore), "Owner edit is restored");
                 snapshots.push_back({ object->GetId(), mesh->GetId(), mesh->GetEditGeneration(),
                     mesh->GetPhysicsPoseGeneration(), float(mesh->GetTransform().GetTranslation().GetY()) });
                 if (!probeModel) probeModel = mesh->GetGeometry()->GetSource();

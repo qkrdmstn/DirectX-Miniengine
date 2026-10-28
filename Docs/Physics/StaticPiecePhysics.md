@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a~6d 완료(물리 절단 transaction·실패 경로 검증·충돌 convex 디버그 표시), 7단계 미구현 (2026-10-28)
+상태: 진행 중 — 6a~6d·7a 완료, 7b 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -285,9 +285,15 @@ CPU:
   - 분량: 제품 코드가 약 450줄(테스트 제외)로 단계당 약 300줄 기준을 넘었다. `-cut 40` 연속 절단 스트레스 실행은 그리기를 꺼도 게시 40회에 도달하지 못해 멈추거나 예외로 끝난다(기존 현상, 원인 미조사. 8단계에서 조사한다).
   - 한계: H 키 입력과 UI 토글은 같은 `BoolVar`를 읽고 쓰는 구조로 보장하며 자동 입력으로 실제 키는 검증하지 못했다(창 포커스 불가). 화면 캡처는 하지 않았다.
 
+- **7a 완료 (2026-10-28)**: 편집 대상 선택만 구현했다(적용·History는 7b·7c).
+  - `Scene/EditTarget.h`: `EditTarget{Kind, Object, Mesh}`와 `FromPick`(월드 독립이면 Mesh, 아니면 Owner)·동등 비교(GPU 무관, `SceneMathTests`에서 검사). `ObjectSelection`의 `ResolveEditTarget`·`IsEditTargetValid`·`TryGetEditTargetTransform`이 Scene과 연결한다. `GameObject::IsEditable`에서 simulate 소유 검사를 제거해 바닥 등 명시적 잠금만 남겼고, simulate 조각 pick 제외를 풀었다.
+  - `TransformGizmo::Update/Render`는 `EditTarget`을 받아 대상의 월드 TRS 위치·축에 기즈모를 그린다. Mesh 대상의 핸들 누름과 `Ctrl+Z`는 편집 없이 거절하고 안내를 띄운다(`GetNotice`). ModelViewer는 `m_Target`을 쓰며 `IsEditTargetValid`가 거짓이면 매 프레임 선택을 해제한다.
+  - 진단 `-edit-target-checks 1`(`Scene/tests/EditTargetChecks.h`): 절단이 끝나고 모든 pose 경계가 준비되면 메시마다 26방향 ray로 pick해 종류(WorldIndependent→Mesh, Attached→Owner)·기즈모 위치·조각별 고유 Mesh 대상·바닥 미선택·사라진 대상 무효를 검사한다.
+  - 검증(Debug/Release 빌드 오류 0, SceneMathTests 476·PhysicsStepClockTests 21·CollisionDebugTests 24 통과, D3D12 ERROR/CORRUPTION 0, 모두 exit 0): 혼합 장면 Mesh 2·Owner 1·바닥 1, Cube 절단 뒤 서로 다른 Mesh 2·바닥 1, `-physics-sim 0` 기본 장면과 sim-off 절단 Owner 3. 섹션 H 3개 실행과 6b·6c(`awake`·`fail-a`·`paused`·`empty-a`) 실행도 그대로 통과했다. 마우스 드래그·Ctrl+Z 거절과 화면 안내는 자동 입력으로 확인하지 못했다.
+
 프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
 
-임시 제한: simulate 메시가 포함된 owner는 기즈모·Undo를 거절하며 pick에서 제외한다(7단계에서 해제). simulate 메시 절단은 6b부터 body가 sleep이거나 pause일 때 허용하고 깨어 있으면 거절한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤 해제). 7단계는 구현하지 않았다.
+임시 제한: simulate 조각은 pick에서 Mesh 대상이 되어 기즈모가 보이지만 드래그와 Undo는 "Piece editing not ready"로 거절한다(7b·7c에서 해제). Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6b부터 body가 sleep이거나 pause일 때 허용하고 깨어 있으면 거절한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤 해제). 7b~7d는 구현하지 않았다.
 
 검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
 

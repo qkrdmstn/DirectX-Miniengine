@@ -6,6 +6,7 @@
 #include "../GizmoMath.h"
 #include "../TransformHistory.h"
 #include "../PickHit.h"
+#include "../EditTarget.h"
 #include "ModelPose.h"
 #include "TransformBounds.h"
 #include <cstdio>
@@ -221,6 +222,29 @@ namespace
         Check(NearestPickHit(model, {2, 5}).Id == 1, "equal distance stable");
     }
 
+    // pick 결과가 R8 규칙으로 Owner 또는 Mesh 대상이 되는지와 대상 동등 비교를 검사한다.
+    void EditTargetTests()
+    {
+        // 월드 독립 컴포넌트는 Mesh 대상이다.
+        const EditTarget mesh = EditTarget::FromPick({ 7, 1.0f, 3 }, true);
+        Check(mesh.IsMesh() && mesh.Object == 7 && mesh.Mesh == 3, "world independent pick is a Mesh target");
+
+        // Attached 컴포넌트는 컴포넌트 ID를 버리고 Owner 대상이 된다.
+        const EditTarget owner = EditTarget::FromPick({ 7, 1.0f, 3 }, false);
+        Check(!owner.IsMesh() && owner.Kind == EditTargetKind::Owner && owner.Object == 7 && owner.Mesh == InvalidComponentId,
+            "attached pick is an Owner target");
+
+        // 컴포넌트가 없는 객체(절단 평면)와 빈 pick을 처리한다.
+        Check(EditTarget::FromPick({ 9, 1.0f, InvalidComponentId }, true) == EditTarget::MakeOwner(9), "model-less pick is Owner");
+        Check(EditTarget::FromPick(PickHit(), true).IsNone(), "empty pick is no target");
+        Check(EditTarget().IsNone() && !EditTarget().IsMesh(), "default target is none");
+
+        // 같은 owner의 다른 조각과 owner 전체는 서로 다른 대상이다.
+        Check(EditTarget::MakeMesh(7, 3) == mesh, "same mesh target compares equal");
+        Check(EditTarget::MakeMesh(7, 4) != mesh, "different piece is a different target");
+        Check(EditTarget::MakeOwner(7) != mesh, "owner differs from its piece");
+    }
+
     // 런타임 TRS·크기·경계·법선 도우미의 비균일 변환 계약을 검사한다.
     void NonuniformTests()
     {
@@ -377,6 +401,7 @@ int main()
         NonuniformTests();
         BasisTests();
         PlaneEditingTests();
+        EditTargetTests();
         WorldTransformTests();
         std::printf("SceneMathTests: %d checks passed\n", Checks);
         return 0;

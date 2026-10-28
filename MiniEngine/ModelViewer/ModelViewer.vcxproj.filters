@@ -269,6 +269,7 @@
     <ClInclude Include="Scene\TransformHistory.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\CutPlaneSystem.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\PickHit.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\EditTarget.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\CutPlaneRenderer.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -293,6 +294,7 @@
     <ClInclude Include="Scene\PhysicsSystem.h" />
     <ClInclude Include="Scene\PhysicsStepClock.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\PhysicsSimChecks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\tests\EditTargetChecks.h"><Filter>Header Files</Filter></ClInclude>
     <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
   </ItemGroup>

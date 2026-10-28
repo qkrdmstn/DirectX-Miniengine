@@ -22,7 +22,7 @@ namespace Viewer
     // 유효한 owner TRS를 저장하고 컴포넌트가 공통 월드 변환 계산에 사용하게 한다.
     bool GameObject::SetTransform(const SceneTransform& transform)
     {
-        // 편집 불가 객체와 simulate 메시 owner는 기즈모·Undo 모두 같은 경로에서 거절한다.
+        // 편집 잠금 객체는 기즈모·Undo 모두 같은 경로에서 거절한다.
         if (!IsEditable()) return false;
 
         // 입력을 정규화한 뒤 owner 배치를 저장한다.
@@ -33,14 +33,11 @@ namespace Viewer
         return true;
     }
 
-    // 본체별 편집 경로가 준비될 때까지 simulation owner를 읽기 전용으로 취급한다.
+    // 명시적 편집 잠금 여부만 본다. simulate 조각은 Mesh 대상으로 따로 편집하며 owner 편집은 Attached 컴포넌트만 움직인다.
     bool GameObject::IsEditable() const
     {
-        // 명시적 잠금 또는 body 소유 메시가 하나라도 있으면 owner 편집을 거절한다.
-        if (m_NotEditable) return false;
-        for (const auto& mesh : m_MeshComponents)
-            if (mesh->IsSimulating()) return false;
-        return true;
+        // 편집 잠금이 없으면 owner 편집을 허용한다.
+        return !m_NotEditable;
     }
 
     // 고갈 후에도 0이나 과거 ID를 재발급하지 않는다.
