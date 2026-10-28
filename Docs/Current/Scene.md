@@ -27,7 +27,7 @@ Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::P
 | `L` | 이동·회전의 World / Local 축 전환 (크기는 항상 Local) |
 | `V` | Solid → Wireframe → Vertices → Solid 순환 (현재 모드 overlay 표시) |
 | `C` | 현재 유한 평면 영역의 Static 컴포넌트 후보를 조회하고 실제 분할만 게시. 처리 중 재입력은 Busy 안내 |
-| `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태 |
+| `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태. 기본 정지 상태로 시작한다 |
 | `H` | 조각별 충돌 convex hull 모서리와 물리 바닥 상자 표시 켜기/끄기(기본 꺼짐). 디버그 UI `Viewer/Physics/ShowCollision`과 동일 상태. 깨어 있음 초록·잠듦 파랑·body 없음 노랑·바닥 회색 |
 | 드래그 중 `Esc` | 시작 Transform으로 복구 |
 | `Ctrl+Z` | 마지막 완료 드래그 한 번 취소; 최근 128개 보관 |

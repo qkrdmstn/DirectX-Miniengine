@@ -127,7 +127,7 @@ CREATE_APPLICATION( ModelViewer )
 ExpVar g_SunLightIntensity("Viewer/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
 NumVar g_SunOrientation("Viewer/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f );
 NumVar g_SunInclination("Viewer/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f );
-BoolVar g_PhysicsRunning("Viewer/Physics/Running", true);
+BoolVar g_PhysicsRunning("Viewer/Physics/Running", false);
 BoolVar g_ShowCollision("Viewer/Physics/ShowCollision", false);
 
 void ChangeIBLSet(EngineVar::ActionType);
@@ -215,6 +215,8 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"physics-query",m_UsePhysicsQuery);
     CommandLineArgs::GetInteger(L"physics-sim",m_UsePhysicsSim);
     CommandLineArgs::GetInteger(L"physics-sim-checks",m_PhysicsSimChecks);
+
+    // 충돌 표시와 물리 조회 진단 옵션을 읽는다.
     uint32_t collisionDraw = 0;
     if (CommandLineArgs::GetInteger(L"collision-draw",collisionDraw))
         g_ShowCollision = collisionDraw != 0;
@@ -325,6 +327,13 @@ void ModelViewer::Startup( void )
     std::wstring cutScenario;
     if (CommandLineArgs::GetString(L"physics-cut-scenario",cutScenario))
         m_CutScenario.Configure(cutScenario,m_Cutting);
+
+    // 세 검사 옵션의 기본 실행 상태를 정하고 명시적인 시작 옵션을 우선 적용한다.
+    uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active()) ? 1u : 0u;
+    CommandLineArgs::GetInteger(L"physics-running",physicsRunning);
+    g_PhysicsRunning = physicsRunning != 0;
+
+    // 절단 대상의 변환 검사 옵션을 적용한다.
     uint32_t transformChecks = 0;
     if (CommandLineArgs::GetInteger(L"cut-transform-checks",transformChecks) && transformChecks)
     {
