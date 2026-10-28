@@ -3,6 +3,21 @@
 
 namespace MiniPhysics
 {
+    // 잠긴 동적 body의 역질량을 실제 질량으로 변환한다.
+    bool PhysicsWorld::GetBodyMass(BodyHandle handle, double& mass) const
+    {
+        // handle을 찾고 읽기 잠금 아래에서 동적 body인지 확인한다.
+        if (!m_Impl) return false;
+        const auto entry = m_Impl->SimBodies.find(handle);
+        if (entry == m_Impl->SimBodies.end()) return false;
+        const JPH::BodyLockRead lock(m_Impl->World.GetBodyLockInterface(), entry->second);
+        if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return false;
+
+        // solver가 사용하는 역질량을 읽어 반환한다.
+        mass = 1.0 / double(lock.GetBody().GetMotionProperties()->GetInverseMass());
+        return true;
+    }
+
     namespace
     {
         // handle에 대응하는 Jolt BodyID를 찾는다. 등록되지 않은 handle이면 false다.

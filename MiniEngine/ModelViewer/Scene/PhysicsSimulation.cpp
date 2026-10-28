@@ -1,10 +1,57 @@
 ﻿#include "PhysicsSystem.h"
 #include "Utility.h"
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 
 namespace Viewer
 {
+    // 물리 갱신을 먼저 완료하고 같은 body를 유지한 채 메시 편집을 게시한다.
+    bool PhysicsSystem::ApplyMeshEdit(Scene& scene, ObjectId owner, ComponentId meshId, const SceneTransform& world)
+    {
+        // 다른 장면이나 잠긴 객체, 종속 메시, 잘못된 TRS는 변경 전에 거절한다.
+        auto* object = scene.FindObject(owner);
+        auto* mesh = object ? object->FindMeshComponent(meshId) : nullptr;
+        SceneTransform normalized = world;
+        if (&scene != &m_Scene || !object || !object->IsEditable() || !mesh ||
+            mesh->GetTransformMode() != MeshTransformMode::WorldIndependent || !normalized.Normalize()) return false;
+
+        // scale의 실제 세 성분을 비트 단위로 비교한다.
+        DirectX::XMFLOAT3 oldScale, scale, position;
+        DirectX::XMFLOAT4 rotation;
+        DirectX::XMStoreFloat3(&oldScale, mesh->GetTransform().GetScale());
+        DirectX::XMStoreFloat3(&scale, normalized.GetScale());
+        DirectX::XMStoreFloat3(&position, normalized.GetTranslation());
+        DirectX::XMStoreFloat4(&rotation, normalized.GetRotation());
+        auto entry = m_Bodies.find(Key(owner, meshId));
+        const bool hasBody = entry != m_Bodies.end() && entry->second.Handle;
+        const bool reshape = hasBody && std::memcmp(&oldScale, &scale, sizeof(scale)) != 0;
+
+        // 정규화된 TRS의 위치 한계를 shape 변경 전에 검사해 실패 시 sleep 상태도 보존한다.
+        if (hasBody)
+            for (const double p : { double(position.x), double(position.y), double(position.z) })
+                if (std::abs(p) > MiniPhysics::PhysicsWorld::MaxBodyPosition) return false;
+
+        // cook 실패는 렌더와 세대를 건드리지 않고 반환한다.
+        if (reshape && !m_World.SetBodyShape(entry->second.Handle, mesh->GetCollision(),
+            { scale.x, scale.y, scale.z }, MiniPhysics::BodyDesc().MassScale)) return false;
+
+        // 순간이동 실패 시 이전 scale의 shape와 질량으로 복구한다.
+        if (hasBody && !m_World.SetBodyTransform(entry->second.Handle,
+            { position.x, position.y, position.z }, { rotation.x, rotation.y, rotation.z, rotation.w }))
+        {
+            if (reshape && !m_World.SetBodyShape(entry->second.Handle, mesh->GetCollision(),
+                { oldScale.x, oldScale.y, oldScale.z }, MiniPhysics::BodyDesc().MassScale))
+                throw std::runtime_error("Mesh edit shape rollback failed");
+            return false;
+        }
+
+        // 검증된 TRS를 게시하고 SyncBodies가 기존 body를 유지하도록 세대를 맞춘다.
+        if (!mesh->SetTransform(normalized, MeshTransformMode::WorldIndependent)) return false;
+        if (hasBody) entry->second.EditGeneration = mesh->GetEditGeneration();
+        return true;
+    }
+
     // 삭제·geometry/편집 변경 body를 제거한 뒤 CPU 충돌을 가진 메시를 독립 강체로 등록한다.
     void PhysicsSystem::SyncBodies()
     {

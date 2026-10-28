@@ -5,6 +5,9 @@
 
 namespace Viewer
 {
+    class PhysicsSystem;
+    // 편집 대상의 TRS와 물리 body를 함께 갱신한다.
+    bool ApplyEditTransform(Scene& scene, PhysicsSystem* physics, const EditTarget& target, const SceneTransform& world);
     struct PickingRay
     {
         Math::Vector3 Origin;

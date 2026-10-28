@@ -386,7 +386,7 @@ namespace MiniPhysics
         JPH::Quat q;
         if (!AllFinite(position) || !AllFinite(rotation)) return false;
         for (const double p : position)
-            if (std::abs(p) > 1.0e9) return false;
+            if (std::abs(p) > MaxBodyPosition) return false;
         if (!NormalizeRotation(rotation, q)) return false;
 
         // 월드에 올라간 body만 깨우고 빠져 있으면 pose만 바꾼다. 정적 body는 Jolt가 활성화하지 않는다.

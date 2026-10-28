@@ -17,13 +17,6 @@ namespace Viewer
         GizmoMath::Basis(transform.GetRotation(), IsLocal(), m_Axes);
     }
 
-    // Mesh 대상 편집이 아직 준비되지 않았음을 알리는 안내를 약 2초 켠다.
-    void TransformGizmo::RaiseNotice()
-    {
-        // 안내 표시 프레임 수를 채운다.
-        m_NoticeFrames = 120;
-    }
-
     // 화면에서 일정한 크기를 유지하는 월드 핸들 길이를 구한다.
     float TransformGizmo::HandleSize(Vector3 pivot, const Camera& camera, float height) const
     {
@@ -106,23 +99,20 @@ namespace Viewer
     }
 
     // 시작 TRS 전체를 복구하고 활성 드래그를 해제한다.
-    void TransformGizmo::Cancel(Scene& scene)
+    void TransformGizmo::Cancel(Scene& scene, PhysicsSystem* physics)
     {
-        if (GameObject* object = scene.FindObject(m_DragId))
-            object->SetTransform(m_Start);
-        m_DragId = InvalidObjectId;
+        // 공통 경로로 시작 월드 TRS를 복구한다.
+        ApplyEditTransform(scene, physics, m_DragTarget, m_Start);
+        m_DragTarget = EditTarget();
         m_Active = None;
     }
 
-    // 입력 게이트를 유지하며 owner 대상의 TRS 드래그·취소·Undo를 처리한다. Mesh 대상은 기즈모만 보이고 편집은 거절한다.
+    // Owner와 Mesh의 드래그와 취소를 처리하고 Owner 이력만 기록한다.
     bool TransformGizmo::Update(Scene& scene, const EditTarget& target, const Camera& camera, float width, float height,
-        unsigned scaleAxisMask)
+        unsigned scaleAxisMask, PhysicsSystem* physics)
     {
+        // 이번 입력의 크기 축 제한을 저장한다.
         m_ScaleAxisMask = scaleAxisMask;
-
-        // 거절 안내 표시 시간을 한 프레임 줄인다.
-        if (m_NoticeFrames > 0)
-            --m_NoticeFrames;
 
         // 마우스 위치를 읽는다.
         float x;
@@ -130,27 +120,32 @@ namespace Viewer
         const bool validMouse = GameInput::GetMousePosition(x, y);
         if (IsDragging())
         {
-            if (target.Kind != EditTargetKind::Owner || target.Object != m_DragId || !scene.FindObject(m_DragId) || !validMouse ||
+            // 대상 소멸이나 Esc 입력은 시작 변환 복구로 처리한다.
+            if (target != m_DragTarget || !IsEditTargetValid(scene, m_DragTarget) || !validMouse ||
                 GameInput::IsFirstPressed(GameInput::kKey_escape))
             {
-                Cancel(scene);
+                Cancel(scene, physics);
                 return true;
             }
+
+            // 시작 월드 TRS를 기준으로 매 프레임 편집량을 계산한다.
             const PickingRay ray = MakePickingRay(camera, x, y);
             SceneTransform transform = m_Start;
             if (m_Mode == Scale)
             {
+                // 유효한 교차점이 있을 때 시작 크기에서 배율을 계산한다.
                 float drag = m_StartY - y * height;
-                if (m_Active != Uniform)
+                Vector3 hit;
+                const bool validScale = m_Active == Uniform ||
+                    GizmoMath::IntersectPlane(ray.Origin, ray.Direction, m_Pivot, m_Normal, hit);
+                if (validScale)
                 {
-                    Vector3 hit;
-                    if (!GizmoMath::IntersectPlane(ray.Origin, ray.Direction, m_Pivot, m_Normal, hit))
-                        hit = m_StartHit;
-                    drag = 100.0f * float(Dot(hit - m_StartHit, m_Axes[m_Active])) / m_StartSize;
+                    if (m_Active != Uniform)
+                        drag = 100.0f * float(Dot(hit - m_StartHit, m_Axes[m_Active])) / m_StartSize;
+                    transform.SetScale(GizmoMath::ScaleComponents(m_Start.GetScale(),
+                        m_Active == Uniform ? -1 : int(m_Active), drag, m_ScaleAxisMask));
+                    m_LastDragTransform = transform;
                 }
-                transform.SetScale(GizmoMath::ScaleComponents(m_Start.GetScale(),
-                    m_Active == Uniform ? -1 : int(m_Active), drag, m_ScaleAxisMask));
-                scene.FindObject(m_DragId)->SetTransform(transform);
             }
             else
             {
@@ -159,54 +154,65 @@ namespace Viewer
                 {
                     if (m_Mode == Rotate)
                     {
+                        // 피벗에서 떨어진 입력만 회전 누적에 사용한다.
                         const Vector3 offset = hit - m_Pivot;
                         if (float(LengthSquare(offset)) > 0.000001f)
                         {
                             const Vector3 current = Normalize(offset);
                             m_Angle += GizmoMath::SignedAngle(m_LastVector, current, m_Normal);
                             m_LastVector = current;
+
+                            // 누적 회전을 시작 자세에 적용해 마지막 유효 변환으로 보관한다.
                             transform.SetRotation(Quaternion(m_Normal, m_Angle) * m_Start.GetRotation());
-                            scene.FindObject(m_DragId)->SetTransform(transform);
+                            m_LastDragTransform = transform;
                         }
                     }
                     else
                     {
+                        // 시작 교차점에서 이동량을 구하고 축 핸들의 방향으로 제한한다.
                         Vector3 delta = hit - m_StartHit;
                         if (m_Active <= Z)
                             delta = m_Axes[m_Active] * Dot(delta, m_Axes[m_Active]);
+
+                        // 시작 위치에 이동량을 적용해 마지막 유효 변환으로 보관한다.
                         transform.SetTranslation(m_Start.GetTranslation() + delta);
-                        scene.FindObject(m_DragId)->SetTransform(transform);
+                        m_LastDragTransform = transform;
                     }
                 }
             }
+
+            // 계산이 실패한 프레임에도 마지막 유효 변환으로 body를 순간이동한다.
+            ApplyEditTransform(scene, physics, m_DragTarget, m_LastDragTransform);
+
+            // 버튼을 놓으면 드래그와 이력 기록을 마친다.
             if (!GameInput::IsPressed(GameInput::kMouse0))
             {
-                m_History.Record(m_DragId, m_Start, scene.FindObject(m_DragId)->GetTransform());
-                m_DragId = InvalidObjectId;
+                // Mesh 이력 확장은 7c에 맡기고 Owner만 기록한다.
+                if (!m_DragTarget.IsMesh())
+                    m_History.Record(m_DragTarget.Object, m_Start, scene.FindObject(m_DragTarget.Object)->GetTransform());
+                m_DragTarget = EditTarget();
                 m_Active = None;
             }
             return true;
         }
+
+        // 현재 선택과 무관하게 기존 Owner 이력을 되돌린다.
         const bool control = GameInput::IsPressed(GameInput::kKey_lcontrol) ||
             GameInput::IsPressed(GameInput::kKey_rcontrol);
         if (control && GameInput::IsFirstPressed(GameInput::kKey_z))
         {
-            // Mesh 대상은 이력이 준비되기 전까지 Undo를 거절한다.
-            if (target.IsMesh())
-            {
-                RaiseNotice();
-                return true;
-            }
-
             // 살아 있는 객체에 기록된 TRS를 복구한다.
             m_History.Undo([&scene](uint64_t id, const SceneTransform& transform)
             {
+                // 살아 있는 Owner에만 이력을 적용한다.
                 GameObject* object = scene.FindObject(id);
                 return object && object->SetTransform(transform);
             });
             m_Hover = None;
             return true;
         }
+
+        // 카메라 입력 중이 아니면 편집 모드와 좌표계를 바꾼다.
         if (!GameInput::IsPressed(GameInput::kMouse1))
         {
             if (GameInput::IsFirstPressed(GameInput::kKey_q)) m_Mode = View;
@@ -215,6 +221,8 @@ namespace Viewer
             if (GameInput::IsFirstPressed(GameInput::kKey_r)) m_Mode = Scale;
             if (GameInput::IsFirstPressed(GameInput::kKey_l)) m_Local = !m_Local;
         }
+
+        // 대상의 월드 TRS에서 핸들을 선택한다.
         m_Hover = None;
         const GameObject* object = scene.FindObject(target.Object);
         SceneTransform frame;
@@ -231,13 +239,7 @@ namespace Viewer
         if (m_Hover == None || !GameInput::IsFirstPressed(GameInput::kMouse0))
             return false;
 
-        // Mesh 대상은 적용 경로가 준비되기 전까지 드래그를 시작하지 않는다.
-        if (target.IsMesh())
-        {
-            RaiseNotice();
-            return true;
-        }
-
+        // 선택한 핸들에서 드래그 기저를 고정한다.
         bool canStart = m_Mode == Scale && m_Hover == Uniform;
         if (canStart)
         {
@@ -267,12 +269,15 @@ namespace Viewer
                 m_LastVector = Normalize(offset);
             m_Angle = 0.0f;
         }
+
+        // 드래그 시작 상태와 첫 프레임부터 재적용할 유효 변환을 저장한다.
         if (canStart)
         {
             m_StartSize = size;
-            m_Start = object->GetTransform();
+            m_Start = frame;
+            m_LastDragTransform = m_Start;
             m_Pivot = pivot;
-            m_DragId = target.Object;
+            m_DragTarget = target;
             m_Active = m_Hover;
         }
         return true;

@@ -88,6 +88,7 @@
     <ClInclude Include="Scene\PhysicsSystem.h" />
     <ClInclude Include="Scene\PhysicsStepClock.h" />
     <ClInclude Include="Scene\tests\PhysicsSimChecks.h" />
+    <ClInclude Include="Scene\tests\EditApplyChecks.h" />
     <ClInclude Include="Scene\tests\EditTargetChecks.h" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
     <ClInclude Include="Scene\ComponentId.h" />

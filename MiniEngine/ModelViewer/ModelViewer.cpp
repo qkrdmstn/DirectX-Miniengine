@@ -44,6 +44,7 @@
 #include "Scene/tests/PhysicsQueryChecks.h"
 #include "Scene/tests/PhysicsSimChecks.h"
 #include "Scene/tests/EditTargetChecks.h"
+#include "Scene/tests/EditApplyChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -68,7 +69,8 @@ public:
     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
     virtual bool IsDone() override
     {
-        return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished())
+        // 모든 활성 진단이 끝난 뒤 종료한다.
+        return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished() && m_EditApplyChecks.Finished())
             || (!m_EscapeConsumed && IGameApp::IsDone());
     }
 
@@ -108,6 +110,7 @@ private:
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
     Viewer::EditTarget m_Target;
     Viewer::EditTargetChecks m_EditTargetChecks;
+    Viewer::EditApplyChecks m_EditApplyChecks;
     Viewer::TransformGizmo m_Gizmo;
     Viewer::CollisionDebugDraw m_CollisionDraw;
     bool m_EscapeConsumed = false;
@@ -210,6 +213,9 @@ void ModelViewer::Startup( void )
     uint32_t editTargetChecks = 0;
     CommandLineArgs::GetInteger(L"edit-target-checks",editTargetChecks);
     m_EditTargetChecks.Enable(editTargetChecks != 0);
+    uint32_t editApplyChecks = 0;
+    CommandLineArgs::GetInteger(L"edit-apply-checks",editApplyChecks);
+    m_EditApplyChecks.Enable(editApplyChecks != 0);
 
     // 물리 조회·시뮬레이션 옵션을 읽는다.
     CommandLineArgs::GetInteger(L"physics-query",m_UsePhysicsQuery);
@@ -507,7 +513,7 @@ void ModelViewer::Update( float deltaT )
 
     m_EscapeConsumed = m_Gizmo.IsDragging() && GameInput::IsFirstPressed(GameInput::kKey_escape);
     const bool gizmoInput = m_Gizmo.Update(m_Scene, m_Target, m_Camera,
-        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()), m_CutPlanes.Find(m_Target.Object) ? 5u : 7u);
+        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()), m_CutPlanes.Find(m_Target.Object) ? 5u : 7u, &m_Physics);
     // Hold the right button to navigate; the free cursor selects objects with the left button.
     if (!gizmoInput && !m_Gizmo.IsDragging() && GameInput::IsPressed(GameInput::kMouse1))
         m_CameraController->Update(deltaT);
@@ -606,8 +612,11 @@ void ModelViewer::Update( float deltaT )
 
     // GPU 절단이 모두 끝난 뒤 편집 대상 pick 규칙을 한 번 검사한다.
     if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining)
+    {
         m_EditTargetChecks.Poll(m_Scene);
-    if (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_EditTargetChecks.Finished())
+        m_EditApplyChecks.Poll(m_Scene, m_Physics);
+    }
+    if (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && (!m_EditTargetChecks.Finished() || !m_EditApplyChecks.Finished()))
         throw std::runtime_error("Edit target checks did not finish");
 
     // GPU 작업이 없었던 후보 없음·제출 거절도 최종 게시 수 검증을 거친다.
@@ -827,7 +836,5 @@ void ModelViewer::RenderUI(GraphicsContext& context)
             static_cast<unsigned long long>(selected->GetId()));
     else
         text.DrawString("Selected: none\n");
-    if (const char* notice = m_Gizmo.GetNotice())
-        text.DrawFormattedString("%s\n", notice);
     text.End();
 }

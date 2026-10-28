@@ -1,4 +1,4 @@
-상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a 완료, 7b 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b 완료, 7c 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -230,7 +230,7 @@ CPU:
 | 6f-1 완료 (`7e007898`) | PreparedBody COM 조회·속도 설정, 회전 COM 계승 CPU 검증 | `Physics/PhysicsWorld*`, `Physics/tests/PhysicsBodyTests.cpp` | 기존 CPU 검증 기록 참조 |
 | 6f-2 구현 완료 / 검증 일부 미완료(미커밋) | 움직이는 Static 절단·commit 배치·COM 속도 계승 | `Scene/CutTransaction.*`, `CuttingSystem.*`, `PhysicsSimulation.cpp`, `PhysicsSystem.h`, `tests/PhysicsSimChecks.h` | 미완료: 공중 절단 후 정착 관통·솔루션 빌드. 기존 Debug 약 7초·Release 약 135초, 런타임 실측 32~123초/회 |
 | 7a | EditTarget(Owner/Mesh) 선택 | `Scene/EditTarget.h`, `ObjectSelection.*`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
-| 7b | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `Scene/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
+| 7b 완료 | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `ObjectSelection.*`, `PhysicsSimulation.cpp`, `TransformGizmo.*`, `tests/EditApplyChecks.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7c | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7d | 조각 삭제 vs owner 삭제·body 정리 | `Scene.*`, `PhysicsSystem` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 8 | 전체 검증·문서 상태 최종 확인 | `Docs/` | 빌드 약 90초 + 전체 테스트·런타임 |
@@ -270,7 +270,7 @@ CPU:
   - 실패(용량·cook·stale·깨어남·pose 변경·예산)는 파괴자 RAII로 준비물과 B 칸을 회수하고 부모를 유지하며, 결과는 `Failed`, `Error=0x200`, `CutResultEntry::Reason`에 이유를 남기고 한 번 로그한다. 기존 generic stale 검사(Input geometry·EditGeneration·월드 행렬)는 이전처럼 Cancelled다. 부모 body가 예약 한 칸을 쥔 채 A/B를 준비하므로 일시적으로 여유 두 칸이 필요하다.
   - 예산: `CutBudget::MaxNewBodiesPerFrame = 4`. 시도 시점에 차감하고 실패해도 환불하지 않으며 프레임마다 초기화한다. 현재 `Update` 한 번에 GPU 작업이 하나만 끝나 평소에는 닿지 않는 안전 상한이다.
   - `PhysicsWorld::PrepareBody`가 BodyHandle을 예약하므로 handle 고갈은 Prepare 실패이고 유효한 `PreparedBody`의 `CommitBody`는 실패하지 않는다(PhysicsBodyTests 보강).
-  - 해제: sleep이거나 pause인 simulate 메시의 절단. 유지: sim on의 `-cut-gap`(B를 바닥 아래로 옮겨 stale 재생성 경로로 관통하므로 7b의 `SetBodyTransform` 공통 경로 뒤에 해제), simulate 메시 owner의 기즈모·Undo(7단계).
+  - 해제: sleep이거나 pause인 simulate 메시의 절단. 유지: sim on의 `-cut-gap`(B를 바닥 아래로 옮겨 stale 재생성 경로로 관통한다. 2026-10-28 결정으로 7b 뒤에도 sim on에서는 계속 거절한다), simulate 메시 owner의 기즈모·Undo(7단계).
   - 진단: 시뮬레이션 중 자동 절단은 모든 body가 sleep할 때까지 기다린다(`-physics-cut-checks 1`일 때만 3000프레임 초과를 오류로 보고). 신규 옵션 `-physics-cut-checks 1`은 절단 뒤 전 조각 sleep 시 body 수·정착을 검사한다.
 
     ```powershell
@@ -353,7 +353,14 @@ CPU:
 
 프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
 
-임시 제한: simulate 조각은 pick에서 Mesh 대상이 되어 기즈모가 보이지만 드래그와 Undo는 "Piece editing not ready"로 거절한다(7b·7c에서 해제). Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤 해제). 7b~7d는 구현하지 않았다.
+- **7b 완료 (2026-10-28)**: 공통 편집 적용 경로.
+  - `ApplyEditTransform(Scene&, PhysicsSystem*, EditTarget, world TRS)`(`ObjectSelection`)가 기즈모 드래그·Esc의 유일한 적용 경로다. Owner는 `GameObject::SetTransform`, Mesh는 WorldIndependent 검사 후 `PhysicsSystem::ApplyMeshEdit`를 부른다.
+  - `ApplyMeshEdit` 순서: 편집 가능·WorldIndependent·`Normalize`·body 위치 한계(`PhysicsWorld::MaxBodyPosition`) 검사 → scale이 비트 단위로 다르면 `SetBodyShape`(실패면 무변경 반환) → `SetBodyTransform`(실패면 이전 scale shape 복구) → `MeshComponent::SetTransform`(EditGeneration +1) → `BodyEntry.EditGeneration` 동기화로 다음 `SyncBodies`가 body를 재생성하지 않는다. 속도는 리셋하지 않는다.
+  - 기즈모는 드래그 대상을 `EditTarget`과 시작 world TRS로 보관한다. 입력 계산이 실패한 프레임에도 마지막 유효 변환을 다시 적용해 simulation 중에도 매 프레임 순간이동한다. "Piece editing not ready" 거절과 안내를 제거했다. History는 Owner 드래그만 기록하며 Mesh 기록은 7c다.
+  - 진단 `-edit-apply-checks 1`(`Scene/tests/EditApplyChecks.h`, `PhysicsWorld::GetBodyMass` 추가): sleep 조각에 이동·회전 → 다음 프레임 같은 body → scale ×1.5(질량 증가) → 다음 프레임 같은 body → hull 정점을 3개로 줄인 강제 cook 실패(렌더 TRS·세대·질량 무변경)와 바닥 Owner/Mesh 거절.
+  - 검증: `.slnx` Debug/Release 빌드 오류 0, MiniPhysics CPU 테스트 Debug/Release 통과. `-model Models/cube.glb -physics-running 1 -edit-apply-checks 1 -physics-query-exit 1800` Debug/Release, `-edit-target-checks 1`, `-physics-sim-checks 1`, Release `awake` 시나리오 모두 exit 0·D3D12 ERROR/CORRUPTION 0. 로그는 `%TEMP%/step7-<구성>-<이름>.log`, 러너는 `%TEMP%/step7-runtime.ps1`이다. 실제 마우스 드래그는 수동 확인하지 않았다.
+
+임시 제한: simulate 조각의 Mesh 기즈모 드래그·Esc는 7b부터 동작하지만 Mesh 드래그는 아직 History에 남지 않는다(7c). Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 7c~7d는 구현하지 않았다.
 
 검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
 

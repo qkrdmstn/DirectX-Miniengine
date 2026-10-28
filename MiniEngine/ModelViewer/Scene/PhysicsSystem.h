@@ -31,6 +31,8 @@ namespace Viewer
         void Initialize(bool useJolt = true, uint32_t capacity = 4096, bool simulate = false);
         // GPU 준비와 무관하게 충돌이 있는 정적 메시를 등록하고 오래된 body를 step 전에 제거한다.
         void SyncBodies();
+        // 독립 메시의 shape와 pose를 먼저 갱신한 뒤 편집 세대를 게시한다.
+        bool ApplyMeshEdit(Scene& scene, ObjectId owner, ComponentId mesh, const SceneTransform& world);
         // 공통 world를 한 번 진행한다. 호출자는 고정 간격과 프레임당 step 수를 관리한다.
         bool StepSimulation(float seconds);
         // body 원점 pose를 독립 메시 컴포넌트에 반영한다.
@@ -91,6 +93,7 @@ namespace Viewer
 
     private:
         friend class CutTransaction;
+        friend class EditApplyChecks;
         using Key = std::pair<ObjectId, ComponentId>;
         struct Entry
         {

@@ -1,10 +1,27 @@
 ﻿#include "ObjectSelection.h"
 #include "GizmoMath.h"
+#include "PhysicsSystem.h"
 #include <cmath>
 #include <limits>
 
 namespace Viewer
 {
+    // Owner는 기존 경로로, 독립 Mesh는 물리 갱신 후 렌더 변환으로 적용한다.
+    bool ApplyEditTransform(Scene& scene, PhysicsSystem* physics, const EditTarget& target, const SceneTransform& world)
+    {
+        // 대상의 편집 가능 여부와 정규화된 월드 TRS를 먼저 검사한다.
+        GameObject* object = scene.FindObject(target.Object);
+        if (!object || !object->IsEditable()) return false;
+        if (target.Kind == EditTargetKind::Owner) return object->SetTransform(world);
+        MeshComponent* mesh = object->FindMeshComponent(target.Mesh);
+        SceneTransform normalized = world;
+        if (!mesh || mesh->GetTransformMode() != MeshTransformMode::WorldIndependent || !normalized.Normalize()) return false;
+
+        // 물리 갱신이 성공한 경우에만 렌더 변환과 편집 세대를 게시한다.
+        if (physics) return physics->ApplyMeshEdit(scene, target.Object, target.Mesh, normalized);
+        return mesh->SetTransform(normalized, MeshTransformMode::WorldIndependent);
+    }
+
     // 화면 좌표에서 정규화된 월드 선택 ray를 만든다.
     PickingRay MakePickingRay(const Math::Camera& camera, float x, float y)
     {

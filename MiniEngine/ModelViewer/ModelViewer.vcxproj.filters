@@ -294,6 +294,7 @@
     <ClInclude Include="Scene\PhysicsSystem.h" />
     <ClInclude Include="Scene\PhysicsStepClock.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\PhysicsSimChecks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\tests\EditApplyChecks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\EditTargetChecks.h"><Filter>Header Files</Filter></ClInclude>
     <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
