@@ -1,4 +1,4 @@
-상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b 완료, 7c 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b(`5e0a5627`)·7c 완료, 7d 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -231,7 +231,7 @@ CPU:
 | 6f-2 구현 완료 / 검증 일부 미완료(미커밋) | 움직이는 Static 절단·commit 배치·COM 속도 계승 | `Scene/CutTransaction.*`, `CuttingSystem.*`, `PhysicsSimulation.cpp`, `PhysicsSystem.h`, `tests/PhysicsSimChecks.h` | 미완료: 공중 절단 후 정착 관통·솔루션 빌드. 기존 Debug 약 7초·Release 약 135초, 런타임 실측 32~123초/회 |
 | 7a | EditTarget(Owner/Mesh) 선택 | `Scene/EditTarget.h`, `ObjectSelection.*`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7b 완료 | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `ObjectSelection.*`, `PhysicsSimulation.cpp`, `TransformGizmo.*`, `tests/EditApplyChecks.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
-| 7c | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
+| 7c 완료 | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h`, `ObjectSelection.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7d | 조각 삭제 vs owner 삭제·body 정리 | `Scene.*`, `PhysicsSystem` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 8 | 전체 검증·문서 상태 최종 확인 | `Docs/` | 빌드 약 90초 + 전체 테스트·런타임 |
 
@@ -360,7 +360,13 @@ CPU:
   - 진단 `-edit-apply-checks 1`(`Scene/tests/EditApplyChecks.h`, `PhysicsWorld::GetBodyMass` 추가): sleep 조각에 이동·회전 → 다음 프레임 같은 body → scale ×1.5(질량 증가) → 다음 프레임 같은 body → hull 정점을 3개로 줄인 강제 cook 실패(렌더 TRS·세대·질량 무변경)와 바닥 Owner/Mesh 거절.
   - 검증: `.slnx` Debug/Release 빌드 오류 0, MiniPhysics CPU 테스트 Debug/Release 통과. `-model Models/cube.glb -physics-running 1 -edit-apply-checks 1 -physics-query-exit 1800` Debug/Release, `-edit-target-checks 1`, `-physics-sim-checks 1`, Release `awake` 시나리오 모두 exit 0·D3D12 ERROR/CORRUPTION 0. 로그는 `%TEMP%/step7-<구성>-<이름>.log`, 러너는 `%TEMP%/step7-runtime.ps1`이다. 실제 마우스 드래그는 수동 확인하지 않았다.
 
-임시 제한: simulate 조각의 Mesh 기즈모 드래그·Esc는 7b부터 동작하지만 Mesh 드래그는 아직 History에 남지 않는다(7c). Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 7c~7d는 구현하지 않았다.
+- **7c 완료 (2026-10-28)**: History·Undo의 대상 종류 저장.
+  - `TransformHistory::Command`는 `EditTarget`·`HistoryTransformMode{Owner, Attached, WorldIndependent}`·Before/After world TRS를 저장한다. `MeshTransformMode`는 GPU 의존 헤더에 있어 `SceneMathTests` 독립 빌드를 위해 가벼운 enum을 따로 두었다.
+  - 기즈모는 드래그 종료 시 Owner·Mesh 모두 기록한다(Before=시작 world TRS, After=종료 시 `TryGetEditTargetTransform`). Esc는 7b부터 공통 경로로 시작 TRS를 복원한다.
+  - `ApplyHistoryCommand`(`ObjectSelection`)가 Undo 적용을 맡는다. 대상이 무효이거나 Mesh의 현재 모드가 기록과 다르면 건너뛴다. 그 외에는 After 일치 여부와 무관하게 `ApplyEditTransform`으로 Before를 복원해 body를 순간이동한다. Undo는 선택과 무관한 전역 History다.
+  - 검증: SceneMathTests Debug/Release 각 487 checks 통과. `-edit-apply-checks 1`에 이동 기록 → Undo → 같은 body·Before 위치·EditGeneration +1 → 다음 프레임 같은 body 단계를 추가해 Debug/Release exit 0·D3D12 ERROR/CORRUPTION 0, `-edit-target-checks 1` 통과.
+
+임시 제한: 조각 삭제와 owner 삭제 분리는 7d다. Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 7d는 구현하지 않았다.
 
 검증 명령(작업 디렉터리는 저장소 루트, 실행은 `MiniEngine/ModelViewer`):
 

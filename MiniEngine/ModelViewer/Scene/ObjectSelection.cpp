@@ -6,6 +6,25 @@
 
 namespace Viewer
 {
+    // 대상 유효성과 기록한 변환 모드를 확인하고 이전 월드 TRS를 복구한다.
+    bool ApplyHistoryCommand(Scene& scene, PhysicsSystem* physics, const TransformHistory::Command& command)
+    {
+        // 삭제되거나 대상 종류에 맞지 않는 명령을 건너뛴다.
+        if (!IsEditTargetValid(scene, command.Target)) return false;
+
+        // Mesh의 현재 모드가 기록 당시와 다르면 적용하지 않는다.
+        if (command.Target.IsMesh())
+        {
+            const auto* mesh = scene.FindObject(command.Target.Object)->FindMeshComponent(command.Target.Mesh);
+            const HistoryTransformMode mode = mesh->GetTransformMode() == MeshTransformMode::Attached ?
+                HistoryTransformMode::Attached : HistoryTransformMode::WorldIndependent;
+            if (mode != command.Mode) return false;
+        }
+
+        // 물리 이동 이후에도 After 비교 없이 트랜잭션 시작 상태를 복구한다.
+        return ApplyEditTransform(scene, physics, command.Target, command.Before);
+    }
+
     // Owner는 기존 경로로, 독립 Mesh는 물리 갱신 후 렌더 변환으로 적용한다.
     bool ApplyEditTransform(Scene& scene, PhysicsSystem* physics, const EditTarget& target, const SceneTransform& world)
     {

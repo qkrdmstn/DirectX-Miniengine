@@ -1,4 +1,4 @@
-상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택·7b 조각 편집 적용 경로 완료; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반); 조각 Undo(7c)와 관절 미구현 (2026-10-28)
+상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택·7b 조각 편집 적용 경로·7c 대상 종류 History 완료; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반); 조각 삭제(7d)와 관절 미구현 (2026-10-28)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -70,10 +70,10 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 
 선택 결과는 `Scene/EditTarget.h`의 `EditTarget{Kind(Owner|Mesh), Object, Mesh}`다. `ResolveEditTarget`이 pick을 R8 규칙으로 바꾼다. `WorldIndependent` 컴포넌트(simulate 여부 무관)를 맞히면 Mesh 대상, `Attached` 컴포넌트나 모델 없는 객체(절단 평면)는 Owner 대상이다. 순수 규칙은 `EditTarget::FromPick`(CPU 테스트 가능)이고, `IsEditTargetValid`는 owner·컴포넌트 존재와 월드 독립 여부를 확인하며 ModelViewer가 매 프레임 무효 대상을 해제한다. `TryGetEditTargetTransform`은 기즈모 위치·축으로 쓰는 월드 TRS를 주는데 Owner는 `GameObject::GetTransform`, Mesh는 `MeshComponent::GetWorldTransform`을 TRS로 분해한 값이다. `GameObject::IsEditable`은 바닥 같은 명시적 편집 잠금만 보며, 잠긴 객체는 pick에서 제외한다. owner 기즈모는 `MeshComponent::GetWorldTransform`이 WorldIndependent에서 owner를 곱하지 않으므로 Attached 컴포넌트만 움직인다.
 
-편집 적용(7b): 기즈모 드래그와 Esc 복구는 `ApplyEditTransform`(`ObjectSelection`) 하나로 적용한다. Owner는 `GameObject::SetTransform`을 쓴다. Mesh 대상은 `PhysicsSystem::ApplyMeshEdit`로 simulate body를 매 드래그 프레임 순간이동하고(속도 유지) scale 변경 시 shape·질량을 다시 만든다. cook이 실패하면 렌더 TRS도 바꾸지 않는다. 임시 제한(7c 전): History는 아직 owner 드래그만 기록하므로 Mesh 드래그는 `Ctrl+Z` 대상이 아니다.
+편집 적용(7b): 기즈모 드래그와 Esc 복구는 `ApplyEditTransform`(`ObjectSelection`) 하나로 적용한다. Owner는 `GameObject::SetTransform`을 쓴다. Mesh 대상은 `PhysicsSystem::ApplyMeshEdit`로 simulate body를 매 드래그 프레임 순간이동하고(속도 유지) scale 변경 시 shape·질량을 다시 만든다. cook이 실패하면 렌더 TRS도 바꾸지 않는다. History(7c)는 대상 종류·ObjectId·MeshId·TransformMode·Before/After world TRS를 기록하고, `Ctrl+Z`는 `ApplyHistoryCommand`로 Before를 같은 공통 경로에 적용한다(조각 body 순간이동). 삭제되었거나 TransformMode가 바뀐 대상의 기록은 건너뛴다.
 Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하면 해당 축/회전 링 조작을 제한한다.
 크기는 각 축 `0.0001`부터 `1e8`까지의 양수다. 음수·영 크기, 계층 편집, Redo,
-장면 저장은 구현하지 않는다. 충돌 hull이 있는 Static 메시의 낙하·바닥 접촉·pause는 [물리 5단계](../Physics/StaticPiecePhysics.md)의 범위다. simulate 조각은 Mesh 대상으로 선택되고 드래그로 body를 순간이동하며, Undo는 7c에서 추가한다. `-physics-sim 0`은 기존 비물리 동작을 유지한다. Static 절단은 [구현 기록](../GPU/StaticCutImplementation.md)을 따른다.
+장면 저장은 구현하지 않는다. 충돌 hull이 있는 Static 메시의 낙하·바닥 접촉·pause는 [물리 5단계](../Physics/StaticPiecePhysics.md)의 범위다. simulate 조각은 Mesh 대상으로 선택되고 드래그·Esc·Undo로 body를 순간이동한다. `-physics-sim 0`은 기존 비물리 동작을 유지한다. Static 절단은 [구현 기록](../GPU/StaticCutImplementation.md)을 따른다.
 
 현재 velocity 셰이더는 카메라 이동만 반영하고 객체 Transform·스킨 애니메이션의 이전 위치는 반영하지 않는다.
 따라서 ModelViewer는 TAA를 끄고 FXAA를 사용하며 모션 블러도 끈다. TAA를 다시 켜면 움직이는 객체에
@@ -88,7 +88,7 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 
 `MiniEngine/ModelViewer/Scene/tests/SceneMathTests.cpp`는 실제 `GizmoMath`, `TransformHistory`, `EvaluateModelPose`를 호출한다.
 표준/역방향/무한 역방향 Z의 투영·레이 왕복, 축/평면 드래그, 회전 부호·π 경계,
-양수 크기, Undo와 삭제된 대상, DFS 부모 복원 및 skeletonRoot 유/무의 locator 단일 적용을 검사한다.
+양수 크기, Undo와 삭제된 대상, Mesh 대상 History의 대상·모드·Before/After 보관, DFS 부모 복원 및 skeletonRoot 유/무의 locator 단일 적용을 검사한다.
 VS Developer PowerShell에서 파일 머리말의 명령을 사용하고 `/Fo`, `/Fe`는 저장소 밖으로 지정한다.
 GPU 렌더링과 실제 마우스 조작은 별도 런타임 확인이 필요하다.
 

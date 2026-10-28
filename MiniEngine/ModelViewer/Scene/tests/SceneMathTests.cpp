@@ -248,6 +248,7 @@ namespace
     // 런타임 TRS·크기·경계·법선 도우미의 비균일 변환 계약을 검사한다.
     void NonuniformTests()
     {
+        // 비균일 TRS와 법선 및 기본 경계 변환을 검사한다.
         const Quaternion rotation(Vector3(kZUnitVector), 0.7f);
         SceneTransform start(rotation, Vector3(2, 3, 5), Vector3(7, -4, 2));
         Check(start.Normalize(), "valid anisotropic TRS accepted");
@@ -263,6 +264,8 @@ namespace
         const BoundingSphere world = TransformBoundingSphere(affine, sphere);
         Near(world.GetCenter(), affine * sphere.GetCenter(), "off-origin sphere center uses complete TRS");
         Check(std::abs(float(world.GetRadius()) - 20.0f) < 0.0001f, "TRS radius uses maximum scale");
+
+        // 전단을 포함하는 합성 변환의 경계가 모든 표본을 감싸는지 검사한다.
         const AffineTransform composed = affine * AffineTransform(Quaternion(Vector3(kYUnitVector), 0.8f));
         const BoundingSphere conservative = TransformBoundingSphere(composed, sphere);
         for (int i = 0; i < 180; ++i)
@@ -273,6 +276,8 @@ namespace
                 conservative.GetCenter())) <= float(conservative.GetRadius()) + 0.0001f,
                 "composed shear boundary remains inside culling sphere");
         }
+
+        // 축별 크기 조작과 중앙 핸들의 동작을 검사한다.
         for (int axis = 0; axis < 3; ++axis)
         {
             const Vector3 scaled = GizmoMath::ScaleComponents(start.GetScale(), axis, 100);
@@ -286,23 +291,29 @@ namespace
         }
         Near(GizmoMath::ScaleComponents(start.GetScale(), -1, 100), start.GetScale() * std::exp(1.0f),
             "center scales every component by same factor");
+
+        // 극단적인 드래그에서도 허용된 양수 크기를 유지한다.
         SceneTransform extreme = start;
         extreme.SetScale(GizmoMath::ScaleComponents(Vector3(1.0e8f, 0.0001f, 5), -1, 100000));
         Check(extreme.Normalize(), "maximum drag remains valid TRS");
         Check(float(extreme.GetScale().GetX()) == 1.0e8f, "upper scale bound enforced");
         const Vector3 minimum = GizmoMath::ScaleComponents(Vector3(0.0001f, 0.0001f, 0.0001f), -1, -100000);
         Near(minimum, Vector3(0.0001f, 0.0001f, 0.0001f), "minimum positive clamp enforced");
+
+        // 실제 이력으로 비균일 TRS 전체를 복구한다.
         TransformHistory history;
-        Check(history.Record(42, start, extreme), "anisotropic history records extreme drag");
-        // 실제 히스토리를 통해 세 축과 회전·위치를 복구한다.
+        Check(history.Record(EditTarget::MakeOwner(42), HistoryTransformMode::Owner, start, extreme), "anisotropic history records extreme drag");
         // 기록된 TRS를 검사하거나 복구한다.
-        Check(history.Undo([&](uint64_t id, const SceneTransform& before)
+        Check(history.Undo([&](const TransformHistory::Command& command)
         {
-            extreme = before;
-            return id == 42;
+            // 명령의 이전 TRS를 복구한다.
+            extreme = command.Before;
+            return command.Target == EditTarget::MakeOwner(42);
         }), "anisotropic history undoes extreme drag");
         Near(extreme.GetScale(), start.GetScale(), "undo restores all scale components");
         Near(extreme.GetTranslation(), start.GetTranslation(), "undo restores translation");
+
+        // 유효 범위를 벗어난 크기는 거절한다.
         for (const Vector3 invalid : { Vector3(0, 1, 1), Vector3(-1, 1, 1), Vector3(1.0e9f, 1, 1),
             Vector3(INFINITY, 1, 1), Vector3(NAN, 1, 1) })
         {
@@ -339,49 +350,110 @@ namespace
             }
         }
     }
-    // TRS 히스토리의 복구와 삭제 대상 및 용량 정책을 검사한다.
+    // 대상과 모드 및 전후 TRS 보관과 적용 실패 건너뛰기 및 용량 정책을 검사한다.
     void HistoryTests()
     {
+        // 무변화와 동등한 회전 및 빈 대상은 기록하지 않는다.
         TransformHistory history;
         const SceneTransform start(kIdentity);
         SceneTransform moved = start;
         moved.SetTranslation(Vector3(3, 2, 1));
-        Check(!history.Record(1, start, start), "click without movement creates no command");
+        Check(!history.Record(EditTarget(), HistoryTransformMode::Owner, start, moved), "none target creates no command");
+        Check(!history.Record(EditTarget::MakeOwner(1), HistoryTransformMode::Owner, start, start), "click without movement creates no command");
         SceneTransform signedQuaternion = start;
         signedQuaternion.SetRotation(-start.GetRotation());
-        Check(!history.Record(1, start, signedQuaternion), "equivalent quaternion sign creates no command");
+        Check(!history.Record(EditTarget::MakeOwner(1), HistoryTransformMode::Owner, start, signedQuaternion), "equivalent quaternion sign creates no command");
+
+        // 빈 이력은 적용 콜백을 호출하지 않는다.
         int calls = 0;
+
         // 기록된 TRS를 검사하거나 복구한다.
-        Check(!history.Undo([&](uint64_t, const SceneTransform&) { ++calls; return true; }) && calls == 0,
-            "empty/canceled transaction cannot undo anything");
-        Check(history.Record(1, start, moved), "completed drag records one command");
-        SceneTransform current = moved;
-        // 기록된 TRS를 검사하거나 복구한다.
-        Check(history.Undo([&](uint64_t id, const SceneTransform& before)
+        Check(!history.Undo([&](const TransformHistory::Command&)
         {
-            Check(id == 1, "undo targets stable object ID");
-            current = before;
+            // 호출 여부만 센다.
+            ++calls;
+            return true;
+        }) && calls == 0,
+            "empty/canceled transaction cannot undo anything");
+
+        // Owner 명령에 변경 전후 TRS를 기록한다.
+        Check(history.Record(EditTarget::MakeOwner(1), HistoryTransformMode::Owner, start, moved), "completed drag records one command");
+
+        // Undo로 복구할 현재 TRS를 준비한다.
+        SceneTransform current = moved;
+
+        // 기록된 TRS를 검사하거나 복구한다.
+        Check(history.Undo([&](const TransformHistory::Command& command)
+        {
+            // 대상과 모드를 확인하고 이전 TRS를 복구한다.
+            Check(command.Target == EditTarget::MakeOwner(1) && command.Mode == HistoryTransformMode::Owner, "undo targets stable object ID");
+            current = command.Before;
             return true;
         }), "completed drag can undo");
         Near(current.GetTranslation(), Vector3(kZero), "one undo restores original transform");
+
         // 기록된 TRS를 검사하거나 복구한다.
-        Check(!history.Undo([](uint64_t, const SceneTransform&) { return true; }), "one drag produces only one command");
-        history.Record(1, start, moved);
-        history.Record(2, start, moved);
-        calls = 0;
-        // 기록된 TRS를 검사하거나 복구한다.
-        Check(history.Undo([&](uint64_t id, const SceneTransform&)
+        Check(!history.Undo([](const TransformHistory::Command&)
         {
+            // 남은 명령이 있으면 성공으로 처리한다.
+            return true;
+        }), "one drag produces only one command");
+
+        // Mesh 명령은 조각 ID와 모드 및 전후 TRS를 그대로 보관한다.
+        const EditTarget mesh = EditTarget::MakeMesh(1, 7);
+        const SceneTransform meshBefore(Quaternion(Vector3(kYUnitVector), 0.4f), Vector3(2, 3, 5), Vector3(1, -2, 3));
+        const SceneTransform meshAfter(Quaternion(Vector3(kZUnitVector), -0.7f), Vector3(4, 6, 7), Vector3(-4, 5, 2));
+        Check(history.Record(mesh, HistoryTransformMode::WorldIndependent, meshBefore, meshAfter), "mesh drag records command");
+
+        // 저장된 Mesh 명령 전체를 검사한다.
+        Check(history.Undo([&](const TransformHistory::Command& command)
+        {
+            // 대상과 모드를 보존하고 Before와 After를 구분한다.
+            Check(command.Target == mesh && command.Mode == HistoryTransformMode::WorldIndependent,
+                "undo preserves mesh target and mode");
+            Near(command.Before.GetTranslation(), meshBefore.GetTranslation(), "mesh preserves Before translation");
+            Check(XMVector4NearEqual(command.Before.GetRotation(), meshBefore.GetRotation(), XMVectorReplicate(0.0002f)),
+                "mesh preserves Before rotation");
+            Near(command.Before.GetScale(), meshBefore.GetScale(), "mesh preserves Before scale");
+            Near(command.After.GetTranslation(), meshAfter.GetTranslation(), "mesh preserves After translation");
+            Check(XMVector4NearEqual(command.After.GetRotation(), meshAfter.GetRotation(), XMVectorReplicate(0.0002f)),
+                "mesh preserves After rotation");
+            Near(command.After.GetScale(), meshAfter.GetScale(), "mesh preserves After scale");
+            return true;
+        }), "mesh command can undo");
+
+        // 삭제된 대상과 적용 실패한 Mesh 명령을 소비하고 이전 Owner로 진행한다.
+        history.Record(EditTarget::MakeOwner(1), HistoryTransformMode::Owner, start, moved);
+        history.Record(EditTarget::MakeOwner(2), HistoryTransformMode::Owner, start, moved);
+        history.Record(mesh, HistoryTransformMode::WorldIndependent, start, moved);
+        history.Record(mesh, HistoryTransformMode::Attached, start, moved);
+
+        // 실패한 명령까지 콜백이 몇 번 호출되는지 셀 준비를 한다.
+        calls = 0;
+
+        // 기록된 TRS를 검사하거나 복구한다.
+        Check(history.Undo([&](const TransformHistory::Command& command)
+        {
+            // 삭제와 모드 불일치를 적용 실패로 모사한다.
             ++calls;
-            return id == 1; // Object 2 was deleted; object 1 is still live.
-        }) && calls == 2, "deleted target skipped in favor of next live command");
+            if (command.Target.IsMesh()) return false;
+            current = command.Before;
+            return command.Target == EditTarget::MakeOwner(1); // Object 2 was deleted; object 1 is still live.
+        }) && calls == 4, "deleted target and rejected meshes skipped in favor of owner");
+        Near(current.GetTranslation(), start.GetTranslation(), "owner Before restored after rejected meshes");
+
+        // 용량을 넘으면 가장 오래된 명령 하나를 버린다.
         for (uint64_t id = 1; id <= 129; ++id)
-            history.Record(id, start, moved);
+            history.Record(EditTarget::MakeOwner(id), HistoryTransformMode::Owner, start, moved);
+
+        // 남은 명령 수를 셀 준비를 한다.
         calls = 0;
+
         // 기록된 TRS를 검사하거나 복구한다.
-        while (history.Undo([&](uint64_t id, const SceneTransform&)
+        while (history.Undo([&](const TransformHistory::Command& command)
         {
-            Check(id >= 2, "history drops oldest command beyond capacity");
+            // 첫 명령을 제외한 128개만 남아야 한다.
+            Check(command.Target.Object >= 2, "history drops oldest command beyond capacity");
             ++calls;
             return true;
         })) {}

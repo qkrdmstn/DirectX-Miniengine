@@ -107,7 +107,7 @@ namespace Viewer
         m_Active = None;
     }
 
-    // Owner와 Mesh의 드래그와 취소를 처리하고 Owner 이력만 기록한다.
+    // Owner와 Mesh의 드래그와 취소 및 공통 경로의 이력 복구를 처리한다.
     bool TransformGizmo::Update(Scene& scene, const EditTarget& target, const Camera& camera, float width, float height,
         unsigned scaleAxisMask, PhysicsSystem* physics)
     {
@@ -187,26 +187,37 @@ namespace Viewer
             // 버튼을 놓으면 드래그와 이력 기록을 마친다.
             if (!GameInput::IsPressed(GameInput::kMouse0))
             {
-                // Mesh 이력 확장은 7c에 맡기고 Owner만 기록한다.
-                if (!m_DragTarget.IsMesh())
-                    m_History.Record(m_DragTarget.Object, m_Start, scene.FindObject(m_DragTarget.Object)->GetTransform());
+                // 대상의 종료 월드 TRS와 변환 모드를 함께 기록한다.
+                SceneTransform after;
+                if (TryGetEditTargetTransform(scene, m_DragTarget, after))
+                {
+                    HistoryTransformMode mode = HistoryTransformMode::Owner;
+                    if (m_DragTarget.IsMesh())
+                    {
+                        const auto* mesh = scene.FindObject(m_DragTarget.Object)->FindMeshComponent(m_DragTarget.Mesh);
+                        mode = mesh->GetTransformMode() == MeshTransformMode::Attached ?
+                            HistoryTransformMode::Attached : HistoryTransformMode::WorldIndependent;
+                    }
+                    m_History.Record(m_DragTarget, mode, m_Start, after);
+                }
+
+                // 완료한 드래그의 활성 상태를 해제한다.
                 m_DragTarget = EditTarget();
                 m_Active = None;
             }
             return true;
         }
 
-        // 현재 선택과 무관하게 기존 Owner 이력을 되돌린다.
+        // 현재 선택과 무관하게 전역 이력을 되돌린다.
         const bool control = GameInput::IsPressed(GameInput::kKey_lcontrol) ||
             GameInput::IsPressed(GameInput::kKey_rcontrol);
         if (control && GameInput::IsFirstPressed(GameInput::kKey_z))
         {
-            // 살아 있는 객체에 기록된 TRS를 복구한다.
-            m_History.Undo([&scene](uint64_t id, const SceneTransform& transform)
+            // 공통 콜백으로 대상과 모드를 검사하고 물리 body도 복구한다.
+            m_History.Undo([&scene, physics](const TransformHistory::Command& command)
             {
-                // 살아 있는 Owner에만 이력을 적용한다.
-                GameObject* object = scene.FindObject(id);
-                return object && object->SetTransform(transform);
+                // 진단과 같은 이력 적용 경로를 사용한다.
+                return ApplyHistoryCommand(scene, physics, command);
             });
             m_Hover = None;
             return true;

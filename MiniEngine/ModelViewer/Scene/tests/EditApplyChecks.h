@@ -14,7 +14,7 @@ namespace Viewer
         // 비활성 또는 완료된 진단인지 읽는다.
         bool Finished() const { return !m_Enabled || m_Done; }
 
-        // sleep한 첫 조각을 편집하고 다음 프레임에도 같은 body가 남는지 확인한다.
+        // sleep한 첫 조각의 편집과 이력 복구 및 다음 프레임의 body 유지를 확인한다.
         void Poll(Scene& scene, PhysicsSystem& physics)
         {
             // 비활성이면 건너뛰고 각 편집 다음 프레임에 같은 handle인지 검사한다.
@@ -35,7 +35,15 @@ namespace Viewer
                     return;
                 }
 
-                // 크기 편집 이후 프레임에는 실패 원자성과 바닥 잠금을 검사한다.
+                // 크기 편집 이후 프레임에는 이력을 복구하고 다음 Poll을 기다린다.
+                if (!m_UndoApplied)
+                {
+                    CheckHistoryUndo(scene, physics, *mesh);
+                    m_UndoApplied = true;
+                    return;
+                }
+
+                // Undo 이후 프레임의 handle 유지와 실패 원자성 및 바닥 잠금을 확인하고 완료한다.
                 CheckRejections(scene, physics, *mesh);
                 m_Done = true;
                 Utility::Printf("Edit apply validation passed\n");
@@ -55,6 +63,43 @@ namespace Viewer
         }
 
     private:
+        // 실제 이력 적용 콜백으로 이동을 취소하고 같은 body의 원점 복구를 검사한다.
+        void CheckHistoryUndo(Scene& scene, PhysicsSystem& physics, MeshComponent& mesh)
+        {
+            // 현재 월드 TRS에서 이동 편집을 만든 뒤 전후 값을 기록한다.
+            SceneTransform before;
+            Check(TryGetEditTargetTransform(scene, m_Target, before), "Read history Before");
+            SceneTransform moved = before;
+            moved.SetTranslation(before.GetTranslation() + Math::Vector3(0.2f, 0.3f, 0.1f));
+            Check(ApplyEditTransform(scene, &physics, m_Target, moved), "Apply history translation");
+            SceneTransform after;
+            Check(TryGetEditTargetTransform(scene, m_Target, after), "Read history After");
+            TransformHistory history;
+            Check(history.Record(m_Target, HistoryTransformMode::WorldIndependent, before, after), "Record mesh history");
+            const uint64_t generation = mesh.GetEditGeneration();
+
+            // 기즈모와 같은 콜백으로 이전 상태를 복구한다.
+            Check(history.Undo([&](const TransformHistory::Command& command)
+            {
+                // 공통 경로가 body까지 순간이동하도록 전달한다.
+                return ApplyHistoryCommand(scene, &physics, command);
+            }), "Undo mesh history");
+            Check(mesh.GetEditGeneration() == generation + 1, "Undo advances generation once");
+            Check(physics.m_Bodies.at({ m_Target.Object, m_Target.Mesh }).Handle == m_Handle, "Undo preserves body");
+
+            // 복구 직후 body 원점과 렌더 위치가 Before인지 검사한다.
+            std::array<double, 3> position;
+            std::array<double, 4> rotation;
+            Check(physics.m_World.GetBodyPose(m_Handle, position, rotation), "Read undo body pose");
+            DirectX::XMFLOAT3 expected;
+            DirectX::XMStoreFloat3(&expected, before.GetTranslation());
+            const double expectedP[] = { expected.x, expected.y, expected.z };
+            for (unsigned i = 0; i < 3; ++i)
+                Check(std::abs(position[i] - expectedP[i]) <= 1e-5, "Undo body translation matches Before");
+            Check(float(Math::Length(mesh.GetTransform().GetTranslation() - before.GetTranslation())) <= 1e-5f,
+                "Undo render translation matches Before");
+        }
+
         // Release에서도 실패 이유를 출력한 뒤 예외로 중단한다.
         static void Check(bool condition, const char* message)
         {
@@ -146,6 +191,7 @@ namespace Viewer
         bool m_Enabled = false;
         bool m_Done = false;
         bool m_ScaleApplied = false;
+        bool m_UndoApplied = false;
         EditTarget m_Target;
         MiniPhysics::BodyHandle m_Handle = MiniPhysics::InvalidBody;
     };
