@@ -38,6 +38,7 @@
 #include "Scene/CutPlaneSystem.h"
 #include "Scene/CutPlaneRenderer.h"
 #include "Scene/CuttingSystem.h"
+#include "Scene/CollisionDebugDraw.h"
 #include <algorithm>
 #include "Scene/tests/MeshComponentChecks.h"
 #include "Scene/tests/PhysicsQueryChecks.h"
@@ -106,6 +107,7 @@ private:
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
     Viewer::ObjectId m_SelectedObject = Viewer::InvalidObjectId;
     Viewer::TransformGizmo m_Gizmo;
+    Viewer::CollisionDebugDraw m_CollisionDraw;
     bool m_EscapeConsumed = false;
     Renderer::RenderMode m_RenderMode = Renderer::RenderMode::Solid;
     bool m_ViewDiagnosticPending = false;
@@ -124,6 +126,7 @@ ExpVar g_SunLightIntensity("Viewer/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16
 NumVar g_SunOrientation("Viewer/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f );
 NumVar g_SunInclination("Viewer/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f );
 BoolVar g_PhysicsRunning("Viewer/Physics/Running", true);
+BoolVar g_ShowCollision("Viewer/Physics/ShowCollision", false);
 
 void ChangeIBLSet(EngineVar::ActionType);
 void ChangeIBLBias(EngineVar::ActionType);
@@ -203,6 +206,12 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"physics-query",m_UsePhysicsQuery);
     CommandLineArgs::GetInteger(L"physics-sim",m_UsePhysicsSim);
     CommandLineArgs::GetInteger(L"physics-sim-checks",m_PhysicsSimChecks);
+    uint32_t collisionDraw = 0;
+    if (CommandLineArgs::GetInteger(L"collision-draw",collisionDraw))
+        g_ShowCollision = collisionDraw != 0;
+    uint32_t collisionDrawLog = 0;
+    CommandLineArgs::GetInteger(L"collision-draw-log",collisionDrawLog);
+    m_CollisionDraw.SetLogging(collisionDrawLog != 0);
     CommandLineArgs::GetInteger(L"physics-query-checks",physicsQueryChecks);
     CommandLineArgs::GetInteger(L"physics-query-capacity",m_PhysicsCapacity);
     CommandLineArgs::GetInteger(L"physics-query-self-test",m_QuerySelfTest);
@@ -376,6 +385,7 @@ void ModelViewer::Cleanup( void )
 {
     m_Cutting.Clear();
     m_CutScenario.Shutdown();
+    m_CollisionDraw.PrintSummary();
     m_Physics.Clear();
     Utility::Printf("Physics simulation cleanup: bodies=%zu\n", m_Physics.GetSimulationBodyCount());
     Utility::Printf("Physics query cleanup: registered=%zu fallback=%zu\n",m_Physics.GetColliderCount(),m_Physics.GetFallbackCount());
@@ -457,6 +467,9 @@ void ModelViewer::Update( float deltaT )
     const int scenarioRunState = m_CutScenario.WantedRunState(m_Physics, m_CutOwner, m_CutMesh);
     if (scenarioRunState >= 0) g_PhysicsRunning = scenarioRunState != 0;
     m_Physics.SetSimulationRunning(g_PhysicsRunning);
+
+    // H 키와 디버그 UI는 같은 충돌 표시 플래그를 토글한다.
+    if (GameInput::IsFirstPressed(GameInput::kKey_h)) g_ShowCollision = !bool(g_ShowCollision);
 
     if (GameInput::IsFirstPressed(GameInput::kKey_v))
         m_RenderMode = static_cast<Renderer::RenderMode>((static_cast<unsigned>(m_RenderMode) + 1) % 3);
@@ -750,6 +763,9 @@ void ModelViewer::RenderUI(GraphicsContext& context)
         m_CapturePostPending = false;
         Utility::Printf("ModelViewer diagnostic: HDR/post pixels captured, view=%u, typedUAV=%u\n", static_cast<unsigned>(m_RenderMode), g_bTypedUAVLoadSupport_R11G11B10_FLOAT);
     }
+    if (g_ShowCollision)
+        m_CollisionDraw.Draw(context, m_Scene, m_Physics, m_Camera,
+            float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
     m_Gizmo.Render(context, m_Scene, m_SelectedObject, m_Camera,
         float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
     TextContext text(context);
@@ -760,6 +776,7 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     text.DrawString("Q: View/select (hide gizmo) | W: Move | E: Rotate | R: Local axis/center scale\n");
     text.DrawString("Cut Plane: cyan grid, click inside to select | Scale X/Z or center XZ (Y fixed)\n");
     text.DrawFormattedString("C: cut static meshes in plane area | %s\n",m_Cutting.GetStatusText());
+    text.DrawFormattedString("H: collision hulls %s\n", bool(g_ShowCollision) ? "on" : "off");
     text.DrawFormattedString("P: physics %s | bodies: %zu\n",
         !m_Physics.IsSimulationEnabled() ? "disabled" : (bool(g_PhysicsRunning) ? "running" : "paused"),
         m_Physics.GetSimulationBodyCount());

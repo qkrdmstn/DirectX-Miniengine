@@ -22,16 +22,18 @@ namespace Viewer
         Triangle(points[0], points[2], points[3], color);
     }
 
-    void GizmoDraw::Line(GizmoMath::Point a, GizmoMath::Point b, Color color, float thickness)
+    // 두 점을 잇는 두께 있는 선을 사각형 두 삼각형으로 낸다. 길이가 0.01 px 미만이면 내지 않고 false다.
+    bool GizmoDraw::Line(GizmoMath::Point a, GizmoMath::Point b, Color color, float thickness)
     {
         const float dx = b.X - a.X, dy = b.Y - a.Y;
         const float length = std::sqrt(dx * dx + dy * dy);
         if (length < 0.01f)
-            return;
+            return false;
         const float x = -dy * thickness * 0.5f / length, y = dx * thickness * 0.5f / length;
         const GizmoMath::Point corners[] = { {a.X + x, a.Y + y}, {b.X + x, b.Y + y},
             {b.X - x, b.Y - y}, {a.X - x, a.Y - y} };
         Quad(corners, color);
+        return true;
     }
 
     void GizmoDraw::Arrow(GizmoMath::Point a, GizmoMath::Point b, Color color)

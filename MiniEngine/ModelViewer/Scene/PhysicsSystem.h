@@ -51,6 +51,14 @@ namespace Viewer
         size_t GetAwakeBodyCount() const;
         // 등록된 메시 body가 깨어 있는지 읽는다.
         bool IsSimulationAwake(ObjectId owner, ComponentId mesh) const;
+        // 디버그 표시용 body 상태다. None은 body 없음이다.
+        enum class BodyState { None, Awake, Asleep };
+        // 등록된 메시 body의 깨움/수면/없음 상태를 읽는다.
+        BodyState GetBodyState(ObjectId owner, ComponentId mesh) const;
+        // 해당 메시가 물리 바닥의 렌더 메시인지 읽는다.
+        bool IsFloorMesh(ObjectId owner, ComponentId mesh) const;
+        // 바닥 Static Box의 중심과 반크기를 읽는다. 바닥 body가 없으면 false다.
+        bool GetFloorBox(std::array<double, 3>& center, std::array<double, 3>& half) const;
         // 진단: 조회·simulation·준비 중 body의 용량 예약 합계를 읽는다.
         size_t GetReservedBodyCount() const { return m_World.GetReservedCount(); }
         // 진단: 등록된 메시 body의 선속도와 각속도를 읽는다.
@@ -113,6 +121,8 @@ namespace Viewer
         ObjectId m_FloorOwner = InvalidObjectId;
         ComponentId m_FloorMesh = InvalidComponentId;
         MiniPhysics::BodyHandle m_FloorBody = MiniPhysics::InvalidBody;
+        std::array<double, 3> m_FloorCenter{};
+        std::array<double, 3> m_FloorHalf{};
         PhysicsStepClock m_StepClock;
         bool m_Running = true;
         uint64_t m_StepCount = 0;

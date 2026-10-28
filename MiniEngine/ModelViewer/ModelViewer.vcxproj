@@ -77,6 +77,7 @@
     <ClCompile Include="Scene\PhysicsFloor.cpp" />
     <ClCompile Include="Scene\MeshComponent.cpp" />
     <ClCompile Include="Scene\ObjectSelection.cpp" />
+    <ClCompile Include="Scene\CollisionDebugDraw.cpp" />
     <ClCompile Include="Scene\GizmoDraw.cpp" />
     <ClCompile Include="Scene\TransformGizmo.cpp" />
     <ClCompile Include="Scene\CutPlaneSystem.cpp" />
@@ -94,6 +95,8 @@
     <ClInclude Include="Scene\SceneTransform.h" />
     <ClInclude Include="Scene\ObjectSelection.h" />
     <ClInclude Include="Scene\GizmoMath.h" />
+    <ClInclude Include="Scene\CollisionDebugDraw.h" />
+    <ClInclude Include="Scene\CollisionDebugMath.h" />
     <ClInclude Include="Scene\GizmoDraw.h" />
     <ClInclude Include="Scene\TransformGizmo.h" />
     <ClInclude Include="Scene\TransformHistory.h" />

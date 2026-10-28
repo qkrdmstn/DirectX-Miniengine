@@ -127,6 +127,8 @@ namespace Viewer
             const auto handle = m_World.CommitBody(std::move(prepared), false);
             if (!handle) throw std::runtime_error("Unable to commit floor body");
             m_FloorBody = handle;
+            m_FloorCenter = desc.Position;
+            m_FloorHalf = desc.StaticBoxHalfExtent;
             m_FloorOwner = created;
             m_FloorMesh = object.GetMeshComponents().front()->GetId();
             Utility::Printf("Physics floor: owner=%llu body=%llu top=%.6f size=(%.3f,0.500,%.3f) initialLift=%.6f\n",

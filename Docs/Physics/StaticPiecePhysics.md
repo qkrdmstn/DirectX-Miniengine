@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a~6c 완료(물리 절단 transaction·실패 경로 검증), 6d 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6a~6d 완료(물리 절단 transaction·실패 경로 검증·충돌 convex 디버그 표시), 7단계 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -218,6 +218,7 @@ CPU:
 | 6a | 물리 무관 게시 준비·교체: `PrepareGeometryReplacement`, 준비된 B 컴포넌트, 할당 없는 commit, `DrainResults` 결과 소비, 기존 소비자 이전 | `Scene/CuttingSystem.*`, `Scene.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6b | 물리 절단 transaction(준비→검증→교체→rollback)·예산, 절단 임시 제한 해제 | `Scene/CutTransaction.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6c | 실패 경로 런타임 검증(작업 중 깨어남·강제 cook 실패·빈 쪽) | `Scene/tests/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
+| 6d | 충돌 convex 디버그 표시(H·UI 토글), 조각별 색, 바닥 상자 | `Scene/CollisionDebugMath.h`, `Scene/CollisionDebugDraw.*`, `Scene/PhysicsSystem.*`, `Scene/GizmoDraw.h`, `ModelViewer.cpp`, `Scene/tests/CollisionDebugTests.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+CPU 테스트 약 5초, 런타임 약 8초/회) |
 | 7a | EditTarget(Owner/Mesh) 선택 | `Scene/EditTarget.h`, `ObjectSelection.*`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7b | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `Scene/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7c | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
@@ -272,6 +273,17 @@ CPU:
   - 주입 지점은 기본값에서 비활성이다: `CutTransaction::DiagFailSide`, `CuttingSystem::DiagEmptySide`, `CutBudget::SetLimit`. 시나리오가 끝나거나 Cleanup되면 `PhysicsCutScenario`가 되돌리며, 선택한 시나리오가 끝나지 않은 채 종료하면 오류다. 진단 접근자는 `PhysicsSystem::GetReservedBodyCount`·`GetSimulationVelocity`·`NudgeBodyForDiagnostic`이다.
   - 결과(Debug/Release 모두 exit 0, D3D12 ERROR/CORRUPTION 0): `awake`는 "Wait - object moving"으로 제출 거절·작업/게시 없음·부모 불변. `woken`은 Failed 0x200 "Wait - object moving". `fail-a`·`fail-b`·`budget`은 Failed 0x200과 이유, 부모 메시·body 수·예약 수(시작값) 복귀. `empty-a/b`는 빈 쪽이 bodyless이고 다른 쪽만 body를 가지며 SyncBodies가 재등록하지 않는다. `paused`·`paused-asleep`은 정지 중 절단이 허용되고 조각 속도는 0이며 재개 후 정착한다. 게시 프레임의 조각 월드 변환은 부모와 차이 0(허용 1e-5)이다. 정착은 모든 조각이 sleep하고 각 조각이 바닥−0.01 m 이상이며 적어도 하나가 바닥 ±0.01 m 안이다(30° 절단에서 위쪽 조각은 아래쪽 조각 위에 얹힌다, 예: 위쪽 −0.6676, 아래쪽 −1.155189, 바닥 −1.155179).
   - 참고: `moved`는 월드 행렬이 바뀌므로 일반 stale 검사가 먼저 걸려 Cancelled가 된다. `CutTransaction::Prepare`의 pose 세대 검사는 행렬이 같은 값으로 돌아왔지만 세대만 앞선 경우를 막는 방어로 유지하며 현재 시나리오로는 직접 도달하지 못한다.
+- **6d 완료 (2026-10-28)**: 조각마다 충돌 convex hull이 절단으로 어떻게 나뉘는지 화면에서 확인하는 디버그 표시다(물리·절단 동작은 변하지 않는다).
+  - 토글: `H`와 디버그 UI `Viewer/Physics/ShowCollision`이 같은 `BoolVar`를 쓴다(P와 `Viewer/Physics/Running`처럼). 기본 꺼짐이며 `-collision-draw 1`로 시작부터 켠다. 물리 실행·일시정지·`-physics-sim 0` 어디서나 동작한다. 진단 옵션 `-collision-draw-log 1`은 색별 모서리 수가 바뀔 때와 종료 때 통계·CPU 시간을 출력한다.
+  - 데이터(캐시 없음): 매 프레임 충돌 상태가 FromModel/Inherited인 `MeshComponent`의 컴포넌트 로컬 `AggregateGeom`을 `GetWorldTransform(owner)`(비균일 scale 포함 전체 월드 행렬)로 변환한다. Unavailable/None은 그리지 않는다.
+  - 모서리: `CollisionDebug::ExtractHullEdges`(`Scene/CollisionDebugMath.h`, GPU 무관)가 `IndexData` 삼각형에서 방향 없는 쌍을 모으고, 배정밀도로 면 법선을 구해 퇴화 삼각형은 법선에서 제외한다. 유효한 인접 면이 정확히 둘이고 법선 내적이 1-1e-9보다 크면 삼각분할 대각선으로 보고 숨긴다. 이 허용치는 약 0.0026도 미만의 꺾임을 숨기며 그보다 큰 꺾임(예: 0.5도)은 남긴다.
+  - 그리기: `GizmoDraw`(깊이 검사 없는 화면 overlay 삼각형)에 두께 1.5 px 선으로 낸다. `GizmoDraw::Reserve`로 예상 선 수만큼(선당 192 B) 용량을 먼저 잡는다. 투영 전에 뷰 공간에서 `ClipSegmentToNearPlane`으로 근평면(z ≤ −near)에 맞춰 자르고(걸침·완전 뒤·평면 위 처리) 그 뒤 `GizmoMath::Project`로 투영한다. 호출 위치는 `RenderUI`에서 `AdvanceSimulation`·`Scene::Update` 뒤, 기즈모 그리기 앞이다(같은 스레드).
+  - 색: 깨어 있는 body 초록, 잠든 body 파랑, 충돌은 있으나 body가 없는 조각(body 없음·simulation 끔) 노랑, 바닥 회색. 바닥은 모델 hull이 아니라 `CreateFloor`가 저장한 Static Box의 중심·반크기에서 12개 모서리를 그린다. `PhysicsSystem`에 `GetBodyState`(None/Awake/Asleep)·`IsFloorMesh`·`GetFloorBox` 읽기 전용 접근자를 추가했다.
+  - 검증: `Scene/tests/CollisionDebugTests.cpp` 24 checks 통과(빌드 명령은 파일 머리말; 실제 `ConvexElem`·`SliceAggregateGeom` 사용). 단위 상자 12개, 0.5도 꺾인 윗면 상자 15개(능선 유지), 상자 평면 절단 두 조각 각 12개, 대각 절단 삼각기둥 각 9개, 퇴화·범위 밖 삼각형, 근평면 자르기(걸침·반대 방향·완전 뒤·평면 위·평면에 걸친 선분·유한 화면 좌표).
+  - 런타임(Debug/Release 빌드 오류 0, `-collision-draw 1 -collision-draw-log 1`, 모두 exit 0, D3D12 ERROR/CORRUPTION 0). 모서리 수는 초록/파랑/노랑/회색 순서다. 혼합 장면(Cube+Bunny): 시작 60/0/0/12 → 61프레임 12/48/0/12(Cube만 정착) → 70프레임 0/60/0/12. Cube 절단 `-physics-cut-checks 1`: 0/24/0/12(조각 둘 정착 뒤), 절단 직후 24/0/0/12. `paused` 시나리오 24/0/0/12 → 0/24/0/12. `-physics-sim 0` 4회 절단: 노랑만 12→60, 회색 0(바닥 없음). `empty-a/b`: 빈 쪽은 충돌이 없어 그려지지 않고 남은 hull만 12개(초록 → 파랑). `-physics-query-capacity 2`로 body 등록이 거절된 Bunny는 노랑 48이다. 바닥 12개는 sim-on 모든 실행에서 확인했다.
+  - 비용(Release, 프레임당 CPU, 캐시 없음): Cube+Bunny 평균 0.13 ms, 조각 33개(396 모서리, `-physics-sim 0` 연속 절단) 0.28~0.36 ms. 첫 프레임의 PSO 생성과 일시 정지로 최대 수 ms~100 ms 수준의 이상치가 있다. 기존 5·6c 검증 실행(Debug/Release 8회)은 그대로 통과했다.
+  - 분량: 제품 코드가 약 450줄(테스트 제외)로 단계당 약 300줄 기준을 넘었다. `-cut 40` 연속 절단 스트레스 실행은 그리기를 꺼도 게시 40회에 도달하지 못해 멈추거나 예외로 끝난다(기존 현상, 원인 미조사. 8단계에서 조사한다).
+  - 한계: H 키 입력과 UI 토글은 같은 `BoolVar`를 읽고 쓰는 구조로 보장하며 자동 입력으로 실제 키는 검증하지 못했다(창 포커스 불가). 화면 캡처는 하지 않았다.
 
 프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
 

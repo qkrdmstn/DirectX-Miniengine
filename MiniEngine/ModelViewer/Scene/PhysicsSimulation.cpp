@@ -197,4 +197,36 @@ namespace Viewer
         const auto entry = m_Bodies.find(Key(owner, mesh));
         return entry != m_Bodies.end() && m_World.IsBodyAwake(entry->second.Handle);
     }
+
+    // 등록된 메시 body의 상태를 디버그 표시 색 구분용으로 읽는다.
+    PhysicsSystem::BodyState PhysicsSystem::GetBodyState(ObjectId owner, ComponentId mesh) const
+    {
+        // body가 없거나 handle이 비면 None이다.
+        const auto entry = m_Bodies.find(Key(owner, mesh));
+        if (entry == m_Bodies.end() || !entry->second.Handle)
+            return BodyState::None;
+
+        // 유효한 body는 Jolt의 활성 여부로 Awake/Asleep을 나눈다.
+        return m_World.IsBodyAwake(entry->second.Handle) ? BodyState::Awake : BodyState::Asleep;
+    }
+
+    // 바닥 렌더 메시인지 소유 ID로 비교한다.
+    bool PhysicsSystem::IsFloorMesh(ObjectId owner, ComponentId mesh) const
+    {
+        // 바닥 body가 살아 있고 두 ID가 일치할 때만 참이다.
+        return m_FloorBody && owner == m_FloorOwner && mesh == m_FloorMesh;
+    }
+
+    // CreateFloor가 만든 Static Box의 중심과 반크기를 돌려준다.
+    bool PhysicsSystem::GetFloorBox(std::array<double, 3>& center, std::array<double, 3>& half) const
+    {
+        // 바닥 body가 없으면 읽을 값이 없다.
+        if (!m_FloorBody)
+            return false;
+
+        // 저장해 둔 Static Box 값을 복사한다.
+        center = m_FloorCenter;
+        half = m_FloorHalf;
+        return true;
+    }
 }

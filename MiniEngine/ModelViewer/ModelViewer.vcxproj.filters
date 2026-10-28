@@ -238,6 +238,7 @@
     <ClCompile Include="Scene\ObjectSelection.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Scene\CollisionDebugDraw.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Scene\GizmoDraw.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Scene\TransformGizmo.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Scene\CutPlaneSystem.cpp"><Filter>Source Files</Filter></ClCompile>
@@ -261,6 +262,8 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Scene\GizmoMath.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\CollisionDebugDraw.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\CollisionDebugMath.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\GizmoDraw.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\TransformGizmo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\TransformHistory.h"><Filter>Header Files</Filter></ClInclude>
