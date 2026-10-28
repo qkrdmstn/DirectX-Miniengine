@@ -326,6 +326,65 @@ namespace Viewer
         return true;
     }
 
+    // 교체에 필요한 pose 버퍼와 충돌 상태를 컴포넌트 밖에서 미리 만든다. 같은 원본이 아니거나 TRS가 무효면 null을 돌려준다.
+    std::unique_ptr<PreparedGeometryReplacement> MeshComponent::PrepareGeometryReplacement(std::shared_ptr<const GeometryRevision> geometry,
+        const SceneTransform& transform, MeshTransformMode mode, const DeformBinding& binding,
+        MiniCollision::AggregateGeom collision, const char* emptyReason) const
+    {
+        // 같은 원본의 생성 geometry만 받는다.
+        if (!geometry || !geometry->IsGenerated() || geometry->GetSource() != m_Geometry->GetSource())
+            return nullptr;
+
+        // 배치와 source 기준을 정규화해 검증한다.
+        auto prepared = std::make_unique<PreparedGeometryReplacement>();
+        prepared->Transform = transform;
+        prepared->Binding = binding;
+        if (!prepared->Transform.Normalize() || !prepared->Binding.SourceFrame.Normalize())
+            return nullptr;
+        prepared->Mode = mode;
+
+        // 새 pose 버퍼를 만든다.
+        prepared->Posed = std::make_unique<PosedGeometry>(*geometry->GetGenerated());
+
+        // 계승 충돌과 상태를 확정한다. 빈 형상은 body 없는 조각이다.
+        const bool empty = collision.ConvexElems.empty();
+        prepared->Collision = std::move(collision);
+        if (empty)
+        {
+            prepared->CollisionStatus = ComponentCollisionStatus::Unavailable;
+            prepared->CollisionReason = emptyReason;
+        }
+        else
+            prepared->CollisionStatus = ComponentCollisionStatus::Inherited;
+        prepared->Geometry = std::move(geometry);
+        return prepared;
+    }
+
+    // 준비된 값을 옮기기만 해 geometry·배치·충돌을 한 번에 바꾼다. 이전 pose 버퍼는 마지막에 해제된다.
+    void MeshComponent::CommitGeometryReplacement(PreparedGeometryReplacement& prepared) noexcept
+    {
+        // pose 버퍼를 교체하되 이전 버퍼의 해제는 함수 끝으로 미룬다.
+        std::unique_ptr<PosedGeometry> previous = std::move(m_PosedGeometry);
+        m_PosedGeometry = std::move(prepared.Posed);
+
+        // SetGeometry·SetTransform·SetDeformBinding과 같은 세대 증가와 캐시 무효화를 적용한다.
+        m_EditGeneration += 3;
+        m_Geometry = std::move(prepared.Geometry);
+        m_Transform = prepared.Transform;
+        m_TransformMode = prepared.Mode;
+        m_DeformBinding = prepared.Binding;
+        m_SectionBounds.clear();
+        m_FrozenNodes.clear();
+        m_FrozenJoints.clear();
+        m_Ready = false;
+
+        // 새 revision에 대응하는 계승 충돌을 저장한다.
+        m_Collision = std::move(prepared.Collision);
+        m_CollisionStatus = prepared.CollisionStatus;
+        m_CollisionReason = std::move(prepared.CollisionReason);
+        m_CollisionRevisionId = m_Geometry->GetId();
+    }
+
     // 소유 객체와의 종속 모드에서만 owner Transform을 곱한다.
     AffineTransform MeshComponent::GetWorldTransform(const SceneTransform& owner) const
     {

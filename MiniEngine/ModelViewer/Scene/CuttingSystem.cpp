@@ -162,6 +162,9 @@ namespace Viewer
             m_Job->HasSplit() ? (m_Publish ? "Cancelled - cut target changed" : "Cut measured") : "No split - plane missed or only touched the mesh";
         if (m_Job->HasSplit() && LastCaps < ExpectedMinimumLoops)
             throw std::runtime_error("Expected closed cap loop was not generated");
+
+        // Scene을 바꾸기 전에 결과 한 칸을 확보해 게시 후 기록이 실패하지 않게 한다.
+        ReserveResultSlot();
         GameObject* object = m_Scene.FindObject(m_Owner);
         MeshComponent* mesh = object ? object->FindMeshComponent(m_Mesh) : nullptr;
 
@@ -206,29 +209,28 @@ namespace Viewer
                 {
                     const SceneTransform transform = mesh->GetTransform();
                     const MeshTransformMode mode = mesh->GetTransformMode();
-                    // B를 먼저 준비한다. A의 교체가 실패하면 B를 제거하고 입력은 유지한다.
-                    ComponentId pending = InvalidComponentId;
+                    // 준비 단계: 할당과 실패가 가능한 B 컴포넌트와 A 교체 자원을 모두 만든다. 실패하면 준비물만 해제되고 Scene은 그대로다.
                     try
                     {
-                        MeshComponent& other = object->AddMeshComponent(results[1]);
-                        const ComponentId id = other.GetId();
-                        pending = id;
-                        other.SetPlacement(transform, mode, DeformBinding{});
                         const char* emptyReason = hasInherited ? "no convex after slice" : "parent has no collision";
-                        other.SetInheritedCollision(std::move(inherited[1]), results[1]->GetId(), emptyReason);
-                        if (mesh->SetGeometry(results[0]))
+                        std::unique_ptr<MeshComponent> preparedB = object->PrepareMeshComponent(results[1]);
+                        preparedB->SetPlacement(transform, mode, DeformBinding{});
+                        preparedB->SetInheritedCollision(std::move(inherited[1]), results[1]->GetId(), emptyReason);
+                        const ComponentId id = preparedB->GetId();
+                        auto preparedA = mesh->PrepareGeometryReplacement(results[0], transform, mode, DeformBinding{}, std::move(inherited[0]), emptyReason);
+
+                        // commit 단계: 할당 없이 A를 교체하고 B를 공개한다.
+                        if (preparedA)
                         {
-                            mesh->SetPlacement(transform, mode, DeformBinding{});
-                            mesh->SetInheritedCollision(std::move(inherited[0]), results[0]->GetId(), emptyReason);
+                            mesh->CommitGeometryReplacement(*preparedA);
+                            MeshComponent& other = object->CommitMeshComponent(std::move(preparedB));
                             LogInheritance(parentStatus, parentVolume, parentConvex, *mesh, other);
                             LastOther = id;
                             m_StatusText = "Cut complete";
                         }
-                        else object->RemoveMeshComponent(id);
                     }
                     catch (const std::exception& error)
                     {
-                        if (pending && !LastOther) object->RemoveMeshComponent(pending);
                         LastError = 0x100;
                         Utility::Printf("Cut publish rejected: %s\n",error.what());
                     }
@@ -247,16 +249,58 @@ namespace Viewer
         Utility::Printf("Static cut cap diagnostics: failedEarSegments=%u badBoundaryMask=%u\n",m_Job->Status[6],m_Job->Status[7]);
         Utility::Printf("Static cut stages ms: clip=%.6f boundary=%.6f cap=%.6f finalize=%.6f\n",
             m_Job->StageMs[0],m_Job->StageMs[1],m_Job->StageMs[2],m_Job->StageMs[3]);
+
+        // 이번 작업의 결과를 소비용 목록에 남긴다.
+        CutResultEntry entry;
+        entry.Owner = m_Owner;
+        entry.Mesh = m_Mesh;
+        entry.Other = LastOther;
+        entry.RevisionId = (LastOther && mesh) ? mesh->GetGeometry()->GetId() : m_Job->Input->GetId();
+        entry.Status = LastOther ? CutResultStatus::Published : LastError ? CutResultStatus::Failed :
+            !m_Job->HasSplit() ? CutResultStatus::NoSplit : !m_Publish ? CutResultStatus::Measured : CutResultStatus::Cancelled;
+        entry.Error = LastError;
+        entry.GpuMs = LastGpuMs;
+        entry.ReadyMs = LastReadyMs;
+        m_Results.push_back(entry);
+
         m_Job.reset();
         if (m_BatchActive && LastOther) ++m_BatchApplied;
         FinishBatch();
         return true;
     }
 
+    // 가득 찬 목록에서는 가장 오래된 결과를 버리고, 이후 push_back이 할당하지 않도록 최대 용량을 한 번에 확보한다.
+    void CuttingSystem::ReserveResultSlot()
+    {
+        // 최대 용량을 확보한다. 이미 확보했다면 아무 일도 하지 않는다.
+        m_Results.reserve(MaxPendingResults);
+
+        // 가득 찼으면 가장 오래된 결과를 버리고 연속 손실은 한 번만 로그로 남긴다.
+        if (m_Results.size() >= MaxPendingResults)
+        {
+            m_Results.erase(m_Results.begin());
+            ++m_DroppedResults;
+            if (!m_DropLogged)
+            {
+                Utility::Printf("Static cut results dropped: unconsumed results exceed %zu\n", MaxPendingResults);
+                m_DropLogged = true;
+            }
+        }
+    }
+
+    // 쌓인 결과를 모두 넘기고 비우며 손실 로그 상태를 다시 열어 둔다.
+    std::vector<CutResultEntry> CuttingSystem::DrainResults()
+    {
+        // 소비 후에는 새 손실 구간을 다시 한 번 로그로 남길 수 있다.
+        m_DropLogged = false;
+        return std::exchange(m_Results, {});
+    }
+
     // 장면/렌더러 종료보다 먼저 제출 작업과 입력 snapshot을 정리한다.
     void CuttingSystem::Clear()
     {
         m_Pending.clear();
+        m_Results.clear();
         m_Job.reset();
         m_BatchActive = false;
     }

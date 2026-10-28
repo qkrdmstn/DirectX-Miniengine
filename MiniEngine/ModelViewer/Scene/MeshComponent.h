@@ -24,6 +24,19 @@ namespace Viewer
     bool GatherSectionHulls(const std::vector<MeshCollisionStatus>& statuses, const std::vector<MiniCollision::AggregateGeom>& hulls,
         const std::vector<GeometrySection>& sections, const double inverse[3][4], MiniCollision::AggregateGeom& out, std::string& reason);
 
+    // 준비 단계에서 모두 만들어 둔 A의 교체 자원이다. commit은 이 값을 옮기기만 하며 할당하지 않는다.
+    struct PreparedGeometryReplacement
+    {
+        std::shared_ptr<const GeometryRevision> Geometry;
+        std::unique_ptr<PosedGeometry> Posed;
+        SceneTransform Transform;
+        MeshTransformMode Mode = MeshTransformMode::Attached;
+        DeformBinding Binding;
+        MiniCollision::AggregateGeom Collision;
+        ComponentCollisionStatus CollisionStatus = ComponentCollisionStatus::Unavailable;
+        std::string CollisionReason;
+    };
+
     // 세대 증가 규칙 (R6)
     //  EditGeneration: SetGeometry, SetDeformBinding(source frame), SetTransform(배치·teleport·scale 포함),
     //                  SetPlacement(위 둘의 합)에서 증가한다.
@@ -68,6 +81,12 @@ namespace Viewer
         bool SetPlacement(const SceneTransform& transform, MeshTransformMode mode, const DeformBinding& binding);
         // 같은 Model의 새 geometry를 게시하고 이 컴포넌트의 pose 출력을 무효화한다.
         bool SetGeometry(std::shared_ptr<const GeometryRevision> geometry);
+        // 컴포넌트를 바꾸지 않고 새 geometry·배치·계승 충돌과 pose 버퍼를 미리 만든다. 할당과 실패는 여기서만 일어나며 거절되면 null이다.
+        std::unique_ptr<PreparedGeometryReplacement> PrepareGeometryReplacement(std::shared_ptr<const GeometryRevision> geometry,
+            const SceneTransform& transform, MeshTransformMode mode, const DeformBinding& binding,
+            MiniCollision::AggregateGeom collision, const char* emptyReason) const;
+        // 준비된 자원으로 geometry·배치·충돌을 교체한다. SetGeometry+SetPlacement와 같은 세대 증가(+3)이며 할당하거나 실패하지 않는다.
+        void CommitGeometryReplacement(PreparedGeometryReplacement& prepared) noexcept;
         // 현재 revision에 대응하는 컴포넌트 로컬 충돌을 읽는다. revision이 다르면 빈 형상이다.
         const MiniCollision::AggregateGeom& GetCollision() const;
         // 충돌 출처를 읽는다. revision이 다르면 Unavailable이다.

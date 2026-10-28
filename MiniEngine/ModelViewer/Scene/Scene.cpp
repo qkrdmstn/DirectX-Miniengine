@@ -1,5 +1,6 @@
 ﻿#include "Scene.h"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -53,13 +54,32 @@ namespace Viewer
     // 원본 pose 소유자와 같은 Model을 사용하는 geometry만 등록한다.
     MeshComponent& GameObject::AddMeshComponent(std::shared_ptr<const GeometryRevision> geometry)
     {
+        // 준비와 commit을 연달아 수행한다.
+        return CommitMeshComponent(PrepareMeshComponent(std::move(geometry)));
+    }
+
+    // 원본 검증, ID 발급, 컴포넌트 생성, 삽입 자리 예약을 owner 변경 없이 수행한다.
+    std::unique_ptr<MeshComponent> GameObject::PrepareMeshComponent(std::shared_ptr<const GeometryRevision> geometry)
+    {
+        // 원본 pose 소유자와 같은 Model인지 검증한다.
         if (!m_ModelInstance || !geometry || geometry->GetSource() != m_ModelInstance->GetModel())
             throw std::invalid_argument("Component source differs from owner pose");
-        auto component = std::make_unique<MeshComponent>(AllocateComponentId(), std::move(geometry));
-        m_MeshComponents.push_back(std::move(component));
 
-        // -collision-log 1이면 새 컴포넌트의 충돌 요약을 출력한다.
-        m_MeshComponents.back()->LogCollision(static_cast<uint32_t>(m_Id));
+        // 컴포넌트를 만들고 -collision-log 1이면 충돌 요약을 출력한다.
+        auto component = std::make_unique<MeshComponent>(AllocateComponentId(), std::move(geometry));
+        component->LogCollision(static_cast<uint32_t>(m_Id));
+
+        // commit이 할당하지 않도록 한 칸을 미리 확보한다.
+        m_MeshComponents.reserve(m_MeshComponents.size() + 1);
+        return component;
+    }
+
+    // 예약된 자리에 준비된 컴포넌트를 넣어 owner에 공개한다.
+    MeshComponent& GameObject::CommitMeshComponent(std::unique_ptr<MeshComponent> prepared) noexcept
+    {
+        // 예약 용량 안에서만 삽입한다.
+        assert(m_MeshComponents.size() < m_MeshComponents.capacity());
+        m_MeshComponents.push_back(std::move(prepared));
         return *m_MeshComponents.back();
     }
 

@@ -34,6 +34,10 @@ namespace Viewer
         const MeshComponent* FindMeshComponent(ComponentId id) const;
         // 같은 pose를 사용하는 독립 메시 컴포넌트를 추가한다.
         MeshComponent& AddMeshComponent(std::shared_ptr<const GeometryRevision> geometry);
+        // 컴포넌트를 만들고 ID를 발급하며 삽입 자리를 예약한다. 아직 owner에 보이지 않고 버려도 ID만 소모된다.
+        std::unique_ptr<MeshComponent> PrepareMeshComponent(std::shared_ptr<const GeometryRevision> geometry);
+        // 준비된 컴포넌트를 예약한 자리에 넣는다. 할당하지 않으며 Prepare 직후 다른 추가가 없어야 한다.
+        MeshComponent& CommitMeshComponent(std::unique_ptr<MeshComponent> prepared) noexcept;
         // 대응 collider와 함께 메시를 제거하며 ID는 재사용하지 않는다.
         bool RemoveMeshComponent(ComponentId id);
         // 컴포넌트별 geometry·pose·변환을 읽는다.

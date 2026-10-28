@@ -3,9 +3,27 @@
 #include "PhysicsSystem.h"
 #include "../../MeshCutting/GPU/GpuMeshCutter.h"
 #include <deque>
+#include <utility>
+#include <vector>
 
 namespace Viewer
 {
+    // 절단 결과의 종류다. Published만 Scene을 바꾼다.
+    enum class CutResultStatus { Published, Measured, NoSplit, Cancelled, Failed };
+
+    // 완료된 절단 하나의 소비용 기록이다. Other는 새 조각 B이며 Published일 때만 유효하다.
+    struct CutResultEntry
+    {
+        ObjectId Owner = InvalidObjectId;
+        ComponentId Mesh = InvalidComponentId;
+        ComponentId Other = InvalidComponentId;
+        uint64_t RevisionId = 0;    // Published면 A의 새 revision, 아니면 입력 revision
+        CutResultStatus Status = CutResultStatus::NoSplit;
+        uint32_t Error = 0;
+        double GpuMs = 0;
+        double ReadyMs = 0;
+    };
+
     // Scene 변경은 완료된 GPU 작업을 프레임 입력 경계에서 게시할 때만 수행한다.
     class CuttingSystem
     {
@@ -20,6 +38,10 @@ namespace Viewer
         void SubmitPending();
         // 작은 상태를 비동기로 수집하고 아직 같은 입력일 때만 A/B를 함께 적용한다.
         bool Update();
+        // 쌓인 완료 결과를 모두 넘겨 비운다. 소비자는 Last* 대신 이 목록을 읽는다.
+        std::vector<CutResultEntry> DrainResults();
+        // 소비되지 않아 버려진 가장 오래된 결과의 누적 수를 읽는다.
+        uint32_t GetDroppedResults() const { return m_DroppedResults; }
         // 원본과 결과가 제출된 GPU 작업을 참조하는 동안 작업을 유지한다.
         void Clear();
         // 진행 중 작업이 있는지 확인한다.
@@ -31,6 +53,7 @@ namespace Viewer
         uint32_t ExpectedMinimumLoops = 0;
         double LastGpuMs = 0, LastReadyMs = 0, LastAppliedMs = 0;
         uint32_t LastSegments = 0, LastCaps = 0, LastUncapped = 0, LastError = 0;
+        // 진단 로그 전용이다. 결과 소비는 DrainResults를 쓴다.
         ComponentId LastOther = InvalidComponentId;
         ObjectId LastOwner = InvalidObjectId;
 
@@ -49,6 +72,12 @@ namespace Viewer
         uint64_t m_EditGeneration = 0;
         uint64_t m_PhysicsPoseGeneration = 0;   // 6단계에서 simulate 대상 게시 직전 재확인에 쓴다
         bool m_Publish = true;
+        // 결과 목록에 한 칸을 확보한다. 가득 차 있으면 가장 오래된 결과를 버리며 게시 전에 호출해 이후 push가 할당하지 않게 한다.
+        void ReserveResultSlot();
+        static constexpr size_t MaxPendingResults = 256;
+        std::vector<CutResultEntry> m_Results;
+        uint32_t m_DroppedResults = 0;
+        bool m_DropLogged = false;
         std::deque<CutCandidate> m_Pending;
         MeshCutting::CutPlaneData m_PendingPlane{};
         uint32_t m_PendingCapMode = 0;

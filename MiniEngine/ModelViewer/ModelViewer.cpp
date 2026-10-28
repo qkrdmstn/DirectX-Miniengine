@@ -390,12 +390,17 @@ void ModelViewer::Update( float deltaT )
         Viewer::RunPhysicsQueryChecks(m_Scene,m_Physics,m_UsePhysicsQuery != 0,m_PhysicsCapacity);
         m_QuerySelfTest = 0;
     }
-    if (m_Cutting.Update())
+    m_Cutting.Update();
+    for (const Viewer::CutResultEntry& cutResult : m_Cutting.DrainResults())
     {
         if (m_BenchmarkRemaining)
         {
             if (m_BenchmarkWarmup) --m_BenchmarkWarmup;
-            else { m_CutGpuSamples.push_back(m_Cutting.LastGpuMs); m_CutReadySamples.push_back(m_Cutting.LastReadyMs); }
+            else
+            {
+                m_CutGpuSamples.push_back(cutResult.GpuMs);
+                m_CutReadySamples.push_back(cutResult.ReadyMs);
+            }
             --m_BenchmarkRemaining;
             if (!m_BenchmarkRemaining && !m_CutGpuSamples.empty())
             {
@@ -403,16 +408,16 @@ void ModelViewer::Update( float deltaT )
                 std::sort(m_CutReadySamples.begin(),m_CutReadySamples.end());
                 Utility::Printf("Static cut benchmark: samples=%zu medianGpuMs=%.6f p95GpuMs=%.6f medianReadyMs=%.3f error=%u\n",
                     m_CutGpuSamples.size(), m_CutGpuSamples[m_CutGpuSamples.size()/2],
-                    m_CutGpuSamples[std::min(m_CutGpuSamples.size()-1, size_t(m_CutGpuSamples.size()*0.95))],m_CutReadySamples[m_CutReadySamples.size()/2],m_Cutting.LastError);
+                    m_CutGpuSamples[std::min(m_CutGpuSamples.size()-1, size_t(m_CutGpuSamples.size()*0.95))],m_CutReadySamples[m_CutReadySamples.size()/2],cutResult.Error);
             }
         }
         else if (m_AutoCuts && !m_Cutting.IsBusy()) { --m_AutoCuts; ++m_AutoCutIndex; }
         // 기본은 위치 보존이며, 명시한 진단 간격만 새 B의 실제 Transform에 적용한다.
-        if (m_Cutting.LastOther)
+        if (cutResult.Status == Viewer::CutResultStatus::Published)
         {
             ++m_Publications;
-            auto* owner = m_Scene.FindObject(m_Cutting.LastOwner);
-            auto* piece = owner ? owner->FindMeshComponent(m_Cutting.LastOther) : nullptr;
+            auto* owner = m_Scene.FindObject(cutResult.Owner);
+            auto* piece = owner ? owner->FindMeshComponent(cutResult.Other) : nullptr;
             if (piece)
             {
                 auto transform = piece->GetTransform();
@@ -425,10 +430,10 @@ void ModelViewer::Update( float deltaT )
                     piece->SetTransform(transform, piece->GetTransformMode());
                 }
                 Utility::Printf("Static cut separation: owner=%llu mesh=%llu gap=%.6f delta=(%.6f,%.6f,%.6f) deltaSpace=%s\n",
-                    static_cast<unsigned long long>(m_Cutting.LastOwner),static_cast<unsigned long long>(m_Cutting.LastOther),
+                    static_cast<unsigned long long>(cutResult.Owner),static_cast<unsigned long long>(cutResult.Other),
                     m_CutGap,float(delta.GetX()),float(delta.GetY()),float(delta.GetZ()),
                     piece->GetTransformMode() == Viewer::MeshTransformMode::Attached ? "owner-local" : "world");
-                if (m_CutOther) { m_CutOwner = m_Cutting.LastOwner; m_CutMesh = m_Cutting.LastOther; }
+                if (m_CutOther) { m_CutOwner = cutResult.Owner; m_CutMesh = cutResult.Other; }
             }
         }
     }

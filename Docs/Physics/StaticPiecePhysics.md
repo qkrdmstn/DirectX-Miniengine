@@ -1,4 +1,4 @@
-상태: 진행 중 — `cccf6a3b` 기반 4d·5a~5c 작업 트리 구현·단계별 리뷰·Debug/Release 검증 완료, 6단계 transaction 미구현 (2026-10-26)
+상태: 진행 중 — 6a 완료(게시 준비·교체 분리, DrainResults), 6b 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -253,6 +253,7 @@ CPU:
 - **5b-1 완료**: `PhysicsSystem::SyncBodies`는 GPU 준비 전에 CPU 충돌로 body를 준비하고, cook/용량 예약 성공 후 컴포넌트를 분리·게시한다. 삭제·geometry/편집 변경 body를 다음 step 전에 정리하고 `ApplyBodyPoses`는 COM이 아닌 원점 T/R만 반영한다. 리뷰에서 용량 부족 실패의 영구 캐시를 발견해 예약 수 변화 시 재시도하도록 수정했고, 재리뷰와 용량 1 회귀를 통과했다.
 - **5b-2 완료**: `CreateFloor`는 CPU 충돌 경계에서 XZ 여유와 높이를 계산하고 cube asset bounds를 실제 Jolt Static Box와 맞춘다. 가장 작은 물체 높이의 절반 아래에 바닥을 두고 초기 clearance 0.5 m를 확보한다. 바닥은 정규화 뒤 생성되며 절단 후보·직접 요청·pick·owner 편집/Undo에서 제외된다. 바닥 메시만 제거되어도 다음 step 전에 body를 회수한다. 독립 리뷰 뒤 수명 처리를 보강했다.
 - **5c 완료**: `PhysicsStepClock`와 `AdvanceSimulation`은 1/60 s·최대4 step·초과 잔량 폐기를 적용한다. P와 `Viewer/Physics/Running` BoolVar는 동일한 pause 상태를 사용하고 토글 시 시계만 초기화한다. pause/zero-step에서도 stale body를 정리하며 body pose/속도/sleep은 보존한다. `-physics-sim` 기본1과 `-physics-query`는 독립이고, simulation 초기화/바닥 준비 실패는 경고 후 비활성화한다. 독립 리뷰에서 추가 결함 없음.
+- **6a 완료 (2026-10-28)**: 물리와 무관하게 절단 게시를 준비/commit으로 나눴다. `PrepareMeshComponent`·`PrepareGeometryReplacement`가 B 컴포넌트(ID·삽입 자리 예약)와 A 교체 자원을 만들고, `CommitGeometryReplacement`·`CommitMeshComponent`가 할당 없이 교체한다(세대 증가는 기존과 동일). 결과는 `CuttingSystem::DrainResults`(Owner/Mesh/Other/RevisionId/Status, 최대 256개·초과 시 오래된 것 폐기)로 소비하며 `ModelViewer`가 이전했고 `LastOther`는 진단용이다. 동작 변화 없음: Debug/Release 빌드, CPU 8 target·SceneMathTests 468·PhysicsStepClockTests 21 통과, 위 3개 실행 exit 0이며 sim-off 게시 4회와 D3D12 ERROR/CORRUPTION 0건을 OutputDebugString 수집으로 확인했다.
 
 프레임 순서는 절단 결과 게시 → 입력/P·UI 반영 → `AdvanceSimulation`(stale 정리·등록→step→pose) → `Scene::Update`/Finish → `SyncColliders` → 절단 제출/요청이다. Startup에서는 기존 진단용 query world 재초기화를 simulation 등록 전에 완료한다. Cleanup은 cutting → physics body/참조/소유 바닥 → scene 순서다.
 
