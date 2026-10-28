@@ -1,4 +1,4 @@
-상태: 설계안 — `5f56b93d` 기준 재대조·인계 v2 (2026-10-28), Xbot 데모 경로 추가, BC-00부터 구현 전
+상태: 진행 중 — BC-00 구현 완료, branch `break-constraint` (uncommitted, `0b1a395d` 기반); Debug/Release 빌드 성공, Debug 실행 PASS, GPU validation 미확인 (2026-10-28)
 
 # BreakConstraint 구현 인계
 
@@ -11,6 +11,8 @@
 첫 완료 목표 M1은 한 owner의 body chain에서 관절 하나를 끊고, 떨어진 subtree만 Jolt가 구동하며 그 결과가 본 pose/palette에 반영되는 것이다. M1의 최종 증거는 fixture가 아니라 Xbot 화면이다: 왼팔 상완–전완–손에 body 3개를 붙이고 팔꿈치(상완–전완) 관절을 끊으면 전완·손이 떨어지고(손목 관절은 유지), 상완과 섞인 팔꿈치 주변 정점이 늘어나는 NDC25 슬라이드 장면이 재현돼야 한다. 늘어남은 결함이 아니라 geometry 처리가 없다는 진단 결과다. M2는 기존 GPU 절단과의 원자적 게시 계약이다. 피부 분리·cap·생성 정점의 지속 스키닝 전체는 M1 완료 조건이 아니며 기존 skeletal 절단 거절을 M1에서 해제하지 않는다.
 
 ## 2. 확정 정책
+
+BC-00 자산 정적 확인: `Xbot.glb`의 scene 0을 `WalkGraph`와 같은 DFS 순서로 순회하면 70 nodes이며, NodeId 13/14/15는 `mixamorig:LeftArm`/`LeftForeArm`/`LeftHand`, parent는 12/13/14다. Debug Viewer 런타임에서도 70 nodes, NodeId 13→14→15와 parent 12/13/14를 확인했다. `RunXbotArmChecks`는 런타임에서도 node 수·parent를 출력하고 이 구조와 다르면 실패한다. 이름은 런타임에 없으므로 기대 이름으로만 출력한다.
 
 | 항목 | v1 결정 |
 | --- | --- |
@@ -84,6 +86,10 @@ Scene에는 `EvaluateAnimations(dt)`, `PrepareMeshes(context)`를 추가하고 �
 
 ## 6. rig 데이터와 물리 frame (BC-04~08)
 
+BC-00 측정 경로: `-xbot-arm-checks 1`은 기본 장면의 정규화된 Xbot 배치를 사용한다(`-model` 생략). 각 skinned section의 실제 `meshCBV` node를 Nmesh로, `GetWorldTransform`을 Wc로, `GetDeformBinding().SourceFrame`을 SourceFrame으로 사용하므로 대체 frame은 없다. section 간 E 일치를 매 tick 검사한다. 장면을 변경하지 않는 별도 `ModelInstance`에서 animation 0을 dt=1/60초, 3,600 ticks(시작 포함 3,601 표본) 재생하며 클립 길이가 60초를 넘으면 실패한다.
+
+열 길이 3개와 shear=`max(abs(dot(normalized columns)))`의 시작값·전체 min/max, shoulder→elbow 및 elbow→wrist 길이(m)를 출력한다. Debug 실측에서 세 본의 uniform s≈0.0177327(Armature 0.01 × 뷰어 정규화 배율), shear≤1.1e-6이다. 두 skinned section은 공통 E를 공유한다. 상완(shoulder→elbow)은 약 0.4937m, 전완(elbow→wrist)은 약 0.5023m이며 scale=1로 가정하지 않는다.
+
 `SkeletalPhysicsAsset`는 vector<BodyDefinition>, vector<JointDefinition>을 가진다. body ID와 joint ID는 자산 내 uint32 인덱스, invalid=UINT32_MAX. runtime handle은 단조 증가 uint64, 0 invalid이고 해제 후 재사용하지 않는다.
 
 BodyDefinition 필드: `Node`, `BoneFromBody`(body 원점→bone의 강체 offset), `HalfExtentMeters[3]`, `MassKg`. JointDefinition 필드: `ParentBody`, `ChildBody`, `ParentBodyFromJoint`, `ChildBodyFromJoint`(joint→각 body 원점 frame), `SwingHalfAngles[2]`, `TwistMin/Max`(rad). 양수 extent/mass·유한 입력·정규화 회전·유효 angle 범위·ID·tree·node ancestry를 검증한다.
@@ -118,6 +124,10 @@ Static 단계 4a~4d의 BodyHandle·RAII·Create/Register/Remove/Destroy·Step·f
 RemoveConstraint는 world 참조를 먼저 제거하고 map/RAII의 ref를 정리한다. owner 삭제는 모든 constraint 제거 → body 제거/파괴 → rig entry 제거 순서다. 등록 실패는 등록된 일부 자원도 역순 정리하고 owner pose/geometry를 변경하지 않는다. query fallback body와 본 body의 중복 후보는 handle→owner/node 매핑으로 구별한다.
 
 ## 8. break 준비·commit과 세대 (BC-09~10)
+
+BC-00 위치 지표는 배율을 제거한 전완 강체 frame에서 본 손목 위치(m)의 XYZ min/max와 최초 위치로부터의 거리 min/max다. 이는 anchor 거리의 대용치이며 두 물리 body anchor를 직접 비교한 결과가 아니다. 회전은 `inverse(R(E*G14))*R(E*G15)`를 전완 로컬 +X twist 축으로 분해한 절대 상대 자세다(기준 pose 차감 없음). swing은 비음수 총각, twist는 signed angle(rad)이다.
+
+Debug 실측에서 전완 frame의 손목 drift는 최대 약 1.9e-6m(로그 1.92311586e-6m)로 0.1mm 이하다. animation 0(약 1.83초)의 손목 swing은 [0.105,0.126]rad, 전완 로컬 +X 축 twist는 [-0.594,-0.574]rad다. 이는 애니메이션이 사용하는 pose 범위이며 ragdoll 관절 제한이 아니다. Ragdoll 제한은 이 범위를 포함해야 하며 실제 관절 축과 제한은 BC-04에서 결정한다. PASS의 `animation pose range`는 swing/twist 측정 범위에 0.05rad 여유를 더한 값이다. `anchorTolerance=max(1e-4m,2*driftMax)`는 drift 대용 지표일 뿐 두 body anchor 검증값이 아니다.
 
 ```cpp
 struct BreakRequest {
@@ -203,6 +213,12 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 M1은 BC-00~BC-13a다. BC-09·BC-14는 M2이며 이번 데모에 필요 없다.
 
 ## 12. 검증 명령과 판정
+
+BC-00 검증(2026-10-28): branch `break-constraint`에서 BC-00 구현 완료(uncommitted). Debug/Release 빌드 성공, Debug Viewer 실행의 `XbotArmChecks.log`에서 2 sections·3,601 samples와 PASS를 확인했다. 2·6·8절에 런타임 측정값을 반영했다. GPU validation은 확인하지 않았다. Geometry 코드는 변경하지 않아 CPU slicer 검사는 대상이 아니다.
+
+재검증 명령은 worktree 루트에서 `msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Debug /p:Platform=Windows`(복원 옵션 없음), 이어 `MiniEngine/ModelViewer`에서 `../Build/x64/Debug/Output/ModelViewer/ModelViewer.exe -debug 1 -xbot-arm-checks 1`이다. `XbotArmChecks.log`는 매 실행 초기화하고 요약 후 자동 종료한다. 이번 리뷰 수정 후 Debug 재빌드와 Release 재빌드 모두 성공했다(Release 16.38초). UTF-8 BOM 적용 후 헤더 인코딩 경고도 해소했다. 최종 Debug 실행은 7.30초, 종료 코드 0이며 새 로그에서 `BC-00 PASS: sections=2 samples=3601; animation pose range ...`를 확인했다. `-model Models/cube.glb`를 추가한 실패 경로도 6.32초 후 정상 종료하며 `BC-00 FAILED: default Xbot object required (omit -model)`를 기록했다(종료 코드 0). 샌드박스로 차단된 빌드·실행은 없었다. 빌드 중 pwsh 탐색 메시지 뒤 Windows PowerShell fallback이 수행되어 최종 빌드는 성공했다.
+
+진단 예외는 `ModelViewer::Startup`에서 실패 상태와 `BC-00 FAILED: 이유`를 기록하고, 초기화를 마친 뒤 `IsDone`으로 종료하여 Cleanup과 Graphics shutdown을 거친다. 현재 GameCore는 정상 종료 시 항상 0을 반환하며 기존 검사 옵션에도 실패 종료 코드를 전달하는 장치가 없다. 따라서 프로세스 종료 코드만으로 성공을 판정하지 않고 새 로그의 PASS/FAILED를 확인해야 한다. 로그 파일 쓰기 실패 이유는 디버거 출력으로도 남긴다. BC-01은 사용자 검토·커밋 후 별도 단계로 진행한다.
 
 CPU pose 테스트는 Jolt 없이 VS Developer PowerShell에서 실행한다. 산출물은 `$env:TEMP/BreakConstraintTests`에 둔다. BC-01에 테스트 파일 머리말에도 아래 명령을 넣는다.
 

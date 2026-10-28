@@ -44,6 +44,7 @@
 #include "Scene/tests/PhysicsQueryChecks.h"
 #include "Scene/tests/PhysicsSimChecks.h"
 #include "Scene/tests/EditTargetChecks.h"
+#include "Scene/tests/XbotArmChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -68,6 +69,11 @@ public:
     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
     virtual bool IsDone() override
     {
+        // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
+        if (m_XbotArmChecked || m_XbotArmFailed)
+            return true;
+
+        // 기존 GPU 작업 완료와 사용자 종료 요청을 확인한다.
         return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished())
             || (!m_EscapeConsumed && IGameApp::IsDone());
     }
@@ -108,6 +114,8 @@ private:
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
     Viewer::EditTarget m_Target;
     Viewer::EditTargetChecks m_EditTargetChecks;
+    bool m_XbotArmChecked = false;
+    bool m_XbotArmFailed = false;
     Viewer::TransformGizmo m_Gizmo;
     Viewer::CollisionDebugDraw m_CollisionDraw;
     bool m_EscapeConsumed = false;
@@ -301,6 +309,21 @@ void ModelViewer::Startup( void )
         object->SetTransform(UniformTransform(Quaternion(kIdentity), scale,
             Vector3(x, 0.0f, 0.0f) - model->GetModel()->m_BoundingSphere.GetCenter() * scale));
     }
+
+    // 정규화된 기본 장면에서 진단하고 실패도 정상 정리 경로로 전달한다.
+    try
+    {
+        m_XbotArmChecked = Viewer::RunXbotArmChecks(m_Scene);
+    }
+    catch (const std::exception& error)
+    {
+        // 실패 상태와 이유를 남기고 Startup을 마쳐 IsDone으로 종료한다.
+        m_XbotArmFailed = true;
+        Utility::Printf("BC-00 FAILED: %s\n", error.what());
+        std::ofstream log("XbotArmChecks.log", std::ios::app);
+        log << "BC-00 FAILED: " << error.what() << "\n";
+    }
+
     uint32_t componentChecks = 0;
     if (CommandLineArgs::GetInteger(L"component-checks", componentChecks) && componentChecks == 1)
     {
