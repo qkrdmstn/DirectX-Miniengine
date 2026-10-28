@@ -98,6 +98,44 @@ static void TestCubeSlice()
     CheckNear(TotalVolume(keep) + TotalVolume(other), parentVolume, parentVolume * 1e-6, "dop sum");
 }
 
+// 정육면체 18-DOP을 45도로 자를 때 정점 병합에 따른 hull 초과량을 검사한다.
+static void TestCubeDiagonalHullContainment()
+{
+    // 정육면체 18-DOP을 원점을 지나는 45도 평면으로 자른다.
+    const std::vector<Vec3d> pts = { {-1,-1,-1}, {1,-1,-1}, {-1,1,-1}, {1,1,-1}, {-1,-1,1}, {1,-1,1}, {-1,1,1}, {1,1,1} };
+    AggregateGeom dop;
+    Check(GenerateKDop18(pts, dop), "diagonal dop");
+    const double r = std::sqrt(0.5);
+    const Plane plane = { { -r, r, 0 }, 0.0 };
+    AggregateGeom keep;
+    AggregateGeom other;
+    SliceAggregateGeom(dop, plane, keep, other);
+    Check(!keep.ConvexElems.empty() && !other.ConvexElems.empty(), "diagonal pieces");
+
+    // 평면 위 꼭짓점을 양쪽에 포함해 각 쪽 지지 평면의 최대 초과량을 구한다.
+    for (int side = 0; side < 2; ++side)
+    {
+        std::vector<Plane> planes;
+        const AggregateGeom& piece = side == 0 ? keep : other;
+        piece.ConvexElems[0].GetPlanes(planes);
+        double maxExcess = -1.0e30;
+        for (const Vec3d& p : pts)
+        {
+            const double d = plane.PlaneDot(p);
+            if ((side == 0 && d >= -1e-9) || (side == 1 && d <= 1e-9))
+            {
+                for (const Plane& hullPlane : planes)
+                {
+                    maxExcess = std::max(maxExcess, hullPlane.PlaneDot(p));
+                }
+            }
+        }
+
+        // 병합 근사가 실제로 생기며 병합 거리와 snap 오차의 합 이내인지 확인한다.
+        Check(maxExcess > 0.0 && maxExcess <= MinHullVertDistance + 1e-6, "diagonal hull excess");
+    }
+}
+
 // 한쪽에 통째로 있거나 면과 겹치는 평면을 처리하는지 검사한다.
 static void TestPassThroughAndFace()
 {
@@ -248,6 +286,7 @@ int main()
     {
         TestBoxPlaneCompare();
         TestCubeSlice();
+        TestCubeDiagonalHullContainment();
         TestPassThroughAndFace();
         TestCornerTetra();
         TestTwoElems();

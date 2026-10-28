@@ -1,4 +1,4 @@
-상태: 완료 — 6a~6f-2·7a~7d·8단계 완료(8a `4495d1f4`, 8b·8c 원인 기록 `0ef416dd`, 8d 전체 검증), 미해결: cube 45° hull 포함 검증 예외 (2026-10-28)
+상태: 완료 — 6a~6f-2·7a~7d·8단계 완료(8a `4495d1f4`, 8b·8c 원인 기록 `0ef416dd`, 8d 전체 검증 `1d383ebb`, 8e cube 45° hull 포함 검증) (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -391,7 +391,7 @@ CPU:
   - 기본 `-cut 40 -physics-sim 0`(Release): 결과 40회 중 38회가 `split=0`이고 게시 2회에서 `-cut-expect-publications 40`이 실패한다. `-cut N`은 게시가 아니라 완료된 시도 수를 센다. `cut-repeat-plane 0`은 두 평면 방향을 번갈아 같은 위치에 다시 적용하므로 이미 잘린 A가 분할되지 않는다.
   - `-cut 40 -cut-repeat-plane 1 -cut-step-y .02`: 32회 게시 후 33번째 제출이 `Cut retained history/output memory budget exceeded`로 거절된다. `GpuMeshCutter::Submit`의 생성 세대 상한 32(계보 메모리 512 MiB와 함께 검사)에 따른 설계된 거절이며 오류 없이 처리된다.
   - 따라서 한 계보 40회 게시는 현재 예산으로 불가능하다. 반복 절단 검증은 `-cut 32 -cut-repeat-plane 1 -cut-step-y .02 -cut-validate 1 -cut-expect-publications 32`로 바꾼다. Debug/Release 모두 게시 32·exit 0·D3D12 ERROR 0이다. physics 실행 중 자동 절단이 awake body를 기다리는 동작은 이번 실행에서 문제가 되지 않았다.
-  - 별도 결함(미해결): cube `-cut-angle 45`는 `GpuCutValidation.cpp`의 A쪽 sliced hull 포함 검사에서 `std::runtime_error`로 끝난다. 양쪽 hull은 생성된다(sliced 4.00653514 / 4.0061456). 절단면이 hull 모서리 근처를 지날 때 CPU `SliceConvexElem`·`HullFromPlanes`의 snap·0.001 병합과 GPU 평면 위 판정의 차이로 추정하며, 초과량은 아직 측정하지 않았다. 검증을 끈 게시와 물리 동작은 확인하지 않았다.
+  - 별도 결함(8e에서 해결): cube `-cut-angle 45`는 `GpuCutValidation.cpp`의 A쪽 sliced hull 포함 검사에서 `std::runtime_error`로 끝난다. 양쪽 hull은 생성된다(sliced 4.00653514 / 4.0061456). 절단면이 hull 모서리 근처를 지날 때 CPU `SliceConvexElem`·`HullFromPlanes`의 snap·0.001 병합과 GPU 평면 위 판정의 차이로 추정하며, 초과량은 아직 측정하지 않았다. 검증을 끈 게시와 물리 동작은 확인하지 않았다.
 
 - **8d R14 전체 검증 (2026-10-28, `0ef416dd` 기준)**: 모두 통과, 코드 변경 없음.
   - CPU(Debug/Release 각각): SceneMathTests 495, PhysicsStepClockTests 21, CollisionDebugTests 24 checks, CutPlaneTests 통과, MiniPhysics CTest 9/9. 산출물은 `%TEMP%/step8/verify/`.
@@ -399,6 +399,12 @@ CPU:
   - 정착 관통: 모든 시나리오에서 최저점 ≥ −1.155251 m, 바닥 −1.155179 m로 최대 0.000072 m다. R14 한계 0.01 m 이내다.
   - 실행 명령은 `%TEMP%/step8/verify.ps1`에 모아 두었다. 런타임 1회는 약 7~45초다. 환경은 NVIDIA GeForce MX450, 드라이버 DLL 32.0.15.9186이다.
   - 미확인: 실제 마우스 드래그·Ctrl+Z·Delete 키·P/H 토글의 수동 조작. `Docs/README.md` 상태 행은 스테이징 금지 파일이라 갱신하지 않았다.
+
+- **8e 완료 (2026-10-28)**: cube 45° 절단 hull 포함 검증 예외.
+  - 원인: cube `GenerateKDop18` hull은 병합 뒤 x 반폭 1.001, y·z 반폭 1.0004142인 상자다. 45° 평면이 A쪽 바닥면에 폭 0.0006 m 띠를 만들고, `HullFromPlanes`가 `MinHullVertDistance`(0.001 m)보다 가까운 두 꼭짓점을 병합한다. 병합은 z=−1에서 x=−1.001, z=+1에서 x=−1.0004를 남겨 6정점 hull이 된다. 그래서 원래 cube 꼭짓점이 hull 밖으로 0.000414 m 나가고, 허용치(1e-4 × 최대 변 ≈ 0.0002)를 넘었다. CPU 재현의 부피(4.00653601 / 4.00614517)와 초과량이 런타임과 같다.
+  - 판단: 이 병합은 Unreal `HullFromPlanes`와 같은 동작이고 `GenerateKDop18`도 병합 근사를 명시한다. 절단이나 hull 생성의 결함이 아니라 검증 허용치가 문서화된 근사를 반영하지 않은 것이다. 병합 대표점은 이동하지 않고, 지지 평면은 정규화 법선과 최대 내적으로 만들어진다. 따라서 초과량은 원래 점과 대표점의 거리, 즉 snap 1e-6 m + 병합 0.001 m 이하다. 물리 영향은 충돌 hull이 렌더보다 최대 약 1 mm 작아지는 것이며 8a slop 0.005 m보다 작다.
+  - 구현: `CutJob::ValidateDiagnostics`의 포함 허용치를 `hullExtent × 1e-4 + MinHullVertDistance + sqrt(DefaultSnapDistSq)`로 바꿨다. `HullFromPlanes` 병합 규칙과 얇은 조각 규칙은 바꾸지 않았다. `AggregateSliceTests`의 `TestCubeDiagonalHullContainment`가 cube 18-DOP 45° 절단의 양쪽 초과량이 0보다 크고 상한 이하임을 검사한다.
+  - 검증: MiniPhysics CTest Debug/Release 9/9, `.slnx` Debug/Release 빌드 오류 0. cube `midair-settle -cut-angle 45` Debug/Release 74 checks, 초과량 0.000414 m / 허용치 0.00120114 m, exit 0, D3D12 ERROR 0. 8d 런타임 44회 재실행(snap 항 추가 전 빌드) 모두 exit 0·D3D12 ERROR 0, 최대 관통 0.000072 m. 리뷰 지적(snap 항 누락)은 반영했다.
 
 남은 제한: Owner 대상은 Attached 컴포넌트가 있을 때만 그것을 맞혀 얻으며 기존 동작을 유지하고 WorldIndependent 조각은 움직이지 않는다. simulate 메시 절단은 6f-2부터 awake·sleep·pause 모두 허용하며 COM 속도를 계승한다. `-cut-gap`은 simulation 활성 상태에서 거절하고 `-physics-sim 0`에서만 사용한다(7b 뒤에도 유지). 8단계 결과와 남은 결함(cube 45° hull 포함 검증 예외)은 8a~8d 기록을 따른다.
 
