@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | [JoltQueryIntegration.md](Physics/JoltQueryIntegration.md) | 현재 SDK 빌드·collider 등록·평면 후보 API·실행 검증 | 완료 — `39db69f3` 커밋된 Jolt v5.6.0 조회 연결·Debug/Release/Profile 빌드·CPU/실행 검증 |
 | [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `39db69f3` 조회 구현 완료; 동적 조각 물리는 StaticPiecePhysics로 대체, Skeletal 물리는 후속 |
-| [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — `cccf6a3b` 기반 4d·5a~5c 작업 트리 구현·리뷰·Debug/Release 검증 완료; 물리 절단 transaction은 6단계 (2026-10-26) |
+| [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — 7a~7d 완료, `26302519` 기반 바닥 최소 1,000×1,000 m 확장; 8단계 전체 검증 미진행 (2026-10-28) |
 | [BreakConstraintDesign.md](Physics/BreakConstraintDesign.md) | UE5.3.2 관절 해제·Actor 유지·physics pose 반영 원리 | 설계안 — `5f56b93d` 재대조, 구현 계약은 아래 인계 문서 참조 (2026-10-28) |
 | [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트·첫 작업 지시 | 설계안 — `5f56b93d` 기준 인계 v2, Xbot 팔 데모 추가, BC-00부터 구현 전 (2026-10-28) |
 

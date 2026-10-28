@@ -1,4 +1,4 @@
-상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b(`5e0a5627`)·7c(`6fcccce9`)·7d 완료, 8단계 미진행 (2026-10-28)
+상태: 진행 중 — 6f-2(`1b9aacba`) 구현 완료 / 검증 일부 미완료(공중 절단 후 정착 관통·솔루션 빌드), 6a~6e·6f-1(`7e007898`)·7a(`b956f66b`)·7b(`5e0a5627`)·7c(`6fcccce9`)·7d 완료, `26302519` 기반 바닥 최소 1 km 확장, 8단계 미진행 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -69,8 +69,10 @@ Body 생성: scale을 정점에 반영 → Jolt ConvexHullShape → Dynamic body
 ### R1 바닥
 
 - 별도 GameObject, Static, `cube.glb`를 확대 표시, Jolt Static Box.
-- 시작 정규화·배치에서 제외하고, 모델 bounds로 크기와 높이를 정한다(기본 평면 y=0, 4×4가 멈춘 물체를 지나도록).
+- 시작 정규화·배치에서 제외한다. `PhysicsSystem::CreateFloor`는 원점 X/Z ±500 m를 덮는 최소 1,000×1,000 m 바닥을 만들고, 더 큰 장면은 모델 bounds 밖 2 m까지 확장한다. 두께는 0.5 m이며 렌더 메시와 Jolt Static Box는 같은 크기를 쓴다. 높이는 기존처럼 가장 작은 충돌 높이의 절반 아래로 정한다(기본 절단 평면 y=0, 4×4가 멈춘 물체를 지나도록).
 - NotCuttable/NotEditable를 `IsEligible`·직접 Request·기즈모 pick·Undo에서 검사한다.
+- 2026-10-28 확장 검증(`26302519` 기반): `.slnx` Debug/Release 빌드와 독립 코드 리뷰 통과. `MiniEngine/ModelViewer`에서 각 구성 실행 파일에 `-debug 1 -model Models/cube.glb -physics-sim-checks 1 -physics-query-exit 120`을 전달해 바닥 크기 `(1000,0.5,1000)`, 360 step 후 sleep·최저점 −1.155180 m(바닥 −1.155179 m), 400 checks·exit 0·D3D12 ERROR/CORRUPTION 0을 확인했다. 실제 화면의 수동 시각 검사는 수행하지 않았다.
+- 실행 로그의 선택 GPU는 NVIDIA GeForce MX450이며 드라이버 버전 재조회는 OS 접근 거부로 확인하지 못했다. Release에는 출력 화면과 swapchain 어댑터 불일치 DXGI 메시지가 있다. 로그는 `%TEMP%/step7-Debug-large-floor.log`, `%TEMP%/step7-Release-large-floor.log`, 빌드는 `%TEMP%/large-floor-<구성>-build.log`에 보관했다.
 
 ### R2 충돌 자산
 
