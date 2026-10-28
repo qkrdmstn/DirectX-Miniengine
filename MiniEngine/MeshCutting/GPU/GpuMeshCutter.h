@@ -30,6 +30,9 @@ namespace MeshCutting
         uint64_t Fence = 0;
         CutConstants Constants;
         std::vector<uint32_t> Status;
+        // 면(A/B)별 출력 정점의 GPU 18-DOP이며 SideDopValid가 거짓이면 출력 정점이 없어 값이 없다. 아직 게시에는 쓰지 않는다.
+        std::array<KDop18, 2> SideDop{};
+        std::array<bool, 2> SideDopValid{};
         std::array<double, 4> StageMs{};
         double GpuMilliseconds = 0, ReadyMilliseconds = 0;
         std::chrono::steady_clock::time_point Started;

@@ -85,9 +85,26 @@ namespace MeshCutting
     {
         if (Collected) return true;
         if (!Graphics::g_CommandManager.IsFenceComplete(Fence)) return false;
-        Status.resize(80 / 4 + Constants.Sections * 2);
+        Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide);
         std::memcpy(Status.data(), StatusReadback.Map(), Status.size() * 4);
         StatusReadback.Unmap();
+
+        // Metadata 끝의 면별 18-DOP을 해석하며 기여 정점이 없는 면은 sentinel을 해석하지 않고 비운다.
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            const uint32_t base = 80 / 4 + Constants.Sections * 2 + side * KDopWordsPerSide;
+            if (Status[base + 18] == 0) continue;
+
+            KDop18 dop;
+            for (uint32_t axis = 0; axis < 9; ++axis)
+            {
+                dop.Min[axis] = Unorder(Status[base + axis]);
+                dop.Max[axis] = Unorder(Status[base + 9 + axis]);
+            }
+            dop.VertexCount = Status[base + 18];
+            SideDop[side] = dop;
+            SideDopValid[side] = true;
+        }
         const uint64_t* times = static_cast<const uint64_t*>(TimeReadback.Map());
         uint64_t frequency = 0;
         Graphics::g_CommandManager.GetCommandQueue()->GetTimestampFrequency(&frequency);
@@ -230,8 +247,12 @@ namespace MeshCutting
             material.normalTextureScale=1;material.roughnessFactor=0.8f;
             out->CapMaterial.Create(L"Cut cap material",1,sizeof(material),&material);
         }
-        std::vector<uint32_t> initial(20 + c.Sections * 2, 0);
+        std::vector<uint32_t> initial(20 + c.Sections * 2 + 2 * KDopWordsPerSide, 0);
         for (uint32_t side = 0; side < 2; ++side) for (uint32_t k = 0; k < 3; ++k) initial[8 + side * 6 + k] = 0xffffffff;
+        // 면별 18-DOP의 최솟값 단어는 최대 sentinel로, 최댓값 단어와 개수는 0으로 시작한다.
+        for (uint32_t side = 0; side < 2; ++side)
+            for (uint32_t axis = 0; axis < 9; ++axis)
+                initial[20 + c.Sections * 2 + side * KDopWordsPerSide + axis] = 0xffffffff;
         job->Metadata.Create(L"Cut counts/status/bounds", uint32_t(initial.size()), 4, initial.data());
         job->Scratch.Create(L"Cut boundary graph/hash", c.HashLinksOffset + c.MaxSegments * 8, 1);
         job->Descriptors.Create(L"Cut sections", c.Sections, sizeof(CutSection), job->Sections.data());

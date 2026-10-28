@@ -1,4 +1,4 @@
-상태: 진행 중 — 6a~6d·7a 완료, 7b 이후 미구현 (2026-10-28)
+상태: 진행 중 — 6a~6d·6e-1·7a 완료, 6e-2 이후 미구현 (2026-10-28)
 
 # Static 절단 조각 물리 (요구사항 v4)
 
@@ -195,6 +195,10 @@ CPU:
 - Debug/Release D3D12 ERROR 0.
 - `TransformHistory`를 바꾸면 `SceneMathTests`를 갱신한다.
 
+### R15 절단 후 convex 재맞춤
+
+절단 후 각 쪽 조각의 convex를 그 쪽 출력 정점의 18-DOP(GPU 측정)와 잘린 부모 convex의 교집합으로 다시 맞춘다. 포함이 검증되지 않거나 겹침이 불확실하면 잘린 convex를 그대로 쓴다. 섬 분리는 하지 않는다(Unreal SliceProceduralMesh와 같음, Skeletal 단계로 연기). Unreal 슬라이스는 재맞춤을 하지 않으며 이는 우리 정책이다.
+
 ## F. 구현 계획
 
 단계마다 구현 → 독립 리뷰 → Debug/Release 빌드·테스트 → 사용자 검토·커밋 순서로 진행하며, 한 단계는 한 개념·약 300줄이다. 해당 문서와 README 상태를 단계마다 갱신한다. 2026-10-26 사용자는 5a~5c의 자동 진행·병렬 작업과 단계별 필수 리뷰를 승인했다.
@@ -219,6 +223,9 @@ CPU:
 | 6b | 물리 절단 transaction(준비→검증→교체→rollback)·예산, 절단 임시 제한 해제 | `Scene/CutTransaction.*` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6c | 실패 경로 런타임 검증(작업 중 깨어남·강제 cook 실패·빈 쪽) | `Scene/tests/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 6d | 충돌 convex 디버그 표시(H·UI 토글), 조각별 색, 바닥 상자 | `Scene/CollisionDebugMath.h`, `Scene/CollisionDebugDraw.*`, `Scene/PhysicsSystem.*`, `Scene/GizmoDraw.h`, `ModelViewer.cpp`, `Scene/tests/CollisionDebugTests.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+CPU 테스트 약 5초, 런타임 약 8초/회) |
+| 6e-1 | GPU 조각별 18-DOP 측정·검증 | `MeshCutting/Shaders/CutBoundsCS.hlsl`, `GPU/CutTypes.h`, `GPU/GpuMeshCutter.*`, `tests/GpuCutValidation.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
+| 6e-2 | CPU convex 재맞춤 함수·테스트 | 미정 (Physics/Collision, CPU 테스트) | 미측정 |
+| 6e-3 | 절단 경로 연결·포함 검증·문서 | 미정 (Scene/CutTransaction, CuttingSystem) | 미측정 |
 | 7a | EditTarget(Owner/Mesh) 선택 | `Scene/EditTarget.h`, `ObjectSelection.*`, `ModelViewer.cpp` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7b | 공통 편집 적용 경로(transform·body·세대), scale cook 실패 원자성 | `Scene/` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
 | 7c | History·Esc·Undo(대상 종류 저장), `SceneMathTests` 갱신, 기즈모 임시 제한 해제 | `TransformGizmo.*`, `TransformHistory.h` | 리뷰 2~5분 + 빌드 약 90초 (+런타임 약 8초/회) |
@@ -285,6 +292,12 @@ CPU:
   - 분량: 제품 코드가 약 450줄(테스트 제외)로 단계당 약 300줄 기준을 넘었다. `-cut 40` 연속 절단 스트레스 실행은 그리기를 꺼도 게시 40회에 도달하지 못해 멈추거나 예외로 끝난다(기존 현상, 원인 미조사. 8단계에서 조사한다).
   - 한계: H 키 입력과 UI 토글은 같은 `BoolVar`를 읽고 쓰는 구조로 보장하며 자동 입력으로 실제 키는 검증하지 못했다(창 포커스 불가). 화면 캡처는 하지 않았다.
 
+- **6e-1 완료 (2026-10-28)**: 절단 각 쪽 출력 정점의 18-DOP을 GPU에서 측정해 읽어 온다(동작 변화 없음, 게시는 아직 쓰지 않는다).
+  - 레이아웃: `Metadata` 끝에 `20 + 2*Sections` 뒤로 면당 19단어(축 9개 최솟값, 최댓값 9개, 기여 정점 수)를 붙인다. 축은 `KDopDir18`의 짝수 번째 방향 9개(음의 방향은 최솟값이 맡음)이며 `GenerateKDop18`과 같은 단위 방향이다. 값은 `Ordered` 인코딩의 원자 min/max이고 최솟값은 0xffffffff, 최댓값·개수는 0으로 시작한다.
+  - 구현: `CutBoundsCS`의 `ReduceDop`이 기존 AABB 축소 뒤 같은 순회(구간별 VertexStart·min(count, capacity), cap 포함)로 그룹 축소 후 전역 합산한다. 출력은 컴포넌트 로컬 Pose를 그대로 쓰며 SourceFrame은 적용하지 않는다. 비유한 정점은 제외하고 세지 않는다. `CutJob::Poll`이 `SideDop`/`SideDopValid`로 풀며(C++17이 아니라 optional 대신 배열+플래그) 개수 0인 면은 sentinel을 해석하지 않는다. 새 셰이더·PSO는 없다.
+  - 검증: `ValidateDiagnostics`가 분할 여부와 무관하게 `ValidateSideDop`으로 출력 Pose를 읽어 CPU double 기준과 비교한다(허용 `1e-6*extent+1e-7`, 유한 정점이 0이면 GPU도 비어야 함).
+  - 결과(Debug/Release, 모두 exit 0, D3D12 ERROR/CORRUPTION 0): sim-off Cube 4회 절단 최대 오차 9.6e-8(허용 약 2.9e-6), 6b 30° 절단·6c `empty-a` 7.2e-8, Bunny 1.8e-5(좌표 약 250, 허용 약 4.4e-4). 샘플(Cube 첫 절단 A, 정점 54): 축0 [-1,1], 축1 [0,1], 축2 [-1,1.000001].
+  - 미해결: Bunny 절단 출력 정점 수가 실행마다 다르다(A면 Debug 36576/36564, Release 36564). 구성이 아니라 실행 간 비결정일 수 있으며 원인은 조사하지 않았다.
 - **7a 완료 (2026-10-28)**: 편집 대상 선택만 구현했다(적용·History는 7b·7c).
   - `Scene/EditTarget.h`: `EditTarget{Kind, Object, Mesh}`와 `FromPick`(월드 독립이면 Mesh, 아니면 Owner)·동등 비교(GPU 무관, `SceneMathTests`에서 검사). `ObjectSelection`의 `ResolveEditTarget`·`IsEditTargetValid`·`TryGetEditTargetTransform`이 Scene과 연결한다. `GameObject::IsEditable`에서 simulate 소유 검사를 제거해 바닥 등 명시적 잠금만 남겼고, simulate 조각 pick 제외를 풀었다.
   - `TransformGizmo::Update/Render`는 `EditTarget`을 받아 대상의 월드 TRS 위치·축에 기즈모를 그린다. Mesh 대상의 핸들 누름과 `Ctrl+Z`는 편집 없이 거절하고 안내를 띄운다(`GetNotice`). ModelViewer는 `m_Target`을 쓰며 `IsEditTargetValid`가 거짓이면 매 프레임 선택을 해제한다.

@@ -42,12 +42,103 @@ namespace MeshCutting
             return section.BaseVertex + (section.Index32 ? Read<uint32_t>(data,section.IbOffset+at*4) :
                 Read<uint16_t>(data,section.IbOffset+at*2));
         }
+
+        // 각 면 출력 정점을 읽어 CPU에서 double로 18-DOP을 구하고 GPU 값과 절대+상대 허용오차로 비교한다.
+        void ValidateSideDop(CutJob& job)
+        {
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                // CutBoundsCS와 같은 section별 유효 범위(min(count, capacity))의 정점 수를 센다.
+                uint64_t total = 0;
+                for (uint32_t section = 0; section < job.Constants.Sections; ++section)
+                {
+                    const uint32_t count = job.Status[20 + side * job.Constants.Sections + section];
+                    total += std::min(count, job.Sections[section].VertexCapacity);
+                }
+
+                // 출력 정점이 없는 면은 GPU도 DOP을 비워야 한다.
+                if (total == 0)
+                {
+                    Require(!job.SideDopValid[side], "GPU DOP exists for a side without output");
+                    Utility::Printf("GPU cut DOP check: side=%u empty (no output)\n", side);
+                    continue;
+                }
+
+                // 출력 Pose 버퍼를 읽어 오고 원래 상태로 되돌린다.
+                auto& out = *job.Output[side];
+                ReadbackBuffer pose;
+                pose.Create(L"Diagnostic DOP pose", uint32_t(out.Pose.GetBufferSize()), 1);
+                auto& read = GraphicsContext::Begin(L"Read cut DOP pose");
+                read.CopyBuffer(pose, out.Pose);
+                read.TransitionResource(out.Pose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                read.Finish(true);
+                const auto* vertices = static_cast<const uint8_t*>(pose.Map());
+
+                // CPU에서 9개 축의 최솟값/최댓값과 기여 정점 수를 double로 구한다.
+                double cpuMin[9];
+                double cpuMax[9];
+                for (uint32_t axis = 0; axis < 9; ++axis)
+                {
+                    cpuMin[axis] = 1.0e300;
+                    cpuMax[axis] = -1.0e300;
+                }
+                uint64_t contributing = 0;
+                for (uint32_t section = 0; section < job.Constants.Sections; ++section)
+                {
+                    const uint32_t count = std::min(job.Status[20 + side * job.Constants.Sections + section], job.Sections[section].VertexCapacity);
+                    for (uint32_t i = 0; i < count; ++i)
+                    {
+                        const auto p = Read<Math::XMFLOAT3>(vertices, (job.Sections[section].VertexStart + i) * 40);
+                        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+                        ++contributing;
+                        for (uint32_t axis = 0; axis < 9; ++axis)
+                        {
+                            const double d = double(p.x) * KDopAxes9[axis][0] + double(p.y) * KDopAxes9[axis][1] + double(p.z) * KDopAxes9[axis][2];
+                            cpuMin[axis] = std::min(cpuMin[axis], d);
+                            cpuMax[axis] = std::max(cpuMax[axis], d);
+                        }
+                    }
+                }
+                pose.Unmap();
+
+                // 유한한 출력 정점이 하나도 없으면 GPU도 DOP을 비워야 하며 극값은 비교하지 않는다.
+                if (contributing == 0)
+                {
+                    Require(!job.SideDopValid[side], "GPU DOP exists but CPU has no finite vertices");
+                    Utility::Printf("GPU cut DOP check: side=%u no finite vertices (GPU DOP empty)\n", side);
+                    continue;
+                }
+
+                // GPU 값이 있어야 하며 개수가 CPU와 같아야 한다.
+                Require(job.SideDopValid[side], "GPU DOP is missing for a side with output");
+                const KDop18& gpu = job.SideDop[side];
+                Require(gpu.VertexCount == contributing, "GPU DOP vertex count differs from CPU");
+
+                // 허용오차 1e-6 x extent + 1e-7로 모든 축의 최솟값/최댓값을 비교한다.
+                double extent = 0;
+                for (uint32_t axis = 0; axis < 9; ++axis) extent = std::max(extent, cpuMax[axis] - cpuMin[axis]);
+                const double tolerance = 1.0e-6 * extent + 1.0e-7;
+                double maxError = 0;
+                for (uint32_t axis = 0; axis < 9; ++axis)
+                {
+                    maxError = std::max({maxError, std::abs(double(gpu.Min[axis]) - cpuMin[axis]), std::abs(double(gpu.Max[axis]) - cpuMax[axis])});
+                }
+                Require(maxError <= tolerance, "GPU DOP differs from CPU reference");
+                Utility::Printf("GPU cut DOP check passed: side=%u vertices=%u maxAbsError=%.3g tolerance=%.3g extent=%.6g axis0=[%.6f,%.6f] axis1=[%.6f,%.6f] axis2=[%.6f,%.6f]\n",
+                    side, gpu.VertexCount, maxError, tolerance, extent,
+                    gpu.Min[0], gpu.Max[0], gpu.Min[1], gpu.Max[1], gpu.Min[2], gpu.Max[2]);
+            }
+        }
     }
 
     // 명시적 진단에서만 전체 결과를 읽는다. 일반 절단/벤치마크는 작은 metadata만 읽는다.
     void CutJob::ValidateDiagnostics()
     {
         Require(Collected && Status[0] == 0, "GPU cut status failed");
+
+        // 분할 여부와 무관하게 출력이 있는 모든 면의 GPU 18-DOP을 CPU 기준과 비교한다.
+        ValidateSideDop(*this);
+
         if (!HasSplit())
         {
             for (uint32_t side = 0; side < 2; ++side)
