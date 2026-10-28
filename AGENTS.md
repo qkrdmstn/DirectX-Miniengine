@@ -54,7 +54,12 @@ Build affected projects in Debug and Release. Run changed samples with DirectX v
 - Keep each implementation step to one concept and about 300 changed lines, then stop so the user can read and commit it before the next step. The user must be able to follow every line.
 - After changing `Geometry/`, run the CPU tests in `MiniEngine/MeshCutting/tests/PlaneSlicerTests.cpp` (build command in the file header); keep build output outside the repository.
 - When several sessions work at once, design sessions edit only `Docs/`, and only one session writes code at a time.
-- 역할 분담: 계획·설계는 Claude Opus가 맡는다. 구현과 각 단계 리뷰(요구사항·계획·구현)는 Codex가 맡는다.
+- 역할 분담: Codex가 조사하고, Claude Opus가 판단하고, Codex가 실행한다. Claude 사용량이 더 빠듯하므로 Claude에는 판단만 맡긴다.
+  - 현황 조사(Codex): 설계 전에 현재 구조, 호출 지점, 제약, 관련 함수 이름을 100줄 이내 조사 메모로 낸다. Claude는 원본 코드를 넓게 읽지 않고 이 메모로 설계한다.
+  - 요구 구체화·설계 결정(Claude Opus + 사용자): 목표, 결정과 이유, 인터페이스 골격, 단계 목록, 완료 조건을 150줄 이내 결정 문서로 쓴다. 결정 하나에 세션 하나를 쓰고, 문서를 쓰면 세션을 닫는다.
+  - 설계 검토·단계 계획 상세화, 구현, 테스트, 문서 동기화(상태 줄, README, CodeMap), 근거 보고서(Codex): 구현은 단계마다 새 Codex 실행으로 한다.
+  - 리뷰(Codex): 구현과 다른 새 Codex 실행으로 하고, 기준은 결정 문서의 완료 조건으로 준다. 구현 대화를 이어받지 않는다.
+  - Claude는 기능 하나가 끝날 때만 결정 문서와 결과가 맞는지 Codex의 요약과 근거로 짧게 확인한다. 최종 검토는 사용자가 단계마다 읽고 커밋하는 것으로 한다.
 - At the start of multi-step work, list the steps with a rough time for each, based on measured costs (Codex review about 2-5 minutes, Debug/Release builds, CPU tests), not guesses.
 
 ## Commit & Pull Request Guidelines
