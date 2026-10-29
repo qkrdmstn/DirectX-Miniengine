@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-03a ModelInstance 애니메이션 평가/포즈 확정 분리 완료, 기준 3bee0b20 (2026-10-29)
+상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29)
 
 # 현재 Scene과 유한 평면 코드 지도
 
@@ -37,3 +37,4 @@
 
 BC-03a(3bee0b20 이후): ModelInstance::EvaluateAnimation은 애니메이션 node를 평가하고 FinalizePose는 물리 override 후 전체 팔레트를 확정한다. 기존 Update는 두 함수를 연속 호출한다. 이 단계에서 Scene의 GPU 준비 순서는 유지한다.
 
+BC-03b: Scene::EvaluateAnimations가 모든 owner의 CPU 애니메이션을 평가하고 FinalizePoses가 override 없는 최종 pose를 만든다. 물리 owner는 이후 FinalizeObjectPose로 해당 pose를 다시 확정한다. PrepareMeshes는 시간 진행 없이 GPU 준비만 하며, 기존 Update는 세 단계를 연속 호출한다. 비물리 회귀는 -physics-sim 0 -component-checks 1 -physics-query-exit 6으로 Debug/Release PASS를 확인했다.

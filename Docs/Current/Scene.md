@@ -1,4 +1,4 @@
-상태: 진행 중 — 7a~7d 완료, `3dc5d6ba` 기반 생성 조각 hull 선택·중심 기즈모·노란 선택 모서리 구현; CPU·실행 진단 통과, 수동 화면 확인 미완료, 관절 미구현 (2026-10-28)
+상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -51,7 +51,7 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 - `GameObject`는 모델 없이도 존재하며, 모델이 있으면 별도 `ModelInstance`를 소유한다.
 - `GetTransform()` / `SetTransform()`은 `SceneTransform`의 위치·Quaternion·양수 XYZ 크기를 다룬다. 각 성분은 `0.0001`~`1e8`이며 범위를 벗어난 값과 NaN/Inf를 거부하고 회전을 정규화한다.
 - `ModelInstance` 하나는 공유 원본과 CPU 애니메이션·node·joint pose만 소유한다. 원본 모델은 최초 `MeshComponent` 하나로 표현한다.
-- `Scene::Update`는 owner마다 `ModelInstance::Update`를 한 번 호출하고 모든 메시 컴포넌트에 같은 읽기 전용 pose를 전달한다.
+- `Scene::Update`는 `EvaluateAnimations` → `FinalizePoses` → `PrepareMeshes`를 연속 호출한다. 평가 단계는 owner마다 애니메이션을 한 번 진행하고, 확정 단계는 node pose와 position·normal 팔레트를 만든다. GPU 준비 단계는 시간을 진행하지 않고 모든 메시 컴포넌트에 같은 읽기 전용 pose를 전달한다.
 - 각 `MeshComponent`는 자체 Transform·GeometryRevision·PosedGeometry·상수 버퍼를 소유한다. `Attached`는 `Wc=owner*component`, `WorldIndependent`는 component 월드 TRS를 사용한다.
 - 변형은 `Vc=inverse(SourceFrame)*node*skin(p)`를 Compute에 저장하고 VS에서 `Wc`를 한 번 적용한다. source 프레임과 target 이동은 독립이며, 기존 화면을 보존하려면 Attached target을 SourceFrame으로 맞춘다. `SetPlacement`는 둘을 함께 검증·게시한다.
 - 기본 정책 `FollowModel`은 공유 pose를 따라가고 `Frozen`은 다음 유효 Update의 node/joint snapshot을 고정한다. 선택 본 분리·기여 보정 정책은 아직 없다.
@@ -148,3 +148,5 @@ CPU 회귀 검사는 공통 TRS·축 기저·축별 배율·히스토리·경계
 생성·삭제·geometry/placement 변경은 프레임 입력 단계, 즉 `Scene::Update`의 GPU 명령 기록 전에 수행한다. Update부터 모든 Render pass의 명령 제출 사이에는 geometry/컴포넌트를 변경하지 않는다. 현재 GPU 대기 정책은 이미 제출된 명령의 수명을 보장하며, 아직 제출하지 않은 명령을 자동으로 제출하거나 보존하지 않는다. 공유 pose 배열은 해당 프레임 렌더 소비까지 유지되며 GameObject는 MeshComponent를 ModelInstance보다 먼저 파괴한다.
 
 진단 `-component-checks 1`은 각 모델에 메시 두 개를 만든다. 하단은 FollowModel, 상단은 source 프레임 보정·Frozen·WorldIndependent다. 구조/ID/revision/collider/TRS 검증과 첫 GPU 준비 검증을 수행하고 debugger에 결과를 기록한다. 기본 실행 장면은 기존 Cube·Bunny·Xbot을 유지한다.
+
+BC-03b: Scene::EvaluateAnimations가 모든 owner의 CPU 애니메이션을 평가하고 FinalizePoses가 override 없는 최종 pose를 만든다. 물리 owner는 이후 FinalizeObjectPose로 해당 pose를 다시 확정한다. PrepareMeshes는 시간 진행 없이 GPU 준비만 하며, 기존 Update는 세 단계를 연속 호출한다. 비물리 회귀는 -physics-sim 0 -component-checks 1 -physics-query-exit 6으로 Debug/Release PASS를 확인했다.

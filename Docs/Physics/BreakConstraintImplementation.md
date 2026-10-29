@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-03a ModelInstance 애니메이션 평가/포즈 확정 분리 완료, 기준 3bee0b20 (2026-10-29)
+상태: 진행 중 — BC-03b 완료, 기준 3bee0b20, 커밋 없이 후속 진행 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
@@ -289,3 +289,12 @@ PhysicsWorld의 handle·PreparedBody·COM 속도·private PImpl·Static/Dynamic�
 ModelInstance::EvaluateAnimation과 FinalizePose를 분리하고 Update는 override 없는 wrapper로 유지했다. 인스턴스별 유효 부모를 생성 시 저장하며 애니메이션 단계는 node pose를 공개하되 HasValidPose는 false다. FinalizePose는 모든 팔레트 참조를 검사하고 override 평가 성공 후 각 palette의 IBM·normal을 계산한다.
 
 SkeletonPose 32/32, SceneMath 495 checks와 Physics Debug 9/9 회귀 PASS. 최종 Debug 빌드 10.94초, Release 14.75초, 각 종료 코드 0. 실제 Debug Viewer -debug 1 -xbot-arm-checks 1은 6.32초/종료 코드 0이며 BC-03a PASS와 BC-00 PASS를 새 로그에서 확인했다. Xbot 실제 팔레트는 67개·중복0개여서 별도 CPU Model의 같은 NodeId 두 entry와 서로 다른 IBM으로 중복 갱신을 확인했다(syntheticDuplicateEntries=2). 4개 dt의 wrapper/split node·position·normal 동등, override, 실패 출력 보존을 검사했다. 별도 새 Codex 읽기 전용 리뷰 지적 0건. GPU 기반 검증 옵션은 켜지 않았고 DirectX debug layer를 켰다. 드라이버 레지스트리에는 Intel Iris Xe 27.20.100.9415가 있으며 실제 선택 adapter는 별도 계측하지 않았다. 기존 미수정 헤더 C4819와 pwsh fallback 메시지가 있으나 빌드 성공이다.
+### BC-03b 완료 및 Static 기본값 보완 (2026-10-29)
+
+리뷰 수정: 같은 초기 상태의 ModelInstance::Update 기준과 Scene 분리 경로를 4개 dt에서 전체 node·position·normal 팔레트로 비교하고 PrepareMeshes 전후 snapshot 일치를 검사한다. 임시 Scene 해제 전 GPU 명령 완료를 기다리며, FinalizePoses 주석을 문장별 두 줄로 나누고 Scene 소유권 본문을 현재 단계 순서로 맞췄다.
+
+Scene::EvaluateAnimations→FinalizePoses→PrepareMeshes로 분리했다. FinalizeObjectPose는 ID로 지정한 한 owner만 확정한다. 전체 FinalizePoses는 개별 물리 override보다 먼저 호출해야 한다. 무효 pose도 MeshComponent::Update에 전달하여 기존 readiness 해제를 보존한다. 기존 Update wrapper는 세 단계를 이어 부른다.
+
+병합된 master의 ModelViewer::m_UsePhysicsSim 기본값은 1이다. 기존 계약의 비물리 회귀 명령은 반드시 -physics-sim 0을 명시한다. default 값을 변경하지 않는다. 처음 -component-checks 실행은 이를 빠뜨려 준비 이후 추가된 바닥의 메시 수가 기존 Two components per owner 조건과 달라 실패했다. 영속 MeshComponentChecks.log를 추가해 원인을 확인했다. 물리를 명시적으로 끈 재실행은 Debug 4.67초와 Release 4.66초/종료 코드0, PASS GPU preparation이다. Scene 분리 단계·owner override·무효 pose readiness·삭제 ID 검사를 포함한다.
+
+Debug 전체 빌드 PASS(첫136.80초, 로그 추가 후 최종 빌드도 종료0), Release 재실행 PASS(177.00초). 최초 Release 로그 경합은 명령이 실행되지 않았으므로 성공으로 계산하지 않았다. CPU SkeletonPose32/32·SceneMath495 checks 재실행 PASS. 별도 새 Codex 리뷰는 Scene·추가 진단 모두 지적0건. 진단의 반복 GPU 준비와 상세 flush는 옵션 실행에만 적용되며 프레임 성능 측정에는 사용하지 않는다. UI 도구로 찾을 오류 창은 없었으며 Windows ACL이나 앱 설정은 변경하지 않았다.

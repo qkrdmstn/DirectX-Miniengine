@@ -86,6 +86,16 @@ namespace Viewer
         void Clear();
 
         const std::vector<std::unique_ptr<GameObject>>& GetObjects() const { return m_Objects; }
+        // 모든 owner의 애니메이션을 진행하고 최종 확정 전 node pose를 공개한다.
+        void EvaluateAnimations(float deltaTime);
+        // 모든 owner를 override 없이 확정한다.
+        // 개별 물리 override 전달 전에 호출한다.
+        bool FinalizePoses();
+        // 모델 소유권을 노출하지 않고 지정 owner의 물리 pose만 최종 확정한다.
+        bool FinalizeObjectPose(ObjectId id, const NodePhysicsPose* overrides, uint32_t overrideCount);
+        // 확정된 CPU pose를 소비하여 컴포넌트별 GPU geometry를 한 번 준비한다.
+        void PrepareMeshes(GraphicsContext& context);
+        // 비물리 호출자를 위해 CPU 평가·확정과 GPU 준비를 연속 수행한다.
         void Update(GraphicsContext& context, float deltaTime);
         void Render(Renderer::MeshSorter& sorter) const;
 

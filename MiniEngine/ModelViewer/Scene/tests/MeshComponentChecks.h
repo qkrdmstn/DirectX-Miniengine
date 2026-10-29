@@ -5,6 +5,7 @@
 #include "Utility.h"
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 
@@ -13,6 +14,11 @@ namespace Viewer
     // Release에서도 실패를 숨기지 않는 GPU 통합 진단의 조건을 검사한다.
     inline void CheckComponent(bool condition, const char* message)
     {
+        // 마지막 성공 조건도 추적할 수 있도록 모든 검사 결과를 즉시 파일에 남긴다.
+        std::ofstream log("MeshComponentChecks.log", std::ios::app);
+        log << (condition ? "PASS" : "FAIL") << " condition=" << condition << ": " << message << std::endl;
+
+        // 실패하면 기록을 마친 뒤 예외를 전달한다.
         if (!condition)
             throw std::runtime_error(message);
     }
@@ -226,6 +232,12 @@ namespace Viewer
     // ID·revision·collider·변환 계약을 검사하고 같은 owner 아래 두 번째 메시를 배치한다.
     inline void PrepareMeshComponentChecks(Scene& scene)
     {
+        // 진단 시작 시 이전 실행 로그를 비우고 시작 지점을 즉시 기록한다.
+        {
+            std::ofstream log("MeshComponentChecks.log", std::ios::trunc);
+            log << "MeshComponent checks: begin" << std::endl;
+        }
+
         using namespace Math;
         size_t checked = 0;
         for (const auto& object : scene.GetObjects())
@@ -351,11 +363,158 @@ namespace Viewer
             ++checked;
         }
         Utility::Printf("MeshComponent checks: structure passed, owners=%zu\n", checked);
+        // CPU 구조 검사가 끝났음을 영속 로그에 기록한다.
+        std::ofstream log("MeshComponentChecks.log", std::ios::app);
+        log << "PASS structure owners=" << checked << std::endl;
     }
 
-    // 첫 프레임 pose 준비 후 실제 GPU 자원 분리와 collider 대응을 확인한다.
-    inline void CheckPreparedMeshComponents(const Scene& scene, GraphicsContext& context)
+    // node pose와 position·normal 팔레트의 모든 성분을 비교 가능한 값으로 복사한다.
+    inline std::vector<float> CaptureComponentPose(const ModelInstance& pose)
     {
+        // 행렬을 저장하여 SIMD 패딩을 제외한 성분만 순서대로 누적한다.
+        std::vector<float> values;
+        const auto append = [&values](const Math::Matrix4& matrix)
+        {
+            // 각 행렬의 열과 행 순서를 유지한다.
+            DirectX::XMFLOAT4X4 stored;
+            DirectX::XMStoreFloat4x4(&stored, matrix);
+            for (unsigned row = 0; row < 4; ++row)
+                for (unsigned col = 0; col < 4; ++col)
+                    values.push_back(stored.m[row][col]);
+        };
+
+        // 전체 node와 모든 팔레트 entry를 빠짐없이 복사한다.
+        const auto& model = pose.GetModel();
+        for (uint32_t node = 0; node < model->m_NumNodes; ++node)
+            append(pose.GetNodeTransforms()[node]);
+        for (uint32_t joint = 0; joint < model->m_NumJoints; ++joint)
+        {
+            // normal 행렬도 세 축 모두 비교하도록 확장한다.
+            append(pose.GetJoints()[joint].posXform);
+            append(Math::Matrix4(pose.GetJoints()[joint].nrmXform));
+        }
+        return values;
+    }
+
+    // 같은 초기 상태의 기준 wrapper와 Scene 분리 경로의 전체 출력을 비교한다.
+    inline void CheckScenePoseEquivalence(const Scene& source, GraphicsContext& context)
+    {
+        // 실제 장면의 모델을 공유하되 애니메이션 상태와 출력은 새로 소유한다.
+        Scene split;
+        std::vector<std::unique_ptr<ModelInstance>> references;
+        for (const auto& object : source.GetObjects())
+        {
+            // 모델 없는 객체는 비교 대상에서 제외한다.
+            if (!object->GetModelInstance())
+                continue;
+            const auto model = object->GetModelInstance()->GetModel();
+            GameObject& owner = split.CreateObject(object->GetName(), model);
+            references.push_back(std::make_unique<ModelInstance>(model));
+            if (model->m_NumAnimations > 0)
+            {
+                // 두 경로 모두 같은 클립을 같은 시점에서 반복 재생한다.
+                owner.PlayAnimation(0, true);
+                references.back()->PlayAnimation(0, true);
+            }
+        }
+
+        // 연속된 서로 다른 dt로 누락이나 중복 시간 진행을 검사한다.
+        const float steps[] = { 0.0f, 1.0f / 60.0f, 1.0f / 30.0f, 0.25f };
+        CheckComponent(!references.empty(), "BC-03b reference owners required");
+        for (float dt : steps)
+        {
+            // 기존 ModelInstance wrapper와 Scene의 CPU 단계를 같은 dt로 진행한다.
+            for (const auto& reference : references)
+                reference->Update(dt);
+            split.EvaluateAnimations(dt);
+            CheckComponent(split.FinalizePoses(), "BC-03b reference finalize");
+
+            // GPU 준비 직전의 전체 출력이 기준 wrapper와 정확히 같아야 한다.
+            std::vector<std::vector<float>> before;
+            for (size_t i = 0; i < references.size(); ++i)
+            {
+                // owner 순서대로 독립 snapshot을 저장한다.
+                before.push_back(CaptureComponentPose(*split.GetObjects()[i]->GetModelInstance()));
+                CheckComponent(before.back() == CaptureComponentPose(*references[i]),
+                    "BC-03b wrapper/split node and position/normal palettes");
+            }
+
+            // GPU 준비가 node와 두 팔레트를 변경하지 않아야 한다.
+            split.PrepareMeshes(context);
+            for (size_t i = 0; i < references.size(); ++i)
+                CheckComponent(before[i] == CaptureComponentPose(*split.GetObjects()[i]->GetModelInstance()),
+                    "BC-03b PrepareMeshes preserves all pose outputs");
+        }
+
+        // 임시 Scene의 버퍼를 해제하기 전에 기록된 GPU 명령을 제출하고 완료를 기다린다.
+        context.Flush(true);
+    }
+
+    // Scene의 분리 평가와 override 전달 및 GPU 준비의 pose 보존을 검사한다.
+    inline void CheckScenePosePhases(Scene& scene, GraphicsContext& context)
+    {
+        // 초기 상태가 같은 별도 인스턴스로 시간 진행과 GPU 준비의 무변경을 검사한다.
+        CheckScenePoseEquivalence(scene, context);
+
+        // 모델 없는 객체와 삭제된 ID는 최종 pose 전달을 거절해야 한다.
+        const ObjectId emptyId = scene.CreateObject("BC-03b empty").GetId();
+        CheckComponent(!scene.FinalizeObjectPose(emptyId, nullptr, 0), "BC-03b empty owner rejected");
+        CheckComponent(scene.DeleteObject(emptyId), "BC-03b delete empty owner");
+        CheckComponent(!scene.FinalizeObjectPose(emptyId, nullptr, 0), "BC-03b deleted ID rejected");
+
+        // 여러 시간 간격에서 Scene의 분리 평가와 최종 확정 순서를 검사한다.
+        const float steps[] = { 0.0f, 1.0f / 60.0f, 1.0f / 30.0f };
+        for (float dt : steps)
+        {
+            // 현재 애니메이션 상태를 복제하지 않고 다음 평가의 phase 유효성을 검사한다.
+            scene.EvaluateAnimations(dt);
+            for (const auto& object : scene.GetObjects())
+                if (object->GetModelInstance())
+                    CheckComponent(!object->GetModelInstance()->HasValidPose(), "BC-03b unfinalized pose");
+            CheckComponent(scene.FinalizePoses(), "BC-03b finalize all owners");
+
+            // GPU 준비는 확정된 node와 팔레트를 재평가하거나 애니메이션 시간을 진행하지 않는다.
+            for (const auto& object : scene.GetObjects())
+            {
+                // 각 owner의 애니메이션 root를 이동한 pose로 최종 확정한다.
+                const ModelInstance* pose = object->GetModelInstance();
+                if (!pose)
+                    continue;
+                const NodePhysicsPose overridePose = { 0, Math::Matrix4(Math::Matrix3(Math::kIdentity),
+                    Math::Vector3(1.0f, 2.0f, 3.0f)) * pose->GetNodeTransforms()[0] };
+                CheckComponent(scene.FinalizeObjectPose(object->GetId(), &overridePose, 1), "BC-03b owner override");
+                const Math::Matrix4 expected = pose->GetNodeTransforms()[0];
+                scene.PrepareMeshes(context);
+                DirectX::XMFLOAT4X4 actualValues, expectedValues;
+                DirectX::XMStoreFloat4x4(&actualValues, pose->GetNodeTransforms()[0]);
+                DirectX::XMStoreFloat4x4(&expectedValues, expected);
+                for (unsigned row = 0; row < 4; ++row)
+                    for (unsigned col = 0; col < 4; ++col)
+                        CheckComponent(actualValues.m[row][col] == expectedValues.m[row][col],
+                            "BC-03b GPU preparation preserves override");
+
+                // 잘못된 override 후 GPU 준비는 이전 프레임의 준비 상태도 해제한다.
+                const NodePhysicsPose invalid = { UINT32_MAX, Math::Matrix4(Math::kIdentity) };
+                CheckComponent(!scene.FinalizeObjectPose(object->GetId(), &invalid, 1), "BC-03b invalid override");
+                scene.PrepareMeshes(context);
+                for (const auto& mesh : object->GetMeshComponents())
+                    CheckComponent(!mesh->HasPoseBounds(), "BC-03b invalid pose clears readiness");
+                CheckComponent(scene.FinalizeObjectPose(object->GetId(), nullptr, 0), "BC-03b animation restore");
+            }
+        }
+
+        // 원래 애니메이션 pose로 GPU 준비를 복구하여 기존 컴포넌트 검사를 이어간다.
+        scene.PrepareMeshes(context);
+        Utility::Printf("BC-03b PASS: wrapper/split samples=4, node/position/normal, phase validity, owner override, stale ID, invalid pose, GPU preservation\n");
+    }
+
+    // 첫 프레임 pose와 분리 단계의 GPU 자원 및 collider 대응을 확인한다.
+    inline void CheckPreparedMeshComponents(Scene& scene, GraphicsContext& context)
+    {
+        // 진단 옵션에서만 분리 단계의 실패와 복구 경로를 실제 GPU 문맥으로 검사한다.
+        CheckScenePosePhases(scene, context);
+
+        // 기존 컴포넌트별 자원 독립성과 collider 대응을 검사한다.
         for (const auto& object : scene.GetObjects())
         {
             if (!object->GetModelInstance())
@@ -378,5 +537,8 @@ namespace Viewer
                 CheckComponent(object->IsColliderCurrent(collider.Id), "Live collider target");
         }
         Utility::Printf("MeshComponent checks: GPU preparation passed\n");
+        // GPU 준비와 Scene 단계 검사가 끝났음을 영속 로그에 기록한다.
+        std::ofstream log("MeshComponentChecks.log", std::ios::app);
+        log << "PASS GPU preparation" << std::endl;
     }
 }

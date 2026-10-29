@@ -205,17 +205,57 @@ namespace Viewer
         m_Objects.clear();
     }
 
-    // pose를 owner당 한 번 평가한 뒤 컴포넌트별 GPU geometry를 준비한다.
-    void Scene::Update(GraphicsContext& context, float deltaTime)
+    // GPU 작업 없이 owner당 한 번 애니메이션을 평가하여 물리 입력 pose를 만든다.
+    void Scene::EvaluateAnimations(float deltaTime)
     {
+        // 모델 없는 객체를 건너뛰고 각 인스턴스의 애니메이션 시간만 진행한다.
+        for (const auto& object : m_Objects)
+            if (object->m_ModelInstance)
+                object->m_ModelInstance->EvaluateAnimation(deltaTime);
+    }
+
+    // 모든 모델을 애니메이션 pose로 확정한다.
+    // 개별 물리 writeback보다 먼저 호출한다.
+    bool Scene::FinalizePoses()
+    {
+        // 한 owner가 실패해도 다른 owner는 확정하여 독립적인 렌더 유효성을 유지한다.
+        bool valid = true;
+        for (const auto& object : m_Objects)
+            if (object->m_ModelInstance && !object->m_ModelInstance->FinalizePose(nullptr, 0))
+                valid = false;
+        return valid;
+    }
+
+    // ID로 찾은 owner에게만 override를 전달하고 모델 없는 객체나 삭제된 ID는 거절한다.
+    bool Scene::FinalizeObjectPose(ObjectId id, const NodePhysicsPose* overrides, uint32_t overrideCount)
+    {
+        // Scene이 소유한 모델 인스턴스 안에서만 최종 node pose와 팔레트를 변경한다.
+        GameObject* object = FindObject(id);
+        if (!object || !object->m_ModelInstance)
+            return false;
+        return object->m_ModelInstance->FinalizePose(overrides, overrideCount);
+    }
+
+    // CPU pose를 다시 평가하지 않고 각 컴포넌트의 GPU geometry를 준비한다.
+    void Scene::PrepareMeshes(GraphicsContext& context)
+    {
+        // 무효 pose도 Update에 전달하여 이전 준비 상태를 해제하고 GPU 기록을 생략한다.
         for (const auto& object : m_Objects)
         {
             if (!object->m_ModelInstance)
                 continue;
-            object->m_ModelInstance->Update(deltaTime);
             for (const auto& mesh : object->m_MeshComponents)
                 mesh->Update(context, *object->m_ModelInstance, object->m_Transform);
         }
+    }
+
+    // 기존 비물리 호출 순서를 유지하며 분리된 CPU·GPU 단계를 연속 수행한다.
+    void Scene::Update(GraphicsContext& context, float deltaTime)
+    {
+        // 애니메이션과 override 없는 최종 pose를 만든 뒤 GPU 준비를 한 번 수행한다.
+        EvaluateAnimations(deltaTime);
+        FinalizePoses();
+        PrepareMeshes(context);
     }
 
     // 같은 owner의 모든 메시 컴포넌트를 각 렌더 pass에 등록한다.
