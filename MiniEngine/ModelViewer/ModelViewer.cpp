@@ -103,6 +103,9 @@ private:
     Viewer::PhysicsCutScenario m_CutScenario;
     uint32_t m_CutWaitFrames = 0;
     uint32_t m_CutSettleFrames = 0;
+    uint32_t m_DemoTower = 0;
+    float m_DemoCutSeconds = 3.0f;
+    bool m_DemoCutDone = false;
     size_t m_BodiesBeforeCuts = 0;
     bool m_PhysicsCutChecked = false;
     std::vector<double> m_CutGpuSamples, m_CutReadySamples;
@@ -207,6 +210,29 @@ void LoadIBLTextures()
 }
 
 // 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
+// 시연용 큐브 탑의 한 변 길이(m)와 층 사이 초기 틈이다.
+constexpr float kDemoTowerSide = 1.6f;
+constexpr float kDemoTowerGap = 0.02f;
+
+// 시연용으로 Cube 모델 count개를 층마다 6도씩 비틀어 원점 위에 쌓는다.
+void CreateDemoTower(Viewer::Scene& scene, const std::shared_ptr<const Model>& cube, uint32_t count)
+{
+    // 모델 경계 상자로 가장 긴 변이 kDemoTowerSide가 되는 배율과 중심을 구한다.
+    const Vector3 dimensions = cube->m_BoundingBox.GetDimensions();
+    const float longest = std::max(float(dimensions.GetX()), std::max(float(dimensions.GetY()), float(dimensions.GetZ())));
+    const float scale = kDemoTowerSide / longest;
+    const Vector3 center = cube->m_BoundingBox.GetCenter() * scale;
+
+    // 층마다 작은 틈을 두고 Y축으로 조금씩 회전해 모델 중심을 탑 축에 맞춘다.
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const Quaternion rotation(Vector3(kYUnitVector), float(i) * 6.0f * XM_PI / 180.0f);
+        const Vector3 position(0.0f, (kDemoTowerSide + kDemoTowerGap) * (float(i) + 0.5f), 0.0f);
+        auto& object = scene.CreateObject("TowerCube" + std::to_string(i), cube);
+        object.SetTransform(Viewer::SceneTransform(rotation, Vector3(scale, scale, scale), position - rotation * center));
+    }
+}
+
 void ModelViewer::Startup( void )
 {
     uint32_t physicsQueryChecks = 0;
@@ -284,7 +310,14 @@ void ModelViewer::Startup( void )
     if (CommandLineArgs::GetInteger(L"rebuild", rebuildValue))
         forceRebuild = rebuildValue != 0;
 
-    if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
+    // 큐브 탑 시연 옵션을 읽는다. 켜면 기본 모델 대신 탑만 만든다.
+    CommandLineArgs::GetInteger(L"demo-tower", m_DemoTower);
+    CommandLineArgs::GetFloat(L"demo-cut-sec", m_DemoCutSeconds);
+    m_DemoTower = std::min(m_DemoTower, 16u);
+
+    if (m_DemoTower)
+        CreateDemoTower(m_Scene, Renderer::LoadModel(L"Models/cube.glb", forceRebuild), m_DemoTower);
+    else if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
     {
         // 기본 장면에 정적 대형 Dragon 모델을 포함해 여러 절단 후보를 함께 확인한다.
         m_Scene.CreateObject("Cube", Renderer::LoadModel(L"Models/cube.glb", forceRebuild));
@@ -311,7 +344,7 @@ void ModelViewer::Startup( void )
     for (const auto& object : m_Scene.GetObjects())
     {
         const ModelInstance* model = object->GetModelInstance();
-        if (!model || float(model->GetModel()->m_BoundingSphere.GetRadius()) <= 0.0f)
+        if (m_DemoTower || !model || float(model->GetModel()->m_BoundingSphere.GetRadius()) <= 0.0f)
             continue;
         const float scale = 2.0f / float(model->GetModel()->m_BoundingSphere.GetRadius());
         const float x = (float(index++) - 0.5f * float(m_Scene.GetObjects().size() - 1)) * 5.0f;
@@ -344,7 +377,7 @@ void ModelViewer::Startup( void )
         m_CutScenario.Configure(cutScenario,m_Cutting);
 
     // 세 검사 옵션의 기본 실행 상태를 정하고 명시적인 시작 옵션을 우선 적용한다.
-    uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active()) ? 1u : 0u;
+    uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active() || m_DemoTower != 0) ? 1u : 0u;
     CommandLineArgs::GetInteger(L"physics-running",physicsRunning);
     g_PhysicsRunning = physicsRunning != 0;
 
@@ -376,7 +409,10 @@ void ModelViewer::Startup( void )
     for (const auto& object : m_Scene.GetObjects())
         if (!object->GetMeshComponents().empty())
         { m_CutOwner = object->GetId(); m_CutMesh = object->GetMeshComponents().front()->GetId(); break; }
-    m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
+    if (m_DemoTower)
+        m_Camera.SetEyeAtUp(Vector3(12.0f, 6.0f, 16.0f), Vector3(0.0f, 3.5f, 0.0f), Vector3(kYUnitVector));
+    else
+        m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
     m_Camera.SetZRange(0.1f, 1000.0f);
     auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
     controller->EnableMomentum(false);
@@ -415,6 +451,17 @@ void ModelViewer::Startup( void )
 
 // GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.
 void ModelViewer::Cleanup( void )
+
+    // 시연 탑이 있으면 바닥 위 두 번째 층 중심을 지나는 45도 절단 평면을 배치한다.
+    std::array<double, 3> floorCenter{}, floorHalf{};
+    auto* demoPlane = m_DemoTower ? m_Scene.FindObject(m_ActiveCutPlane) : nullptr;
+    if (demoPlane && m_Physics.GetFloorBox(floorCenter, floorHalf))
+    {
+        const float floorTop = float(floorCenter[1] + floorHalf[1]);
+        const Quaternion tilt(Vector3(kZUnitVector), XM_PIDIV4);
+        demoPlane->SetTransform(Viewer::SceneTransform(tilt, Vector3(1.0f, 1.0f, 1.0f),
+            Vector3(0.0f, floorTop + kDemoTowerSide * 1.5f, 0.0f)));
+    }
 {
     m_Cutting.Clear();
     m_CutScenario.Shutdown();
@@ -581,6 +628,16 @@ void ModelViewer::Update( float deltaT )
             Utility::Printf("Physics bodies still awake after 3000 frames; auto cut keeps waiting\n");
         }
         waitingForSleep = true;
+    }
+
+    // 시연 탑은 시뮬레이션이 정한 시간만큼 진행되면 배치한 평면으로 한 번 자른다.
+    const uint64_t demoCutStep = uint64_t(m_DemoCutSeconds * 60.0f);
+    if (m_DemoTower && !m_DemoCutDone && m_DemoCutSeconds > 0.0f && m_Physics.GetSimulationStepCount() >= demoCutStep)
+    {
+        MeshCutting::CutPlaneData plane;
+        if (m_CutPlanes.BuildData(m_ActiveCutPlane, plane) && m_Cutting.RequestAll(plane, m_CapMode))
+            m_LastCutNormal = Vector3(plane.WorldPlane);
+        m_DemoCutDone = true;
     }
     else m_CutWaitFrames = 0;
     if (m_CutScenario.Active()) waitingForSleep = !m_CutScenario.AllowSubmit(m_Physics);
