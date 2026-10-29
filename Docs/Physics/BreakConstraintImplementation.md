@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-01 구현 완료, branch `break-constraint` (uncommitted, `d865c5ed` 기반); CPU 16/16 PASS, Debug 재빌드 Jolt junction 외부 캐시 쓰기 권한 차단으로 실패 (2026-10-28)
+상태: 중단 — BC-02 검증 통과, Git 쓰기 허용 후에도 실제 index.lock 권한 거부 지속, HEAD d044de76 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
@@ -193,7 +193,7 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | --- | --- | --- | --- |
 | BC-00 | Xbot 진단 로그만 추가(동작 변경 없음): 왼팔 NodeId·parent, `E * Gnode` scale/shear, 본 길이(월드 m), 재생 중 손목 anchor·상대 자세 범위 | 로그 값을 이 문서 2·6·8절에 기록 / 지금 가능 | R+B+V |
 | BC-01 | SkeletonPose.h parent map + Model/tests/SkeletonPoseTests.cpp | 구현 완료(uncommitted): CPU 16/16 PASS, Debug 재빌드는 Jolt 외부 캐시 권한 차단 / 선행 00 완료 | R+CPU 1.19초 |
-| BC-02 | override evaluator + 같은 테스트 | 부모 이동에도 물리 본 world 유지, body 없는 자손 local 유지 / 01 | R+CPU 실측 |
+| BC-02 | override evaluator + 같은 테스트 | 구현 완료(uncommitted): CPU 32/32 PASS; override=0 동등, 물리 본 고정·자손 local·skeletonRoot·실패 시 출력 보존 / 01 | R+CPU 0.91초 |
 | BC-03a | ModelInstance animation/finalize 분리 | override=0 pose/palette 동등, 중복 palette node 갱신 / 02 | R+B+T |
 | BC-03b | Scene CPU/GPU 단계 분리·wrapper | 비물리 Debug/Release 실행·애니메이션 회귀 / 03a | R+B+V |
 | BC-04 | SkeletalPhysicsAsset 정의/검증·fixture·Xbot 왼팔 rig 값 | cycle/ID/shape/mass/ancestry 거절 / 00,01 | R+B+T |
@@ -218,7 +218,11 @@ BC-01 검증(2026-10-28): branch `break-constraint`, HEAD `d865c5ed` 기반의 �
 
 아래 명령으로 CPU 테스트 16/16 PASS, 종료 코드 0, 컴파일 경고 없이 빌드·실행 합계 1.19초를 확인했다. 산출물은 `$env:TEMP/BreakConstraintTests`이며 TEMP 쓰기는 차단되지 않았다. 개발자 환경 로드 시 PowerShell 실행 정책 때문에 첫 시도가 컴파일 전에 중단되어 프로세스 범위 Bypass로 재실행했다. 복원 옵션 없는 ModelViewer Debug 재빌드는 Jolt CMake가 `MiniEngine/Build/ThirdParty` junction 대상인 워크트리 밖 캐시에 쓰려다 Permission denied로 실패했다. junction 변경이나 외부 캐시 수정으로 우회하지 않았다. Debug 재빌드는 71.95초 후 종료 코드 1로 끝났으며 `Model.lib` 컴파일은 성공했다. 따라서 전체 Debug 빌드 성공은 미확인이다.
 
-후속 작업: `XbotArmChecks.h`의 인라인 부모 복원을 `BuildPoseParents` 호출로 교체한다. BC-01에서는 이 파일을 수정하지 않았다. BC-02 이후는 구현하지 않는다.
+BC-02 검증(2026-10-28): branch `break-constraint`, HEAD `d044de76` 기반의 미커밋 구현이다. `EvaluatePoseOverrides`는 `BuildPoseParents`로 부모 배열과 DFS를 검증한 뒤 임시 pose 배열에서 부모 우선 합성을 수행한다. override 없는 결과는 `EvaluateModelPose`와 모든 행렬 성분이 정확히 일치한다. 부모 애니메이션 변경에도 물리 본 pose가 고정되며 body 없는 자손은 변경된 local 애니메이션을 유지한다. 물리 조상 아래 skeletonRoot 초기화와 skeletonRoot 자체 override를 확인했다. 부모 크기·범위·구조 오류, null 포인터, 빈 그래프, 중복·범위 밖 override, NaN·무한대, 잘못된 DFS를 거절하며 출력 배열 전체를 보존한다. `GraphNode`와 `EvaluateModelPose`는 변경하지 않았다.
+
+테스트 파일 헤더의 명령을 VS Developer PowerShell 환경에서 실행하여 CPU 32/32 PASS, 종료 코드 0, 컴파일 경고 없이 빌드·실행 합계 0.91초를 확인했다. 산출물은 `$env:TEMP/BreakConstraintTests`다. 개발자 환경 로드 중 `vswhere.exe` 경로 탐색 메시지가 있었지만 C++ 도구 초기화와 컴파일·실행은 성공했다. 이번 단계는 CPU 테스트만 실행했으며 전체 viewer Debug/Release 빌드는 수행하지 않았다.
+
+후속 작업: `XbotArmChecks.h`의 인라인 부모 복원을 `BuildPoseParents` 호출로 교체한다. BC-01과 BC-02에서는 이 파일을 수정하지 않았다. BC-03 이후는 구현하지 않는다.
 
 BC-00 검증(2026-10-28): branch `break-constraint`에서 BC-00 구현 완료(uncommitted). Debug/Release 빌드 성공, Debug Viewer 실행의 `XbotArmChecks.log`에서 2 sections·3,601 samples와 PASS를 확인했다. 2·6·8절에 런타임 측정값을 반영했다. GPU validation은 확인하지 않았다. Geometry 코드는 변경하지 않아 CPU slicer 검사는 대상이 아니다.
 
@@ -260,3 +264,13 @@ NodeId·parent, E*Gnode의 열 길이(scale)·shear, 본 길이(월드 m), 재�
 ## 14. 문서 검증과 제한
 
 v1은 `367301ec` 기준으로 ModelPose/ModelInstance/Scene/MeshComponent/물리 CMake와 Static 단계 의존을 대조했다. v2(2026-10-28)는 `5f56b93d` 기준으로 다시 대조해 Static 선행 완료, 프레임 순서(`AdvanceSimulation`→`Scene::Update`), private world, 레이어 전용 충돌 필터를 반영했다. Xbot.glb의 Armature 배율 0.01과 왼팔 본 이름을 자산에서 직접 확인했고, Xbot 데모(BC-00, BC-12b)와 uniform scale 분리 계약을 추가했다. UE5.3 `BreakConstraint`·`UpdateMeshForBrokenConstraints` 본문을 다시 읽어 정점·weight를 바꾸지 않음을 확인했다. 문서만 변경했으므로 빌드·물리 실행은 하지 않았다. 범용 본 이름 로더, 비균일 scale, GPU 피부 절단은 별도 후속이다.
+
+
+### BC-02 재검증 중단 (2026-10-28)
+
+현재 사용자 지시는 단계별 중단 없이 M1까지 진행하되 샌드박스 검증 차단 시 중단하는 것이다. CPU SkeletonPoseTests 32/32 PASS, 컴파일·실행 6.60초, 종료 코드 0. 구현과 분리하여 diff와 기존 EvaluateModelPose를 대조한 자기 리뷰에서 유효 지적 0건이며 git diff --check도 통과했다. 전체 Debug 빌드는 Jolt CMake 재구성 중 메인 체크아웃의 MiniEngine/Build/ThirdParty/Jolt/build에 쓰려다 Permission denied와 MSB3073으로 실패했다. Tools/BuildJolt.ps1은 cacheRoot가 고정되어 별도 경로 인자가 없고 Physics.vcxproj/Physics.props도 같은 경로를 사용한다. 메인 파일·junction을 변경하지 않았으며 권한 우회나 빌드 생략으로 성공 처리하지 않았다. Release와 viewer 실행은 미수행이다. 사용자 멈춤 조건에 따라 BC-02 완료 커밋, master 병합 및 BC-03a 이후를 보류했다. 기존 .mini 부산물 3개는 보존하며 커밋하지 않는다.
+
+### BC-02 재개 검증 (2026-10-29)
+
+사용자 지시에 따라 단계별 승인 중단 없이 M1까지 진행한다. ThirdParty 실제 복사본의 이전 build 폴더는 worktree 내부 build.main-copy-20261029로 보존했다. Tools/BuildJolt.ps1로 로컬 캐시를 재구성하고 Debug Jolt 빌드에 성공했다. CPU SkeletonPoseTests 32/32 PASS(3.59초), 전체 Debug/Release MSBuild /v:minimal 빌드 모두 종료 코드 0이다. pwsh 탐색 메시지는 있었으나 빌드 최종 종료는 성공이다. 연결 단절 전 빌드는 완료 근거로 사용하지 않았다. 별도 codex exec 읽기 전용 리뷰는 home directory 탐색 실패로 실행되지 않아, diff와 기존 EvaluateModelPose를 다시 대조한 자기 리뷰를 수행했고 유효 지적은 0건이다. BC-02는 화면 경로를 변경하지 않아 이번 단계 viewer 실행은 하지 않았다. .mini 부산물은 커밋에서 제외한다.
+커밋 단계에서 worktree 외부 Git 관리 폴더의 index.lock 생성이 Permission denied로 차단됐다. git add와 git commit 모두 실패했으며 master 병합·후속 단계는 미수행이다. 최종 보고는 BreakConstraintReport.md에 저장했다.

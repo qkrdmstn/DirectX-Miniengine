@@ -8,6 +8,31 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
+
+// 모든 행렬 성분을 정확히 비교하여 무변경과 기존 평가기 동등성을 검사한다.
+void CheckMatrix(const Math::Matrix4& actual, const Math::Matrix4& expected)
+{
+    // SIMD 행렬을 저장한 뒤 각 성분의 값이 동일한지 확인한다.
+    DirectX::XMFLOAT4X4 a;
+    DirectX::XMFLOAT4X4 b;
+    DirectX::XMStoreFloat4x4(&a, actual);
+    DirectX::XMStoreFloat4x4(&b, expected);
+    for (unsigned row = 0; row < 4; ++row)
+    {
+        // 허용 오차 없이 출력 보존과 연산 순서를 확인한다.
+        for (unsigned col = 0; col < 4; ++col)
+        {
+            // 실패 원인을 출력하고 즉시 종료한다.
+            if (a.m[row][col] != b.m[row][col])
+            {
+                // 기존 테스트와 같은 실패 종료 코드를 사용한다.
+                std::printf("FAIL: exact matrix equality\n");
+                std::exit(1);
+            }
+        }
+    }
+}
 
 // 조건이 거짓이면 실패 원인을 출력하고 테스트를 종료한다.
 void Check(bool valid, const char* reason)
@@ -81,6 +106,110 @@ void CheckEvaluatorAgreement()
     std::printf("PASS: evaluator agreement\n");
 }
 
+// 물리 pose 고정과 자손 local 상속 및 skeletonRoot의 공간 초기화를 검사한다.
+void CheckOverrides()
+{
+    // 비연속 matrixIdx와 분기를 포함한 그래프로 override 없는 동등성을 검사한다.
+    std::vector<GraphNode> graph = { Node(4, true, true), Node(1, true, true),
+        Node(5), Node(0, true, true, true), Node(3), Node(2), Node(6) };
+    std::vector<NodeId> parents;
+    std::vector<Math::Matrix4> expected(graph.size());
+    std::vector<Math::Matrix4> actual(graph.size());
+    Check(BuildPoseParents(graph.data(), uint32_t(graph.size()), parents), "override parents");
+    Check(EvaluateModelPose(graph.data(), uint32_t(graph.size()), expected.data()), "baseline pose");
+    Check(EvaluatePoseOverrides(graph.data(), uint32_t(graph.size()), parents, nullptr, 0,
+        actual.data()), "zero overrides");
+    for (uint32_t i = 0; i < graph.size(); ++i)
+    {
+        // 기존 평가기와 모든 성분이 정확히 같아야 한다.
+        CheckMatrix(actual[i], expected[i]);
+    }
+    std::printf("PASS: zero overrides exact agreement\n");
+
+    // 부모 애니메이션이 바뀌어도 물리 본과 body 없는 자손의 관계를 보존한다.
+    const NodePhysicsPose physics = { 1, expected[1] };
+    const Math::Matrix4 childLocal = graph[2].xform;
+    graph[0].xform = Math::Matrix4(DirectX::XMMatrixTranslation(40.0f, -8.0f, 12.0f));
+    graph[2].xform = Math::Matrix4(DirectX::XMMatrixRotationY(0.7f)) * childLocal;
+    const std::vector<GraphNode> original = graph;
+    Check(EvaluatePoseOverrides(graph.data(), uint32_t(graph.size()), parents, &physics, 1,
+        actual.data()), "moved animation parent");
+    CheckMatrix(actual[4], Math::Matrix4(Math::kIdentity) * graph[0].xform);
+    CheckMatrix(actual[1], physics.ModelPose);
+    CheckMatrix(actual[5], physics.ModelPose * graph[2].xform);
+    for (uint32_t i = 0; i < graph.size(); ++i)
+    {
+        // 공유 그래프의 local 애니메이션은 수정하지 않아야 한다.
+        CheckMatrix(graph[i].xform, original[i].xform);
+    }
+    std::printf("PASS: fixed physics bone and animated body-less child\n");
+
+    // skeletonRoot는 물리 조상의 영향을 끊고 자신의 자손에는 pose를 전달한다.
+    const NodePhysicsPose ancestorPhysics = { 4, physics.ModelPose };
+    Check(EvaluatePoseOverrides(graph.data(), uint32_t(graph.size()), parents, &ancestorPhysics, 1,
+        actual.data()), "physics ancestor of skeleton root");
+    CheckMatrix(actual[0], graph[3].xform);
+    CheckMatrix(actual[3], graph[3].xform * graph[4].xform);
+    const NodePhysicsPose rootPhysics = { 0, physics.ModelPose };
+    Check(EvaluatePoseOverrides(graph.data(), uint32_t(graph.size()), parents, &rootPhysics, 1,
+        actual.data()), "overridden skeleton root");
+    CheckMatrix(actual[0], rootPhysics.ModelPose);
+    CheckMatrix(actual[3], rootPhysics.ModelPose * graph[4].xform);
+    std::printf("PASS: skeleton root reset and override\n");
+}
+
+// 거절되는 입력마다 출력 배열 전체가 그대로 남는지 검사한다.
+void CheckOverrideFailure(const char* name, const GraphNode* graph, uint32_t count,
+    const std::vector<NodeId>& parents, const NodePhysicsPose* overrides,
+    uint32_t overrideCount, bool nullOutput = false)
+{
+    // 부분 쓰기를 탐지하도록 식별 가능한 서로 다른 행렬을 준비한다.
+    std::vector<Math::Matrix4> output = { Node(7).xform, Node(8).xform, Node(9).xform };
+    const std::vector<Math::Matrix4> original = output;
+    Check(!EvaluatePoseOverrides(graph, count, parents, overrides, overrideCount,
+        nullOutput ? nullptr : output.data()), name);
+    for (uint32_t i = 0; i < output.size(); ++i)
+    {
+        // 마지막 출력 원소까지 실패 전 값을 유지해야 한다.
+        CheckMatrix(output[i], original[i]);
+    }
+    std::printf("PASS: %s\n", name);
+}
+
+// 포인터와 부모 정보 및 override 행렬의 모든 거절 경로를 검사한다.
+void CheckOverrideRejections()
+{
+    // 유효 입력을 기준으로 한 항목씩 잘못된 값을 전달한다.
+    const std::vector<GraphNode> graph = { Node(2, true), Node(0, true), Node(1) };
+    const std::vector<NodeId> parents = { 2, 0, UINT32_MAX };
+    NodePhysicsPose poses[] = { { 0, Node(4).xform }, { 0, Node(5).xform } };
+    CheckOverrideFailure("parent size mismatch", graph.data(), 3, {}, nullptr, 0);
+    CheckOverrideFailure("parent out of range", graph.data(), 3, { 3, 0, UINT32_MAX }, nullptr, 0);
+    CheckOverrideFailure("parent topology mismatch", graph.data(), 3, { 1, 0, UINT32_MAX }, nullptr, 0);
+    CheckOverrideFailure("null override graph", nullptr, 3, parents, nullptr, 0);
+    CheckOverrideFailure("empty override graph", graph.data(), 0, {}, nullptr, 0);
+    CheckOverrideFailure("null overrides", graph.data(), 3, parents, nullptr, 1);
+    CheckOverrideFailure("null final output", graph.data(), 3, parents, nullptr, 0, true);
+    CheckOverrideFailure("duplicate override", graph.data(), 3, parents, poses, 2);
+    poses[1].Node = 3;
+    CheckOverrideFailure("override out of range", graph.data(), 3, parents, poses, 2);
+
+    // 앞선 override가 유효해도 뒤의 비유한 행렬 때문에 출력하면 안 된다.
+    poses[1].Node = 1;
+    poses[1].ModelPose.SetX(Math::Vector4(DirectX::XMVectorReplicate(
+        std::numeric_limits<float>::quiet_NaN())));
+    CheckOverrideFailure("NaN override", graph.data(), 3, parents, poses, 2);
+    poses[1].ModelPose.SetX(Math::Vector4(DirectX::XMVectorReplicate(
+        std::numeric_limits<float>::infinity())));
+    CheckOverrideFailure("infinite override", graph.data(), 3, parents, poses, 2);
+
+    // BC-01 검증도 평가기에서 실행하여 잘못된 DFS의 부분 출력을 방지한다.
+    const std::vector<GraphNode> duplicate = { Node(0, true), Node(0), Node(1) };
+    const std::vector<GraphNode> early = { Node(2), Node(0), Node(1) };
+    CheckOverrideFailure("override duplicate graph index", duplicate.data(), 3, parents, nullptr, 0);
+    CheckOverrideFailure("override early graph termination", early.data(), 3, parents, nullptr, 0);
+}
+
 // 정상 토폴로지와 잘못된 입력 및 형제 스택 경계를 CPU에서 검증한다.
 int main()
 {
@@ -148,7 +277,11 @@ int main()
     // 독립적인 행렬 평가 결과와 대조하고 전체 검사 수를 출력한다.
     CheckEvaluatorAgreement();
 
+    // BC-02 물리 pose 합성과 실패 시 출력 보존을 검사한다.
+    CheckOverrides();
+    CheckOverrideRejections();
+
     // 모든 검사를 통과한 최종 결과를 출력한다.
-    std::printf("SkeletonPoseTests: 16 tests PASS\n");
+    std::printf("SkeletonPoseTests: 32 tests PASS\n");
     return 0;
 }
