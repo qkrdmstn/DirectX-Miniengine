@@ -74,7 +74,128 @@ namespace Viewer
         return Matrix4(axes[0], axes[1], axes[2], Vector3(frame.GetW()));
     }
 
-    // 옵션이 켜지면 별도 CPU 인스턴스로 Xbot 왼팔을 측정하고 자동 종료를 요청한다.
+    // 실제 Xbot의 분리 평가와 기존 wrapper 및 전체 팔레트의 동등성을 검증한다.
+    inline void CheckXbotPoseFinalization(const std::shared_ptr<const Model>& model)
+    {
+        // 모든 행렬 성분을 정확히 비교하여 연산 순서 차이도 검출한다.
+        const auto checkMatrix = [](const Math::Matrix4& a, const Math::Matrix4& b)
+        {
+            // 저장된 성분은 패딩 없이 값으로 비교한다.
+            DirectX::XMFLOAT4X4 left, right;
+            DirectX::XMStoreFloat4x4(&left, a);
+            DirectX::XMStoreFloat4x4(&right, b);
+            for (unsigned row = 0; row < 4; ++row)
+                for (unsigned col = 0; col < 4; ++col)
+                    CheckXbotArm(left.m[row][col] == right.m[row][col], "BC-03a matrix mismatch");
+        };
+
+        // 같은 클립을 별도 인스턴스에서 여러 시간 간격으로 진행한다.
+        ModelInstance wrapper(model), split(model);
+        wrapper.PlayAnimation(0, true);
+        split.PlayAnimation(0, true);
+        const float steps[] = { 0.0f, 1.0f / 60.0f, 1.0f / 30.0f, 0.25f };
+        for (float dt : steps)
+        {
+            // 애니메이션 입력은 읽을 수 있지만 최종 pose는 아직 무효여야 한다.
+            wrapper.Update(dt);
+            split.EvaluateAnimation(dt);
+            CheckXbotArm(wrapper.HasValidPose() && !split.HasValidPose(), "BC-03a phase validity");
+            for (uint32_t node = 0; node < model->m_NumNodes; ++node)
+                checkMatrix(split.GetNodeTransforms()[node], wrapper.GetNodeTransforms()[node]);
+            CheckXbotArm(split.FinalizePose(nullptr, 0) && split.HasValidPose(), "BC-03a finalize failed");
+
+            // 모든 node와 각 IBM을 쓰는 position·normal 팔레트를 비교한다.
+            for (uint32_t node = 0; node < model->m_NumNodes; ++node)
+                checkMatrix(split.GetNodeTransforms()[node], wrapper.GetNodeTransforms()[node]);
+            for (uint32_t joint = 0; joint < model->m_NumJoints; ++joint)
+            {
+                // normal 행렬은 4x4로 확장하여 유효한 세 축을 함께 검사한다.
+                checkMatrix(split.GetJoints()[joint].posXform, wrapper.GetJoints()[joint].posXform);
+                checkMatrix(Math::Matrix4(split.GetJoints()[joint].nrmXform),
+                    Math::Matrix4(wrapper.GetJoints()[joint].nrmXform));
+            }
+        }
+
+        // 중복 본이 있으면 해당 본을 override하여 모든 중복 entry 갱신을 확인한다.
+        std::vector<uint32_t> entries(model->m_NumNodes, 0);
+        uint32_t duplicates = 0, target = 13;
+        for (uint32_t joint = 0; joint < model->m_NumJoints; ++joint)
+            if (entries[model->m_JointIndices[joint]]++ != 0)
+            {
+                ++duplicates;
+                target = model->m_JointIndices[joint];
+            }
+        const NodePhysicsPose overridePose = { target, Math::Matrix4(Math::Matrix3(Math::kIdentity),
+            Math::Vector3(1.0f, 2.0f, 3.0f)) * split.GetNodeTransforms()[target] };
+        CheckXbotArm(split.FinalizePose(&overridePose, 1), "BC-03a override failed");
+        checkMatrix(split.GetNodeTransforms()[target], overridePose.ModelPose);
+        for (uint32_t joint = 0; joint < model->m_NumJoints; ++joint)
+        {
+            // 중복 항목도 생략하지 않고 개별 IBM과 normal 변환의 기대값을 검사한다.
+            const Math::Matrix4 expected = split.GetNodeTransforms()[model->m_JointIndices[joint]]
+                * model->m_JointIBMs[joint];
+            checkMatrix(split.GetJoints()[joint].posXform, expected);
+            checkMatrix(Math::Matrix4(split.GetJoints()[joint].nrmXform),
+                Math::Matrix4(Math::InverseTranspose(expected.Get3x3())));
+        }
+
+        // 잘못된 override는 출력 전체를 보존하고 최종 pose의 유효성만 해제해야 한다.
+        const std::vector<Math::Matrix4> savedNodes(split.GetNodeTransforms(),
+            split.GetNodeTransforms() + model->m_NumNodes);
+        const std::vector<Joint> savedJoints(split.GetJoints(), split.GetJoints() + model->m_NumJoints);
+        const NodePhysicsPose invalidPose = { UINT32_MAX, Math::Matrix4(Math::kIdentity) };
+        CheckXbotArm(!split.FinalizePose(&invalidPose, 1) && !split.HasValidPose(), "BC-03a invalid override accepted");
+        for (uint32_t node = 0; node < model->m_NumNodes; ++node)
+            checkMatrix(split.GetNodeTransforms()[node], savedNodes[node]);
+        for (uint32_t joint = 0; joint < model->m_NumJoints; ++joint)
+        {
+            // 실패 전 position과 normal 팔레트 모두 유지되는지 확인한다.
+            checkMatrix(split.GetJoints()[joint].posXform, savedJoints[joint].posXform);
+            checkMatrix(Math::Matrix4(split.GetJoints()[joint].nrmXform), Math::Matrix4(savedJoints[joint].nrmXform));
+        }
+        // 실제 자산의 skin 구성과 무관하게 동일 본을 참조하는 별도 CPU 모델을 만든다.
+        auto fixture = std::make_shared<Model>();
+        fixture->m_NumNodes = 3;
+        fixture->m_NumMeshes = 0;
+        fixture->m_NumAnimations = 0;
+        fixture->m_NumJoints = 2;
+        fixture->m_SceneGraph = std::make_unique<GraphNode[]>(3);
+        fixture->m_JointIndices = std::make_unique<uint16_t[]>(2);
+        fixture->m_JointIBMs = std::make_unique<Math::Matrix4[]>(2);
+        for (uint32_t node = 0; node < 3; ++node)
+        {
+            // 세 본은 identity local을 가진 하나의 부모·자식 체인이다.
+            GraphNode& graph = fixture->m_SceneGraph[node];
+            graph.xform = Math::Matrix4(Math::kIdentity);
+            graph.matrixIdx = node;
+            graph.hasChildren = node < 2;
+            graph.hasSibling = graph.skeletonRoot = graph.staleMatrix = 0;
+        }
+        fixture->m_JointIndices[0] = fixture->m_JointIndices[1] = 1;
+        fixture->m_JointIBMs[0] = Math::Matrix4(Math::kIdentity);
+        fixture->m_JointIBMs[1] = Math::Matrix4(Math::Matrix3(Math::kIdentity), Math::Vector3(3.0f, 0.0f, 0.0f));
+
+        // 서로 다른 IBM을 가진 중복 팔레트가 모두 물리 pose를 반영해야 한다.
+        ModelInstance duplicatePose(fixture);
+        duplicatePose.EvaluateAnimation(0.0f);
+        CheckXbotArm(!duplicatePose.HasValidPose(), "BC-03a synthetic phase validity");
+        const NodePhysicsPose syntheticOverride = { 1, Math::Matrix4(Math::Matrix3::MakeScale(2.0f),
+            Math::Vector3(1.0f, 2.0f, 3.0f)) };
+        CheckXbotArm(duplicatePose.FinalizePose(&syntheticOverride, 1) && duplicatePose.HasValidPose(),
+            "BC-03a synthetic override failed");
+        for (uint32_t joint = 0; joint < 2; ++joint)
+        {
+            // 본 pose는 같아도 개별 IBM에 따른 position과 normal 기대값을 검사한다.
+            const Math::Matrix4 expected = syntheticOverride.ModelPose * fixture->m_JointIBMs[joint];
+            checkMatrix(duplicatePose.GetJoints()[joint].posXform, expected);
+            checkMatrix(Math::Matrix4(duplicatePose.GetJoints()[joint].nrmXform),
+                Math::Matrix4(Math::InverseTranspose(expected.Get3x3())));
+        }
+        LogXbotArm("BC-03a PASS: samples=4 nodes=%u palette=%u duplicateEntries=%u overrideNode=%u syntheticDuplicateEntries=2\n",
+            model->m_NumNodes, model->m_NumJoints, duplicates, target);
+    }
+
+    // 옵션이 켜지면 별도 CPU 인스턴스로 Xbot 왼팔과 pose 확정을 검증하고 종료를 요청한다.
     inline bool RunXbotArmChecks(const Scene& scene)
     {
         // 기본 장면의 Xbot만 선택하여 이름 없는 런타임 자산의 구조를 확인한다.
@@ -116,6 +237,9 @@ namespace Viewer
             LogXbotArm("BC-00 found: NodeId=%u parent=%u\n", id, parents[id]);
         CheckXbotArm(model->m_NumNodes == 70 && parents[13] == 12 && parents[14] == 13
             && parents[15] == 14 && model->m_NumAnimations > 0, "unexpected Xbot topology/animation");
+
+        // 실제 자산으로 분리된 CPU pose 단계와 중복 팔레트 갱신을 회귀 검사한다.
+        CheckXbotPoseFinalization(model);
 
         // 기본 장면과 같은 클립을 별도 인스턴스에서 고정 간격으로 재생한다.
         ModelInstance pose(model);

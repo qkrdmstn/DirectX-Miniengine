@@ -1,4 +1,4 @@
-상태: 중단 — BC-02 검증 통과, Git 쓰기 허용 후에도 실제 index.lock 권한 거부 지속, HEAD d044de76 (2026-10-29)
+상태: 진행 중 — BC-03a ModelInstance 애니메이션 평가/포즈 확정 분리 완료, 기준 3bee0b20 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
@@ -274,3 +274,18 @@ v1은 `367301ec` 기준으로 ModelPose/ModelInstance/Scene/MeshComponent/물리
 
 사용자 지시에 따라 단계별 승인 중단 없이 M1까지 진행한다. ThirdParty 실제 복사본의 이전 build 폴더는 worktree 내부 build.main-copy-20261029로 보존했다. Tools/BuildJolt.ps1로 로컬 캐시를 재구성하고 Debug Jolt 빌드에 성공했다. CPU SkeletonPoseTests 32/32 PASS(3.59초), 전체 Debug/Release MSBuild /v:minimal 빌드 모두 종료 코드 0이다. pwsh 탐색 메시지는 있었으나 빌드 최종 종료는 성공이다. 연결 단절 전 빌드는 완료 근거로 사용하지 않았다. 별도 codex exec 읽기 전용 리뷰는 home directory 탐색 실패로 실행되지 않아, diff와 기존 EvaluateModelPose를 다시 대조한 자기 리뷰를 수행했고 유효 지적은 0건이다. BC-02는 화면 경로를 변경하지 않아 이번 단계 viewer 실행은 하지 않았다. .mini 부산물은 커밋에서 제외한다.
 커밋 단계에서 worktree 외부 Git 관리 폴더의 index.lock 생성이 Permission denied로 차단됐다. git add와 git commit 모두 실패했으며 master 병합·후속 단계는 미수행이다. 최종 보고는 BreakConstraintReport.md에 저장했다.
+
+### Static 병합 후 전제 대조 (2026-10-29, 3bee0b20)
+
+사용자 변경 지시: 이 세션은 git commit/merge를 실행하지 않고 M1까지 단계별 구현·검증·별도 리뷰·문서 갱신을 계속한다. 단계별 바뀐 파일 목록을 Progress에 남긴다. 각 단계 구현과 리뷰는 별도 Codex 실행으로 수행한다.
+
+PhysicsWorld의 handle·PreparedBody·COM 속도·private PImpl·Static/Dynamic만 있는 motion은 기존 계약과 일치한다. Kinematic/impulse/constraint 중복 API는 없다. PhysicsSystem::AdvanceSimulation은 PhysicsStepClock의 최대 4회 step과 ApplyBodyPoses를 소유하며 BC-11에서 이 기존 루프에 skeletal 단계를 삽입한다. 새 step 시계를 만들지 않는다.
+
+편집·삭제의 실제 연결 지점은 PhysicsSystem::ApplyMeshEdit와 RemoveTarget, 공통 DeleteEditTarget이다. GameObject::IsEditable은 명시적 m_NotEditable만 검사하며 기존 Static sim 조각 owner도 편집할 수 있다. 따라서 skeletal 등록 시 owner를 명시적으로 잠그고 해제 시 이전 잠금 값을 복원해야 한다. Scene::DeleteObject/Clear 직접 호출은 PhysicsSystem을 통하지 않으므로 SkeletalPhysicsSystem은 SyncBodies 이전 정리에서 사라진 ID도 검사한다. Clear에서는 skeletal 관절→body를 world Clear보다 먼저 정리한다. 이 차이는 기존 Static 편집 정책을 보존하기 위해 문서에 반영했다.
+
+병합 충돌은 사용자가 ModelViewer.cpp의 양쪽 include·IsDone 조건·멤버를 보존하여 해결했고 Debug 빌드 성공을 알렸다. 본 세션은 병합을 다시 실행하지 않는다.
+### BC-03a 완료 (2026-10-29)
+
+ModelInstance::EvaluateAnimation과 FinalizePose를 분리하고 Update는 override 없는 wrapper로 유지했다. 인스턴스별 유효 부모를 생성 시 저장하며 애니메이션 단계는 node pose를 공개하되 HasValidPose는 false다. FinalizePose는 모든 팔레트 참조를 검사하고 override 평가 성공 후 각 palette의 IBM·normal을 계산한다.
+
+SkeletonPose 32/32, SceneMath 495 checks와 Physics Debug 9/9 회귀 PASS. 최종 Debug 빌드 10.94초, Release 14.75초, 각 종료 코드 0. 실제 Debug Viewer -debug 1 -xbot-arm-checks 1은 6.32초/종료 코드 0이며 BC-03a PASS와 BC-00 PASS를 새 로그에서 확인했다. Xbot 실제 팔레트는 67개·중복0개여서 별도 CPU Model의 같은 NodeId 두 entry와 서로 다른 IBM으로 중복 갱신을 확인했다(syntheticDuplicateEntries=2). 4개 dt의 wrapper/split node·position·normal 동등, override, 실패 출력 보존을 검사했다. 별도 새 Codex 읽기 전용 리뷰 지적 0건. GPU 기반 검증 옵션은 켜지 않았고 DirectX debug layer를 켰다. 드라이버 레지스트리에는 Intel Iris Xe 27.20.100.9415가 있으며 실제 선택 adapter는 별도 계측하지 않았다. 기존 미수정 헤더 C4819와 pwsh fallback 메시지가 있으나 빌드 성공이다.

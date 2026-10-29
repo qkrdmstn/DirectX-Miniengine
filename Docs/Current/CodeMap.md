@@ -1,4 +1,4 @@
-상태: 완료 — `3dc5d6ba` 기반 생성 조각 선택·중심 기즈모·선택 표시 갱신; CPU·실행 검증과 수동 확인 한계는 Scene.md 참조 (2026-10-28)
+상태: 진행 중 — BC-03a ModelInstance 애니메이션 평가/포즈 확정 분리 완료, 기준 3bee0b20 (2026-10-29)
 
 # 현재 Scene과 유한 평면 코드 지도
 
@@ -34,3 +34,6 @@
 `IntersectCutPlaneRectangle`은 정규화된 월드 ray의 거리 t를 보존한다. `ClipCoplanarSegmentToCutPlaneRectangle`은 공면 선분의 내부 구간을 원본 선분의 [0,1]로 반환한다. 둘 다 실패 시 출력 인자를 보존한다.
 
 구현·검증 범위는 [CutPlaneDesign.md](CutPlaneDesign.md), 후속 GPU 방향은 [GPUCuttingSystemDesign.md](../GPU/GPUCuttingSystemDesign.md), NDC 근거 등급은 [NDC25Reference.md](../NDC/NDC25Reference.md)를 본다.
+
+BC-03a(3bee0b20 이후): ModelInstance::EvaluateAnimation은 애니메이션 node를 평가하고 FinalizePose는 물리 override 후 전체 팔레트를 확정한다. 기존 Update는 두 함수를 연속 호출한다. 이 단계에서 Scene의 GPU 준비 순서는 유지한다.
+

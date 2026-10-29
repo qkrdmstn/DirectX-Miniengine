@@ -14,7 +14,7 @@
 #pragma once
 
 #include "Animation.h"
-#include "ModelPose.h"
+#include "SkeletonPose.h"
 #include "PosedGeometry.h"
 #include "TransformBounds.h"
 #include "../Core/GpuBuffer.h"
@@ -161,7 +161,11 @@ public:
     const Joint* GetJoints() const { return m_Skeleton.get(); }
     // 잘못된 node 그래프의 이전 pose를 렌더에 사용하지 않도록 검사한다.
     bool HasValidPose() const { return m_PoseValid; }
-    // GameObject당 한 번 CPU 애니메이션·node·본 pose를 평가한다.
+    // 애니메이션 node pose를 공개하되 최종 pose와 팔레트는 아직 유효하게 만들지 않는다.
+    void EvaluateAnimation(float deltaTime);
+    // 물리 override를 합성하고 모든 팔레트 항목을 갱신한 뒤 최종 pose를 공개한다.
+    bool FinalizePose(const NodePhysicsPose* overrides, uint32_t overrideCount);
+    // 기존 호출자를 위해 애니메이션 평가와 override 없는 최종 확정을 연속 수행한다.
     void Update(float deltaTime);
 
     size_t GetNumAnimations(void) const { return m_AnimState.size(); }
@@ -175,6 +179,8 @@ public:
 private:
     std::shared_ptr<const Model> m_Model;
     std::unique_ptr<Math::Matrix4[]> m_ModelSpaceTransforms;
+    std::vector<NodeId> m_PoseParents;
+    bool m_AnimationValid = false;
     bool m_PoseValid = false;
 
     std::unique_ptr<GraphNode[]> m_AnimGraph;   // A copy of the scene graph when instancing animation
