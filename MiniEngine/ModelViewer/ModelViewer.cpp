@@ -286,8 +286,10 @@ void ModelViewer::Startup( void )
 
     if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
     {
+        // 기본 장면에 정적 대형 Dragon 모델을 포함해 여러 절단 후보를 함께 확인한다.
         m_Scene.CreateObject("Cube", Renderer::LoadModel(L"Models/cube.glb", forceRebuild));
         m_Scene.CreateObject("Bunny", Renderer::LoadModel(L"Models/bunny.glb", forceRebuild));
+        m_Scene.CreateObject("Dragon", Renderer::LoadModel(L"Models/dragon.glb", forceRebuild));
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
     }
     else
