@@ -73,6 +73,9 @@ namespace MiniPhysics
     class PhysicsWorld
     {
     public:
+        // body 원점 위치의 각 성분에 허용하는 절대값 한계다.
+        static constexpr double MaxBodyPosition = 1.0e9;
+
         // SDK 초기화는 명시적인 Initialize 호출까지 보류한다.
         PhysicsWorld();
         // 남은 조회 body와 SDK 자원을 순서대로 해제한다.
@@ -131,6 +134,8 @@ namespace MiniPhysics
         bool IsBodyAwake(BodyHandle handle) const;
         // body의 선속도(m/s)와 각속도(rad/s)를 읽는다. 정적 body는 0이다. handle이 무효면 false다.
         bool GetBodyVelocity(BodyHandle handle, std::array<double, 3>& linear, std::array<double, 3>& angular) const;
+        // 진단에서 동적 body의 실제 질량을 읽는다.
+        bool GetBodyMass(BodyHandle handle, double& mass) const;
 
     private:
         struct Impl;

@@ -65,15 +65,22 @@ namespace MiniPhysics
     // 명시적 종료를 생략해도 등록 body를 남기지 않는다.
     PhysicsWorld::~PhysicsWorld() { Shutdown(); }
 
-    // 아직 simulation하지 않는 조회 전용 world를 초기화한다.
+    // 조회와 simulation에 사용할 Jolt world와 물리 설정을 초기화한다.
     void PhysicsWorld::Initialize(uint32_t capacity)
     {
+        // 중복 초기화와 잘못된 용량을 검사한다.
         if (m_Impl) return;
         if (capacity == 0 || capacity > MaxColliderCapacity) throw std::invalid_argument("Invalid collider capacity");
 
         // Jolt world를 만든다.
         auto impl = std::make_unique<Impl>();
         impl->World.Init(capacity, 0, capacity, capacity, impl->Layers, impl->Layers, impl->Layers);
+
+        // R14 관통 한계 0.01 m의 절반을 위치 보정 허용치로 지정한다.
+        constexpr float PenetrationSlop = 0.005f;
+        JPH::PhysicsSettings settings = impl->World.GetPhysicsSettings();
+        settings.mPenetrationSlop = PenetrationSlop;
+        impl->World.SetPhysicsSettings(settings);
 
         // Y-up 중력(Unreal -980 cm/s²를 m로 환산한 값)을 지정한다.
         impl->World.SetGravity(JPH::Vec3(0.0f, -9.8f, 0.0f));

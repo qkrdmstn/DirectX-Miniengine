@@ -14,10 +14,10 @@
 
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
-| [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — 현황문서 (`527ed749` 기준 미커밋 문서 정리, 구현 변경 없음) |
+| [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | `3dc5d6ba` 기반 조각 hull 선택·중심 기즈모·선택 모서리 갱신 |
 | [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749` 기반, GPU 연결 `673b56b6`; 수동 입력 검증 범위는 본문 참조 |
 | [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `673b56b6` Compute pose 연결, 검증은 본문·GPU 설계 참조 |
-| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `39db69f3` 커밋된 Jolt collider 후보 조회, 편집 UI는 owner TRS; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반) |
+| [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `3dc5d6ba` 기반 조각 hull 선택·중심 기즈모·노란 선택 모서리 구현, CPU/실행 진단 통과; 수동 화면 미확인 |
 
 ## GPU — 후속 절단 설계·문헌
 
@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | [JoltQueryIntegration.md](Physics/JoltQueryIntegration.md) | 현재 SDK 빌드·collider 등록·평면 후보 API·실행 검증 | 완료 — `39db69f3` 커밋된 Jolt v5.6.0 조회 연결·Debug/Release/Profile 빌드·CPU/실행 검증 |
 | [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `39db69f3` 조회 구현 완료; 동적 조각 물리는 StaticPiecePhysics로 대체, Skeletal 물리는 후속 |
-| [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — `cccf6a3b` 기반 4d·5a~5c 작업 트리 구현·리뷰·Debug/Release 검증 완료; 물리 절단 transaction은 6단계 (2026-10-26) |
+| [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — 7a~7d 완료, `26302519` 기반 바닥 최소 1,000×1,000 m 확장; 8단계 전체 검증 미진행 (2026-10-28) |
 | [BreakConstraintDesign.md](Physics/BreakConstraintDesign.md) | UE5.3.2 관절 해제·Actor 유지·physics pose 반영 원리 | 설계안 — `5f56b93d` 재대조, 구현 계약은 아래 인계 문서 참조 (2026-10-28) |
 | [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트·첫 작업 지시 | 진행 중 — BC-02 CPU 32/32·Debug/Release 빌드 PASS, Git 관리 경로 쓰기 권한 차단으로 미커밋 (d044de76 기반, 2026-10-29) |
 

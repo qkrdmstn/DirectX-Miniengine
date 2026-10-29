@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "VectorMath.h"
+#include "SceneTransform.h"
 #include <cmath>
 
 namespace Viewer
@@ -8,6 +9,34 @@ namespace Viewer
     namespace GizmoMath
     {
         struct Point { float X, Y; };
+
+        // 정규화하지 않은 로컬 ray도 원래 매개변수 거리를 보존하며 양면 삼각형과 비교한다.
+        inline bool IntersectTriangle(Math::Vector3 origin, Math::Vector3 direction,
+            Math::Vector3 a, Math::Vector3 b, Math::Vector3 c, float& distance)
+        {
+            // 삼각형 크기에 비례한 기준으로 평행하거나 퇴화한 입력을 거절한다.
+            const Math::Vector3 ab = b - a, ac = c - a;
+            const Math::Vector3 p = Math::Cross(direction, ac);
+            const float determinant = Math::Dot(ab, p);
+            const float magnitude = std::sqrt(float(Math::LengthSquare(ab) * Math::LengthSquare(p)));
+            if (!std::isfinite(determinant) || std::abs(determinant) <= magnitude * 1e-6f) return false;
+
+            // 무게중심 좌표와 앞쪽 교차 거리를 검사한다.
+            const Math::Vector3 offset = origin - a, q = Math::Cross(offset, ab);
+            const float u = float(Math::Dot(offset, p)) / determinant;
+            const float v = float(Math::Dot(direction, q)) / determinant;
+            distance = float(Math::Dot(ac, q)) / determinant;
+            return u >= -1e-5f && v >= -1e-5f && u + v <= 1.00001f &&
+                distance >= 0.0f && std::isfinite(distance);
+        }
+
+        // 회전·크기를 바꿔도 시작 변환의 로컬 피벗이 같은 월드 위치에 남도록 위치를 보정한다.
+        inline void KeepPivot(const SceneTransform& start, Math::Vector3 pivot, SceneTransform& changed)
+        {
+            // 시작 월드 피벗을 로컬로 돌리고 새 회전·크기가 만든 오프셋을 제거한다.
+            const Math::Vector3 local(Math::Invert(Math::Matrix4(start.ToAffine())) * pivot);
+            changed.SetTranslation(pivot - changed.GetRotation() * (changed.GetScale() * local));
+        }
 
         inline Math::Vector3 RayDirection(const Math::Matrix4& viewProjection, Math::Vector3 eye, float x, float y)
         {

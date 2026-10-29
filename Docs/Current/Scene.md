@@ -1,4 +1,4 @@
-상태: 진행 중 — 5a~5c 낙하·바닥·pause, 6b 물리 절단 transaction, 6d 충돌 overlay, 7a EditTarget 선택 완료; collider 유효성 검색 순서 최적화 완료 (`5f56b93d` 기반); 조각 드래그·Undo(7b·7c)와 관절 미구현 (2026-10-28)
+상태: 진행 중 — 7a~7d 완료, `3dc5d6ba` 기반 생성 조각 hull 선택·중심 기즈모·노란 선택 모서리 구현; CPU·실행 진단 통과, 수동 화면 확인 미완료, 관절 미구현 (2026-10-28)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -27,8 +27,9 @@ Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::P
 | `L` | 이동·회전의 World / Local 축 전환 (크기는 항상 Local) |
 | `V` | Solid → Wireframe → Vertices → Solid 순환 (현재 모드 overlay 표시) |
 | `C` | 현재 유한 평면 영역의 Static 컴포넌트 후보를 조회하고 실제 분할만 게시. 처리 중 재입력은 Busy 안내 |
-| `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태 |
+| `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태. 기본 정지 상태로 시작한다 |
 | `H` | 조각별 충돌 convex hull 모서리와 물리 바닥 상자 표시 켜기/끄기(기본 꺼짐). 디버그 UI `Viewer/Physics/ShowCollision`과 동일 상태. 깨어 있음 초록·잠듦 파랑·body 없음 노랑·바닥 회색 |
+| `Delete` | 드래그 밖에서 현재 편집 대상 삭제(Mesh는 조각만, Owner는 객체 전체). 바닥은 거절 |
 | 드래그 중 `Esc` | 시작 Transform으로 복구 |
 | `Ctrl+Z` | 마지막 완료 드래그 한 번 취소; 최근 128개 보관 |
 | 오른쪽 버튼 유지 + 마우스 | 카메라 회전 |
@@ -57,7 +58,7 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 - 렌더는 각 컴포넌트의 현재 revision section만 등록한다. Static node bound와 Skeletal 전체 본 변환 구의 합으로 컴포넌트 경계를 만들며, 스킨 경계는 보수적이지만 느슨할 수 있다. 첫 유효 pose 전·기준 변경 후·pose 실패 시 선택을 보류한다.
 - 컴포넌트 GPU 버퍼 삭제는 현재 전역 GPU 완료를 기다린다. 단계별 검증은 [GPU 설계 14절](../GPU/GPUCuttingSystemDesign.md)을 따른다.
 
-`Scene::CreateObject`, `FindObject`, `DeleteObject`, `Clear`로 객체를 관리한다.
+`Scene::CreateObject`, `FindObject`, `DeleteObject`, `Clear`로 객체를 관리한다. 사용자 삭제는 `DeleteEditTarget`(`ObjectSelection`)이 절단 대기 후보와 물리 body·query 매핑을 먼저 즉시 제거한 뒤 조각은 `GameObject::RemoveMeshComponent`, owner는 `DeleteObject`로 지운다.
 매 프레임 `Scene::Update` 후 기본·그림자 pass에서 각각 `Scene::Render`를 호출한다.
 `TransformGizmo`는 viewport 하나와 Scene 하나를 대상으로 입력·overlay를 처리한다.
 
@@ -66,14 +67,16 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 표시 모드의 입력·PSO·깊이·알파·검증 계약은
 [RenderModes.md](RenderModes.md)를 따른다.
 
-선택은 각 메시 컴포넌트의 CPU 경계 구와 가장 가까운 교차점을 이용하고 `PickHit`에 ObjectId와 MeshId를 함께 반환한다. 구가 겹치거나 빈 공간이 많은 모델에서는 근사 선택이다.
+`PickObject`는 CPU 경계 구로 후보를 줄인 뒤, 충돌 hull이 있는 생성 조각은 현재 로컬 hull 삼각형과 양면 ray 교차를 검사해 가장 가까운 월드 거리로 선택한다. 역변환한 ray를 정규화하지 않아 비균일 scale 조각끼리도 거리를 비교할 수 있다. 원본·충돌 없는 조각은 기존 경계 구 근사 선택을 유지한다. hull은 실제 렌더 삼각형과 다른 근사이므로 오목한 빈 공간까지 정확한 선택을 보장하지 않는다. `PickHit`에는 ObjectId와 MeshId를 함께 반환한다.
+
+`GetEditTargetPivot`는 생성 Mesh의 최신 경계 구 중심을 반환하고, 원본·Owner는 기존 편집 원점을 유지한다. `TryGetEditTargetTransform`의 실제 편집 TRS는 바꾸지 않는다. `TransformGizmo`는 표시·핸들 선택·드래그에 같은 피벗을 쓰며 `GizmoMath::KeepPivot`로 회전·크기 변경 시 중심 위치를 보존한다. Esc·Undo는 기존 실제 TRS 복구 경로를 따른다. 선택된 Mesh의 충돌 hull 모서리를 노란 2px overlay로 표시하며 View 도구에서도 유지한다. 표시에는 실제 렌더 실루엣과 다른 hull 근사 및 가려진 모서리가 포함된다.
 
 선택 결과는 `Scene/EditTarget.h`의 `EditTarget{Kind(Owner|Mesh), Object, Mesh}`다. `ResolveEditTarget`이 pick을 R8 규칙으로 바꾼다. `WorldIndependent` 컴포넌트(simulate 여부 무관)를 맞히면 Mesh 대상, `Attached` 컴포넌트나 모델 없는 객체(절단 평면)는 Owner 대상이다. 순수 규칙은 `EditTarget::FromPick`(CPU 테스트 가능)이고, `IsEditTargetValid`는 owner·컴포넌트 존재와 월드 독립 여부를 확인하며 ModelViewer가 매 프레임 무효 대상을 해제한다. `TryGetEditTargetTransform`은 기즈모 위치·축으로 쓰는 월드 TRS를 주는데 Owner는 `GameObject::GetTransform`, Mesh는 `MeshComponent::GetWorldTransform`을 TRS로 분해한 값이다. `GameObject::IsEditable`은 바닥 같은 명시적 편집 잠금만 보며, 잠긴 객체는 pick에서 제외한다. owner 기즈모는 `MeshComponent::GetWorldTransform`이 WorldIndependent에서 owner를 곱하지 않으므로 Attached 컴포넌트만 움직인다.
 
-임시 제한(7b·7c 전): Mesh 대상은 선택되고 기즈모가 조각 위치에 보이지만 드래그와 `Ctrl+Z`는 거절하며 화면에 "Piece editing not ready"를 약 2초 표시한다. Owner 대상의 드래그·Undo는 그대로다. History는 아직 owner만 기록한다.
+편집 적용(7b): 기즈모 드래그와 Esc 복구는 `ApplyEditTransform`(`ObjectSelection`) 하나로 적용한다. Owner는 `GameObject::SetTransform`을 쓴다. Mesh 대상은 `PhysicsSystem::ApplyMeshEdit`로 simulate body를 매 드래그 프레임 순간이동하고(속도 유지) scale 변경 시 shape·질량을 다시 만든다. cook이 실패하면 렌더 TRS도 바꾸지 않는다. History(7c)는 대상 종류·ObjectId·MeshId·TransformMode·Before/After world TRS를 기록하고, `Ctrl+Z`는 `ApplyHistoryCommand`로 Before를 같은 공통 경로에 적용한다(조각 body 순간이동). 삭제되었거나 TransformMode가 바뀐 대상의 기록은 건너뛴다.
 Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하면 해당 축/회전 링 조작을 제한한다.
 크기는 각 축 `0.0001`부터 `1e8`까지의 양수다. 음수·영 크기, 계층 편집, Redo,
-장면 저장은 구현하지 않는다. 충돌 hull이 있는 Static 메시의 낙하·바닥 접촉·pause는 [물리 5단계](../Physics/StaticPiecePhysics.md)의 범위다. simulate 조각은 Mesh 대상으로 선택되며 편집(드래그·Undo)은 7b·7c 전까지 거절한다. `-physics-sim 0`은 기존 비물리 동작을 유지한다. Static 절단은 [구현 기록](../GPU/StaticCutImplementation.md)을 따른다.
+장면 저장은 구현하지 않는다. 충돌 hull이 있는 Static 메시의 낙하·바닥 접촉·pause는 [물리 5단계](../Physics/StaticPiecePhysics.md)의 범위다. simulate 조각은 Mesh 대상으로 선택되고 드래그·Esc·Undo로 body를 순간이동한다. `-physics-sim 0`은 기존 비물리 동작을 유지한다. Static 절단은 [구현 기록](../GPU/StaticCutImplementation.md)을 따른다.
 
 현재 velocity 셰이더는 카메라 이동만 반영하고 객체 Transform·스킨 애니메이션의 이전 위치는 반영하지 않는다.
 따라서 ModelViewer는 TAA를 끄고 FXAA를 사용하며 모션 블러도 끈다. TAA를 다시 켜면 움직이는 객체에
@@ -88,9 +91,13 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 
 `MiniEngine/ModelViewer/Scene/tests/SceneMathTests.cpp`는 실제 `GizmoMath`, `TransformHistory`, `EvaluateModelPose`를 호출한다.
 표준/역방향/무한 역방향 Z의 투영·레이 왕복, 축/평면 드래그, 회전 부호·π 경계,
-양수 크기, Undo와 삭제된 대상, DFS 부모 복원 및 skeletonRoot 유/무의 locator 단일 적용을 검사한다.
+양수 크기, Undo와 삭제된 대상, Mesh 대상 History의 대상·모드·Before/After 보관, DFS 부모 복원 및 skeletonRoot 유/무의 locator 단일 적용을 검사한다.
 VS Developer PowerShell에서 파일 머리말의 명령을 사용하고 `/Fo`, `/Fe`는 저장소 밖으로 지정한다.
 GPU 렌더링과 실제 마우스 조작은 별도 런타임 확인이 필요하다.
+
+2026-10-28 조각 편집 검증: SceneMathTests Debug/Release 각각 495 checks 통과(양면 ray·빈 삼각형 영역·역변환 ray 거리·비균일 scale/회전의 중심 보존 포함). `.slnx` Debug/Release 빌드를 확인했다. 각 구성에서 `-debug 1 -model Models/cube.glb -physics-running 1 -cut 1 -cut-angle 30 -cut-expect-publications 1 -edit-target-checks 1 -edit-apply-checks 1 -physics-query-exit 360`으로 실제 절단 조각 2개 pick·중심 피벗·편집·Undo와 선택 overlay 렌더 경로를 검사했다. 명시적 `-edit-target-checks`에서만 첫 생성 조각을 화면 선택으로 지정한다. 로그는 `%TEMP%/step7-<구성>-piece-selection-overlay.log`, 빌드는 `%TEMP%/piece-selection-<구성>-build.log`, CPU 결과는 `%TEMP%/step7c-scenemath/`에 있다.
+
+선택 GPU 로그는 NVIDIA GeForce MX450이며 드라이버 버전은 이번에 재조회하지 않았다. 기존 하이브리드 그래픽 초기화 메시지는 남는다. Computer Use가 뷰어 스크린샷 대상을 반환하지 않아 실제 클릭·드래그와 노란 표시의 시각 확인은 미완료다. 겹친 두 조각의 특정 MeshId를 고정한 별도 회귀 fixture도 아직 없으며 기존 26방향 pick 진단은 모든 조각을 적어도 한 방향에서 고를 수 있는지 검사한다.
 
 ## 비균일 변환과 회전 검토
 

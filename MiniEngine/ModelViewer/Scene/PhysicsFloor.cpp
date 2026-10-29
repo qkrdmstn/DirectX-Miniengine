@@ -7,7 +7,7 @@
 
 namespace Viewer
 {
-    // 초기 충돌 경계에서 바닥 크기·높이를 정하고 첫 step 전에 렌더와 Static Box를 함께 만든다.
+    // 초기 충돌 경계를 덮는 최소 1 km 바닥을 첫 step 전에 렌더와 Static Box로 함께 만든다.
     bool PhysicsSystem::CreateFloor(std::shared_ptr<const Model> model)
     {
         // 비활성 world와 중복 생성을 거절하고 삭제된 바닥의 handle은 회수한다.
@@ -52,10 +52,14 @@ namespace Viewer
         // 가장 낮은 물체도 정지 후 y=0 평면을 지나도록 높이를 정하고 초기 낙하 여유를 확보한다.
         const float top = -0.5f * minimumHeight;
         const float lift = std::max(0.0f, top + 0.5f - float(bounds.GetMin().GetY()));
-        const float minX = std::min(-2.0f, float(bounds.GetMin().GetX())) - 2.0f;
-        const float maxX = std::max(2.0f, float(bounds.GetMax().GetX())) + 2.0f;
-        const float minZ = std::min(-2.0f, float(bounds.GetMin().GetZ())) - 2.0f;
-        const float maxZ = std::max(2.0f, float(bounds.GetMax().GetZ())) + 2.0f;
+
+        // 조각이 멀리 이동해도 받칠 수 있게 원점 주위 최소 1 km와 장면 경계 여유를 함께 확보한다.
+        constexpr float minimumHalfExtent = 500.0f;
+        constexpr float sceneMargin = 2.0f;
+        const float minX = std::min(-minimumHalfExtent, float(bounds.GetMin().GetX()) - sceneMargin);
+        const float maxX = std::max(minimumHalfExtent, float(bounds.GetMax().GetX()) + sceneMargin);
+        const float minZ = std::min(-minimumHalfExtent, float(bounds.GetMin().GetZ()) - sceneMargin);
+        const float maxZ = std::max(minimumHalfExtent, float(bounds.GetMax().GetZ()) + sceneMargin);
         const Vector3 dimensions(maxX - minX, 0.5f, maxZ - minZ);
         const Vector3 center((minX + maxX) * 0.5f, top - 0.25f, (minZ + maxZ) * 0.5f);
         const Vector3 cubeSize = model->m_BoundingBox.GetDimensions();

@@ -14,13 +14,23 @@
 
 namespace Viewer
 {
+    // 실행한 물리 진단 조건의 누적 개수를 보관한다.
+    inline size_t& PhysicsSimCheckCount()
+    {
+        // 각 실행 프로세스에서 하나의 계수기를 공유한다.
+        static size_t count = 0;
+        return count;
+    }
+
     // Release에서도 물리 장면 진단 실패를 예외로 보고한다.
     inline void CheckPhysicsSim(bool condition, const char* message)
     {
         // false 조건을 호출 위치와 무관하게 런타임 실패로 전달한다.
+        ++PhysicsSimCheckCount();
         if (!condition)
         {
             Utility::Printf("Physics check failed: %s\n", message);
+            Utility::Printf("Physics scenario checks at failure: %zu\n", PhysicsSimCheckCount());
             throw std::runtime_error(message);
         }
     }
@@ -254,7 +264,7 @@ namespace Viewer
     // 절단 실패·예외 경로를 실제 장면에서 구동하고 검사하는 진단 시나리오다. 이름을 주지 않으면 모든 호출이 아무 일도 하지 않는다.
     class PhysicsCutScenario
     {
-        enum class Kind { None, Awake, Woken, Moved, FailA, FailB, Budget, EmptyA, EmptyB, Paused, PausedAsleep, Plain };
+        enum class Kind { None, Midair, MidairSettle, DropNoCut, SpinPaused, Awake, Woken, Moved, FailA, FailB, Budget, EmptyA, EmptyB, Paused, PausedAsleep, Plain };
 
         // 절단 직전에 기록하는 부모와 world의 상태다.
         struct Snapshot
@@ -270,12 +280,19 @@ namespace Viewer
         };
 
     public:
-        // 이름으로 시나리오를 고르고 필요한 주입 스위치를 켠다. 모르는 이름은 오류다.
+        // 이름으로 시나리오를 고르고 필요한 주입 스위치를 켠다.
+        // 모르는 이름은 오류다.
         void Configure(const std::wstring& name, CuttingSystem& cutting)
         {
             // 이름을 종류로 바꾼다.
-            const struct { const wchar_t* Name; Kind Value; } table[] = {
-                { L"awake", Kind::Awake }, { L"woken", Kind::Woken }, { L"moved", Kind::Moved },
+            const struct
+            {
+                const wchar_t* Name;
+                Kind Value;
+            } table[] = {
+                { L"midair-settle", Kind::MidairSettle }, { L"drop-no-cut", Kind::DropNoCut },
+                { L"spin-paused", Kind::SpinPaused },
+                { L"midair", Kind::Midair }, { L"awake", Kind::Awake }, { L"woken", Kind::Woken }, { L"moved", Kind::Moved },
                 { L"fail-a", Kind::FailA }, { L"fail-b", Kind::FailB }, { L"budget", Kind::Budget },
                 { L"empty-a", Kind::EmptyA }, { L"empty-b", Kind::EmptyB }, { L"paused", Kind::Paused },
                 { L"paused-asleep", Kind::PausedAsleep }, { L"plain", Kind::Plain } };
@@ -300,18 +317,27 @@ namespace Viewer
         // 시나리오가 켜져 있는지 읽는다.
         bool Active() const { return m_Kind != Kind::None; }
 
-        // 자동 절단을 제출해도 되는 시점인지 판단한다. 일시정지 시나리오는 정지 뒤, 나머지는 깨어 있는 body가 없을 때다.
+        // 공중 절단은 낙하 속도를 확인하고 정지 시나리오는 정지를 기다린다.
         bool AllowSubmit(const PhysicsSystem& physics) const
         {
-            // 깨어 있는 채 거절을 보는 시나리오는 바로 제출한다.
+            // 무절단 비교는 제출을 막고 낙하 시나리오는 속도를 기다린다.
+            if (m_Kind == Kind::DropNoCut)
+                return false;
+            if (m_Kind == Kind::Midair || m_Kind == Kind::MidairSettle)
+            {
+                std::array<double, 3> linear;
+                std::array<double, 3> angular;
+                return m_Lifted && physics.GetSimulationVelocity(m_Owner, m_Mesh, linear, angular) && linear[1] < -0.2;
+            }
             if (m_Kind == Kind::Awake)
                 return true;
-            if (m_Kind == Kind::Paused || m_Kind == Kind::PausedAsleep)
+            if (m_Kind == Kind::Paused || m_Kind == Kind::PausedAsleep || m_Kind == Kind::SpinPaused)
                 return m_PauseIssued;
             return physics.GetAwakeBodyCount() == 0;
         }
 
-        // 일시정지/재개가 필요하면 0/1을, 아니면 -1을 한 번만 돌려준다. 낙하 중(또는 sleep 뒤)에 정지하고 게시 뒤 재개한다.
+        // 낙하 중 또는 sleep 뒤에 정지를 요청하고 게시 뒤 재개한다.
+        // 실행 상태 변경이 없으면 -1을 돌려준다.
         int WantedRunState(const PhysicsSystem& physics, ObjectId owner, ComponentId mesh)
         {
             // 게시와 검사가 끝나면 재개를 요청한다.
@@ -322,11 +348,11 @@ namespace Viewer
             }
 
             // 아직 정지하지 않았다면 조건에 맞는 첫 프레임에 정지한다.
-            if (m_PauseIssued || (m_Kind != Kind::Paused && m_Kind != Kind::PausedAsleep))
+            if (m_PauseIssued || (m_Kind != Kind::Paused && m_Kind != Kind::PausedAsleep && m_Kind != Kind::SpinPaused))
                 return -1;
             std::array<double, 3> linear;
             std::array<double, 3> angular;
-            const bool ready = m_Kind == Kind::Paused
+            const bool ready = m_Kind == Kind::Paused || m_Kind == Kind::SpinPaused
                 ? physics.GetSimulationVelocity(owner, mesh, linear, angular) && linear[1] < -0.2
                 : physics.GetSimulationBodyCount() > 0 && physics.GetAwakeBodyCount() == 0;
             if (!ready)
@@ -335,16 +361,50 @@ namespace Viewer
             return 0;
         }
 
-        // 절단 제출 직전에 부모와 world 상태를 기록한다. 제출된 뒤에는 기록을 고정한다.
-        void Before(Scene& scene, const PhysicsSystem& physics, ObjectId owner, ComponentId mesh)
+        // 다음 프레임 게시 직전까지 유지되는 부모 pose와 속도를 기록한다.
+        void Before(Scene& scene, PhysicsSystem& physics, ObjectId owner, ComponentId mesh)
         {
-            // 작업이 제출되기 전까지만 최신 상태로 갱신한다.
-            if (m_Kind != Kind::None && !m_Submitted && !m_Done)
-                Capture(scene, physics, owner, mesh);
+            // 설정된 시나리오가 진행 중일 때만 진단용 body 변경을 허용한다.
+            if (m_Kind == Kind::None || m_Done)
+                return;
+            PhysicsSystem::DiagAllowBodyMutation = true;
+
+            // 공중 절단은 바닥에서 충분히 떨어진 곳에서 낙하하게 한다.
+            if ((m_Kind == Kind::Midair || m_Kind == Kind::MidairSettle || m_Kind == Kind::DropNoCut) && !m_Lifted)
+            {
+                CheckPhysicsSim(physics.NudgeBodyForDiagnostic(owner, mesh, 3.0), "Lift cube for midair cut");
+                m_Lifted = true;
+                if (m_Kind == Kind::DropNoCut)
+                {
+                    Capture(scene, physics, owner, mesh);
+                    m_Published = true;
+                }
+            }
+
+            // 정지된 부모에 회전과 선속도를 한 번 주입해 회전 항을 분리한다.
+            if (m_Kind == Kind::SpinPaused && m_PauseIssued && !m_SpinSeeded)
+            {
+                CheckPhysicsSim(!physics.IsSimulationRunning(), "Spin diagnostic runs while paused");
+                CheckPhysicsSim(physics.SeedVelocityForDiagnostic(owner, mesh, { 1, -2, 0.5 }, { 0, 0, 1 }), "Seed parent diagnostic velocity");
+                m_SpinSeeded = true;
+            }
+
+            // 게시가 프레임 첫 단계이므로 이전 프레임 마지막 pose가 commit 시점 pose다.
+            if (m_Kind != Kind::None && !m_Published && !m_Done)
+            {
+                if (!m_Submitted)
+                    Capture(scene, physics, owner, mesh);
+                GameObject* object = scene.FindObject(owner);
+                MeshComponent* parent = object ? object->FindMeshComponent(mesh) : nullptr;
+                CheckPhysicsSim(parent != nullptr, "Commit snapshot parent exists");
+                m_CommitWorld = parent->GetWorldTransform(object->GetTransform());
+                CheckPhysicsSim(physics.GetSimulationVelocity(owner, mesh, m_Linear, m_Angular), "Parent commit velocity readable");
+                CheckPhysicsSim(physics.GetSimulationCenterOfMass(owner, mesh, m_Com), "Parent commit COM readable");
+            }
         }
 
-        // 제출 결과를 보고 깨우기/이동 개입을 하거나, 깨어 있는 body의 제출 거절을 검사한다.
-        void After(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting, ObjectId owner, ComponentId mesh, uint32_t autoCutsLeft)
+        // 제출 결과를 보고 작업 중 깨우기와 이동을 주입한다.
+        void After(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting, ObjectId owner, ComponentId mesh, uint32_t)
         {
             // 꺼져 있거나 이미 끝난 시나리오는 아무것도 하지 않는다.
             if (m_Kind == Kind::None || m_Done)
@@ -368,23 +428,18 @@ namespace Viewer
                     CheckPhysicsSim(physics.NudgeBodyForDiagnostic(owner, mesh, m_Kind == Kind::Moved ? 0.001 : 0.0), "Scenario disturbs the body");
                     CheckPhysicsSim(physics.IsSimulationAwake(owner, mesh), "Disturbed body is awake");
                 }
-                if (m_Kind == Kind::Paused || m_Kind == Kind::PausedAsleep)
+                if (m_Kind == Kind::Paused || m_Kind == Kind::PausedAsleep || m_Kind == Kind::SpinPaused)
                 {
                     CheckPhysicsSim(!physics.IsSimulationRunning(), "Simulation is paused at submit");
-                    CheckPhysicsSim(physics.IsSimulationAwake(owner, mesh) == (m_Kind == Kind::Paused), "Paused cut has the expected sleep state");
+                    CheckPhysicsSim(physics.IsSimulationAwake(owner, mesh) == (m_Kind != Kind::PausedAsleep), "Paused cut has the expected sleep state");
                 }
                 Capture(scene, physics, owner, mesh);
-                return;
-            }
 
-            // 깨어 있는 body에 대한 제출 거절은 작업·결과·변경이 없어야 한다.
-            if (m_Kind == Kind::Awake && autoCutsLeft == 0)
-            {
-                CheckPhysicsSim(physics.IsSimulationRunning() && physics.IsSimulationAwake(owner, mesh), "Body is awake while running");
-                CheckPhysicsSim(std::strcmp(cutting.GetStatusText(), "Wait - object moving") == 0, "Awake cut is rejected as moving");
-                CheckPhysicsSim(cutting.DrainResults().empty(), "Rejected cut leaves no result");
-                VerifyUnchanged(scene, physics);
-                Finish("rejected at submit, no job");
+                // GPU 완료가 다음 프레임에 도착해도 제출 후 실제 낙하 이동을 반드시 검사한다.
+                if (m_Kind == Kind::Midair || m_Kind == Kind::MidairSettle)
+                    CheckPhysicsSim(physics.AdvanceSimulation(PhysicsStepClock::FixedSeconds) == 1, "Parent falls during GPU cut");
+                Before(scene, physics, owner, mesh);
+                return;
             }
         }
 
@@ -394,31 +449,31 @@ namespace Viewer
             // 꺼져 있거나 이미 끝난 시나리오는 아무것도 하지 않는다.
             if (m_Kind == Kind::None || m_Done)
                 return;
-            // 깨어 있는 거절 시나리오에서는 작업이 시작되면 안 된다.
-            CheckPhysicsSim(m_Kind != Kind::Awake, "Awake scenario starts no job");
 
             // 게시 시나리오는 Published와 점프·속도·body 수를 확인하고 정착을 기다린다.
-            if (m_Kind == Kind::EmptyA || m_Kind == Kind::EmptyB || m_Kind == Kind::Paused || m_Kind == Kind::PausedAsleep || m_Kind == Kind::Plain)
+            if (m_Kind != Kind::FailA && m_Kind != Kind::FailB && m_Kind != Kind::Budget)
             {
                 CheckPhysicsSim(entry.Status == CutResultStatus::Published && entry.Error == 0, "Scenario cut publishes");
                 CheckPublished(scene, physics, entry);
                 m_Published = true;
                 m_WantResume = m_Kind == Kind::Paused || m_Kind == Kind::PausedAsleep;
+
+                // commit 전용 시나리오는 배치와 속도 검사를 마치면 완료한다.
+                if (m_Kind == Kind::Midair || m_Kind == Kind::SpinPaused)
+                    Finish("commit pose and velocity inherited");
                 return;
             }
 
-            // 실패 시나리오는 지정한 이유(또는 일반 stale 취소)로 끝나고 아무것도 바뀌지 않아야 한다.
-            const char* expected = m_Kind == Kind::Woken ? "Wait - object moving" : m_Kind == Kind::Moved ? "parent pose changed"
-                : m_Kind == Kind::Budget ? "budget" : "forced cook failure";
+            // 실패 시나리오는 지정한 이유로 끝나고 부모를 유지해야 한다.
+            const char* expected = m_Kind == Kind::Budget ? "budget" : "forced cook failure";
             const bool failed = entry.Status == CutResultStatus::Failed && entry.Error == 0x200 && entry.Reason &&
                 std::strstr(entry.Reason, expected) != nullptr;
-            const bool cancelled = (m_Kind == Kind::Woken || m_Kind == Kind::Moved) && entry.Status == CutResultStatus::Cancelled;
-            CheckPhysicsSim(failed || cancelled, "Scenario cut ends with the expected rollback status");
+            CheckPhysicsSim(failed, "Scenario cut ends with the expected rollback status");
             CheckPhysicsSim(entry.Other == InvalidComponentId && publications == 0, "Failed cut publishes nothing");
             VerifyUnchanged(scene, physics);
-            Utility::Printf("Physics cut scenario detail: status=%s error=0x%x reason=%s\n", failed ? "Failed" : "Cancelled", entry.Error,
+            Utility::Printf("Physics cut scenario detail: status=Failed error=0x%x reason=%s\n", entry.Error,
                 entry.Reason ? entry.Reason : "(none)");
-            Finish(failed ? "failed with reason, rolled back" : "cancelled as stale, rolled back");
+            Finish("failed with reason, rolled back");
         }
 
         // 게시 뒤 모든 body가 sleep하면 body 수·bodyless·바닥 위 정착을 한 번 검사한다.
@@ -432,20 +487,25 @@ namespace Viewer
             GameObject* object = scene.FindObject(m_Owner);
             const GameObject* floor = nullptr;
             for (const auto& candidate : scene.GetObjects())
-                if (candidate->GetName() == "Physics floor") floor = candidate.get();
+                if (candidate->GetName() == "Physics floor")
+                    floor = candidate.get();
             CheckPhysicsSim(object && floor, "Scenario owner and floor exist");
             const float floorTop = PhysicsFloorTop(*floor);
             size_t withBody = 0;
             size_t bodyless = 0;
             float lowest = std::numeric_limits<float>::max();
+            bool aboveFloor = true;
             for (const auto& mesh : object->GetMeshComponents())
             {
                 if (mesh->IsSimulating())
                 {
                     ++withBody;
                     const float pieceLowest = LowestCollisionPoint(*object, *mesh);
-                    CheckPhysicsSim(pieceLowest >= floorTop - 0.01f, "Every piece stays above the floor penetration limit");
-                    Utility::Printf("Physics cut scenario piece: mesh=%llu lowest=%.6f floor=%.6f\n", mesh->GetId(), pieceLowest, floorTop);
+                    const bool asleep = !physics.IsSimulationAwake(m_Owner, mesh->GetId());
+                    Utility::Printf("Physics cut scenario piece: mesh=%llu lowest=%.6f floor=%.6f asleep=%u\n",
+                        mesh->GetId(), pieceLowest, floorTop, asleep ? 1u : 0u);
+                    CheckPhysicsSim(asleep, "Settled piece is asleep");
+                    aboveFloor = aboveFloor && pieceLowest >= floorTop - 0.01f;
                     lowest = std::min(lowest, pieceLowest);
                     continue;
                 }
@@ -453,11 +513,15 @@ namespace Viewer
                 CheckPhysicsSim(mesh->GetCollision().ConvexElems.empty(), "Only a piece without convex collision stays bodyless");
             }
 
-            // 빈 쪽 수, body 수와 바닥 ±0.01 m 정착을 확인한다. 예약 수는 조회 collider가 늘어 달라지므로 게시 프레임에서만 본다.
+            // 모든 조각의 수치를 출력한 뒤 기존 관통 한계를 검사한다.
+            CheckPhysicsSim(aboveFloor, "Every piece stays above the floor penetration limit");
+
+            // 빈 쪽 수와 body 수를 확인한다.
             const bool empty = m_Kind == Kind::EmptyA || m_Kind == Kind::EmptyB;
             CheckPhysicsSim(bodyless == (empty ? 1u : 0u), "Bodyless piece count matches the scenario");
             CheckPhysicsSim(physics.GetSimulationBodyCount() == m_Snap.Bodies - 1 + withBody, "Body count is parent minus one plus pieces");
-            // 각 조각은 바닥 관통 한계 위에 있고, 적어도 하나는 바닥에 닿는다. 위쪽 조각은 아래쪽 조각 위에 얹힐 수 있다.
+
+            // 적어도 하나는 바닥 ±0.01 m 안에 닿아야 한다.
             CheckPhysicsSim(std::fabs(lowest - floorTop) <= 0.01f, "At least one piece rests on the floor within 0.01 m");
             Utility::Printf("Physics cut scenario settled: bodies=%zu bodyless=%zu lowest=%.6f floor=%.6f\n", withBody, bodyless, lowest, floorTop);
             Finish("published, settled above the floor");
@@ -469,8 +533,10 @@ namespace Viewer
         // 종료 정리 단계에서 주입을 끄고, 선택된 시나리오가 끝나지 않았다면 실패로 보고한다.
         void Shutdown()
         {
+            // 주입을 해제하고 종료 조건까지 포함한 검사 수를 출력한다.
             ResetInjection();
             RequireDone();
+            Utility::Printf("Physics scenario checks: %zu\n", PhysicsSimCheckCount());
         }
 
     private:
@@ -495,7 +561,7 @@ namespace Viewer
             m_Snap.World = parent->GetWorldTransform(object->GetTransform());
         }
 
-        // 실패한 절단이 부모 메시·body 수·예약 수를 바꾸지 않았는지 검사한다. 깨우기/이동 시나리오는 pose를 제외한다.
+        // 실패한 절단이 부모 메시·body 수·예약 수와 pose를 바꾸지 않았는지 검사한다.
         void VerifyUnchanged(Scene& scene, const PhysicsSystem& physics) const
         {
             // 부모 메시의 geometry와 편집 세대, simulate 표시와 조각 수가 그대로여야 한다.
@@ -509,15 +575,13 @@ namespace Viewer
             CheckPhysicsSim(physics.GetSimulationBodyCount() == m_Snap.Bodies, "Body count is unchanged");
             CheckPhysicsSim(physics.GetReservedBodyCount() == m_Snap.Reserved, "Reservation count returns to baseline");
 
-            // 개입하지 않은 시나리오는 pose·깨어남·월드 배치도 같아야 한다.
-            if (m_Kind == Kind::Woken || m_Kind == Kind::Moved)
-                return;
+            // 실패 시나리오는 pose·깨어남·월드 배치도 같아야 한다.
             CheckPhysicsSim(parent->GetPhysicsPoseGeneration() == m_Snap.Pose, "Parent pose generation is unchanged");
             CheckPhysicsSim(physics.IsSimulationAwake(m_Owner, m_Mesh) == m_Snap.Awake, "Parent sleep state is unchanged");
             CheckPhysicsSim(MaxDifference(parent->GetWorldTransform(object->GetTransform()), m_Snap.World) == 0.0f, "Parent world transform is unchanged");
         }
 
-        // 게시 직후 두 조각이 부모 월드 배치와 같고 속도 0이며 body 수가 기대와 맞는지 검사한다.
+        // 게시 직후 두 조각의 배치·COM 속도 계승·body 수를 검사한다.
         void CheckPublished(Scene& scene, const PhysicsSystem& physics, const CutResultEntry& entry) const
         {
             // 두 조각을 찾는다.
@@ -526,12 +590,12 @@ namespace Viewer
             MeshComponent* b = object ? object->FindMeshComponent(entry.Other) : nullptr;
             CheckPhysicsSim(a && b, "Both pieces exist after publication");
 
-            // 렌더 월드 배치가 부모의 절단 전 배치와 1e-5 안에서 같아야 한다.
-            const float jumpA = MaxDifference(a->GetWorldTransform(object->GetTransform()), m_Snap.World);
-            const float jumpB = MaxDifference(b->GetWorldTransform(object->GetTransform()), m_Snap.World);
+            // 렌더 월드 배치가 부모의 commit 시점 배치와 1e-5 안에서 같아야 한다.
+            const float jumpA = MaxDifference(a->GetWorldTransform(object->GetTransform()), m_CommitWorld);
+            const float jumpB = MaxDifference(b->GetWorldTransform(object->GetTransform()), m_CommitWorld);
             CheckPhysicsSim(jumpA <= 1.0e-5f && jumpB <= 1.0e-5f, "Pieces keep the parent world transform on the publish frame");
 
-            // body 보유 여부는 주입한 빈 쪽과 일치하고, body가 있는 조각은 속도 0으로 시작한다.
+            // body 보유 여부와 부모 COM 기준의 속도 계승을 확인한다.
             const bool emptyA = m_Kind == Kind::EmptyA;
             const bool emptyB = m_Kind == Kind::EmptyB;
             CheckPhysicsSim(a->IsSimulating() == !emptyA && b->IsSimulating() == !emptyB, "Only the non-empty pieces own bodies");
@@ -542,9 +606,34 @@ namespace Viewer
                 if (!piece->IsSimulating())
                     continue;
                 CheckPhysicsSim(physics.GetSimulationVelocity(m_Owner, piece->GetId(), linear, angular), "Piece body velocity is readable");
-                const double speed = std::fabs(linear[0]) + std::fabs(linear[1]) + std::fabs(linear[2]) +
-                    std::fabs(angular[0]) + std::fabs(angular[1]) + std::fabs(angular[2]);
-                CheckPhysicsSim(speed == 0.0, "Pieces start with zero velocity");
+                std::array<double, 3> com;
+                CheckPhysicsSim(physics.GetSimulationCenterOfMass(m_Owner, piece->GetId(), com), "Piece COM readable");
+                const Math::Vector3 r(float(com[0] - m_Com[0]), float(com[1] - m_Com[1]), float(com[2] - m_Com[2]));
+                const Math::Vector3 w{ float(m_Angular[0]), float(m_Angular[1]), float(m_Angular[2]) };
+                const Math::Vector3 rotational = Math::Cross(w, r);
+                if (m_Kind == Kind::SpinPaused)
+                {
+                    CheckPhysicsSim(float(Math::Length(rotational)) > 0.01f, "Each piece exercises a nontrivial omega cross r");
+                    Utility::Printf("Physics spin term: mesh=%llu magnitude=%g\n", piece->GetId(), float(Math::Length(rotational)));
+                }
+                const Math::Vector3 expected = Math::Vector3(float(m_Linear[0]), float(m_Linear[1]), float(m_Linear[2])) + rotational;
+                CheckPhysicsSim(float(Math::Length(expected - Math::Vector3(float(linear[0]), float(linear[1]), float(linear[2])))) <= 1.0e-5f,
+                    "Piece linear velocity matches v plus omega cross r");
+                for (size_t axis = 0; axis < 3; ++axis)
+                    CheckPhysicsSim(std::fabs(angular[axis] - m_Angular[axis]) <= 1.0e-5, "Piece inherits angular velocity");
+            }
+
+            // 공중 절단은 제출 후 이동과 실제 낙하 상태에서의 게시까지 확인한다.
+            if (m_Kind == Kind::Midair || m_Kind == Kind::MidairSettle)
+            {
+                CheckPhysicsSim(m_Linear[1] < -0.2, "Parent is falling at commit");
+                CheckPhysicsSim(MaxDifference(m_CommitWorld, m_Snap.World) > 1.0e-5f, "Parent moved during GPU cut");
+                const GameObject* floor = nullptr;
+                for (const auto& candidate : scene.GetObjects())
+                    if (candidate->GetName() == "Physics floor")
+                        floor = candidate.get();
+                CheckPhysicsSim(floor && std::min(LowestCollisionPoint(*object, *a), LowestCollisionPoint(*object, *b)) > PhysicsFloorTop(*floor),
+                    "Both pieces are above the floor at commit");
             }
 
             // 부모 body는 사라지고 새 body 수만큼 예약이 바뀐다.
@@ -567,10 +656,12 @@ namespace Viewer
             return largest;
         }
 
-        // cook 실패·빈 쪽·예산 상한 주입을 기본값(꺼짐)으로 되돌린다. 여러 번 불러도 안전하다.
+        // body 변경 허용과 cook 실패·빈 쪽·예산 상한 주입을 기본값으로 되돌린다.
+        // 여러 번 불러도 안전하다.
         void ResetInjection()
         {
             // 정적 실패 주입과 연결된 절단 시스템의 주입을 모두 끈다.
+            PhysicsSystem::DiagAllowBodyMutation = false;
             CutTransaction::DiagFailSide = 0;
             if (!m_Cutting)
                 return;
@@ -590,6 +681,12 @@ namespace Viewer
         Kind m_Kind = Kind::None;
         CuttingSystem* m_Cutting = nullptr;
         Snapshot m_Snap;
+        Math::AffineTransform m_CommitWorld;
+        std::array<double, 3> m_Linear{};
+        std::array<double, 3> m_Angular{};
+        std::array<double, 3> m_Com{};
+        bool m_Lifted = false;
+        bool m_SpinSeeded = false;
         ObjectId m_Owner = InvalidObjectId;
         ComponentId m_Mesh = InvalidComponentId;
         bool m_Submitted = false;

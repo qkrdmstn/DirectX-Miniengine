@@ -29,8 +29,8 @@ namespace Viewer
         // 진단이 꺼져 있거나 이미 끝났는지 읽는다.
         bool Finished() const { return !m_Enabled || m_Done; }
 
-        // 모든 메시의 pose 경계가 준비된 프레임에 한 번 검사한다.
-        void Poll(Scene& scene)
+        // 모든 메시의 pose 경계를 검사하고 선택 출력이 있으면 실제 overlay 렌더 대상도 지정한다.
+        void Poll(Scene& scene, EditTarget* selected = nullptr)
         {
             // 꺼졌거나 이미 끝났으면 건너뛴다.
             if (Finished())
@@ -57,6 +57,10 @@ namespace Viewer
                     PickHit hit;
                     CheckEditTarget(PickMesh(scene, *object, *mesh, hit), "Every piece can be picked from some direction");
                     CheckPick(scene, *object, *mesh, hit, meshTargets, ownerTargets, seen);
+
+                    // 명시적으로 켠 진단에서만 첫 생성 조각을 실제 화면 선택으로 연결한다.
+                    if (selected && selected->IsNone() && mesh->GetGeometry()->IsGenerated())
+                        *selected = ResolveEditTarget(scene, hit);
                 }
             }
             // 장면이 보장하는 범주가 비어 있으면 통과하지 않는다. simulate 장면은 Mesh 대상, sim off 장면은 Owner 대상이 있어야 한다.
@@ -121,6 +125,12 @@ namespace Viewer
             CheckEditTarget(TryGetEditTargetTransform(scene, target, frame), "Target has a gizmo transform");
             const Math::Vector3 expected = independent ? mesh.GetTransform().GetTranslation() : object.GetTransform().GetTranslation();
             CheckEditTarget(float(Math::Length(frame.GetTranslation() - expected)) < 1e-4f, "Gizmo is placed at the target world position");
+
+            // 절단 조각의 표시 중심은 편집 원점과 분리하고 최신 경계 중심을 따라야 한다.
+            const Math::Vector3 pivot = GetEditTargetPivot(scene, target, frame);
+            const Math::Vector3 expectedPivot = independent && mesh.GetGeometry()->IsGenerated() ?
+                mesh.GetBoundingSphere(object.GetTransform()).GetCenter() : expected;
+            CheckEditTarget(float(Math::Length(pivot - expectedPivot)) < 1e-4f, "Generated piece gizmo follows its bounds center");
 
             // 서로 다른 조각은 서로 다른 Mesh 대상이어야 한다.
             if (independent)

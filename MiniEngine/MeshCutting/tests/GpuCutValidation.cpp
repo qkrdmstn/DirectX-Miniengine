@@ -214,8 +214,8 @@ namespace MeshCutting
             const auto* provenance = static_cast<const uint8_t*>(origin.Map());
             double capArea = 0, volume = 0; uint32_t triangles = 0;
 
-            // 계승 hull의 요소별 지지 평면과 허용 오차를 준비한다. tol = 1e-4 x hull 최대 변 길이이며,
-            // 18-DOP은 구성상 렌더 메시를 포함하고 cap 정점은 절단 평면 위에 있으므로 float 오차만 흡수하면 된다.
+            // 계승 hull의 요소별 지지 평면과 허용 오차를 준비한다.
+            // hull 최대 변 길이에 비례한 float 오차와 snap 후 MinHullVertDistance 이내 병합 근사를 흡수한다.
             std::array<std::vector<std::vector<MiniCollision::Plane>>, 2> hullPlanes;
             double hullExtent = 0;
             std::array<double, 2> hullMaxExcess{ -1.0e30, -1.0e30 };
@@ -224,7 +224,7 @@ namespace MeshCutting
                 hullExtent = std::max({hullExtent, elem.ElemBox.Max.x - elem.ElemBox.Min.x,
                     elem.ElemBox.Max.y - elem.ElemBox.Min.y, elem.ElemBox.Max.z - elem.ElemBox.Min.z});
             }
-            double hullTolerance = hullExtent * 1.0e-4;
+            double hullTolerance = hullExtent * 1.0e-4 + MiniCollision::MinHullVertDistance + std::sqrt(MiniCollision::DefaultSnapDistSq);
             std::array<uint32_t, 2> hullChecked{};
 
             // 두 집합의 지지 평면을 준비하되 허용오차는 슬라이스 범위에서만 구한다.

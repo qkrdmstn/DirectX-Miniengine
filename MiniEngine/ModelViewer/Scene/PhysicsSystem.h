@@ -15,7 +15,7 @@ namespace Viewer
         ComponentId Mesh;
         std::shared_ptr<const GeometryRevision> Geometry;
         uint64_t EditGeneration;
-        uint64_t PhysicsPoseGeneration;   // 6단계에서 simulate 대상 재확인에 쓴다. 지금은 비교하지 않는다.
+        uint64_t PhysicsPoseGeneration;   // 물리 pose 기록용이며 절단 자격이나 stale 판정에는 쓰지 않는다.
         Math::Matrix4 World;
     };
 
@@ -31,6 +31,10 @@ namespace Viewer
         void Initialize(bool useJolt = true, uint32_t capacity = 4096, bool simulate = false);
         // GPU 준비와 무관하게 충돌이 있는 정적 메시를 등록하고 오래된 body를 step 전에 제거한다.
         void SyncBodies();
+        // 삭제 대상의 simulation과 query 참조를 즉시 제거한다.
+        void RemoveTarget(ObjectId owner, ComponentId mesh);
+        // 독립 메시의 shape와 pose를 먼저 갱신한 뒤 편집 세대를 게시한다.
+        bool ApplyMeshEdit(Scene& scene, ObjectId owner, ComponentId mesh, const SceneTransform& world);
         // 공통 world를 한 번 진행한다. 호출자는 고정 간격과 프레임당 step 수를 관리한다.
         bool StepSimulation(float seconds);
         // body 원점 pose를 독립 메시 컴포넌트에 반영한다.
@@ -61,10 +65,18 @@ namespace Viewer
         bool GetFloorBox(std::array<double, 3>& center, std::array<double, 3>& half) const;
         // 진단: 조회·simulation·준비 중 body의 용량 예약 합계를 읽는다.
         size_t GetReservedBodyCount() const { return m_World.GetReservedCount(); }
-        // 진단: 등록된 메시 body의 선속도와 각속도를 읽는다.
+        // 등록된 메시 body의 월드 질량 중심을 읽는다.
+        bool GetSimulationCenterOfMass(ObjectId owner, ComponentId mesh, std::array<double, 3>& com) const;
+        // 등록된 메시 body의 선속도와 각속도를 읽는다.
         bool GetSimulationVelocity(ObjectId owner, ComponentId mesh, std::array<double, 3>& linear, std::array<double, 3>& angular) const;
-        // 진단: body를 현재 pose에서 lift(m)만 위로 순간이동해 깨운다. lift가 0이면 깨우기만 한다.
+        // 진단용 body 변경 허용 주입점이며 기본값은 꺼짐이다.
+        static bool DiagAllowBodyMutation;
+        // 진단이 허용되면 body를 lift(m)만 위로 순간이동해 깨운다.
+        // lift가 0이면 깨우기만 하며 진단이 꺼져 있으면 false다.
         bool NudgeBodyForDiagnostic(ObjectId owner, ComponentId mesh, double lift);
+        // 정지 중인 진단 부모를 같은 shape와 pose의 지정 속도 body로 교체한다.
+        // 진단이 꺼져 있으면 아무것도 바꾸지 않고 false를 반환한다.
+        bool SeedVelocityForDiagnostic(ObjectId owner, ComponentId mesh, const std::array<double, 3>& linear, const std::array<double, 3>& angular);
         // 시작 배치 이후 별도 표시용 객체와 고정 Box 바닥을 함께 만든다.
         bool CreateFloor(std::shared_ptr<const Model> model);
         // 준비된 Static 메시 경계를 등록·갱신하고 삭제된 body를 정리한다.
@@ -83,6 +95,8 @@ namespace Viewer
 
     private:
         friend class CutTransaction;
+        friend class EditApplyChecks;
+        friend class EditDeleteChecks;
         using Key = std::pair<ObjectId, ComponentId>;
         struct Entry
         {

@@ -38,6 +38,8 @@ namespace Viewer
         bool RequestAll(const MeshCutting::CutPlaneData& plane, uint32_t capMode = 0);
         // Scene.Update 뒤 준비된 pose로 다음 후보를 제출하고 변경된 후보는 건너뛴다.
         void SubmitPending();
+        // 삭제 대상의 대기 후보를 결과 기록 없이 제거한다.
+        void CancelTarget(ObjectId owner, ComponentId mesh);
         // 작은 상태를 비동기로 수집하고 아직 같은 입력일 때만 A/B를 함께 적용한다.
         bool Update();
         // 쌓인 완료 결과를 모두 넘겨 비운다. 소비자는 Last* 대신 이 목록을 읽는다.
@@ -64,6 +66,7 @@ namespace Viewer
         CutBudget& GetBudget() { return m_Budget; }
 
     private:
+        friend class EditDeleteChecks;
         // 단일 요청과 대기열 내부 제출이 공유하는 GPU 작업 시작 경로다.
         bool Submit(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane,
             bool publish, float worldEpsilon, uint32_t capMode);
@@ -76,7 +79,6 @@ namespace Viewer
         ComponentId m_Mesh = InvalidComponentId;
         Math::Matrix4 m_World;
         uint64_t m_EditGeneration = 0;
-        uint64_t m_PhysicsPoseGeneration = 0;   // simulate 대상 게시 직전 재확인에 쓴다
         CutBudget m_Budget;
         bool m_Publish = true;
         // 결과 목록에 한 칸을 확보한다. 가득 차 있으면 가장 오래된 결과를 버리며 게시 전에 호출해 이후 push가 할당하지 않게 한다.

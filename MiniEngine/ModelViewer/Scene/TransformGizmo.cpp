@@ -1,6 +1,7 @@
 ﻿#include "TransformGizmo.h"
 #include "GizmoDraw.h"
 #include "GameInput.h"
+#include "CollisionDebugMath.h"
 
 namespace Viewer
 {
@@ -9,19 +10,51 @@ namespace Viewer
     {
         const Color Colors[] = { Color(1.0f, 0.2f, 0.15f), Color(0.25f, 1.0f, 0.25f), Color(0.25f, 0.55f, 1.0f) };
         const int PlaneAxes[][2] = { {0, 1}, {1, 2}, {2, 0} };
+
+        // 선택된 조각의 충돌 hull 모서리를 노란 선으로 표시하며 근평면을 가로지르는 선도 보존한다.
+        void DrawSelection(GraphicsContext& context, const Scene& scene, const EditTarget& target,
+            const Camera& camera, float width, float height)
+        {
+            // Mesh 선택만 표시하고 삭제되거나 잠긴 대상은 그리지 않는다.
+            const auto* object = scene.FindObject(target.Object);
+            const auto* mesh = object && target.IsMesh() ? object->FindMeshComponent(target.Mesh) : nullptr;
+            if (!mesh || !object->IsEditable()) return;
+            const Matrix4 viewWorld = camera.GetViewMatrix() * Matrix4(mesh->GetWorldTransform(object->GetTransform()));
+            GizmoDraw draw;
+
+            // 평면 내부의 삼각화 대각선을 제외한 hull 모서리를 화면으로 투영한다.
+            for (const auto& hull : mesh->GetCollision().ConvexElems)
+            {
+                std::vector<CollisionDebug::HullEdge> edges;
+                CollisionDebug::ExtractHullEdges(hull.VertexData, hull.IndexData, edges);
+
+                // 각 로컬 정점을 뷰 공간으로 바꿔 카메라 뒤쪽 선분을 잘라낸다.
+                const auto toView = [&hull, &viewWorld](uint32_t index)
+                {
+                    const auto& v = hull.VertexData[index];
+                    const Vector3 p(viewWorld * Vector3(float(v.x), float(v.y), float(v.z)));
+                    return CollisionDebug::ViewPoint{ p.GetX(), p.GetY(), p.GetZ() };
+                };
+                for (const auto& edge : edges)
+                {
+                    auto a = toView(edge.A), b = toView(edge.B);
+                    if (!CollisionDebug::ClipSegmentToNearPlane(a, b, camera.GetNearClip())) continue;
+                    GizmoMath::Point pa, pb;
+                    if (GizmoMath::Project(Vector3(a.X, a.Y, a.Z), camera.GetProjMatrix(), width, height, pa) &&
+                        GizmoMath::Project(Vector3(b.X, b.Y, b.Z), camera.GetProjMatrix(), width, height, pb))
+                        draw.Line(pa, pb, Color(1.0f, 0.85f, 0.1f), 2.0f);
+                }
+            }
+
+            // 기즈모 도구와 무관하게 선택 표시를 overlay로 게시한다.
+            draw.Render(context, width, height);
+        }
     }
 
     // 선택 좌표계의 축을 구해 선택과 드래그가 공유하도록 저장한다.
     void TransformGizmo::SetAxes(const SceneTransform& transform)
     {
         GizmoMath::Basis(transform.GetRotation(), IsLocal(), m_Axes);
-    }
-
-    // Mesh 대상 편집이 아직 준비되지 않았음을 알리는 안내를 약 2초 켠다.
-    void TransformGizmo::RaiseNotice()
-    {
-        // 안내 표시 프레임 수를 채운다.
-        m_NoticeFrames = 120;
     }
 
     // 화면에서 일정한 크기를 유지하는 월드 핸들 길이를 구한다.
@@ -106,23 +139,20 @@ namespace Viewer
     }
 
     // 시작 TRS 전체를 복구하고 활성 드래그를 해제한다.
-    void TransformGizmo::Cancel(Scene& scene)
+    void TransformGizmo::Cancel(Scene& scene, PhysicsSystem* physics)
     {
-        if (GameObject* object = scene.FindObject(m_DragId))
-            object->SetTransform(m_Start);
-        m_DragId = InvalidObjectId;
+        // 공통 경로로 시작 월드 TRS를 복구한다.
+        ApplyEditTransform(scene, physics, m_DragTarget, m_Start);
+        m_DragTarget = EditTarget();
         m_Active = None;
     }
 
-    // 입력 게이트를 유지하며 owner 대상의 TRS 드래그·취소·Undo를 처리한다. Mesh 대상은 기즈모만 보이고 편집은 거절한다.
+    // Owner와 Mesh의 드래그와 취소 및 공통 경로의 이력 복구를 처리한다.
     bool TransformGizmo::Update(Scene& scene, const EditTarget& target, const Camera& camera, float width, float height,
-        unsigned scaleAxisMask)
+        unsigned scaleAxisMask, PhysicsSystem* physics)
     {
+        // 이번 입력의 크기 축 제한을 저장한다.
         m_ScaleAxisMask = scaleAxisMask;
-
-        // 거절 안내 표시 시간을 한 프레임 줄인다.
-        if (m_NoticeFrames > 0)
-            --m_NoticeFrames;
 
         // 마우스 위치를 읽는다.
         float x;
@@ -130,27 +160,33 @@ namespace Viewer
         const bool validMouse = GameInput::GetMousePosition(x, y);
         if (IsDragging())
         {
-            if (target.Kind != EditTargetKind::Owner || target.Object != m_DragId || !scene.FindObject(m_DragId) || !validMouse ||
+            // 대상 소멸이나 Esc 입력은 시작 변환 복구로 처리한다.
+            if (target != m_DragTarget || !IsEditTargetValid(scene, m_DragTarget) || !validMouse ||
                 GameInput::IsFirstPressed(GameInput::kKey_escape))
             {
-                Cancel(scene);
+                Cancel(scene, physics);
                 return true;
             }
+
+            // 시작 월드 TRS를 기준으로 매 프레임 편집량을 계산한다.
             const PickingRay ray = MakePickingRay(camera, x, y);
             SceneTransform transform = m_Start;
             if (m_Mode == Scale)
             {
+                // 유효한 교차점이 있을 때 시작 크기에서 배율을 계산한다.
                 float drag = m_StartY - y * height;
-                if (m_Active != Uniform)
+                Vector3 hit;
+                const bool validScale = m_Active == Uniform ||
+                    GizmoMath::IntersectPlane(ray.Origin, ray.Direction, m_Pivot, m_Normal, hit);
+                if (validScale)
                 {
-                    Vector3 hit;
-                    if (!GizmoMath::IntersectPlane(ray.Origin, ray.Direction, m_Pivot, m_Normal, hit))
-                        hit = m_StartHit;
-                    drag = 100.0f * float(Dot(hit - m_StartHit, m_Axes[m_Active])) / m_StartSize;
+                    if (m_Active != Uniform)
+                        drag = 100.0f * float(Dot(hit - m_StartHit, m_Axes[m_Active])) / m_StartSize;
+                    transform.SetScale(GizmoMath::ScaleComponents(m_Start.GetScale(),
+                        m_Active == Uniform ? -1 : int(m_Active), drag, m_ScaleAxisMask));
+                    GizmoMath::KeepPivot(m_Start, m_Pivot, transform);
+                    m_LastDragTransform = transform;
                 }
-                transform.SetScale(GizmoMath::ScaleComponents(m_Start.GetScale(),
-                    m_Active == Uniform ? -1 : int(m_Active), drag, m_ScaleAxisMask));
-                scene.FindObject(m_DragId)->SetTransform(transform);
             }
             else
             {
@@ -159,54 +195,77 @@ namespace Viewer
                 {
                     if (m_Mode == Rotate)
                     {
+                        // 피벗에서 떨어진 입력만 회전 누적에 사용한다.
                         const Vector3 offset = hit - m_Pivot;
                         if (float(LengthSquare(offset)) > 0.000001f)
                         {
                             const Vector3 current = Normalize(offset);
                             m_Angle += GizmoMath::SignedAngle(m_LastVector, current, m_Normal);
                             m_LastVector = current;
+
+                            // 누적 회전을 시작 자세에 적용해 마지막 유효 변환으로 보관한다.
                             transform.SetRotation(Quaternion(m_Normal, m_Angle) * m_Start.GetRotation());
-                            scene.FindObject(m_DragId)->SetTransform(transform);
+                            GizmoMath::KeepPivot(m_Start, m_Pivot, transform);
+                            m_LastDragTransform = transform;
                         }
                     }
                     else
                     {
+                        // 시작 교차점에서 이동량을 구하고 축 핸들의 방향으로 제한한다.
                         Vector3 delta = hit - m_StartHit;
                         if (m_Active <= Z)
                             delta = m_Axes[m_Active] * Dot(delta, m_Axes[m_Active]);
+
+                        // 시작 위치에 이동량을 적용해 마지막 유효 변환으로 보관한다.
                         transform.SetTranslation(m_Start.GetTranslation() + delta);
-                        scene.FindObject(m_DragId)->SetTransform(transform);
+                        m_LastDragTransform = transform;
                     }
                 }
             }
+
+            // 계산이 실패한 프레임에도 마지막 유효 변환으로 body를 순간이동한다.
+            ApplyEditTransform(scene, physics, m_DragTarget, m_LastDragTransform);
+
+            // 버튼을 놓으면 드래그와 이력 기록을 마친다.
             if (!GameInput::IsPressed(GameInput::kMouse0))
             {
-                m_History.Record(m_DragId, m_Start, scene.FindObject(m_DragId)->GetTransform());
-                m_DragId = InvalidObjectId;
+                // 대상의 종료 월드 TRS와 변환 모드를 함께 기록한다.
+                SceneTransform after;
+                if (TryGetEditTargetTransform(scene, m_DragTarget, after))
+                {
+                    HistoryTransformMode mode = HistoryTransformMode::Owner;
+                    if (m_DragTarget.IsMesh())
+                    {
+                        const auto* mesh = scene.FindObject(m_DragTarget.Object)->FindMeshComponent(m_DragTarget.Mesh);
+                        mode = mesh->GetTransformMode() == MeshTransformMode::Attached ?
+                            HistoryTransformMode::Attached : HistoryTransformMode::WorldIndependent;
+                    }
+                    m_History.Record(m_DragTarget, mode, m_Start, after);
+                }
+
+                // 완료한 드래그의 활성 상태를 해제한다.
+                m_DragTarget = EditTarget();
                 m_Active = None;
             }
             return true;
         }
+
+        // 현재 선택과 무관하게 전역 이력을 되돌린다.
         const bool control = GameInput::IsPressed(GameInput::kKey_lcontrol) ||
             GameInput::IsPressed(GameInput::kKey_rcontrol);
         if (control && GameInput::IsFirstPressed(GameInput::kKey_z))
         {
-            // Mesh 대상은 이력이 준비되기 전까지 Undo를 거절한다.
-            if (target.IsMesh())
+            // 공통 콜백으로 대상과 모드를 검사하고 물리 body도 복구한다.
+            m_History.Undo([&scene, physics](const TransformHistory::Command& command)
             {
-                RaiseNotice();
-                return true;
-            }
-
-            // 살아 있는 객체에 기록된 TRS를 복구한다.
-            m_History.Undo([&scene](uint64_t id, const SceneTransform& transform)
-            {
-                GameObject* object = scene.FindObject(id);
-                return object && object->SetTransform(transform);
+                // 진단과 같은 이력 적용 경로를 사용한다.
+                return ApplyHistoryCommand(scene, physics, command);
             });
             m_Hover = None;
             return true;
         }
+
+        // 카메라 입력 중이 아니면 편집 모드와 좌표계를 바꾼다.
         if (!GameInput::IsPressed(GameInput::kMouse1))
         {
             if (GameInput::IsFirstPressed(GameInput::kKey_q)) m_Mode = View;
@@ -215,13 +274,15 @@ namespace Viewer
             if (GameInput::IsFirstPressed(GameInput::kKey_r)) m_Mode = Scale;
             if (GameInput::IsFirstPressed(GameInput::kKey_l)) m_Local = !m_Local;
         }
+
+        // 대상의 월드 TRS에서 핸들을 선택한다.
         m_Hover = None;
         const GameObject* object = scene.FindObject(target.Object);
         SceneTransform frame;
         if (m_Mode == View || !object || !object->IsEditable() || !validMouse || GameInput::IsPressed(GameInput::kMouse1) ||
             !TryGetEditTargetTransform(scene, target, frame))
             return false;
-        const Vector3 pivot = frame.GetTranslation();
+        const Vector3 pivot = GetEditTargetPivot(scene, target, frame);
         SetAxes(frame);
         const float size = HandleSize(pivot, camera, height);
         if (size <= 0.0f)
@@ -231,13 +292,7 @@ namespace Viewer
         if (m_Hover == None || !GameInput::IsFirstPressed(GameInput::kMouse0))
             return false;
 
-        // Mesh 대상은 적용 경로가 준비되기 전까지 드래그를 시작하지 않는다.
-        if (target.IsMesh())
-        {
-            RaiseNotice();
-            return true;
-        }
-
+        // 선택한 핸들에서 드래그 기저를 고정한다.
         bool canStart = m_Mode == Scale && m_Hover == Uniform;
         if (canStart)
         {
@@ -267,28 +322,35 @@ namespace Viewer
                 m_LastVector = Normalize(offset);
             m_Angle = 0.0f;
         }
+
+        // 드래그 시작 상태와 첫 프레임부터 재적용할 유효 변환을 저장한다.
         if (canStart)
         {
             m_StartSize = size;
-            m_Start = object->GetTransform();
+            m_Start = frame;
+            m_LastDragTransform = m_Start;
             m_Pivot = pivot;
-            m_DragId = target.Object;
+            m_DragTarget = target;
             m_Active = m_Hover;
         }
         return true;
     }
 
-    // 대상의 월드 TRS 위치에 공통 좌표계와 고정된 드래그 기저로 핸들을 그린다.
+    // 선택 hull과 조각 중심의 기즈모를 그리고 드래그 중에는 시작 기저를 유지한다.
     void TransformGizmo::Render(GraphicsContext& context, const Scene& scene, const EditTarget& target,
         const Camera& camera, float width, float height) const
     {
+        // View 도구에서도 선택한 조각을 확인할 수 있게 테두리를 먼저 그린다.
+        DrawSelection(context, scene, target, camera, width, height);
+
+        // 편집 도구가 활성화된 대상의 중심에서 핸들을 구성한다.
         if (m_Mode == View)
             return;
         const GameObject* object = scene.FindObject(target.Object);
         SceneTransform frame;
         if (!object || !object->IsEditable() || !TryGetEditTargetTransform(scene, target, frame))
             return;
-        const Vector3 pivot = frame.GetTranslation();
+        const Vector3 pivot = GetEditTargetPivot(scene, target, frame);
         const float size = HandleSize(pivot, camera, height);
         if (size <= 0.0f)
             return;
