@@ -102,10 +102,10 @@ private:
     uint32_t m_PhysicsCutChecks = 0;
     Viewer::PhysicsCutScenario m_CutScenario;
     uint32_t m_CutWaitFrames = 0;
-    uint32_t m_CutSettleFrames = 0;
     uint32_t m_DemoTower = 0;
     float m_DemoCutSeconds = 3.0f;
     bool m_DemoCutDone = false;
+    uint32_t m_CutSettleFrames = 0;
     size_t m_BodiesBeforeCuts = 0;
     bool m_PhysicsCutChecked = false;
     std::vector<double> m_CutGpuSamples, m_CutReadySamples;
@@ -209,7 +209,6 @@ void LoadIBLTextures()
         g_IBLSet.Increment();
 }
 
-// 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 // 시연용 큐브 탑의 한 변 길이(m)와 층 사이 초기 틈이다.
 constexpr float kDemoTowerSide = 1.6f;
 constexpr float kDemoTowerGap = 0.02f;
@@ -233,6 +232,7 @@ void CreateDemoTower(Viewer::Scene& scene, const std::shared_ptr<const Model>& c
     }
 }
 
+// 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
     uint32_t physicsQueryChecks = 0;
@@ -444,13 +444,6 @@ void ModelViewer::Startup( void )
         m_Physics.SyncBodies();
         m_BodiesBeforeCuts = m_Physics.GetSimulationBodyCount();
     }
-    if (m_PhysicsSimChecks) Viewer::RunPhysicsSimChecks(m_Scene, m_Physics);
-    if (m_ViewDiagnosticPending)
-        Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
-}
-
-// GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.
-void ModelViewer::Cleanup( void )
 
     // 시연 탑이 있으면 바닥 위 두 번째 층 중심을 지나는 45도 절단 평면을 배치한다.
     std::array<double, 3> floorCenter{}, floorHalf{};
@@ -462,6 +455,13 @@ void ModelViewer::Cleanup( void )
         demoPlane->SetTransform(Viewer::SceneTransform(tilt, Vector3(1.0f, 1.0f, 1.0f),
             Vector3(0.0f, floorTop + kDemoTowerSide * 1.5f, 0.0f)));
     }
+    if (m_PhysicsSimChecks) Viewer::RunPhysicsSimChecks(m_Scene, m_Physics);
+    if (m_ViewDiagnosticPending)
+        Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
+}
+
+// GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.
+void ModelViewer::Cleanup( void )
 {
     m_Cutting.Clear();
     m_CutScenario.Shutdown();
@@ -615,6 +615,16 @@ void ModelViewer::Update( float deltaT )
             if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
         }
     }
+
+    // 시연 탑은 시뮬레이션이 정한 시간만큼 진행되면 배치한 평면으로 한 번 자른다.
+    const uint64_t demoCutStep = uint64_t(m_DemoCutSeconds * 60.0f);
+    if (m_DemoTower && !m_DemoCutDone && m_DemoCutSeconds > 0.0f && m_Physics.GetSimulationStepCount() >= demoCutStep)
+    {
+        MeshCutting::CutPlaneData plane;
+        if (m_CutPlanes.BuildData(m_ActiveCutPlane, plane) && m_Cutting.RequestAll(plane, m_CapMode))
+            m_LastCutNormal = Vector3(plane.WorldPlane);
+        m_DemoCutDone = true;
+    }
     // 시뮬레이션 중 자동 절단은 깨어 있는 body가 모두 sleep할 때까지 기다린다.
     bool waitingForSleep = false;
     if ((m_AutoCuts || m_BenchmarkRemaining) && m_Physics.IsSimulationEnabled() && m_Physics.IsSimulationRunning() &&
@@ -628,16 +638,6 @@ void ModelViewer::Update( float deltaT )
             Utility::Printf("Physics bodies still awake after 3000 frames; auto cut keeps waiting\n");
         }
         waitingForSleep = true;
-    }
-
-    // 시연 탑은 시뮬레이션이 정한 시간만큼 진행되면 배치한 평면으로 한 번 자른다.
-    const uint64_t demoCutStep = uint64_t(m_DemoCutSeconds * 60.0f);
-    if (m_DemoTower && !m_DemoCutDone && m_DemoCutSeconds > 0.0f && m_Physics.GetSimulationStepCount() >= demoCutStep)
-    {
-        MeshCutting::CutPlaneData plane;
-        if (m_CutPlanes.BuildData(m_ActiveCutPlane, plane) && m_Cutting.RequestAll(plane, m_CapMode))
-            m_LastCutNormal = Vector3(plane.WorldPlane);
-        m_DemoCutDone = true;
     }
     else m_CutWaitFrames = 0;
     if (m_CutScenario.Active()) waitingForSleep = !m_CutScenario.AllowSubmit(m_Physics);
