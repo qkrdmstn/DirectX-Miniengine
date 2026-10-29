@@ -44,6 +44,22 @@ namespace MiniPhysics
         std::vector<JointDefinition> Joints;
     };
 
+    // body 없는 tip까지 포함한 정지 fixture의 본별 월드 강체 pose다.
+    struct SkeletalPhysicsFixture
+    {
+        SkeletalPhysicsAsset Asset;
+        std::vector<uint32_t> NodeParents;
+        std::vector<SkeletalRigidFrame> RestNodeFrames;
+    };
+
+    // Y축으로 매달린 1kg 상자 세 개와 body 없는 tip을 생성한다.
+    SkeletalPhysicsFixture CreateThreeBodyFixture();
+
+    // 고정 Xbot node 수와 왼팔 부모 관계를 확인한 뒤 m 단위 rig를 생성한다.
+    // 실패하면 출력 자산을 변경하지 않는다.
+    bool CreateXbotLeftArmAsset(const std::vector<uint32_t>& nodeParents,
+        SkeletalPhysicsAsset& output);
+
     // NodeId별 부모 배열과 대조하여 단일 body tree와 수치 입력을 검증한다.
     // body 없는 중간 본을 허용하며 자산과 부모 배열을 변경하지 않는다.
     bool ValidateSkeletalPhysicsAsset(const SkeletalPhysicsAsset& asset,

@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-04a 완료·미커밋, 기준 71e115e0, BC-04b 이후 미착수 (2026-10-29)
+상태: 진행 중 — BC-04a `8593a0be`, BC-04b 완료·미커밋(기준 `8593a0be`), BC-05 이후 미착수 (2026-10-29)
 
 # BreakConstraint 진행 기록
 
@@ -24,7 +24,7 @@
 
 | BC-03b | MiniEngine/ModelViewer/Scene/Scene.h, Scene.cpp, tests/MeshComponentChecks.h; 계약·README·Scene·CodeMap·Progress | CPU32/32·495 PASS; Debug136.80초+최종로그빌드 PASS/Release177.00초 PASS; physics-sim0 컴포넌트 Debug4.67초·Release4.66초 PASS. 물리기본1로 잘못 실행한 초기 검사 실패는 계약에 기록 | 별도 새 Codex 0건 |
 | BC-03b 리뷰 수정 | MiniEngine/ModelViewer/Scene/tests/MeshComponentChecks.h, Scene.cpp, Scene.h; Docs/Current/Scene.md; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md | CPU SkeletonPose32/32 PASS 1.06초·SceneMath495 PASS 1.03초(컴파일+실행); Debug 빌드 PASS 최초39.40초·최종18.26초, Release PASS 최초162.27초·최종5.14초; 컴포넌트 Debug PASS 11.30초·Release PASS 6.19초; Debug Xbot BC-03a·BC-00 PASS 8.13초; 모든 최종 종료 코드0 | 지적 3건 처리: 4개 dt의 wrapper/분리 경로 전체 node·position/normal 비교 및 GPU 준비 전후 보존, FinalizePoses 두 줄 주석, Scene 소유권 본문 동기화 |
-| BC-04a（미커밋・상위 관리자 커밋 예정） | MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.h, SkeletalPhysicsAsset.cpp; MiniEngine/Physics/tests/SkeletalAssetTests.cpp; MiniEngine/Physics/CMakeLists.txt, Physics.vcxproj, Physics.vcxproj.filters; Tools/BuildJolt.ps1; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | CPU 42/42·/O2 /DNDEBUG 42/42 PASS, 종료0; Debug/Release 최초22.51/7.44초·최종6.89/7.41초 PASS, 경고0·오류0; CTest·viewer 미실행（호출 경로 변경 없음） | codex exec 홈 탐색 실패로 자기 리뷰; 매크로 한 줄 여러 문장·weld 누락 2건 수정 후 재검증, 잔여0건 |
+| BC-04a（커밋 8593a0be） | MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.h, SkeletalPhysicsAsset.cpp; MiniEngine/Physics/tests/SkeletalAssetTests.cpp; MiniEngine/Physics/CMakeLists.txt, Physics.vcxproj, Physics.vcxproj.filters; Tools/BuildJolt.ps1; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | CPU 42/42·/O2 /DNDEBUG 42/42 PASS, 종료0; Debug/Release 최초22.51/7.44초·최종6.89/7.41초 PASS, 경고0·오류0; CTest·viewer 미실행（호출 경로 변경 없음） | codex exec 홈 탐색 실패로 자기 리뷰; 매크로 한 줄 여러 문장·weld 누락 2건 수정 후 재검증, 잔여0건 |
 
 BC-04a 산출물·로그는 `$env:TEMP\BreakConstraintTests`에 두었다(`SkeletalAssetTests.exe`, `SkeletalAssetTestsRelease.exe`, `BC04a-Debug-build-final.log`, `BC04a-Release-build-final.log`, `BC04a-review.log`). 새 C++ 파일은 총 275줄이며 실제 fixture·Xbot 생성 API는 추가하지 않았다. 기존 .mini 3개와 BreakConstraintReport.md는 수정하지 않았고 파일 삭제·junction 수동 변경·git commit/merge/stash/reset/checkout은 수행하지 않았다.
 
@@ -35,3 +35,13 @@ CPU 명령은 SkeletonPoseTests.cpp와 SceneMathTests.cpp 머리말을 따랐으
 MiniEngine/ModelViewer에서 Debug·Release 각각 `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6`, Debug에서 `-debug 1 -xbot-arm-checks 1`로 실행했다. 두 컴포넌트 로그 모두 3개 owner × 4개 dt의 wrapper 동등성12건·PrepareMeshes 보존12건과 최종 PASS GPU preparation을 확인했다. DirectX debug layer를 활성화했고 GPU 기반 검증 옵션은 사용하지 않았다. 드라이버 레지스트리의 NVIDIA GeForce MX450 버전은 32.0.15.9186이며 실제 선택 adapter는 별도 계측하지 않았다(WMI 조회는 접근 거부).
 
 수정 도중 첫 Debug 컴포넌트 실행은 41.75초 후 종료 코드 -1073741819로 실패했다. 새 진단의 임시 Scene이 미제출 GPU 명령의 버퍼를 먼저 해제한 문제를 `context.Flush(true)`로 수정하고 위 최종 빌드·실행을 통과했다. BC-03a/03b 변경 diff에서 같은 줄의 두 문장 주석은 FinalizePoses 선언·정의 두 곳뿐임을 확인하고 모두 나눴다. BC-04 이후, MiniEngine/Physics 코드, .mini, BreakConstraintReport.md는 수정하지 않았으며 커밋·병합·stash·checkout을 수행하지 않았다.
+
+### BC-04b 완료 (2026-10-29)
+
+| 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-04b | 미커밋, 상위 관리자 커밋 후 기입 | MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.h, SkeletalPhysicsAsset.cpp; MiniEngine/Physics/tests/SkeletalAssetTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | 직접 cl CPU 82/82 PASS 1.19초, /O2 /DNDEBUG 82/82 PASS 3.37초, 경고 없음; ModelViewer Debug 105.21초·Release 119.91초 PASS, 종료0, /restore 없음; 기존 C4819·vswhere/pwsh 탐색 메시지 있음; CTest·viewer 미실행(새 API의 런타임 호출 없음) | 자기 리뷰, anchor 시험 부족 1건 보강 후 재검증, 잔여0건; diff --check PASS |
+
+fixture 3 body·2 joints·body 없는 tip, Xbot 고정 NodeId 13→14→15·명시적 m/kg/rad 값을 추가했다. GLB 정적 translation을 읽어 +X 방향을 확인하고 BC-00 배율에서 반올림 anchor 오차≤0.1mm를 검사했다. 손목 swing/twist 제한은 BC-00 측정 범위를 포함한다. 손 크기·폭·두께·질량·관절 한계는 M1 proxy 값이며 계약 §6·§8에 근거와 한계를 적었다. 새 파일이 없어 기존 vcxproj/.filters·CMake·BuildJolt.ps1 시험 target 등록을 그대로 사용한다.
+
+CPU 산출물과 빌드 로그 및 자기 리뷰 메모는 `$env:TEMP/BreakConstraintTests`에 있다(`SkeletalAssetTests.exe`, `SkeletalAssetTestsRelease.exe`, `BC04b-Debug-build.log`, `BC04b-Release-build.log`, `BC04b-self-review.txt`). BC-04a 커밋 칸을 `8593a0be`로 채웠다. BC-05 이후는 시작하지 않았고 git 쓰기 명령·파일 삭제·junction 수동 변경·기존 .mini 3개 및 BreakConstraintReport.md 편집은 하지 않았다.

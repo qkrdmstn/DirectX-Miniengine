@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-04a 완료·미커밋, 기준 71e115e0, BC-04b 이후 미착수 (2026-10-29)
+상태: 진행 중 — BC-04a `8593a0be`, BC-04b 완료·미커밋(기준 `8593a0be`), BC-05 이후 미착수 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
@@ -98,6 +98,18 @@ BC-04a API: `MiniPhysics::SkeletalRigidFrame`은 double 위치(m)·xyzw 회전�
 
 M1 fixture는 Node 0→1→2→3(body 없는 tip), 0~2에 각 1kg box를 둔다. 반크기 (0.1,0.25,0.1)m, bone은 box 중심에 두고 BoneFromBody=identity. rest 중심 Y=(2,1.5,1)m, joint 위치 Y=(1.75,1.25)m, body-local anchor Y=(-0.25,+0.25)m다. floor는 Y=0. swing half-angle π/3, twist 범위 ±π/4, 정지 rest에서 시작한다.
 
+BC-04b 생성 API는 `CreateThreeBodyFixture()`와 `CreateXbotLeftArmAsset(nodeParents, output)`다. fixture는 자산·부모 배열·4개 본의 월드 rest 강체 frame을 반환하고 tip Y=0.5m다. Xbot 생성은 node 수 70과 parent[13/14/15]=12/13/14를 확인하고 공통 검증을 통과한 경우에만 출력에 게시한다. 실패하면 기존 출력은 보존한다. 이름/메시를 검사하는 범용 자산 식별 API는 아니다.
+
+| Xbot body ID / Node | 반크기 XYZ (m) | 질량 (kg) | BoneFromBody 위치 (m) |
+| --- | --- | --- | --- |
+| 0 / 13 상완 | (0.2468535, 0.07, 0.07) | 2.0 | (+0.2468535, 0, 0) |
+| 1 / 14 전완 | (0.251174, 0.06, 0.06) | 1.5 | (+0.251174, 0, 0) |
+| 2 / 15 손 | (0.09, 0.07, 0.035) | 0.5 | (+0.09, 0, 0) |
+
+상완·전완 길이는 BC-00의 월드 길이를 반올림한 0.493707/0.502348m다. GLB의 LeftForeArm/LeftHand 정적 translation도 각 부모 본 +X 방향임을 확인했다. 손 길이 0.18m·폭·두께·질량은 자동 추정이나 실측이 아닌 M1용 명시적 proxy 값이다. 모든 회전 offset은 identity이며 body 중심은 본 +X 반길이에 둔다. 각 관절의 parent anchor는 부모 +X 반길이, child anchor는 자식 -X 반길이다. 따라서 자식 본이 회전해도 child anchor는 자식 본 원점이다. 정적 GLB translation×BC-00 s=0.0177327581과 이 반올림 anchor의 차이는 CPU 시험에서 0.1mm 이내다. animation 전 구간·solver의 실제 anchor 검증은 후속 단계에 남긴다.
+
+관절 0(팔꿈치 0→1)은 양쪽 swing half-angle 150°(5π/6), 관절 1(손목 1→2)은 60°(π/3), 둘 다 twist ±90°(±π/2)다. 팔꿈치 굽힘·손목 굽힘/편위·전완 회전에 여유를 주는 넓은 인체 팔 proxy 범위를 택했다. 한쪽으로만 굽는 해부학적 팔꿈치를 정밀 재현하는 제한은 아니다. BC-00 native 축의 절대 상대 자세를 유지하려고 joint rotation을 identity로 두며 +X가 twist 축이다. fixture와 Xbot은 Model/Jolt 의존 없이 기존 자산 파일 안에 구현하여 새 파일·target은 추가하지 않는다.
+
 frame은 열벡터 기준 `E = Wc * inverse(SourceFrame) * Nmesh`, 일반식은 `B = R(E * Gnode) * BoneFromBody`이고 R은 아래 scale 분리의 강체 부분이다. s=1이면 `B = E * Gnode * BoneFromBody`, writeback `Gnode = inverse(E) * B * inverse(BoneFromBody)`로 줄어든다. 관여하는 skinned section들의 E가 같은지 검사한다. 서로 다른 E·비균일 scale·shear 및 Nmesh 자체가 물리 override의 영향을 받는 구성이면 `UnsupportedFrame`; 자동 근사하지 않는다. E는 매 animation 평가 후 계산하되 분리 body의 world pose는 owner 이동과 무관하게 유지한다. body 없는 fixture는 owner world를 E로 사용한다.
 
 scale 분리: `E * Gnode`는 uniform scale s를 포함할 수 있다(Xbot은 Armature 0.01 × 뷰어 정규화 배율). 등록 시 각 body node의 s를 `E * Gnode`의 열 길이로 구하고, 세 열 길이 차이가 1e-4 상대 오차를 넘거나 shear가 있으면 `UnsupportedFrame`이다. 물리에는 강체 부분 `R(E * Gnode)`만 보내고 `BoneFromBody` offset·half extent·anchor는 월드 m 값으로 저장한다. writeback은 강체 결과에 등록 시 저장한 s를 다시 곱해 `Gnode = inverse(E) * (B * inverse(BoneFromBody)) * S(s)`로 복원한다. 등록 뒤 owner scale 변경은 2절 편집 통제로 막는다. Xbot rig 크기는 BC-00에서 화면 기준 월드 m로 측정해 정한다.
@@ -130,6 +142,8 @@ RemoveConstraint는 world 참조를 먼저 제거하고 map/RAII의 ref를 정�
 BC-00 위치 지표는 배율을 제거한 전완 강체 frame에서 본 손목 위치(m)의 XYZ min/max와 최초 위치로부터의 거리 min/max다. 이는 anchor 거리의 대용치이며 두 물리 body anchor를 직접 비교한 결과가 아니다. 회전은 `inverse(R(E*G14))*R(E*G15)`를 전완 로컬 +X twist 축으로 분해한 절대 상대 자세다(기준 pose 차감 없음). swing은 비음수 총각, twist는 signed angle(rad)이다.
 
 Debug 실측에서 전완 frame의 손목 drift는 최대 약 1.9e-6m(로그 1.92311586e-6m)로 0.1mm 이하다. animation 0(약 1.83초)의 손목 swing은 [0.105,0.126]rad, 전완 로컬 +X 축 twist는 [-0.594,-0.574]rad다. 이는 애니메이션이 사용하는 pose 범위이며 ragdoll 관절 제한이 아니다. Ragdoll 제한은 이 범위를 포함해야 하며 실제 관절 축과 제한은 BC-04에서 결정한다. PASS의 `animation pose range`는 swing/twist 측정 범위에 0.05rad 여유를 더한 값이다. `anchorTolerance=max(1e-4m,2*driftMax)`는 drift 대용 지표일 뿐 두 body anchor 검증값이 아니다.
+
+BC-04b에서는 6절의 native +X/identity 관절 frame과 손목 swing π/3≈1.0472rad, twist ±π/2≈±1.5708rad를 채택했다. swing 최대 0.126rad와 twist [-0.594,-0.574]rad를 충분히 포함하며 CPU 자산 시험에서 포함 관계를 확인한다. 이는 애니메이션 최대치에 근소한 여유만 더한 제한이 아니라 넓은 M1 팔 proxy 설정이다.
 
 ```cpp
 struct BreakRequest {
@@ -198,8 +212,8 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-02 | override evaluator + 같은 테스트 | 구현 완료(uncommitted): CPU 32/32 PASS; override=0 동등, 물리 본 고정·자손 local·skeletonRoot·실패 시 출력 보존 / 01 | R+CPU 0.91초 |
 | BC-03a | ModelInstance animation/finalize 분리 | override=0 pose/palette 동등, 중복 palette node 갱신 / 02 | R+B+T |
 | BC-03b | Scene CPU/GPU 단계 분리·wrapper | 비물리 Debug/Release 실행·애니메이션 회귀 / 03a | R+B+V |
-| BC-04a | SkeletalPhysicsAsset 중립 API·검증·CPU 거절 시험 | 완료·미커밋: CPU 42/42·최적화 42/42 PASS, Debug/Release 빌드 PASS / 00,01 | 최종 B=6.89+7.41초 |
-| BC-04b | fixture·Xbot 왼팔 rig 값·CPU 자산 시험 | 명시적 크기/질량·관절 한계·연결 검증 / 04a | R+B+T |
+| BC-04a | SkeletalPhysicsAsset 중립 API·검증·CPU 거절 시험 | 완료 `8593a0be`: CPU 42/42·최적화 42/42 PASS, Debug/Release 빌드 PASS / 00,01 | 최종 B=6.89+7.41초 |
+| BC-04b | fixture·Xbot 왼팔 rig 값·CPU 자산 시험 | 완료·미커밋: CPU 82/82·최적화82/82, Debug/Release PASS / 04a | B=105.21+119.91초, CPU=1.19+3.37초 |
 | BC-05 | 공통 body Kinematic·Dynamic·impulse API/시험 | handle 유지·pose/속도 전환·실패 정리 / 04 | R+B+T |
 | BC-06 | constraint 수명/enable/motor API + rig 인접 pair 충돌 제외 필터 | 3 body·2 joints 생성/삭제·kinematic disable·인접 pair 무접촉 / 05 | R+B+T |
 | BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 부분 실패 역정리·삭제 뒤 자원0 / 04~06 | R+B+T |
@@ -216,6 +230,10 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 M1은 BC-00~BC-13a다. BC-09·BC-14는 M2이며 이번 데모에 필요 없다.
 
 ## 12. 검증 명령과 판정
+
+BC-04b 검증(2026-10-29, HEAD `8593a0be`): 테스트 머리말의 직접 cl 명령과 `/O2 /DNDEBUG` 구성 모두 82/82 PASS, 종료 코드 0, 컴파일 경고 없음이다(최종 컴파일+실행 1.19/3.37초). 기존 검사 42건에 생성 fixture·Xbot 값·부모 구조 거절·실패 출력 보존·BC-00 손목 범위 포함·회전된 자식 anchor/정적 GLB 반올림 오차 검사를 추가했다. worktree 루트의 전체 ModelViewer Debug/Release를 `/restore` 없이 빌드하여 각각 105.21/119.91초, 종료 코드 0을 확인했다. 기존 SkeletonPose.h·GizmoDraw.h 등의 C4819와 vswhere/pwsh 탐색 메시지는 남아 있으며 새 CPU 파일 컴파일에는 경고가 없다. CTest와 viewer 실행은 미수행이다. 새 생성 API는 tests 외 런타임 호출이 없어 물리를 끈 기존 경로의 실행 코드는 바뀌지 않는다.
+
+별도 diff 읽기 자기 리뷰에서 Xbot anchor 시험이 local 값 대조에만 머문 지적 1건을 보강하고 CPU 두 구성을 재검증했다. 최종 잔여 지적 0건이다. 산출물·전체 빌드 로그·자기 리뷰 메모는 `$env:TEMP/BreakConstraintTests`의 `SkeletalAssetTests*.exe`, `BC04b-*-build.log`, `BC04b-self-review.txt`다. 사용자 지시에 따라 BC-04b에서 중단하며 커밋·병합·파일 삭제·junction 수동 변경 및 BC-05 이후 구현은 하지 않았다. 기존 .mini와 BreakConstraintReport.md는 보존했다.
 
 BC-04a 검증(2026-10-29, HEAD `71e115e0`): `SkeletalAssetTests.cpp` 머리말의 직접 cl 명령으로 TEMP/BreakConstraintTests에만 CPU 산출물을 저장했다. 최종 42/42 PASS, /O2 /DNDEBUG에서도 42/42 PASS, 모두 종료 코드 0·컴파일 경고 없음이다. CMake 테스트 target과 BuildJolt.ps1 testTargets 등록은 완료했으며 CTest 경로 실행은 이번에 수행하지 않았다. 전체 ModelViewer Debug/Release를 /restore 없이 빌드하여 최초 22.51/7.44초, 최종 6.89/7.41초, 모두 종료 코드 0·경고0·오류0을 확인했다. 기존 vswhere 탐색 메시지와 pwsh→Windows PowerShell fallback 메시지는 있었으나 빌드는 성공했다. 기존 실행 경로에서 새 API를 호출하지 않으므로 viewer 실행은 수행하지 않았다.
 
