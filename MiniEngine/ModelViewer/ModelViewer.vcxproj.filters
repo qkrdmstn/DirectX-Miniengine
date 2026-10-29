@@ -299,6 +299,9 @@
     <ClInclude Include="Scene\tests\EditTargetChecks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\XbotArmChecks.h"><Filter>Header Files</Filter></ClInclude>
     <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
+    <None Include="Scene\tests\SkeletalBreakTests.cpp" />
+    <ClCompile Include="Scene\SkeletalPhysicsSystem.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="Scene\SkeletalPhysicsSystem.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
   </ItemGroup>
 </Project>

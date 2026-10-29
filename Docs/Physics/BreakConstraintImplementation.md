@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 `84ecea1f`, BC-06 구현·검증 완료(미커밋), BC-07 이후 미착수 (2026-10-29)
+상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 `84ecea1f`, BC-06 `f6a14195`, BC-07 구현·검증 완료(미커밋), BC-08a 이후 미착수 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
@@ -54,7 +54,7 @@ BC-00 자산 정적 확인: `Xbot.glb`의 scene 0을 `WalkGraph`와 같은 DFS �
 | `MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.h/.cpp` (신규) | 엔진 중립 rig 정의/검증. NodeId는 uint32 값이며 Model 헤더 의존 금지 |
 | `MiniEngine/Physics/PhysicsWorldConstraints.cpp` (신규) | PImpl 내부 Jolt constraint 생성·제거·모터·상태. Static의 `PhysicsWorldInternal.h` 사용 |
 | `MiniEngine/Physics/PhysicsWorldBodies.cpp` | 공통 body API에 Kinematic target·motion 전환·속도/impulse 확장 |
-| `MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.h/.cpp` (신규) | owner↔rig↔본↔body 매핑, generation, break 준비/commit, pose writeback |
+| `MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.h/.cpp` (신규) | owner↔rig↔본↔body 매핑, generation, break 준비/commit, pose writeback. BC-07 등록/해제는 `PhysicsWorld&`와 `ObjectId`만 의존하여 CPU 시험 `Scene/tests/SkeletalBreakTests.cpp`(Physics CMake target)로 검증 |
 | `MiniEngine/ModelViewer/Scene/Scene.h/.cpp` | CPU pose 단계/GPU 준비 단계 분리. PhysicsWorld 소유하지 않음 |
 | `MiniEngine/ModelViewer/ModelViewer.cpp` | 고정 step 프레임 조율·진단 옵션. world step의 소유자는 공통 PhysicsSystem 하나 |
 | `MiniEngine/ModelViewer/Scene/tests/SkeletalPhysicsChecks.h` (신규) | CPU fixture와 대응하는 viewer 진단/overlay |
@@ -144,6 +144,8 @@ BC-06 API: `SwingTwistDesc`는 Parent/Child runtime handle과 중립 `JointDefin
 `ExcludeBodyPair`는 같은 rig인지 판단하는 API가 아니라 등록자가 직접 인접 pair에만 호출하는 공통 기반이다(BC-07에서 적용). Jolt CollisionGroup의 world별 필터가 BodyID index+sequence pair만 제외하므로 비인접 body·다른 owner·Static 바닥은 기존 계층 규칙대로 접촉한다. Step 밖에서만 pair를 바꾸며 기존 접촉 캐시를 무효화한다. 관절 제거로 pair를 되살리지 않는다. `RemoveBodyFromWorld`는 연결 관절을 먼저 제거하되 body와 pair 제외를 보존하고, `DestroyBody`는 연결 관절과 해당 pair를 정리한다. Clear/Shutdown도 관절→body 순서로 정리한다. API/수명 연결과 CPU 검증을 합치면 300줄을 넘으므로 §11의 BC-06a/06b로 나누며 이번 요청의 BC-06 범위 안에서 둘 다 검증한다.
 RemoveConstraint는 world 참조를 먼저 제거하고 map/RAII의 ref를 정리한다. owner 삭제는 모든 constraint 제거 → body 제거/파괴 → rig entry 제거 순서다. 등록 실패는 등록된 일부 자원도 역순 정리하고 owner pose/geometry를 변경하지 않는다. query fallback body와 본 body의 중복 후보는 handle→owner/node 매핑으로 구별한다.
 
+BC-07 API: `PhysicsSystem`이 `m_World` 뒤에 `SkeletalPhysicsSystem m_Skeletal`을 두고 `GetSkeletalPhysics()`로 등록자만 공개한다(world는 비공개 유지). `Register(owner, asset, nodeParents, bodyWorldFrames)`는 owner·중복·`ValidateSkeletalPhysicsAsset`·frame 수를 검사한 뒤 body 원점 중심 상자를 모두 Prepare하고(실패는 PreparedBody RAII가 예약 반환), commit → 관절 생성 → 인접 pair 제외 순으로 진행한다. 질량은 공통 Unreal 질량식의 `MassScale = MassKg / CalculateUnrealMass(volume, 1)`로 맞추며 최소 질량 하한에 걸리는 상자는 거절한다. 중간 실패는 관절 역순 `RemoveConstraint` → body 역순 `DestroyBody`(pair 제외도 정리)로 되돌린다. `bodyWorldFrames`는 호출자가 계산한 body 원점 월드 frame이며 `E*Gnode`에서 계산하는 경로는 BC-08a다. RigGeneration은 성공한 등록마다 새 번호이며 Clear로 되돌리지 않는다. `Unregister`·`Clear`·소멸자는 같은 역순 정리를 쓰고, `PhysicsSystem::RemoveTarget(owner, InvalidComponentId)`(owner 삭제)와 `PhysicsSystem::Clear`(world Shutdown 전)에서 호출한다. 시험용 `DiagFailRegistrationStep`(0=꺼짐)으로 n번째 commit/관절/pair 단계 직전 실패를 주입한다.
+
 ## 8. break 준비·commit과 세대 (BC-09~10)
 
 BC-00 위치 지표는 배율을 제거한 전완 강체 frame에서 본 손목 위치(m)의 XYZ min/max와 최초 위치로부터의 거리 min/max다. 이는 anchor 거리의 대용치이며 두 물리 body anchor를 직접 비교한 결과가 아니다. 회전은 `inverse(R(E*G14))*R(E*G15)`를 전완 로컬 +X twist 축으로 분해한 절대 상대 자세다(기준 pose 차감 없음). swing은 비음수 총각, twist는 signed angle(rad)이다.
@@ -222,9 +224,9 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-04a | SkeletalPhysicsAsset 중립 API·검증·CPU 거절 시험 | 완료 `8593a0be`: CPU 42/42·최적화 42/42 PASS, Debug/Release 빌드 PASS / 00,01 | 최종 B=6.89+7.41초 |
 | BC-04b | fixture·Xbot 왼팔 rig 값·CPU 자산 시험 | 완료 `d31863a7`: CPU 82/82·최적화82/82, Debug/Release PASS / 04a | B=105.21+119.91초, CPU=1.19+3.37초 |
 | BC-05 | 공통 body Kinematic·Dynamic·impulse API/시험 | 완료 `84ecea1f`: CPU 362/362 두 구성, Debug/Release 빌드·비물리 컴포넌트 PASS / 04b | B=40.82+136.18초, CPU=7.63+10.26초 |
-| BC-06a | constraint 수명/enable/motor API + 명시적 인접 pair 필터·body 정리 연결 (BC-06 API 부분) | 구현 완료(미커밋): 3 body·2 joints 생성/삭제, Kinematic disable / 05 | API 약 280줄 |
-| BC-06b | PhysicsConstraintTests·기존 body 회귀·빌드·자기 리뷰 (BC-06 검증 부분) | 검증 완료(미커밋): CPU 관절200/200·body362/362 두 구성, Debug/Release 빌드·비물리 진단 PASS / 06a | B=129.26+138.98초 |
-| BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 부분 실패 역정리·삭제 뒤 자원0 / 04~06 | R+B+T |
+| BC-06a | constraint 수명/enable/motor API + 명시적 인접 pair 필터·body 정리 연결 (BC-06 API 부분) | 완료 `f6a14195`: 3 body·2 joints 생성/삭제, Kinematic disable / 05 | API 약 280줄 |
+| BC-06b | PhysicsConstraintTests·기존 body 회귀·빌드·자기 리뷰 (BC-06 검증 부분) | 완료 `f6a14195`: CPU 관절200/200·body362/362 두 구성, Debug/Release 빌드·비물리 진단 PASS / 06a | B=129.26+138.98초 |
+| BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 구현 완료(미커밋): CPU 64/64 두 구성, 주입 실패 7단계·용량 실패 역정리·해제/Clear/소멸 뒤 body·관절·pair·예약 0, Debug/Release 빌드·비물리 진단 PASS / 04~06 | B=52.13+43.36초, CPU=17.76+19.18초 |
 | BC-08a | rig frame·scale 분리·Kinematic target/속도 | body offset/COM 왕복, uniform scale 왕복, 비균일/shear 거절 / 07 | R+B+T |
 | BC-08b | physics pose→node→palette 반영 | parent 이동 상쇄·tip 상속·scale 복원 / 03b,08a | R+B+T |
 | BC-10 | 동기 BreakConstraint(검증+commit) | body수3 유지·unbroken 2→1·손목 유지·impulse 1회·AlreadyBroken 무추가 / 08b | R+B+T |
@@ -238,6 +240,10 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 M1은 BC-00~BC-13a다. BC-09·BC-14는 M2이며 이번 데모에 필요 없다.
 
 ## 12. 검증 명령과 판정
+
+BC-07 검증(2026-10-29, 기준 `f6a14195`, 미커밋): `SkeletalPhysicsSystem`(Scene 폴더, `PhysicsWorld&`·`ObjectId`만 의존)을 추가하고 `PhysicsSystem` 멤버로 연결했다. 새 시험 `MiniEngine/ModelViewer/Scene/tests/SkeletalBreakTests.cpp` 머리말 직접 cl 명령으로 Debug 64/64 PASS(17.76초), Release `/O2 /DNDEBUG` 64/64 PASS(19.18초), 모두 종료0·컴파일 경고0이다. 무효 owner·frame 수·ancestry·Prepare 단계 무효 회전 거절, fixture 3 body·disabled 관절 2·pair 2와 Kinematic frame, 중복 owner 거절, Xbot rig 공존·Dynamic 전환 뒤 자산 질량(상대 1e-4), 한 owner 해제 시 다른 rig 보존, commit/관절/pair 7단계 주입 실패와 용량 부족 실패의 역순 정리, 재등록 새 세대, Unregister·Clear·소멸자 뒤 body·관절·pair·예약 0을 검사한다. Physics CMake에 `SkeletalBreakTests` target, BuildJolt.ps1 testTargets, ModelViewer vcxproj/.filters에 등록했다. CMake/CTest 경로 실행은 `MiniEngine/Build/ThirdParty` 쓰기가 필요하여 수행하지 않았다.
+
+전체 ModelViewer Debug/Release를 `/restore` 없이 빌드하여 52.13/43.36초, 종료0·오류0이다. 기존 C4819 경고 19개(새 cpp가 BOM 없는 기존 `SkeletalPhysicsAsset.h`를 포함하여 1개 증가, 새 파일 자체 경고 없음)와 vswhere 메시지가 남았다. MiniEngine/ModelViewer에서 두 구성 `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6`을 Start-Process -Wait로 실행하여 3.31/4.10초, 종료0, 갱신된 MeshComponentChecks.log의 `PASS GPU preparation`을 확인했다. 새 등록 API의 viewer 호출은 아직 없으며(BC-12) owner 삭제·Clear 연결만 런타임 경로에 들어갔다. 산출물·로그는 `$env:TEMP/BreakConstraintTests`의 `SkeletalBreakTestsDebug.exe`, `SkeletalBreakTestsRelease.exe`, `BC07-*-build.log`다. 변경 C++ 약 330줄(구현 193·시험 124·연결 11)로 약 300줄 기준을 조금 넘었으나 등록/해제 한 개념이라 행을 나누지 않았다.
 
 BC-06 검증(2026-10-29, 기준 `84ecea1f`, 미커밋): API/수명 연결(06a) 약 280줄과 CPU 검증/등록(06b) 약 200줄로 분리했다. `PhysicsConstraintTests.cpp` 머리말 직접 cl 명령을 사용하여 `$env:TEMP/BreakConstraintTests`에만 CPU 산출물을 두었다. 최종 Debug/Release 관절 200/200 PASS(16.00/29.99초), 기존 PhysicsBodyTests 362/362 PASS(17.68/88.90초), 모두 종료0·컴파일 경고0이다. 3 Kinematic body·2 disabled joints, COM offset·회전축·각도 한계, 거절/출력 보존, 모터 두 종류 Off, 120 step 손목 anchor 오차 <0.01m, break 후 인접 pair 무접촉, 비인접/타 owner/바닥 접촉, 기존 접촉 캐시 갱신, 직접 제거/파괴·Clear·살아 있는 Shutdown·stale handle을 검사했다. CMake·BuildJolt.ps1 testTargets·vcxproj/.filters에 새 소스와 시험을 등록했다. CTest 전체 실행은 하지 않았다.
 

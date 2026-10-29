@@ -73,6 +73,7 @@
     <ClCompile Include="ModelViewer.cpp" />
     <ClCompile Include="Scene\Scene.cpp" />
     <ClCompile Include="Scene\PhysicsSystem.cpp" />
+    <ClCompile Include="Scene\SkeletalPhysicsSystem.cpp" />
     <ClCompile Include="Scene\PhysicsSimulation.cpp" />
     <ClCompile Include="Scene\PhysicsFloor.cpp" />
     <ClCompile Include="Scene\MeshComponent.cpp" />
@@ -86,6 +87,7 @@
   <ItemGroup>
     <ClInclude Include="Scene\Scene.h" />
     <ClInclude Include="Scene\PhysicsSystem.h" />
+    <ClInclude Include="Scene\SkeletalPhysicsSystem.h" />
     <ClInclude Include="Scene\PhysicsStepClock.h" />
     <ClInclude Include="Scene\tests\PhysicsSimChecks.h" />
     <ClInclude Include="Scene\tests\EditApplyChecks.h" />
@@ -428,6 +430,7 @@
     <None Include="Scene\README.md" />
     <None Include="Scene\tests\SceneMathTests.cpp" />
     <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
+    <None Include="Scene\tests\SkeletalBreakTests.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)', 'vcpkg.json'))\vcpkg\DirectX.vcpkg.targets" />

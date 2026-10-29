@@ -104,3 +104,10 @@ add_executable(PhysicsConstraintTests tests/PhysicsConstraintTests.cpp)
 target_link_libraries(PhysicsConstraintTests PRIVATE MiniPhysics)
 target_compile_options(PhysicsConstraintTests PRIVATE /utf-8 /W4)
 add_test(NAME PhysicsConstraintTests COMMAND PhysicsConstraintTests)
+
+# viewer의 skeletal rig 등록자는 Scene 의존 없이 PhysicsWorld만 쓰므로 같은 world 계층으로 시험한다.
+set(VIEWER_SCENE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ModelViewer/Scene")
+add_executable(SkeletalBreakTests "${VIEWER_SCENE_DIR}/tests/SkeletalBreakTests.cpp" "${VIEWER_SCENE_DIR}/SkeletalPhysicsSystem.cpp")
+target_link_libraries(SkeletalBreakTests PRIVATE MiniPhysics)
+target_compile_options(SkeletalBreakTests PRIVATE /utf-8 /W4)
+add_test(NAME SkeletalBreakTests COMMAND SkeletalBreakTests)

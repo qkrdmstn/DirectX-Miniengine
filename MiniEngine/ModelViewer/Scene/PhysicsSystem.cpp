@@ -212,6 +212,9 @@ namespace Viewer
         // 바닥 owner는 직접 호출에서도 보호한다.
         if (owner == m_FloorOwner) return;
 
+        // owner 삭제면 skeletal rig의 관절·body·pair 제외를 먼저 해제한다.
+        if (mesh == InvalidComponentId) m_Skeletal.Unregister(owner);
+
         // 해당 simulation body와 살아 있는 메시의 표시를 정리한다.
         for (auto it = m_Bodies.begin(); it != m_Bodies.end();)
             if (it->first.first == owner && (mesh == InvalidComponentId || it->first.second == mesh))
@@ -265,6 +268,9 @@ namespace Viewer
         m_StepClock.Reset();
         m_StepCount = 0;
         m_Running = true;
+
+        // world 종료 전에 skeletal rig 자원을 관절→body 순서로 해제한다.
+        m_Skeletal.Clear();
 
         // 조회 참조를 지운 뒤 준비 body와 simulation body까지 world에서 회수한다.
         for (auto& entry : m_Entries) RemoveEntry(entry.second);

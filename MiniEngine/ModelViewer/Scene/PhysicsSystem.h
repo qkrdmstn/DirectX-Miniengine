@@ -2,6 +2,7 @@
 
 #include "Scene.h"
 #include "PhysicsStepClock.h"
+#include "SkeletalPhysicsSystem.h"
 #include "../../Physics/PhysicsWorld.h"
 #include "../../MeshCutting/Geometry/CutPlane.h"
 #include <map>
@@ -92,6 +93,9 @@ namespace Viewer
         size_t GetFallbackCount() const;
         // 진단 모드에서 기존 전수 검사와 결과가 같은지 대조한다.
         bool ValidateQueries = false;
+        // 같은 world를 쓰는 skeletal rig 등록자다.
+        // world 자체는 공개하지 않는다.
+        SkeletalPhysicsSystem& GetSkeletalPhysics() { return m_Skeletal; }
 
     private:
         friend class CutTransaction;
@@ -126,6 +130,8 @@ namespace Viewer
         void RemoveEntry(Entry& entry);
         Scene& m_Scene;
         MiniPhysics::PhysicsWorld m_World;
+        // m_World 뒤에 선언해 world보다 먼저 파괴한다.
+        SkeletalPhysicsSystem m_Skeletal{ m_World };
         std::map<Key, Entry> m_Entries;
         std::map<MiniPhysics::ColliderHandle, Key> m_Handles;
         std::vector<Key> m_FallbackKeys;

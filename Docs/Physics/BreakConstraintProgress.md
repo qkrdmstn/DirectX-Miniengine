@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 `84ecea1f`, BC-06 구현·검증 완료(미커밋), BC-07 이후 미착수 (2026-10-29)
+상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 `84ecea1f`, BC-06 `f6a14195`, BC-07 구현·검증 완료(미커밋), BC-08a 이후 미착수 (2026-10-29)
 
 # BreakConstraint 진행 기록
 
@@ -66,7 +66,7 @@ BC-05만 끝내고 중단한다. BC-06 이후 미착수이며 git commit/merge/s
 
 | 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
 | --- | --- | --- | --- | --- |
-| BC-06（06a API·06b 검증） | 미커밋, 상위 관리자 담당 | MiniEngine/Physics/PhysicsWorldConstraints.cpp（신규）, PhysicsWorld.h, PhysicsWorldInternal.h, PhysicsWorld.cpp, PhysicsWorldBodies.cpp; tests/PhysicsConstraintTests.cpp（신규）, tests/PhysicsBodyTests.cpp（머리말 명령만）; CMakeLists.txt, Physics.vcxproj, Physics.vcxproj.filters; Tools/BuildJolt.ps1; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | 관절 CPU Debug 200/200 PASS 16.00초·Release 200/200 PASS 29.99초; 기존 body Debug 362/362 PASS 17.68초·Release 362/362 PASS 88.90초, CPU 경고0·종료0; 전체 Debug 최종129.26초·Release 최종138.98초 PASS, 각각 오류0·기존 C4819 경고18개, /restore 없음; 비물리 component-checks Debug 34.50초·Release 16.77초 PASS GPU preparation·종료0; CTest 전체 미실행 | 자기 리뷰 2건（잠든 endpoint 활성화, solver/접촉/정리 증거 부족）처리·재검증, 잔여0건; diff --check PASS; 독립 리뷰는 상위 관리자 담당 |
+| BC-06（06a API·06b 검증） | `f6a14195` | MiniEngine/Physics/PhysicsWorldConstraints.cpp（신규）, PhysicsWorld.h, PhysicsWorldInternal.h, PhysicsWorld.cpp, PhysicsWorldBodies.cpp; tests/PhysicsConstraintTests.cpp（신규）, tests/PhysicsBodyTests.cpp（머리말 명령만）; CMakeLists.txt, Physics.vcxproj, Physics.vcxproj.filters; Tools/BuildJolt.ps1; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | 관절 CPU Debug 200/200 PASS 16.00초·Release 200/200 PASS 29.99초; 기존 body Debug 362/362 PASS 17.68초·Release 362/362 PASS 88.90초, CPU 경고0·종료0; 전체 Debug 최종129.26초·Release 최종138.98초 PASS, 각각 오류0·기존 C4819 경고18개, /restore 없음; 비물리 component-checks Debug 34.50초·Release 16.77초 PASS GPU preparation·종료0; CTest 전체 미실행 | 자기 리뷰 2건（잠든 endpoint 활성화, solver/접촉/정리 증거 부족）처리·재검증, 잔여0건; diff --check PASS; 독립 리뷰는 상위 관리자 담당 |
 
 BC-05 커밋 칸을 `84ecea1f`로 채웠다. 공통 API와 수명 연결 약280줄, CPU 시험과 등록 약200줄을 계약 §11의 BC-06a/06b로 나누었다. SwingTwist는 body 원점 anchor를 COM 기준으로 바꾸고 +X twist/+Y plane 축·제한을 전달한다. 두 Kinematic 관절은 disabled이며 마지막 Dynamic을 Kinematic으로 바꾸면 꺼진다. Dynamic 전환 후 enable은 호출자 책임이다. 모터는 처음부터 두 종류 모두 Off이고 별도 Off API도 제공한다.
 
@@ -77,3 +77,16 @@ BC-05 커밋 칸을 `84ecea1f`로 채웠다. 공통 API와 수명 연결 약280�
 화면 회귀 명령은 MiniEngine/ModelViewer에서 `../Build/x64/Debug/Output/ModelViewer/ModelViewer.exe -debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6`이며 Release도 같은 인자다. 실제 판정 실행은 Start-Process -WindowStyle Hidden -Wait -PassThru로 종료를 기다리고 실행 시작 뒤 갱신된 MeshComponentChecks.log를 확인한다. 최초 Debug GUI 직접 호출은 종료를 기다리지 않아 측정·판정에서 제외하고 다시 실행했다. DirectX debug layer 사용, GPU 기반 검증·adapter/driver 재측정 없음이다.
 
 BC-06만 끝내고 중단한다. BC-07 이후는 시작하지 않았다. git commit/merge/stash/reset/checkout·파일 삭제·junction 수동 변경·.mini 수동 편집·BreakConstraintReport.md 편집을 하지 않았다. 기존 .mini 3개와 미추적 보고서는 그대로 두며 이번 변경 파일 목록에 포함하지 않는다.
+### BC-07 완료·미커밋 (2026-10-29)
+
+| 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-07 | 미커밋, 상위 관리자 담당 | MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.h, SkeletalPhysicsSystem.cpp（신규）, tests/SkeletalBreakTests.cpp（신규）, PhysicsSystem.h, PhysicsSystem.cpp; MiniEngine/ModelViewer/ModelViewer.vcxproj, ModelViewer.vcxproj.filters; MiniEngine/Physics/CMakeLists.txt; Tools/BuildJolt.ps1; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | 직접 cl CPU Debug 64/64 PASS 17.76초·Release 64/64 PASS 19.18초, 경고0·종료0; 전체 Debug 52.13초·Release 43.36초 PASS, 오류0·기존 C4819 19개, /restore 없음; 비물리 component-checks Debug 3.31초·Release 4.10초 PASS GPU preparation·종료0; CTest 미실행 | 자기 리뷰 잔여0건; 독립 리뷰 낮음 지적 수정(높음·중간 0건); diff --check PASS |
+
+BC-06 커밋 칸을 `f6a14195`로 채웠다. `SkeletalPhysicsSystem`은 `PhysicsWorld&`와 `ObjectId`만 의존하며 `PhysicsSystem`이 `m_World` 뒤 멤버로 소유하고 `GetSkeletalPhysics()`로 등록자만 공개한다. 등록은 검증 → 전체 Prepare → commit → 관절(두 Kinematic이라 disabled) → 인접 pair 제외 순이며 질량은 `MassKg`가 되도록 공통 질량식 배율을 맞춘다. 실패하면 관절 역순 제거 → body 역순 파괴로 되돌린다. owner 삭제(`RemoveTarget(owner, InvalidComponentId)`)와 `PhysicsSystem::Clear`가 world 종료 전에 rig를 해제한다. body 초기 frame은 호출자 입력이며 `E*Gnode` 계산·scale 분리는 BC-08a다.
+
+시험은 거절 4종, fixture·Xbot 등록과 공존, Kinematic frame·disabled 관절·모터 Off, Dynamic 전환 뒤 질량, 7단계 주입 실패와 용량 부족의 역정리, 재등록 새 세대, Unregister·Clear·소멸자 뒤 body·관절·pair·예약 0을 확인한다. 산출물·로그는 `$env:TEMP/BreakConstraintTests`의 `SkeletalBreakTestsDebug.exe`, `SkeletalBreakTestsRelease.exe`, `BC07-Debug-build.log`, `BC07-Release-build.log`다. CMake/CTest 경로는 `MiniEngine/Build/ThirdParty` 쓰기가 필요해 실행하지 않았다. 변경 C++는 약 330줄(구현 193·시험 124·연결 11)이다.
+
+BC-07만 끝내고 중단한다. BC-08a 이후 미착수이며 git commit/merge/stash/reset/checkout·파일 삭제·junction 변경·.mini 수동 편집·BreakConstraintReport.md 편집은 하지 않았다.
+
+독립 리뷰 낮음 지적 수정: 한 줄 두 문장 주석 분리(PhysicsSystem.h `GetSkeletalPhysics`, SkeletalPhysicsSystem.h 클래스·`Unregister`·`Clear`·`DiagFailRegistrationStep`)와 SkeletalPhysicsSystem.cpp `Clear`·`GetRigGeneration`·`GetBodyHandle`·`GetConstraintHandle` 본문 단락 주석 추가. PhysicsSystem 경유 해제(`RemoveTarget`·`Clear`)는 Scene 의존으로 CPU 시험에 없으며 BC-12b/BC-13a 수명 회귀에서 실제 경로를 확인한다.
