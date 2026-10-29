@@ -24,7 +24,8 @@
 
 namespace glTF { class Asset; struct Mesh; }
 
-#define CURRENT_MINI_FILE_VERSION 13
+// 여러 primitive의 stream packing을 수정했으므로 이전 geometry cache를 다시 생성한다.
+#define CURRENT_MINI_FILE_VERSION 14
 
 namespace Renderer
 {
