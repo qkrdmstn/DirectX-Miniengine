@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-03b 완료, 기준 3bee0b20, 커밋 없이 후속 진행 (2026-10-29)
+상태: 진행 중 — BC-04a 완료·미커밋, 기준 71e115e0, BC-04b 이후 미착수 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
@@ -93,6 +93,8 @@ BC-00 측정 경로: `-xbot-arm-checks 1`은 기본 장면의 정규화된 Xbot 
 `SkeletalPhysicsAsset`는 vector<BodyDefinition>, vector<JointDefinition>을 가진다. body ID와 joint ID는 자산 내 uint32 인덱스, invalid=UINT32_MAX. runtime handle은 단조 증가 uint64, 0 invalid이고 해제 후 재사용하지 않는다.
 
 BodyDefinition 필드: `Node`, `BoneFromBody`(body 원점→bone의 강체 offset), `HalfExtentMeters[3]`, `MassKg`. JointDefinition 필드: `ParentBody`, `ChildBody`, `ParentBodyFromJoint`, `ChildBodyFromJoint`(joint→각 body 원점 frame), `SwingHalfAngles[2]`, `TwistMin/Max`(rad). 양수 extent/mass·유한 입력·정규화 회전·유효 angle 범위·ID·tree·node ancestry를 검증한다.
+
+BC-04a API: `MiniPhysics::SkeletalRigidFrame`은 double 위치(m)·xyzw 회전만 저장하며 Model/Jolt에 의존하지 않는다. `ValidateSkeletalPhysicsAsset(asset, nodeParents)`는 NodeId별 부모 배열(invalid=`UINT32_MAX`)을 읽어 bool을 반환하고 입력을 변경하지 않는다. 회전 제곱 길이 오차 ≤1e-4, swing [0,π], twist -π≤min≤max≤π를 허용하며 모든 회전 자유도를 잠근 weld 설정은 거절한다. 비어 있지 않은 단일 body tree, 본당 body 하나, 각 child의 가장 가까운 body 조상과의 관절 하나를 요구한다. 따라서 body 없는 중간 본은 허용하고 cycle·외부 pin·교차 연결·중간 body를 건너뛴 연결은 거절한다. 부모 배열 전체의 ID·cycle도 검사한다. 실제 fixture/Xbot 생성 값은 BC-04b에서 추가한다.
 
 M1 fixture는 Node 0→1→2→3(body 없는 tip), 0~2에 각 1kg box를 둔다. 반크기 (0.1,0.25,0.1)m, bone은 box 중심에 두고 BoneFromBody=identity. rest 중심 Y=(2,1.5,1)m, joint 위치 Y=(1.75,1.25)m, body-local anchor Y=(-0.25,+0.25)m다. floor는 Y=0. swing half-angle π/3, twist 범위 ±π/4, 정지 rest에서 시작한다.
 
@@ -196,7 +198,8 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-02 | override evaluator + 같은 테스트 | 구현 완료(uncommitted): CPU 32/32 PASS; override=0 동등, 물리 본 고정·자손 local·skeletonRoot·실패 시 출력 보존 / 01 | R+CPU 0.91초 |
 | BC-03a | ModelInstance animation/finalize 분리 | override=0 pose/palette 동등, 중복 palette node 갱신 / 02 | R+B+T |
 | BC-03b | Scene CPU/GPU 단계 분리·wrapper | 비물리 Debug/Release 실행·애니메이션 회귀 / 03a | R+B+V |
-| BC-04 | SkeletalPhysicsAsset 정의/검증·fixture·Xbot 왼팔 rig 값 | cycle/ID/shape/mass/ancestry 거절 / 00,01 | R+B+T |
+| BC-04a | SkeletalPhysicsAsset 중립 API·검증·CPU 거절 시험 | 완료·미커밋: CPU 42/42·최적화 42/42 PASS, Debug/Release 빌드 PASS / 00,01 | 최종 B=6.89+7.41초 |
+| BC-04b | fixture·Xbot 왼팔 rig 값·CPU 자산 시험 | 명시적 크기/질량·관절 한계·연결 검증 / 04a | R+B+T |
 | BC-05 | 공통 body Kinematic·Dynamic·impulse API/시험 | handle 유지·pose/속도 전환·실패 정리 / 04 | R+B+T |
 | BC-06 | constraint 수명/enable/motor API + rig 인접 pair 충돌 제외 필터 | 3 body·2 joints 생성/삭제·kinematic disable·인접 pair 무접촉 / 05 | R+B+T |
 | BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 부분 실패 역정리·삭제 뒤 자원0 / 04~06 | R+B+T |
@@ -213,6 +216,10 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 M1은 BC-00~BC-13a다. BC-09·BC-14는 M2이며 이번 데모에 필요 없다.
 
 ## 12. 검증 명령과 판정
+
+BC-04a 검증(2026-10-29, HEAD `71e115e0`): `SkeletalAssetTests.cpp` 머리말의 직접 cl 명령으로 TEMP/BreakConstraintTests에만 CPU 산출물을 저장했다. 최종 42/42 PASS, /O2 /DNDEBUG에서도 42/42 PASS, 모두 종료 코드 0·컴파일 경고 없음이다. CMake 테스트 target과 BuildJolt.ps1 testTargets 등록은 완료했으며 CTest 경로 실행은 이번에 수행하지 않았다. 전체 ModelViewer Debug/Release를 /restore 없이 빌드하여 최초 22.51/7.44초, 최종 6.89/7.41초, 모두 종료 코드 0·경고0·오류0을 확인했다. 기존 vswhere 탐색 메시지와 pwsh→Windows PowerShell fallback 메시지는 있었으나 빌드는 성공했다. 기존 실행 경로에서 새 API를 호출하지 않으므로 viewer 실행은 수행하지 않았다.
+
+별도 `codex exec -s read-only --ephemeral`는 `Error finding codex home: Could not find home directory`로 시작하지 못했다. 대체 자기 리뷰에서 한 줄 여러 문장인 시험 매크로와 weld 설정 누락 2건을 수정하고 CPU 검사와 두 구성 빌드를 다시 통과했다. 최종 자기 리뷰 잔여 지적 0건이다. 기존 BC-04a/04b 단계표 분할을 보존했고 git 쓰기 명령·BC-04b 이후 구현은 수행하지 않았다.
 
 BC-01 검증(2026-10-28): branch `break-constraint`, HEAD `d865c5ed` 기반의 미커밋 구현이다. `BuildPoseParents`는 임시 배열에서 유효성과 matrixIdx 유일성을 검증하고 정상 종료 때만 swap한다. `GraphNode`와 `EvaluateModelPose`는 변경하지 않았다. 형제 스택 32칸 경계·33번째 저장 거절·형제 없는 40노드 체인을 검사하여 기존 평가기의 스택 규칙을 보존했다.
 

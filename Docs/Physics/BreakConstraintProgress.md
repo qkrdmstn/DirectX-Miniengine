@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-03b 완료, 기준 3bee0b20, 커밋 없이 단계별 기록 (2026-10-29)
+상태: 진행 중 — BC-04a 완료·미커밋, 기준 71e115e0, BC-04b 이후 미착수 (2026-10-29)
 
 # BreakConstraint 진행 기록
 
@@ -24,6 +24,9 @@
 
 | BC-03b | MiniEngine/ModelViewer/Scene/Scene.h, Scene.cpp, tests/MeshComponentChecks.h; 계약·README·Scene·CodeMap·Progress | CPU32/32·495 PASS; Debug136.80초+최종로그빌드 PASS/Release177.00초 PASS; physics-sim0 컴포넌트 Debug4.67초·Release4.66초 PASS. 물리기본1로 잘못 실행한 초기 검사 실패는 계약에 기록 | 별도 새 Codex 0건 |
 | BC-03b 리뷰 수정 | MiniEngine/ModelViewer/Scene/tests/MeshComponentChecks.h, Scene.cpp, Scene.h; Docs/Current/Scene.md; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md | CPU SkeletonPose32/32 PASS 1.06초·SceneMath495 PASS 1.03초(컴파일+실행); Debug 빌드 PASS 최초39.40초·최종18.26초, Release PASS 최초162.27초·최종5.14초; 컴포넌트 Debug PASS 11.30초·Release PASS 6.19초; Debug Xbot BC-03a·BC-00 PASS 8.13초; 모든 최종 종료 코드0 | 지적 3건 처리: 4개 dt의 wrapper/분리 경로 전체 node·position/normal 비교 및 GPU 준비 전후 보존, FinalizePoses 두 줄 주석, Scene 소유권 본문 동기화 |
+| BC-04a（미커밋・상위 관리자 커밋 예정） | MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.h, SkeletalPhysicsAsset.cpp; MiniEngine/Physics/tests/SkeletalAssetTests.cpp; MiniEngine/Physics/CMakeLists.txt, Physics.vcxproj, Physics.vcxproj.filters; Tools/BuildJolt.ps1; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | CPU 42/42·/O2 /DNDEBUG 42/42 PASS, 종료0; Debug/Release 최초22.51/7.44초·최종6.89/7.41초 PASS, 경고0·오류0; CTest·viewer 미실행（호출 경로 변경 없음） | codex exec 홈 탐색 실패로 자기 리뷰; 매크로 한 줄 여러 문장·weld 누락 2건 수정 후 재검증, 잔여0건 |
+
+BC-04a 산출물·로그는 `$env:TEMP\BreakConstraintTests`에 두었다(`SkeletalAssetTests.exe`, `SkeletalAssetTestsRelease.exe`, `BC04a-Debug-build-final.log`, `BC04a-Release-build-final.log`, `BC04a-review.log`). 새 C++ 파일은 총 275줄이며 실제 fixture·Xbot 생성 API는 추가하지 않았다. 기존 .mini 3개와 BreakConstraintReport.md는 수정하지 않았고 파일 삭제·junction 수동 변경·git commit/merge/stash/reset/checkout은 수행하지 않았다.
 
 ### BC-03b 리뷰 수정 검증 조건 (2026-10-29)
 

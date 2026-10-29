@@ -28,6 +28,9 @@
     <IntDir>$(OutDir)</IntDir>
   </PropertyGroup>
   <ItemGroup>
+    <ClInclude Include="Skeletal\SkeletalPhysicsAsset.h" />
+    <ClCompile Include="Skeletal\SkeletalPhysicsAsset.cpp" />
+    <None Include="tests\SkeletalAssetTests.cpp" />
     <ClInclude Include="PhysicsWorld.h" />
     <ClInclude Include="PhysicsWorldInternal.h" />
     <ClInclude Include="Collision\CollisionUnits.h" />
