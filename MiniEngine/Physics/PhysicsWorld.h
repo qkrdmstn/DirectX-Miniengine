@@ -26,8 +26,8 @@ namespace MiniPhysics
     using BodyHandle = uint64_t;
     constexpr BodyHandle InvalidBody = 0;
 
-    // body 운동 방식이다. Static은 고정 지형 계층, Dynamic은 simulation 계층에 들어간다.
-    enum class BodyMotion { Static, Dynamic };
+    // Static은 고정 지형 계층, Dynamic과 Kinematic은 simulation 계층에 들어간다.
+    enum class BodyMotion { Static, Dynamic, Kinematic };
 
     // body 생성 요청이다. Geometry의 hull 정점은 컴포넌트 로컬 좌표(에셋 단위)이며 Scale이 정점에 곱해진다.
     // body pose는 Position/Rotation(xyzw 쿼터니언)만 담고 scale은 담지 않는다. Geometry는 PrepareBody 호출 중에만 참조한다.
@@ -116,6 +116,14 @@ namespace MiniPhysics
         bool DestroyBody(BodyHandle handle);
         // body 원점을 순간이동한다(Unreal SetBodyTransform). 속도는 그대로 두고 월드에 올라간 동적 body는 깨운다. 입력이나 handle이 무효면 false이며 body는 그대로다.
         bool SetBodyTransform(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation);
+        // 등록된 Kinematic body의 원점 목표에 fixedDt 동안 도달할 COM 속도를 설정한다.
+        bool MoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt);
+        // 등록된 비정적 body를 Kinematic 또는 Dynamic으로 전환하며 handle·pose·속도를 보존한다.
+        bool SetBodyMotion(BodyHandle handle, BodyMotion motion);
+        // 등록된 비정적 body의 COM 선속도와 월드 각속도를 Jolt 최대 속도로 제한해 설정한다.
+        bool SetBodyVelocity(BodyHandle handle, const std::array<double, 3>& linear, const std::array<double, 3>& angular);
+        // 등록된 Dynamic body에 월드 작용점의 impulse(kg·m/s)를 가한다. 무효 입력은 변경 없이 거절한다.
+        bool AddBodyImpulse(BodyHandle handle, const std::array<double, 3>& impulse, const std::array<double, 3>& worldPoint);
         // shape와 질량을 원자적으로 교체한다(scale 편집용). 실패하면 false를 반환하며 shape·질량·pose·속도는 그대로다. 성공하면 월드에 올라간 동적 body는 깨운다.
         bool SetBodyShape(BodyHandle handle, const MiniCollision::AggregateGeom& geometry, const std::array<double, 3>& scale, double massScale, std::string* error = nullptr);
         // 게시된 simulation body 수를 반환한다.

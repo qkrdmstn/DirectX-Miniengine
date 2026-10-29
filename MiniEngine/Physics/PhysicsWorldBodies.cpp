@@ -73,6 +73,10 @@ namespace MiniPhysics
         // 요청 값의 유한성·범위를 검사한다. shape 관련 검사는 ValidateShapeInput을 쓴다.
         bool ValidateDesc(const BodyDesc& desc, std::string* error)
         {
+            // 정의되지 않은 운동 방식은 생성 전에 거절한다.
+            if (desc.Motion != BodyMotion::Static && desc.Motion != BodyMotion::Dynamic && desc.Motion != BodyMotion::Kinematic)
+                return Fail(error, "Invalid motion type");
+
             // Static Box와 convex 요청을 구분하고 모호한 형상 지정을 거절한다.
             if (!desc.Geometry)
             {
@@ -209,7 +213,7 @@ namespace MiniPhysics
             // 바닥용 Static Box는 명시적 반크기를 쓰고 convex는 공유 helper로 질량까지 만든다.
             JPH::RefConst<JPH::Shape> shape;
             double mass = 0.0;
-            const bool dynamic = desc.Motion == BodyMotion::Dynamic;
+            const bool dynamic = desc.Motion != BodyMotion::Static;
             if (!desc.Geometry)
             {
                 const auto& half = desc.StaticBoxHalfExtent;
@@ -224,12 +228,13 @@ namespace MiniPhysics
             if (!NormalizeRotation(desc.Rotation, rotation)) return Fail(error, "Invalid rotation");
             const JPH::RVec3 position(float(desc.Position[0]), float(desc.Position[1]), float(desc.Position[2]));
             JPH::BodyCreationSettings settings(shape, position, rotation,
-                dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
+                desc.Motion == BodyMotion::Kinematic ? JPH::EMotionType::Kinematic :
+                    (dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static),
                 dynamic ? ObjectLayers::Moving : ObjectLayers::Static);
             settings.mFriction = desc.Friction;
             settings.mRestitution = desc.Restitution;
 
-            // 동적 body는 Unreal 질량을 쓰고 관성은 shape에서 계산해 질량에 맞춘다.
+            // Kinematic도 Dynamic 전환에 필요한 질량과 관성을 미리 준비한다.
             if (dynamic)
             {
                 settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
@@ -396,6 +401,98 @@ namespace MiniPhysics
         return true;
     }
 
+    // 목표 원점 pose를 다음 고정 step의 COM 속도로 변환한다.
+    bool PhysicsWorld::MoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt)
+    {
+        // 시간과 pose를 검사한 뒤 등록된 Kinematic body만 찾는다.
+        if (!m_Impl || !std::isfinite(fixedDt) || fixedDt <= 0.0f) return false;
+        if (!AllFinite(position) || !AllFinite(rotation)) return false;
+        for (const double value : position)
+            if (std::abs(value) > MaxBodyPosition) return false;
+        JPH::Quat q;
+        if (!NormalizeRotation(rotation, q)) return false;
+        const auto entry = m_Impl->SimBodies.find(handle);
+        if (entry == m_Impl->SimBodies.end()) return false;
+        auto& bodies = m_Impl->World.GetBodyInterface();
+        if (!bodies.IsAdded(entry->second) || bodies.GetMotionType(entry->second) != JPH::EMotionType::Kinematic) return false;
+
+        // 극소 dt로 속도가 넘치는 요청을 거절한 뒤 Jolt의 원점 목표 API를 쓴다.
+        const JPH::RVec3 target{ float(position[0]), float(position[1]), float(position[2]) };
+        const JPH::Vec3 delta = JPH::Vec3(target + q * bodies.GetShape(entry->second)->GetCenterOfMass() - bodies.GetCenterOfMassPosition(entry->second));
+        if (double(delta.Length()) / fixedDt > 1.0e18 || 4.0 / fixedDt > 1.0e18) return false;
+        bodies.MoveKinematic(entry->second, target, q, fixedDt);
+        return true;
+    }
+
+    // 동일 body를 유지하며 Kinematic과 Dynamic 사이에서 전환한다.
+    bool PhysicsWorld::SetBodyMotion(BodyHandle handle, BodyMotion motion)
+    {
+        // 정적 body와 제거된 body 및 무효 운동 방식은 거절한다.
+        if (!m_Impl || (motion != BodyMotion::Kinematic && motion != BodyMotion::Dynamic)) return false;
+        const auto entry = m_Impl->SimBodies.find(handle);
+        if (entry == m_Impl->SimBodies.end()) return false;
+        auto& bodies = m_Impl->World.GetBodyInterface();
+        if (!bodies.IsAdded(entry->second) || bodies.GetMotionType(entry->second) == JPH::EMotionType::Static) return false;
+
+        // 두 방식은 Moving 계층을 공유하며 pose와 속도를 유지한다.
+        bodies.SetMotionType(entry->second, motion == BodyMotion::Dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Kinematic, JPH::EActivation::Activate);
+        return true;
+    }
+
+    // 게시된 body에 기존 준비 속도와 같은 제한을 적용한다.
+    bool PhysicsWorld::SetBodyVelocity(BodyHandle handle, const std::array<double, 3>& linear, const std::array<double, 3>& angular)
+    {
+        // 모든 성분과 handle을 변경 전에 검사한다.
+        if (!m_Impl || !AllFinite(linear) || !AllFinite(angular)) return false;
+        for (const double value : linear)
+            if (std::abs(value) > FLT_MAX) return false;
+        for (const double value : angular)
+            if (std::abs(value) > FLT_MAX) return false;
+        const auto entry = m_Impl->SimBodies.find(handle);
+        if (entry == m_Impl->SimBodies.end()) return false;
+
+        // 쓰기 잠금 아래에서 속도를 바꾸고 잠금을 푼 뒤 활성화한다.
+        {
+            const JPH::BodyLockWrite lock(m_Impl->World.GetBodyLockInterface(), entry->second);
+            if (!lock.Succeeded() || !lock.GetBody().IsInBroadPhase() || lock.GetBody().IsStatic()) return false;
+            auto& body = lock.GetBody();
+            const auto* properties = body.GetMotionProperties();
+            body.SetLinearVelocityClamped(ClampPreparedVelocity(linear, properties->GetMaxLinearVelocity()));
+            body.SetAngularVelocityClamped(ClampPreparedVelocity(angular, properties->GetMaxAngularVelocity()));
+        }
+        m_Impl->World.GetBodyInterface().ActivateBody(entry->second);
+        return true;
+    }
+
+    // 작용점 impulse의 선속도와 각속도 결과를 검증한 뒤 한 번만 적용한다.
+    bool PhysicsWorld::AddBodyImpulse(BodyHandle handle, const std::array<double, 3>& impulse, const std::array<double, 3>& worldPoint)
+    {
+        // 유한성과 float 연산 범위를 먼저 검사한다.
+        if (!m_Impl || !AllFinite(impulse) || !AllFinite(worldPoint)) return false;
+        for (const double value : impulse)
+            if (std::abs(value) > FLT_MAX) return false;
+        for (const double value : worldPoint)
+            if (std::abs(value) > MaxBodyPosition) return false;
+        const auto entry = m_Impl->SimBodies.find(handle);
+        if (entry == m_Impl->SimBodies.end()) return false;
+        const JPH::Vec3 j{ float(impulse[0]), float(impulse[1]), float(impulse[2]) };
+        const JPH::RVec3 point{ float(worldPoint[0]), float(worldPoint[1]), float(worldPoint[2]) };
+
+        // 등록된 Dynamic만 허용하며 오버플로가 나면 기존 속도를 보존한다.
+        {
+            const JPH::BodyLockRead lock(m_Impl->World.GetBodyLockInterface(), entry->second);
+            if (!lock.Succeeded() || !lock.GetBody().IsInBroadPhase() || !lock.GetBody().IsDynamic()) return false;
+            const auto& body = lock.GetBody();
+            const JPH::Vec3 v = body.GetLinearVelocity() + j * body.GetMotionProperties()->GetInverseMass();
+            const JPH::Vec3 w = body.GetAngularVelocity() + body.GetInverseInertia().Multiply3x3(JPH::Vec3(point - body.GetCenterOfMassPosition()).Cross(j));
+            if (!std::isfinite(v.LengthSq()) || !std::isfinite(w.LengthSq())) return false;
+        }
+
+        // BodyInterface가 impulse 적용과 잠든 body 활성화를 함께 수행한다.
+        m_Impl->World.GetBodyInterface().AddImpulse(entry->second, j, point);
+        return true;
+    }
+
     // shape와 질량을 통째로 교체한다. 새 shape·질량을 먼저 완성하고, 하나라도 실패하면 body를 전혀 바꾸지 않는다.
     bool PhysicsWorld::SetBodyShape(BodyHandle handle, const MiniCollision::AggregateGeom& geometry, const std::array<double, 3>& scale, double massScale, std::string* error)
     {
@@ -413,7 +510,7 @@ namespace MiniPhysics
             {
                 const JPH::BodyLockRead lock(m_Impl->World.GetBodyLockInterface(), id);
                 if (!lock.Succeeded()) return Fail(error, "Unknown body");
-                dynamic = lock.GetBody().IsDynamic();
+                dynamic = !lock.GetBody().IsStatic();
             }
 
             // body를 건드리기 전에 새 shape와 질량 속성을 모두 만든다.
@@ -430,7 +527,7 @@ namespace MiniPhysics
             // shape만 교체한다. 원점 pose와 속도는 유지되고 질량은 아래에서 직접 설정한다.
             m_Impl->World.GetBodyInterface().SetShape(id, shape, false, JPH::EActivation::DontActivate);
 
-            // 동적 body는 쓰기 잠금 아래에서 새 질량과 관성을 설정한다.
+            // Kinematic도 향후 Dynamic 전환을 위해 새 질량과 관성을 저장한다.
             if (dynamic)
             {
                 const JPH::BodyLockWrite lock(m_Impl->World.GetBodyLockInterface(), id);

@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-04a `8593a0be`, BC-04b 완료·미커밋(기준 `8593a0be`), BC-05 이후 미착수 (2026-10-29)
+상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 구현·검증 완료(미커밋), BC-06 이후 미착수 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
@@ -41,7 +41,7 @@ BC-00 자산 정적 확인: `Xbot.glb`의 scene 0을 `WalkGraph`와 같은 DFS �
 - 조회용 ColliderHandle와 실제 BodyHandle는 별개다. Static 작업의 handle·PImpl·world를 재사용하며 새 Jolt world를 추가하지 않는다.
 - 현재 프레임 순서는 `ModelViewer`에서 `PhysicsSystem::AdvanceSimulation`(자체 substep 루프) 다음에 `Scene::Update`(animation→palette→GPU 준비)다. 그대로 두면 물리 결과를 animation이 덮어쓴다. 9절 순서로 바꾸는 것이 BC-11이다.
 - `PhysicsSystem::m_World`는 private이며 `CutTransaction`은 friend로 접근한다. `SkeletalPhysicsSystem`은 `PhysicsSystem`의 멤버로 두어 같은 world를 쓰고, Scene/ModelViewer에 world를 공개하지 않는다.
-- `PhysicsWorld`의 motion은 Static/Dynamic뿐이다(`PhysicsWorldBodies.cpp`). Kinematic·MoveKinematic·impulse·constraint는 BC-05/06에서 추가한다.
+- `PhysicsWorld`는 BC-05에서 기존 Static/Dynamic에 Kinematic·MoveKinematic·운동 전환·impulse를 추가했다. constraint는 BC-06에서 추가한다.
 - 시작 시 HEAD·diff·선행 단계 완료 여부를 다시 확인한다.
 
 ## 4. 파일과 의존 방향
@@ -123,6 +123,10 @@ SwingTwist constraint는 미리 생성하되 두 endpoint가 모두 Kinematic이
 SDK 근거: [BodyInterface](https://github.com/jrouwe/JoltPhysics/blob/v5.6.0/Jolt/Physics/Body/BodyInterface.h), [BodyCreationSettings](https://github.com/jrouwe/JoltPhysics/blob/v5.6.0/Jolt/Physics/Body/BodyCreationSettings.h), [SwingTwistConstraint](https://github.com/jrouwe/JoltPhysics/blob/v5.6.0/Jolt/Physics/Constraints/SwingTwistConstraint.h). Unreal의 관절 종료/자손 전환 근거는 조사 문서 2절 링크를 따른다.
 
 ## 7. 공통 PhysicsWorld 확장 계약
+
+BC-05 구현: 기존 BodyHandle·PreparedBody·COM 속도 조회·Moving 계층을 재사용했다. 새 API는 `MoveKinematic`, `SetBodyMotion`, `SetBodyVelocity`, `AddBodyImpulse`이며 모두 world에 올라간 body만 변경한다. 전환은 비정적 body의 Kinematic↔Dynamic만 허용하고 pose·속도·shape·handle을 보존한다. 두 방식이 같은 Moving 계층을 쓰므로 전환 시 레이어 교체는 필요 없다. Static은 기존 생성·동작을 유지한다.
+
+Kinematic 생성과 shape 교체는 기존 공통 질량 계산과 shape 관성을 준비하여 Dynamic 전환에 사용한다. skeletal 자산의 명시적 질량 적용은 후속 등록 경로에서 다룬다. 속도 설정은 기존 준비 속도 제한을 재사용한다. MoveKinematic은 원점 목표에서 Jolt가 COM 목표를 계산하며, float 길이 제곱 오버플로 방지를 위해 목표 선속도 또는 보수적 각속도 상계가 1e18을 넘으면 거절한다. impulse도 결과 선속도·각속도의 길이 제곱이 유한한지 먼저 확인하고 Jolt의 제한·활성화 API에 전달한다.
 
 Static 단계 4a~4d의 BodyHandle·RAII·Create/Register/Remove/Destroy·Step·floor 구현을 먼저 재사용한다. 다음 메서드는 그 API에 추가할 의미 계약이며 같은 기능이 있으면 중복 wrapper를 만들지 않는다.
 
@@ -213,8 +217,8 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-03a | ModelInstance animation/finalize 분리 | override=0 pose/palette 동등, 중복 palette node 갱신 / 02 | R+B+T |
 | BC-03b | Scene CPU/GPU 단계 분리·wrapper | 비물리 Debug/Release 실행·애니메이션 회귀 / 03a | R+B+V |
 | BC-04a | SkeletalPhysicsAsset 중립 API·검증·CPU 거절 시험 | 완료 `8593a0be`: CPU 42/42·최적화 42/42 PASS, Debug/Release 빌드 PASS / 00,01 | 최종 B=6.89+7.41초 |
-| BC-04b | fixture·Xbot 왼팔 rig 값·CPU 자산 시험 | 완료·미커밋: CPU 82/82·최적화82/82, Debug/Release PASS / 04a | B=105.21+119.91초, CPU=1.19+3.37초 |
-| BC-05 | 공통 body Kinematic·Dynamic·impulse API/시험 | handle 유지·pose/속도 전환·실패 정리 / 04 | R+B+T |
+| BC-04b | fixture·Xbot 왼팔 rig 값·CPU 자산 시험 | 완료 `d31863a7`: CPU 82/82·최적화82/82, Debug/Release PASS / 04a | B=105.21+119.91초, CPU=1.19+3.37초 |
+| BC-05 | 공통 body Kinematic·Dynamic·impulse API/시험 | 구현·검증 완료(미커밋): CPU 362/362 두 구성, Debug/Release 빌드·비물리 컴포넌트 PASS / 04b | B=40.82+136.18초, CPU=7.63+10.26초 |
 | BC-06 | constraint 수명/enable/motor API + rig 인접 pair 충돌 제외 필터 | 3 body·2 joints 생성/삭제·kinematic disable·인접 pair 무접촉 / 05 | R+B+T |
 | BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 부분 실패 역정리·삭제 뒤 자원0 / 04~06 | R+B+T |
 | BC-08a | rig frame·scale 분리·Kinematic target/속도 | body offset/COM 왕복, uniform scale 왕복, 비균일/shear 거절 / 07 | R+B+T |
@@ -230,6 +234,12 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 M1은 BC-00~BC-13a다. BC-09·BC-14는 M2이며 이번 데모에 필요 없다.
 
 ## 12. 검증 명령과 판정
+
+BC-05 검증(2026-10-29, 기준 `d31863a7`, 미커밋): `PhysicsBodyTests.cpp` 머리말 직접 cl 명령으로 최종 Debug 362/362(7.63초), Release `/O2 /DNDEBUG` 362/362(10.26초)를 통과했다. 둘 다 컴파일 경고 없이 종료0이며 산출물은 `$env:TEMP/BreakConstraintTests`다. 기존 body 검사와 함께 Kinematic 중력 무시·Moving 계층·오프셋 COM 회전 목표·순간이동 없음·같은 handle/BodyID·전환 pose/속도·준비 질량/관성·shape 교체·낙하·잠든 body의 off-center impulse·무효 입력/상태 거절·자원0을 검사한다. 기존 PhysicsBodyTests target을 확장했으므로 CMake·BuildJolt·vcxproj 등록은 추가하지 않았다. CTest 전체 실행은 하지 않았다.
+
+전체 ModelViewer Debug/Release를 저장소 루트에서 `/restore` 없이 빌드하여 40.82/136.18초, 각각 종료0·오류0이다. 기존 C4819 경고 18/20개와 vswhere/pwsh 탐색 메시지는 남아 있다. MiniEngine/ModelViewer에서 두 구성 모두 `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6`으로 실행하여 6.32/7.31초, 종료0 및 `PASS GPU preparation`을 확인했다. DirectX debug layer를 켰으며 adapter/driver는 이번에 재측정하지 않았다. 새 API의 viewer 호출은 아직 없다.
+
+자기 리뷰에서 왕복 전환 및 잘못된 목표 요청 뒤 속도 보존 시험 부족 1건을 보강하고 두 CPU 구성을 재검증했다. 잔여 지적0건이며 diff --check PASS다. 초기 개발 중 벡터의 함수 선언 해석 오류를 중괄호 초기화로 수정했다(첫 Debug 빌드 93.22초 실패). 시험의 Kinematic 상태에서 Dynamic 전용 질량 조회 오류는 전환 뒤 조회하도록 수정했으며, CPU 재검증 스크립트의 인자 배열 해제 오류(LNK1181)는 명시적 배열로 고쳤다. 최종 시험·빌드·실행은 모두 통과했다. 로그는 `BC05-CPU-*-final.log`, `BC05-*-build-final.log`, `BC05-*-component-checks.log`, `BC05-self-review.txt`다. BC-05에서 중단하며 커밋·병합·후속 구현은 하지 않는다.
 
 BC-04b 검증(2026-10-29, HEAD `8593a0be`): 테스트 머리말의 직접 cl 명령과 `/O2 /DNDEBUG` 구성 모두 82/82 PASS, 종료 코드 0, 컴파일 경고 없음이다(최종 컴파일+실행 1.19/3.37초). 기존 검사 42건에 생성 fixture·Xbot 값·부모 구조 거절·실패 출력 보존·BC-00 손목 범위 포함·회전된 자식 anchor/정적 GLB 반올림 오차 검사를 추가했다. worktree 루트의 전체 ModelViewer Debug/Release를 `/restore` 없이 빌드하여 각각 105.21/119.91초, 종료 코드 0을 확인했다. 기존 SkeletonPose.h·GizmoDraw.h 등의 C4819와 vswhere/pwsh 탐색 메시지는 남아 있으며 새 CPU 파일 컴파일에는 경고가 없다. CTest와 viewer 실행은 미수행이다. 새 생성 API는 tests 외 런타임 호출이 없어 물리를 끈 기존 경로의 실행 코드는 바뀌지 않는다.
 

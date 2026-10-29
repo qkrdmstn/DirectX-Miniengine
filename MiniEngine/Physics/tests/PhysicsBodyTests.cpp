@@ -1,3 +1,8 @@
+// VS Developer PowerShell, 저장소 루트: 산출물은 TEMP에만 둔다.
+// $bc = Join-Path $env:TEMP 'BreakConstraintTests'; New-Item -ItemType Directory -Force $bc | Out-Null
+// $sdk = 'MiniEngine/Build/ThirdParty/Jolt/build'
+// cl /nologo /std:c++17 /EHsc /W4 /utf-8 /MDd /DJPH_OBJECT_LAYER_BITS=16 /I MiniEngine/Physics /I "$sdk/_deps/joltsource-src" "/Fo:$bc/" "/Fe:$bc/PhysicsBodyTests.exe" MiniEngine/Physics/tests/PhysicsBodyTests.cpp MiniEngine/Physics/PhysicsWorld.cpp MiniEngine/Physics/PhysicsWorldBodies.cpp MiniEngine/Physics/PhysicsWorldStep.cpp MiniEngine/Physics/Collision/ConvexElem.cpp MiniEngine/Physics/Collision/AggregateGeom.cpp "$sdk/lib/Debug/Jolt.lib" /link "/PDB:$bc/PhysicsBodyTests.pdb"
+// & "$bc/PhysicsBodyTests.exe"; Release는 /MDd 대신 /MD /O2 /DNDEBUG, lib/Release/Jolt.lib를 쓴다.
 #include "CollisionTestUtils.h"
 #include "PhysicsWorldInternal.h"
 #include "Collision/AggregateGeom.h"
@@ -658,6 +663,129 @@ static void TestPreparedVelocityFailures()
     Check(!world.SetPreparedVelocity(orphan, linear, angular) && orphan.IsValid(), "Destroyed world velocity rejected");
 }
 
+// Kinematic 목표·COM·운동 방식 전환과 impulse 및 실패 보존을 검사한다.
+static void TestKinematicMotion()
+{
+    // 오프셋 상자를 중력 없이 유지하고 Moving 계층과 준비된 관성을 확인한다.
+    PhysicsWorld world;
+    world.Initialize(8);
+    const auto geom = MakeBoxGeom({ 2, 0, 0 }, { 0.5, 0.5, 0.5 });
+    auto desc = MakeDesc(geom);
+    desc.Motion = BodyMotion::Kinematic;
+    desc.Position = { 0, 10, 0 };
+    PreparedBody prepared;
+    Check(world.PrepareBody(desc, prepared), "Prepare kinematic");
+    const auto handle = world.CommitBody(std::move(prepared), false);
+    const BodyReader reader(world, handle);
+    const double mass = MiniCollision::CalculateUnrealMass(Volume(geom));
+    Check(PhysicsWorldAccess::GetImpl(world)->World.GetBodyInterface().GetObjectLayer(reader.Id) == ObjectLayers::Moving, "Kinematic moving layer");
+    Check(world.Step(1.0f / 60), "Rest kinematic step");
+    std::array<double, 3> position{}, linear{}, angular{};
+    std::array<double, 4> rotation{};
+    Check(world.GetBodyPose(handle, position, rotation), "Read kinematic rest");
+    CheckVector(position, desc.Position, 1e-5);
+
+    // 회전 목표의 원점과 COM이 다음 step에 도달하며 호출 즉시는 pose가 그대로다.
+    const double h = std::sqrt(0.5);
+    Check(world.MoveKinematic(handle, { 1, 10, 0 }, { 0, 0, h, h }, 1.0f / 60), "Set kinematic target");
+    Check(world.GetBodyPose(handle, position, rotation), "Read before target step");
+    CheckVector(position, desc.Position, 1e-5);
+    Check(world.GetBodyVelocity(handle, linear, angular), "Read target COM velocity");
+    CheckVector(linear, { -60, 120, 0 }, 0.01);
+    CheckNear(angular[2], 30 * 3.141592653589793, 0.01, "Target world angular velocity");
+    Check(world.Step(1.0f / 60), "Target step");
+    Check(world.GetBodyPose(handle, position, rotation), "Read reached target");
+    CheckVector(position, { 1, 10, 0 }, 1e-4);
+    CheckNear(rotation[2], h, 1e-5, "Target rotation");
+    Check(world.SetBodyVelocity(handle, { 1, 2, 3 }, { 0, 0, 0.5 }), "Set kinematic velocity");
+
+    // 같은 handle·BodyID·pose·속도를 유지하며 왕복 전환하고 Dynamic은 중력으로 낙하한다.
+    Check(world.SetBodyMotion(handle, BodyMotion::Dynamic), "Switch to dynamic");
+    Check(world.SetBodyMotion(handle, BodyMotion::Dynamic), "Repeated dynamic preserves state");
+    Check(world.GetBodyPose(handle, position, rotation), "Read switched pose");
+    CheckVector(position, { 1, 10, 0 }, 1e-4);
+    Check(world.GetBodyVelocity(handle, linear, angular), "Read switched velocity");
+    CheckVector(linear, { 1, 2, 3 }, 1e-6);
+    CheckVector(angular, { 0, 0, 0.5 }, 1e-6);
+    CheckNear(reader.Mass(), mass, 1e-5, "Switch preserves mass");
+    Check(reader.SortedInertia()[0] > 0, "Kinematic inertia survives conversion");
+    Check(world.SetBodyMotion(handle, BodyMotion::Kinematic), "Switch back to kinematic");
+    Check(world.SetBodyMotion(handle, BodyMotion::Dynamic), "Switch again to dynamic");
+    Check(world.GetBodyVelocity(handle, linear, angular), "Read round-trip velocity");
+    CheckVector(linear, { 1, 2, 3 }, 1e-6);
+    CheckVector(angular, { 0, 0, 0.5 }, 1e-6);
+    Check(world.GetBodyCount() == 1 && PhysicsWorldAccess::GetImpl(world)->SimBodies.at(handle) == reader.Id, "Handle and ID retained");
+    Check(world.SetBodyVelocity(handle, {}, {}), "Clear velocity");
+    Check(world.Step(1.0f / 60), "Dynamic gravity step");
+    Check(world.GetBodyVelocity(handle, linear, angular) && linear[1] < 0, "Dynamic falls");
+
+    // 정지시킨 body의 COM에서 벗어난 +X impulse는 +Z 회전을 만든다.
+    Check(world.SetBodyVelocity(handle, {}, {}), "Reset impulse velocity");
+    std::array<double, 3> com{};
+    Check(world.GetBodyCenterOfMass(handle, com), "Read impulse COM");
+    auto point = com;
+    point[1] -= 1;
+    PhysicsWorldAccess::GetImpl(world)->World.GetBodyInterface().DeactivateBody(reader.Id);
+    Check(!world.IsBodyAwake(handle), "Impulse starts asleep");
+    Check(world.AddBodyImpulse(handle, { mass, 0, 0 }, point), "Apply off-center impulse");
+    Check(world.IsBodyAwake(handle), "Impulse wakes body");
+    Check(world.GetBodyVelocity(handle, linear, angular), "Read impulse result");
+    CheckVector(linear, { 1, 0, 0 }, 1e-5);
+    Check(angular[2] > 0 && std::abs(angular[0]) < 1e-5, "Off-center impulse rotates");
+    CheckNear(angular[2], 6.0, 0.3, "Box impulse angular response");
+
+    // 무효 입력과 비지원 상태를 거절하고 속도와 자원 수를 보존한다.
+    const auto savedLinear = linear;
+    const auto savedAngular = angular;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    Check(!world.MoveKinematic(handle, {}, { 0, 0, 0, 1 }, 1), "Dynamic target rejected");
+    Check(!world.SetBodyMotion(handle, BodyMotion::Static), "Static conversion rejected");
+    Check(!world.SetBodyMotion(handle, static_cast<BodyMotion>(99)), "Invalid motion rejected");
+    Check(!world.AddBodyImpulse(handle, { nan, 0, 0 }, com), "NaN impulse rejected");
+    Check(!world.AddBodyImpulse(handle, { 1e300, 0, 0 }, com), "Huge impulse rejected");
+    Check(!world.SetBodyVelocity(handle, {}, { nan, 0, 0 }), "NaN velocity rejected");
+    Check(!world.AddBodyImpulse(handle, { 1, 0, 0 }, { nan, 0, 0 }), "NaN point rejected");
+    Check(!world.AddBodyImpulse(handle, { double(FLT_MAX), 0, 0 }, point), "Overflow response rejected");
+    Check(world.GetBodyVelocity(handle, linear, angular), "Read failure survivor");
+    CheckVector(linear, savedLinear, 0);
+    CheckVector(angular, savedAngular, 0);
+    Check(world.SetBodyMotion(handle, BodyMotion::Kinematic), "Kinematic failures setup");
+    Check(!world.AddBodyImpulse(handle, { 1, 0, 0 }, com), "Kinematic impulse rejected");
+    Check(!world.MoveKinematic(handle, {}, { 0, 0, 0, 1 }, 0), "Zero dt rejected");
+    Check(!world.MoveKinematic(handle, {}, { 0, 0, 0, 1 }, float(nan)), "NaN dt rejected");
+    Check(!world.MoveKinematic(handle, { nan, 0, 0 }, { 0, 0, 0, 1 }, 1), "NaN target rejected");
+    Check(!world.MoveKinematic(handle, {}, {}, 1), "Zero rotation rejected");
+    Check(!world.MoveKinematic(handle, {}, { 0, 0, 0, 1 }, std::numeric_limits<float>::denorm_min()), "Overflow target velocity rejected");
+    Check(!world.MoveKinematic(handle, {}, { 0, 0, 0, 1 }, -1), "Negative dt rejected");
+    Check(!world.MoveKinematic(handle, {}, { 0, 0, 0, 1 }, std::numeric_limits<float>::infinity()), "Infinite dt rejected");
+    Check(world.GetBodyVelocity(handle, linear, angular), "Read rejected target velocity");
+    CheckVector(linear, savedLinear, 0);
+    CheckVector(angular, savedAngular, 0);
+    Check(world.SetBodyShape(handle, geom, { 1, 1, 1 }, 2), "Replace kinematic shape and mass");
+    Check(world.SetBodyMotion(handle, BodyMotion::Dynamic), "Convert replaced kinematic");
+    CheckNear(reader.Mass(), 2 * mass, 1e-5, "Replacement mass retained");
+    Check(world.RemoveBodyFromWorld(handle), "Remove transition body");
+    Check(!world.SetBodyMotion(handle, BodyMotion::Dynamic), "Removed motion rejected");
+    Check(!world.MoveKinematic(handle, {}, { 0, 0, 0, 1 }, 1), "Removed target rejected");
+    Check(!world.SetBodyVelocity(handle, {}, {}), "Removed velocity rejected");
+    Check(world.DestroyBody(handle), "Destroy transition body");
+    Check(!world.AddBodyImpulse(handle, {}, {}) && !world.SetBodyMotion(handle, BodyMotion::Dynamic), "Stale handle rejected");
+    Check(world.GetBodyCount() == 0 && world.GetReservedCount() == 0, "No transition resource leak");
+
+    // 기존 Static body는 전환을 허용하지 않으며 초기화 전 API도 안전하게 거절한다.
+    desc.Motion = BodyMotion::Static;
+    Check(world.PrepareBody(desc, prepared), "Prepare static transition guard");
+    const auto fixed = world.CommitBody(std::move(prepared), false);
+    Check(!world.SetBodyMotion(fixed, BodyMotion::Dynamic), "Static body conversion rejected");
+    Check(!world.SetBodyVelocity(fixed, {}, {}) && !world.AddBodyImpulse(fixed, {}, {}), "Static mutations rejected");
+    world.Clear();
+    PhysicsWorld unopened;
+    Check(!unopened.SetBodyMotion(fixed, BodyMotion::Dynamic), "Uninitialized motion rejected");
+    Check(!unopened.MoveKinematic(fixed, {}, { 0, 0, 0, 1 }, 1), "Uninitialized target rejected");
+    Check(!unopened.SetBodyVelocity(fixed, {}, {}) && !unopened.AddBodyImpulse(fixed, {}, {}), "Uninitialized velocity and impulse rejected");
+    Check(world.GetReservedCount() == 0, "Static guard cleaned");
+}
+
 // 실제 Jolt를 링크한 body 수명 검증을 한 번에 실행한다.
 int main()
 {
@@ -686,6 +814,9 @@ int main()
         TestPreparedInheritance();
         TestPreparedVelocityLimit();
         TestPreparedVelocityFailures();
+
+        // Kinematic 이동과 운동 방식 전환 및 impulse를 검사한다.
+        TestKinematicMotion();
 
         // 통과한 검사 수를 출력한다.
         std::printf("PhysicsBodyTests: %zu checks passed\n", g_Checks);

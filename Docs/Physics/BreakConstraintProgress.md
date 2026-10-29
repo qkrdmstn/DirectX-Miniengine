@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-04a `8593a0be`, BC-04b 완료·미커밋(기준 `8593a0be`), BC-05 이후 미착수 (2026-10-29)
+상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 구현·검증 완료(미커밋), BC-06 이후 미착수 (2026-10-29)
 
 # BreakConstraint 진행 기록
 
@@ -40,8 +40,19 @@ MiniEngine/ModelViewer에서 Debug·Release 각각 `-debug 1 -physics-sim 0 -com
 
 | 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
 | --- | --- | --- | --- | --- |
-| BC-04b | 미커밋, 상위 관리자 커밋 후 기입 | MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.h, SkeletalPhysicsAsset.cpp; MiniEngine/Physics/tests/SkeletalAssetTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | 직접 cl CPU 82/82 PASS 1.19초, /O2 /DNDEBUG 82/82 PASS 3.37초, 경고 없음; ModelViewer Debug 105.21초·Release 119.91초 PASS, 종료0, /restore 없음; 기존 C4819·vswhere/pwsh 탐색 메시지 있음; CTest·viewer 미실행(새 API의 런타임 호출 없음) | 자기 리뷰, anchor 시험 부족 1건 보강 후 재검증, 잔여0건; diff --check PASS |
+| BC-04b | `d31863a7` | MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.h, SkeletalPhysicsAsset.cpp; MiniEngine/Physics/tests/SkeletalAssetTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | 직접 cl CPU 82/82 PASS 1.19초, /O2 /DNDEBUG 82/82 PASS 3.37초, 경고 없음; ModelViewer Debug 105.21초·Release 119.91초 PASS, 종료0, /restore 없음; 기존 C4819·vswhere/pwsh 탐색 메시지 있음; CTest·viewer 미실행(새 API의 런타임 호출 없음) | 자기 리뷰, anchor 시험 부족 1건 보강 후 재검증, 잔여0건; diff --check PASS |
 
 fixture 3 body·2 joints·body 없는 tip, Xbot 고정 NodeId 13→14→15·명시적 m/kg/rad 값을 추가했다. GLB 정적 translation을 읽어 +X 방향을 확인하고 BC-00 배율에서 반올림 anchor 오차≤0.1mm를 검사했다. 손목 swing/twist 제한은 BC-00 측정 범위를 포함한다. 손 크기·폭·두께·질량·관절 한계는 M1 proxy 값이며 계약 §6·§8에 근거와 한계를 적었다. 새 파일이 없어 기존 vcxproj/.filters·CMake·BuildJolt.ps1 시험 target 등록을 그대로 사용한다.
 
 CPU 산출물과 빌드 로그 및 자기 리뷰 메모는 `$env:TEMP/BreakConstraintTests`에 있다(`SkeletalAssetTests.exe`, `SkeletalAssetTestsRelease.exe`, `BC04b-Debug-build.log`, `BC04b-Release-build.log`, `BC04b-self-review.txt`). BC-04a 커밋 칸을 `8593a0be`로 채웠다. BC-05 이후는 시작하지 않았고 git 쓰기 명령·파일 삭제·junction 수동 변경·기존 .mini 3개 및 BreakConstraintReport.md 편집은 하지 않았다.
+### BC-05 완료·미커밋 (2026-10-29)
+
+| 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-05 | 미커밋, 상위 관리자 담당 | MiniEngine/Physics/PhysicsWorld.h, PhysicsWorldBodies.cpp, tests/PhysicsBodyTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | CPU Debug 362/362 PASS 7.63초·Release 362/362 PASS 10.26초, 경고0; 전체 Debug 40.82초·Release 136.18초 PASS, 오류0, 기존 경고18/20; 물리OFF component-checks Debug 6.32초·Release 7.31초 PASS GPU preparation·종료0; CTest 전체 미실행 | 자기 리뷰, 왕복 전환/거절 뒤 속도 보존 시험 부족1건 보강, 재검증 후 잔여0건; diff --check PASS |
+
+BC-04b 커밋 칸을 `d31863a7`로 채웠다. 기존 handle·COM 속도 조회·Moving 계층을 재사용하고 Kinematic 생성·MoveKinematic·Dynamic 왕복 전환·속도 설정·월드 작용점 impulse를 추가했다. 새 파일이 없어 기존 PhysicsBodyTests의 CMake·BuildJolt.ps1 testTargets·vcxproj/.filters 등록을 재사용한다. API와 시험 C++ 변경은 약 250줄이다.
+
+검증 산출물과 로그는 `$env:TEMP/BreakConstraintTests`의 `PhysicsBodyTestsDebug.exe`, `PhysicsBodyTestsRelease.exe`, `BC05-CPU-*-final.log`, `BC05-*-build-final.log`, `BC05-*-component-checks.log`, `BC05-self-review.txt`다. 실행 명령은 ModelViewer 폴더에서 각 구성 exe에 `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6`이다. DirectX debug layer 사용, GPU/driver 재측정 없음이다. 첫 CPU/Debug 컴파일의 벡터 선언 오류·시험의 Dynamic 전용 질량 조회 오류·재검증 스크립트의 LNK1181은 수정 후 최종 재검증했다(계약 §12). 초기 실패를 성공으로 계산하지 않았다.
+
+BC-05만 끝내고 중단한다. BC-06 이후 미착수이며 git commit/merge/stash/reset/checkout·파일 삭제·junction 수동 변경·.mini 수동 편집·BreakConstraintReport.md 편집은 하지 않았다. 기존 .mini 부산물은 그대로 커밋 대상에서 제외한다.
