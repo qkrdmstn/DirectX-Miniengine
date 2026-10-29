@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "Skeletal/SkeletalPhysicsAsset.h"
 
 namespace MiniCollision { struct AggregateGeom; }
 
@@ -25,6 +26,23 @@ namespace MiniPhysics
     // 조회용 collider handle과 simulation body handle은 서로 다른 번호 공간이다. 둘을 섞어 쓰지 않는다.
     using BodyHandle = uint64_t;
     constexpr BodyHandle InvalidBody = 0;
+
+    using ConstraintHandle = uint64_t;
+    constexpr ConstraintHandle InvalidConstraint = 0;
+
+    // anchor는 body 원점 기준이며 Joint의 자산 body ID 대신 runtime handle을 사용한다.
+    struct SwingTwistDesc
+    {
+        BodyHandle Parent = InvalidBody;
+        BodyHandle Child = InvalidBody;
+        JointDefinition Joint;
+    };
+
+    struct ConstraintState
+    {
+        bool Enabled = false;
+        bool MotorsOff = true;
+    };
 
     // Static은 고정 지형 계층, Dynamic과 Kinematic은 simulation 계층에 들어간다.
     enum class BodyMotion { Static, Dynamic, Kinematic };
@@ -108,7 +126,7 @@ namespace MiniPhysics
         bool SetPreparedVelocity(PreparedBody& body, const std::array<double, 3>& linear, const std::array<double, 3>& angular);
         // 준비된 body를 world에 올리고 handle을 발급한다. 할당과 실패 경로가 없다(handle 맵은 Initialize에서 예약, 노드는 Prepare에서 할당). 다른 world이거나 고아면 InvalidBody를 반환하고 body는 그대로 둔다.
         BodyHandle CommitBody(PreparedBody&& body, bool activate);
-        // body를 world에서만 빼고 살려 둔다. 이미 빠졌거나 handle이 무효면 false다.
+        // 연결 관절을 먼저 제거하고 body를 world에서 빼되 body와 pair 제외는 유지한다.
         bool RemoveBodyFromWorld(BodyHandle handle);
         // 빼 둔 body를 다시 world에 올린다(롤백용). 이미 올라가 있거나 handle이 무효면 false다.
         bool AddBodyToWorld(BodyHandle handle, bool activate);
@@ -118,7 +136,7 @@ namespace MiniPhysics
         bool SetBodyTransform(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation);
         // 등록된 Kinematic body의 원점 목표에 fixedDt 동안 도달할 COM 속도를 설정한다.
         bool MoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt);
-        // 등록된 비정적 body를 Kinematic 또는 Dynamic으로 전환하며 handle·pose·속도를 보존한다.
+        // 등록된 비정적 body를 전환하며 handle·pose·속도를 보존하고 Dynamic endpoint가 없어진 관절은 끈다.
         bool SetBodyMotion(BodyHandle handle, BodyMotion motion);
         // 등록된 비정적 body의 COM 선속도와 월드 각속도를 Jolt 최대 속도로 제한해 설정한다.
         bool SetBodyVelocity(BodyHandle handle, const std::array<double, 3>& linear, const std::array<double, 3>& angular);
@@ -130,6 +148,21 @@ namespace MiniPhysics
         size_t GetBodyCount() const;
         // 조회 body, simulation body, 준비 중 body의 예약 합계를 반환한다. Initialize 용량을 넘지 않는다.
         size_t GetReservedCount() const;
+
+        // 등록된 서로 다른 비정적 body에 관절을 만들며 두 Kinematic이면 disable한다.
+        ConstraintHandle CreateSwingTwist(const SwingTwistDesc& desc);
+        // world 참조부터 제거하며 인접 pair 충돌 제외는 body 파괴까지 유지한다.
+        bool RemoveConstraint(ConstraintHandle handle);
+        // Dynamic endpoint가 없으면 enable 요청을 거절한다.
+        bool SetConstraintEnabled(ConstraintHandle handle, bool enabled);
+        // swing과 twist 모터를 모두 Off로 만든다.
+        bool SetConstraintMotorsOff(ConstraintHandle handle);
+        // 무효 handle이면 출력을 보존한다.
+        bool GetConstraintState(ConstraintHandle handle, ConstraintState& state) const;
+        // 논리 관절 수를 반환하며 disabled 관절도 포함한다.
+        size_t GetConstraintCount() const;
+        // 호출자가 같은 rig의 직접 인접 pair에만 적용하며 중복 호출은 성공한다.
+        bool ExcludeBodyPair(BodyHandle first, BodyHandle second);
 
         // 고정 시간 deltaSeconds만큼 simulation을 한 번(충돌 step 1회) 진행한다. 중력은 Y-up (0, -9.8, 0) m/s²(Unreal -980 cm/s²)다.
         // 초기화 전이거나 dt가 비유한·0 이하이거나 Jolt가 오류(접촉·body 쌍 용량 초과 등)를 보고하면 false를 반환하며, 오류여도 world는 계속 사용할 수 있다.
@@ -152,5 +185,6 @@ namespace MiniPhysics
         ColliderHandle m_NextHandle = 1;
         // simulation body 전용 handle 발급 번호이며 m_NextHandle과 별개다.
         BodyHandle m_NextBodyHandle = 1;
+        ConstraintHandle m_NextConstraintHandle = 1;
     };
 }

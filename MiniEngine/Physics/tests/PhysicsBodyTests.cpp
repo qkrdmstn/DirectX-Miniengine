@@ -1,7 +1,7 @@
 // VS Developer PowerShell, 저장소 루트: 산출물은 TEMP에만 둔다.
 // $bc = Join-Path $env:TEMP 'BreakConstraintTests'; New-Item -ItemType Directory -Force $bc | Out-Null
 // $sdk = 'MiniEngine/Build/ThirdParty/Jolt/build'
-// cl /nologo /std:c++17 /EHsc /W4 /utf-8 /MDd /DJPH_OBJECT_LAYER_BITS=16 /I MiniEngine/Physics /I "$sdk/_deps/joltsource-src" "/Fo:$bc/" "/Fe:$bc/PhysicsBodyTests.exe" MiniEngine/Physics/tests/PhysicsBodyTests.cpp MiniEngine/Physics/PhysicsWorld.cpp MiniEngine/Physics/PhysicsWorldBodies.cpp MiniEngine/Physics/PhysicsWorldStep.cpp MiniEngine/Physics/Collision/ConvexElem.cpp MiniEngine/Physics/Collision/AggregateGeom.cpp "$sdk/lib/Debug/Jolt.lib" /link "/PDB:$bc/PhysicsBodyTests.pdb"
+// cl /nologo /std:c++17 /EHsc /W4 /utf-8 /MDd /DJPH_OBJECT_LAYER_BITS=16 /I MiniEngine/Physics /I "$sdk/_deps/joltsource-src" "/Fo:$bc/" "/Fe:$bc/PhysicsBodyTests.exe" MiniEngine/Physics/tests/PhysicsBodyTests.cpp MiniEngine/Physics/PhysicsWorld.cpp MiniEngine/Physics/PhysicsWorldBodies.cpp MiniEngine/Physics/PhysicsWorldConstraints.cpp MiniEngine/Physics/PhysicsWorldStep.cpp MiniEngine/Physics/Collision/ConvexElem.cpp MiniEngine/Physics/Collision/AggregateGeom.cpp "$sdk/lib/Debug/Jolt.lib" /link "/PDB:$bc/PhysicsBodyTests.pdb"
 // & "$bc/PhysicsBodyTests.exe"; Release는 /MDd 대신 /MD /O2 /DNDEBUG, lib/Release/Jolt.lib를 쓴다.
 #include "CollisionTestUtils.h"
 #include "PhysicsWorldInternal.h"

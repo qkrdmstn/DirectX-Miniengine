@@ -342,6 +342,15 @@ namespace MiniPhysics
         // 올라가 있는 body만 broadphase에서 뺀다.
         auto& bodies = m_Impl->World.GetBodyInterface();
         if (!bodies.IsAdded(entry->second)) return false;
+
+        // endpoint가 world에서 빠지기 전에 연결 관절을 제거한다.
+        for (auto it = m_Impl->Constraints.begin(); it != m_Impl->Constraints.end();)
+        {
+            const auto current = it++;
+            if (current->second.Parent == handle || current->second.Child == handle) RemoveConstraint(current->first);
+        }
+
+        // 인접 pair 제외는 재등록과 break 이후에도 유지한다.
         bodies.RemoveBody(entry->second);
         return true;
     }
@@ -368,6 +377,20 @@ namespace MiniPhysics
         if (!m_Impl) return false;
         const auto entry = m_Impl->SimBodies.find(handle);
         if (entry == m_Impl->SimBodies.end()) return false;
+
+        // 관절을 먼저 제거하고 body 수명이 끝난 pair 기록을 정리한다.
+        for (auto it = m_Impl->Constraints.begin(); it != m_Impl->Constraints.end();)
+        {
+            const auto current = it++;
+            if (current->second.Parent == handle || current->second.Child == handle) RemoveConstraint(current->first);
+        }
+        const auto id = entry->second.GetIndexAndSequenceNumber();
+        auto& pairs = m_Impl->PairFilter->Pairs;
+        for (auto it = pairs.begin(); it != pairs.end();)
+        {
+            if (it->first == id || it->second == id) it = pairs.erase(it);
+            else ++it;
+        }
 
         // 올라가 있으면 먼저 뺀다.
         auto& bodies = m_Impl->World.GetBodyInterface();
@@ -436,6 +459,14 @@ namespace MiniPhysics
 
         // 두 방식은 Moving 계층을 공유하며 pose와 속도를 유지한다.
         bodies.SetMotionType(entry->second, motion == BodyMotion::Dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Kinematic, JPH::EActivation::Activate);
+
+        // 마지막 Dynamic endpoint가 사라지면 solver 참여를 즉시 끈다.
+        for (const auto& pair : m_Impl->Constraints)
+        {
+            const auto& joint = pair.second;
+            if (bodies.GetMotionType(m_Impl->SimBodies.at(joint.Parent)) != JPH::EMotionType::Dynamic &&
+                bodies.GetMotionType(m_Impl->SimBodies.at(joint.Child)) != JPH::EMotionType::Dynamic) joint.Joint->SetEnabled(false);
+        }
         return true;
     }
 

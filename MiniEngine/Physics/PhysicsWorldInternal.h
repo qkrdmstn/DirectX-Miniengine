@@ -13,6 +13,9 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <set>
+#include <algorithm>
 #include "PhysicsWorld.h"
 #include <memory>
 #include <unordered_map>
@@ -82,11 +85,31 @@ namespace MiniPhysics
     // simulation body handle과 Jolt BodyID의 대응이다. query handle 맵과 별개다.
     using SimBodyMap = std::unordered_map<BodyHandle, JPH::BodyID>;
 
+    // pair는 BodyID의 sequence까지 포함하며 Step 중에는 읽기만 한다.
+    struct AdjacentPairFilter final : JPH::GroupFilter
+    {
+        std::set<std::pair<JPH::uint32, JPH::uint32>> Pairs;
+        // 같은 world의 명시적 pair만 제외하고 타 owner와 지형은 허용한다.
+        bool CanCollide(const JPH::CollisionGroup& a, const JPH::CollisionGroup& b) const override
+        {
+            // 다른 필터와의 접촉은 기존 계층 규칙에 맡긴다.
+            if (a.GetGroupFilter() != this || b.GetGroupFilter() != this) return true;
+            return Pairs.count(std::minmax(a.GetSubGroupID(), b.GetSubGroupID())) == 0;
+        }
+    };
+
+    struct ConstraintEntry
+    {
+        BodyHandle Parent, Child;
+        JPH::Ref<JPH::SwingTwistConstraint> Joint;
+    };
+
     // PhysicsWorld의 Jolt 상태다. Bodies는 query handle만 담고 body handle과 섞지 않는다.
     struct PhysicsWorld::Impl
     {
         std::shared_ptr<Runtime> RuntimeOwner = AcquireRuntime();
         PhysicsLayers Layers;
+        JPH::Ref<AdjacentPairFilter> PairFilter = new AdjacentPairFilter();
         JPH::PhysicsSystem World;
         // Step 전용 자원이다. World 뒤에 선언해 World보다 먼저 파괴되며, JobSystem 파괴가 작업 스레드를 모두 정지시킨다.
         std::unique_ptr<JPH::TempAllocatorImpl> TempAllocator;
@@ -96,6 +119,7 @@ namespace MiniPhysics
         uint32_t Capacity = 0;
         // 게시된 simulation body다. Initialize에서 용량만큼 예약해 Commit이 재해시하지 않는다.
         SimBodyMap SimBodies;
+        std::unordered_map<ConstraintHandle, ConstraintEntry> Constraints;
         // 준비되었지만 게시되지 않은 body 소유 정보다. Shutdown이 고아 처리한다.
         std::unordered_set<PreparedBody::Data*> Prepared;
         // 용량 예약 합계를 반환한다.

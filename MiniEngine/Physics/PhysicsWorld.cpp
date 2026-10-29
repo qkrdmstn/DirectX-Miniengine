@@ -167,7 +167,9 @@ namespace MiniPhysics
     // 조회와 simulation body를 모두 해제하며 stale handle을 무효로 유지한다. 준비만 된 body는 건드리지 않는다.
     void PhysicsWorld::Clear()
     {
+        // body보다 먼저 관절 참조를 모두 해제한다.
         if (!m_Impl) return;
+        while (!m_Impl->Constraints.empty()) RemoveConstraint(m_Impl->Constraints.begin()->first);
 
         // 조회 body를 모두 제거한다.
         while (!m_Impl->Bodies.empty()) RemoveCollider(m_Impl->Bodies.begin()->first);
