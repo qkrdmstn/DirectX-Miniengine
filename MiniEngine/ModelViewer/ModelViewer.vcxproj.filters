@@ -297,6 +297,7 @@
     <ClInclude Include="Scene\tests\EditApplyChecks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\EditDeleteChecks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\EditTargetChecks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\tests\SkeletalPhysicsChecks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\XbotArmChecks.h"><Filter>Header Files</Filter></ClInclude>
     <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
     <None Include="Scene\tests\SkeletalBreakTests.cpp" />

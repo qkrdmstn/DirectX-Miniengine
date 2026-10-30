@@ -45,6 +45,7 @@
 #include "Scene/tests/PhysicsSimChecks.h"
 #include "Scene/tests/EditTargetChecks.h"
 #include "Scene/tests/XbotArmChecks.h"
+#include "Scene/tests/SkeletalPhysicsChecks.h"
 #include "Scene/tests/EditApplyChecks.h"
 #include "Scene/tests/EditDeleteChecks.h"
 #include <cmath>
@@ -72,7 +73,7 @@ public:
     virtual bool IsDone() override
     {
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
-        if (m_XbotArmChecked || m_XbotArmFailed)
+        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done)
             return true;
 
         // 기존 GPU 작업 완료와 사용자 종료 요청을 확인한다.
@@ -122,6 +123,7 @@ private:
     Viewer::EditDeleteChecks m_EditDeleteChecks;
     Viewer::TransformGizmo m_Gizmo;
     Viewer::CollisionDebugDraw m_CollisionDraw;
+    Viewer::SkeletalPhysicsChecks m_SkeletalChecks;
     bool m_EscapeConsumed = false;
     Renderer::RenderMode m_RenderMode = Renderer::RenderMode::Solid;
     bool m_ViewDiagnosticPending = false;
@@ -235,6 +237,12 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"physics-query",m_UsePhysicsQuery);
     CommandLineArgs::GetInteger(L"physics-sim",m_UsePhysicsSim);
     CommandLineArgs::GetInteger(L"physics-sim-checks",m_PhysicsSimChecks);
+
+    // 골격 진단은 공통 simulation을 켜고 별도 fixture만 추가한다.
+    uint32_t skeletalChecks = 0;
+    CommandLineArgs::GetInteger(L"skeletal-break-checks", skeletalChecks);
+    m_SkeletalChecks.Enabled = skeletalChecks == 1;
+    if (m_SkeletalChecks.Enabled) m_UsePhysicsSim = 1;
 
     // 충돌 표시와 물리 조회 진단 옵션을 읽는다.
     uint32_t collisionDraw = 0;
@@ -428,6 +436,11 @@ void ModelViewer::Startup( void )
         m_Physics.SyncBodies();
         m_BodiesBeforeCuts = m_Physics.GetSimulationBodyCount();
     }
+
+    // 진단 fixture는 기존 모델의 정규화와 물리 초기화가 끝난 뒤 추가한다.
+    m_SkeletalChecks.Start(m_Scene, m_Physics);
+    if (m_SkeletalChecks.Enabled) g_PhysicsRunning = true;
+
     if (m_PhysicsSimChecks) Viewer::RunPhysicsSimChecks(m_Scene, m_Physics);
     if (m_ViewDiagnosticPending)
         Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
@@ -566,7 +579,11 @@ void ModelViewer::Update( float deltaT )
 
     // 공통 프레임 경로에서 고정 step과 GPU pose 준비를 완료한다.
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
-    m_Physics.UpdateFrame(gfxContext, deltaT, m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
+    m_SkeletalChecks.BeforeStep(m_Physics);
+    const unsigned steps = m_Physics.UpdateFrame(gfxContext,
+        m_SkeletalChecks.Enabled ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+        m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
+    m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
 
     // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
     if (m_ComponentChecksPending)
@@ -839,6 +856,11 @@ void ModelViewer::RenderUI(GraphicsContext& context)
         m_CapturePostPending = false;
         Utility::Printf("ModelViewer diagnostic: HDR/post pixels captured, view=%u, typedUAV=%u\n", static_cast<unsigned>(m_RenderMode), g_bTypedUAVLoadSupport_R11G11B10_FLOAT);
     }
+
+    // 실제 골격 상태를 기존 편집 overlay와 같은 화면에 표시한다.
+    m_SkeletalChecks.Draw(context, m_Scene, m_Camera,
+        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
+
     if (g_ShowCollision)
         m_CollisionDraw.Draw(context, m_Scene, m_Physics, m_Camera,
             float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));

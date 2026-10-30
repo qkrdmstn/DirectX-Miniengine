@@ -94,6 +94,7 @@
     <ClInclude Include="Scene\tests\EditApplyChecks.h" />
     <ClInclude Include="Scene\tests\EditDeleteChecks.h" />
     <ClInclude Include="Scene\tests\EditTargetChecks.h" />
+    <ClInclude Include="Scene\tests\SkeletalPhysicsChecks.h" />
     <ClInclude Include="Scene\tests\XbotArmChecks.h" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
     <ClInclude Include="Scene\ComponentId.h" />

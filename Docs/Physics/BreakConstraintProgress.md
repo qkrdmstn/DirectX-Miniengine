@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-10 `e7a608dc` 이후 BC-11 완료·독립 리뷰 3건 수정(미커밋), BC-12a 미착수 (2026-10-30)
+상태: 진행 중 — BC-12a-1 dd219b8e 완료, BC-12a-2 구현(미커밋)·Debug PASS/Release FAIL·화면 검증 대기 (2026-10-30)
 
 # BreakConstraint 진행 기록
 
@@ -203,3 +203,42 @@ MiniEngine/ModelViewer에서 Debug exe -debug 1 -physics-sim 0 -component-checks
 - 실행: Debug `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6` 종료0·PASS 703행·실패0·`PASS GPU preparation`, 물리 OFF 기본 실행 종료0. 이번 단계는 뷰어 호출 경로가 없어 화면 변화 없음.
 - 리뷰: Codex 사용량 한도로 구현 실행이 Release 빌드 기록 중 끊겼다. Claude가 이어받아 diff 자기 리뷰(지적 0: 함수·단락 한글 주석, 실패 시 출력 보존, impulse 기대값 r×J/I=6 손계산 일치)와 Release 빌드·뷰어 실행을 했다.
 - 로그: `$env:TEMP/BreakConstraintTests/BC12a-root`, `$env:TEMP/BreakConstraintTests/BC12a-claude`.
+
+### BC-12a-2 fixture 뷰어 진단 (2026-10-30, HEAD dd219b8e)
+
+| 단계 | 커밋 | 바뀐 파일 | 테스트·빌드·실행 결과와 측정 시간 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-12a-2 | 미커밋 | ModelViewer.cpp; ModelViewer.vcxproj/.filters; Scene/tests/SkeletalPhysicsChecks.h(신규); Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/README.md | CPU SkeletalBreak Debug/Release909/909 PASS(13.11/24.80초), PhysicsBody393 PASS(11.72/15.32초); 전체 Debug17.76초/Release167.11초 PASS·오류0·기존 C4819 4/33개; Debug fixture41.81초 BC-12a PASS·종료0; 물리OFF 기본41.03초·component30.54초 종료0·GPU preparation PASS; 모든 viewer D3D12 ERROR/CORRUPTION0 | 독립 codex exec는 home directory 탐색 실패; 별도 읽기 전용 자기 리뷰 지적1건(.filters 잘못된 Scene 필터) 수정, 잔여0 |
+
+- 별도 4-node 모델 하나를 기존 모델 정규화 뒤 추가한다. 기존 모델/메시/weight 변경 없이 공통 UpdateFrame으로 프레임당1 fixed tick. tick60 완료 뒤 joint0 zero impulse queue→tick61 target 뒤 break→tick180 판정. 본 청록·COM 노랑·양쪽 anchor 빨강/초록 overlay, 기존 근평면 clipping/projection 재사용.
+- 수치: rootDeltaY=0m, childDeltaY=-2.51435m, wristMaxError=0.00992500037m(≤0.01m), finite=1, joint0 broken/손목 enabled·motorsOff 유지. 종료0은 PASS 판정을 대신하지 않으며 파일/debugger의 BC-12a PASS를 확인했다.
+- viewer 명령: ModelViewer 폴더에서 Debug exe에 `-debug 1 -skeletal-break-checks 1`; 회귀는 `-debug 1 -physics-sim 0 -physics-query-exit 6` 및 `-component-checks 1` 추가. debugger 수집기는 자식 프로세스180초 제한, 회귀 실행은 Start-Process -WindowStyle Hidden -Wait로 수집기를 기다렸다. GPU NVIDIA GeForce MX450(1906MB), driver는 레지스트리에서 32.0.15.9186 확인(CIM 조회는 권한 거절). GPU 기반 검증 미사용, 기존 Light live-resource 경고가 남지만 D3D12 ERROR/CORRUPTION0.
+- 스크린샷: 기존 capture가 overlay 전에 scene color만 저장하므로 overlay 포함 분리 전/후 스크린샷 기능은 없어 미확보. 사람이 청록 본 연결·COM 낙하·손목 anchor 유지와 원래 모델 배치를 화면에서 확인해야 한다.
+- 최초 Debug 컴파일은 Matrix4 위치 조회/Color 정수 overload 오류로11.02초 실패. GetW·float Color로 고친 뒤 위 최종 결과를 얻었다. Python 실행은 환경의 접근 거절로 시작하지 못해 PowerShell/.NET으로 편집했다. 빌드·시험·뷰어는 차단되지 않았다.
+- 로그/재현: `$env:TEMP/BreakConstraintTests/BC12a2-root`의 verify.ps1, capture-viewer.ps1, self-review.txt, results.txt/results-extra.txt, build-*.log, viewer-*-debug.log, fixture-Debug.log, component-Debug.log. .mini3개·Report 전후 SHA-256 동일. git add/commit/stash/merge/push, 메인 체크아웃 수동 수정, junction 변경 없음. CTest 전체/Release viewer 미수행. BC-12b 이후 미착수.
+- 최종 fixture 재실행: Start-Process -WindowStyle Hidden -Wait, 수집기 내부180초 제한, 28.90초·동일 수치 BC-12a PASS·종료0·D3D12 ERROR/CORRUPTION0. fixture-Debug-final.log와 run-skeletal-final.txt에 기록. 최종 보호 파일 SHA-256 동일·git diff --check PASS.
+
+#### BC-12a-2 독립 리뷰 지적 수정·재검증 (2026-10-30, HEAD dd219b8e, 미커밋)
+
+- **독립 리뷰(Codex) 지적 3건 수정**: ① 외부 화면 캡처 시도 후 미확보를 명시하고 계약 상태/§11/README를 “구현 완료·화면 검증 대기”로 정정 ② 이 문서 첫 상태 줄의 선행 완료/현재 검증 상태 정정 ③ Startup fixture/RenderUI overlay 앞 빈 줄, Draw mark 역할·본/COM/anchor별 한글 주석과 단락 정리. 추가 별도 읽기 전용 자기 리뷰에서 동작 변경 없음·요청 주석/공백 확인, 잔여 코드 지적0건. 새 독립 리뷰 실행은 하지 않았다.
+- 이번 변경 파일은 ModelViewer.cpp(빈 줄2개), Scene/tests/SkeletalPhysicsChecks.h(주석·단락만 +9/-1행), BreakConstraintImplementation.md(상태/§11/§12), 이 Progress, Docs/README.md의 5개다. 기존 vcxproj/.filters 변경은 그대로 보존했다. 새 기능·기준 완화·판정/종료 타이밍 변경 없음.
+- CPU 머리말 직접 cl 명령 재검증: SkeletalBreakTests Debug909/909 12.63초·Release909/909 18.94초, PhysicsBodyTests Debug393건12.72초·Release393건22.67초, 모두 PASS·종료0·컴파일 경고0. TEMP/BreakConstraintTests/BC12a2-root의 기존 산출물 폴더를 재사용하고 이번 생성 obj만 삭제하여 큰 산출물 복사본을 만들지 않았다.
+- 전체 빌드: worktree 루트의 지정 .slnx /m /p:Configuration={Debug,Release} /p:Platform=Windows, /restore 없음. 최종 Debug27.77초/Release22.21초 PASS·종료0·각 오류0·기존 C4819 4건. 최초25.75/16.95초도 성공했으나 편집 중 빠진 ModelViewer.cpp 기존 BOM을 복구하고 mark 앞 빈 줄을 보강해 최종 재빌드했다.
+- fixture 실행: Debug -debug 1 -skeletal-break-checks 1, 34.19초·BC-12a PASS·종료0, rootDeltaY=0·childDeltaY=-2.51435m·손목 최대0.00992500037m(0.01m 대비 여유0.75%). **Release 동일 옵션36.51초·재실행32.76초 모두 BC-12a FAIL·종료0**, rootDeltaY=0·childDeltaY=-2.53709m·손목 최대0.0133718159m(기준보다33.72% 큼). 두 구성 모두180 ticks·finite/topology=1. Release는 PASS가 아니며 오차 수정은 미해결·이번 지적 수정 범위 밖이다.
+- Debug 물리 OFF -debug 1 -physics-sim 0 -physics-query-exit 6 기본35.47초·종료0, 여기에 -component-checks 1 추가35.17초·종료0·PASS703행/FAIL0·PASS GPU preparation. 최종5회 viewer 모두 D3D12 ERROR/CORRUPTION0, 기존 Light live-resource 경고 유지. Start-Process -WindowStyle Hidden -Wait와 내부 viewer180초 제한 사용. GPU/driver는 이전 동일 환경(NVIDIA MX450/32.0.15.9186), 이번 재조회·GPU 기반 검증·CTest 전체 미수행.
+- 캡처: PowerShell/System.Drawing CopyFromScreen으로 창 발견(28.122초) 약0.5초 뒤부터 종료 직전(마지막33.903초)까지 반복 시도했으나 “핸들이 잘못되었습니다”로 전부 실패. TEMP/BreakConstraintTests/BC12a2-screens에 PNG 없음·직접 이미지 확인 불가이므로 본 청록/COM 노랑/anchor 빨강·초록과 분리 전후 화면은 사람이 확인해야 한다. 초기 수집기의 동기 ShowWindow 대기는 이번 실행의 수집기/자식만 종료하고 비동기 ShowWindowAsync로 수정하여 재실행했다. 해당 중단 실행은 PASS 근거에서 제외했다.
+- 로그/재현: TEMP/BreakConstraintTests/BC12a2-review-fix의 verify.ps1, build-final.ps1, capture-viewer.ps1, viewers.ps1, build-*-final.log, fixture-{Debug,Release,Release-repeat}.log, viewer-*-debug.log, component-Debug.log. 보호 대상 .mini3개·Report SHA-256 전후 동일. git add/commit/stash/merge/push·메인 체크아웃 수정·junction 변경 없음, BC-12b 미착수.
+
+#### BC-12a-2 Release 손목 오차 원인 확인·판정 정리 (2026-10-30, HEAD dd219b8e, 미커밋)
+
+| 단계 | 커밋 | 바뀐 파일 | 검증·리뷰 |
+| --- | --- | --- | --- |
+| BC-12a-2 후속 | 미커밋 | Scene/tests/SkeletalPhysicsChecks.h(+40/-4); BreakConstraintImplementation.md(상태·§11·§12); BreakConstraintProgress.md; Docs/README.md | 관련 CPU 두 구성 PASS·전체 Debug/Release 빌드 PASS·fixture 각2회 PASS·Debug 물리OFF/component PASS; 별도 자기 리뷰 지적0건 |
+- 판정 변경 전 각1회: Debug34.25초 PASS, Release28.25초 FAIL(기존 전체구간≤0.01m). 두 구성 tick98에서 바닥 충돌(상면-1.155179m, 하위 COM Y≈-0.8627m, Vy=-5.9486→+1.822m/s). 최대는 Debug tick131=0.00992500037m/하위COM Y=-0.88278234m, Release tick139=0.0133718159m/하위COM Y=-0.886882186m. 둘 다 접촉 이후여서 사용자 전달 Claude 판정대로 자유낙하 최대≤0.01m·접촉 이후 최대≤0.02m·마지막≤0.01m로 변경. 충돌 solver 순간 오차와 Release 최적화(/fp:fast 포함)에 따른 차이로 해석하며 옵션 단독 원인은 미분리다.
+- 접촉은 하위 COM이 실제 바닥상면+0.30m(반높이0.25+여유0.05) 이하이고 Vy 증가가1m/s/tick 초과인 최초 tick으로 고정. tick별 오차·COM·속도, 접촉/최대 tick, 구간 최대·마지막 오차만 기록·판정한다. 물리 구현·형상·GPU·메시·웨이트·기존 옵션 동작 변경 없음.
+- CPU 머리말 cl 명령/Jolt 설정: SkeletalBreak Debug909/909(25.13초)·Release909/909(32.79초), PhysicsBody Debug393(20.06초)·Release393(29.67초), 모두 PASS·종료0·컴파일경고0. TEMP 기존 CPU 출력 폴더를 재사용하고 이번 obj만 정리했다. 전체 msbuild Debug17.19초·Release31.38초, /restore 없이 PASS·오류0·기존 C4819 각4건. 측정 로그만 넣은 최초 빌드42.97/48.30초도 PASS.
+- 최종 fixture `-debug 1 -skeletal-break-checks 1`: Debug52.55/31.69초·Release36.21/24.72초 각2회 PASS·종료0. 접촉tick98·접촉전최대2.384185791e-7m 공통, Debug 접촉후최대0.00992500037m/마지막0.009835194796m/rootDelta0/childDelta-2.514346242m, Release 접촉후최대0.0133718159m/마지막0.0001645183365m/rootDelta0/childDelta-2.537089825m. 각 구성 반복 수치 동일·finite/topology=1.
+- Debug 물리OFF 기본 `-debug 1 -physics-sim 0 -physics-query-exit 6` 39.63초·종료0, 같은 명령에 `-component-checks 1` 추가39.16초·종료0·703 PASS행/FAIL0·PASS GPU preparation. 최종6회 모두 D3D12 ERROR/CORRUPTION0(기존 경고는 유지), GPU/driver는 이전 기록 NVIDIA MX450/32.0.15.9186, 이번 재조회·GPU 기반검증·CTest 전체는 미수행. Start-Process -WindowStyle Hidden -Wait, 내부 viewer180초 제한.
+- 화면: **화면 캡처 확인(Claude), 사람 확인 대기 없음**. 사용자 전달대로 샌드박스 밖 Claude 캡처 성공을 반영: `$env:TEMP/BreakConstraintTests/BC12a2-screens/t002.7.png`(분리 전 세로 본 사슬·COM·anchor), `t005.4.png`(분리 후 아래 두 body가 바닥에 누움). 파일 존재 확인, 재캡처·추가 화면 확인 요청 없음. 이전 캡처 실패/화면 대기 기록은 당시 이력이다.
+- 리뷰: `codex.cmd exec -s read-only --ephemeral`는 `Error finding codex home: Could not find home directory`로 시작 실패. 별도 읽기 전용 diff/계약 자기 리뷰로 대체(지적0건): 접촉tick을 오차와 독립 판단·접촉tick부터 이후구간·최종오차 별도 제한·무접촉 FAIL·물리OFF 경로 불변·한글 역할/단락 주석·코드44줄 변경 확인. 보호대상 .mini3개/Report SHA-256 전후 동일. git add/commit/stash/merge/push·메인 체크아웃 수동 수정·junction 변경 없음, BC-12b 미착수.
+- 로그·재현: `$env:TEMP/BreakConstraintTests/BC12a2-contact`의 measure-{Debug,Release}.log, final-{Debug,Release}-skeletal-{1,2}.log, final-Debug-{basic,component}-1-debug.log, results*.txt, verify.ps1, build.ps1, final-viewers.ps1, collect.ps1(캡처 호출 제거), self-review.txt. 미해결 사항 없음(최종 검증 기준). 커밋은 바깥 Claude 담당.
