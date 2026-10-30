@@ -40,6 +40,7 @@
     <ClInclude Include="Collision\BodyMass.h" />
     <ClCompile Include="PhysicsWorld.cpp" />
     <ClCompile Include="PhysicsWorldBodies.cpp" />
+    <ClCompile Include="PhysicsWorldBreak.cpp" />
     <ClCompile Include="PhysicsWorldConstraints.cpp" />
     <ClCompile Include="PhysicsWorldStep.cpp" />
     <ClCompile Include="Collision\ConvexElem.cpp" />

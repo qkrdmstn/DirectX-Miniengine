@@ -224,6 +224,78 @@ namespace Viewer
         return true;
     }
 
+    // 선택 관절 아래의 연결된 body만 검증하고 동기 분리를 게시한다.
+    BreakStatus SkeletalPhysicsSystem::BreakConstraint(const BreakRequest& request)
+    {
+        // 같은 관절 재요청은 오래된 세대나 잘못된 impulse보다 우선한다.
+        const auto found = m_Rigs.find(request.Owner);
+        if (found == m_Rigs.end()) return BreakStatus::NotFound;
+        auto& rig = found->second;
+        if (request.JointId >= rig.Joints.size()) return BreakStatus::NotFound;
+        if (rig.Joints[request.JointId] == MiniPhysics::InvalidConstraint) return BreakStatus::AlreadyBroken;
+        if (request.ExpectedRigGeneration != rig.Generation ||
+            request.ExpectedTopologyGeneration != rig.TopologyGeneration) return BreakStatus::Stale;
+        for (size_t i = 0; i < 3; ++i)
+            if (!std::isfinite(request.WorldImpulse[i]) || !std::isfinite(request.WorldPoint[i]))
+                return BreakStatus::InvalidInput;
+
+        // 이미 끊긴 경계는 건너지 않으며 자산 인덱스 순서에 의존하지 않고 subtree를 모은다.
+        MiniPhysics::ConstraintBreakDesc desc;
+        desc.Remove = rig.Joints[request.JointId];
+        const auto child = rig.Asset.Joints[request.JointId].ChildBody;
+        desc.ImpulseBody = rig.Bodies[child];
+        std::vector<bool> included(rig.Bodies.size(), false);
+        std::vector<uint32_t> pending{ child };
+        included[child] = true;
+        for (size_t i = 0; i < pending.size(); ++i)
+        {
+            for (size_t j = 0; j < rig.Joints.size(); ++j)
+            {
+                const auto& joint = rig.Asset.Joints[j];
+                if (rig.Joints[j] == MiniPhysics::InvalidConstraint || joint.ParentBody != pending[i]) continue;
+                if (included[joint.ChildBody]) return BreakStatus::UnsupportedTopology;
+                included[joint.ChildBody] = true;
+                pending.push_back(joint.ChildBody);
+                desc.Enable.push_back(rig.Joints[j]);
+            }
+        }
+
+        // 전체 저장 공간과 목표를 준비하며 이 구간에서는 world나 세대를 변경하지 않는다.
+        desc.Bodies.reserve(pending.size());
+        for (uint32_t body : pending)
+        {
+            const auto& target = rig.Targets[body];
+            desc.Bodies.push_back({ rig.Bodies[body], target.Frame, target.Linear, target.Angular });
+        }
+        for (size_t i = 0; i < 3; ++i)
+        {
+            desc.Impulse[i] = request.WorldImpulse[i];
+            desc.Point[i] = request.WorldPoint[i];
+        }
+
+        // world의 전체 선검증과 무실패 commit이 성공한 경우에만 논리 topology를 게시한다.
+        const auto status = m_World.ApplyConstraintBreak(desc);
+        switch (status)
+        {
+        case MiniPhysics::ConstraintBreakStatus::InvalidInput: return BreakStatus::InvalidInput;
+        case MiniPhysics::ConstraintBreakStatus::NotReady: return BreakStatus::NotReady;
+        case MiniPhysics::ConstraintBreakStatus::UnsupportedPose: return BreakStatus::UnsupportedPose;
+        case MiniPhysics::ConstraintBreakStatus::UnsupportedTopology: return BreakStatus::UnsupportedTopology;
+        case MiniPhysics::ConstraintBreakStatus::Applied: break;
+        }
+        rig.Joints[request.JointId] = MiniPhysics::InvalidConstraint;
+        ++rig.TopologyGeneration;
+        return BreakStatus::Applied;
+    }
+
+    // owner의 현재 topology 번호를 읽는다.
+    uint64_t SkeletalPhysicsSystem::GetTopologyGeneration(ObjectId owner) const
+    {
+        // 등록되지 않은 owner에는 유효한 세대가 없다.
+        const auto found = m_Rigs.find(owner);
+        return found == m_Rigs.end() ? 0 : found->second.TopologyGeneration;
+    }
+
     // 등록된 owner의 관절과 body를 역순으로 정리한 뒤 항목을 지운다.
     bool SkeletalPhysicsSystem::Unregister(ObjectId owner)
     {

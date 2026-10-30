@@ -1,7 +1,7 @@
 ﻿// VS Developer PowerShell, 저장소 루트: CPU 산출물은 TEMP/BreakConstraintTests에만 둔다.
 // $bc = Join-Path $env:TEMP 'BreakConstraintTests'; New-Item -ItemType Directory -Force $bc | Out-Null
 // $sdk = 'MiniEngine/Build/ThirdParty/Jolt/build'
-// cl /nologo /std:c++17 /EHsc /W4 /utf-8 /MDd /DJPH_OBJECT_LAYER_BITS=16 /I MiniEngine/Physics /I MiniEngine/Core /I "$sdk/_deps/joltsource-src" "/Fo:$bc/" "/Fe:$bc/SkeletalBreakTests.exe" MiniEngine/ModelViewer/Scene/tests/SkeletalBreakTests.cpp MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.cpp MiniEngine/Physics/PhysicsWorld.cpp MiniEngine/Physics/PhysicsWorldBodies.cpp MiniEngine/Physics/PhysicsWorldConstraints.cpp MiniEngine/Physics/PhysicsWorldStep.cpp MiniEngine/Physics/Collision/ConvexElem.cpp MiniEngine/Physics/Collision/AggregateGeom.cpp MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.cpp "$sdk/lib/Debug/Jolt.lib" /link "/PDB:$bc/SkeletalBreakTests.pdb"
+// cl /nologo /std:c++17 /EHsc /W4 /utf-8 /MDd /DJPH_OBJECT_LAYER_BITS=16 /I MiniEngine/Physics /I MiniEngine/Core /I "$sdk/_deps/joltsource-src" "/Fo:$bc/" "/Fe:$bc/SkeletalBreakTests.exe" MiniEngine/ModelViewer/Scene/tests/SkeletalBreakTests.cpp MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.cpp MiniEngine/Physics/PhysicsWorld.cpp MiniEngine/Physics/PhysicsWorldBodies.cpp MiniEngine/Physics/PhysicsWorldBreak.cpp MiniEngine/Physics/PhysicsWorldConstraints.cpp MiniEngine/Physics/PhysicsWorldStep.cpp MiniEngine/Physics/Collision/ConvexElem.cpp MiniEngine/Physics/Collision/AggregateGeom.cpp MiniEngine/Physics/Skeletal/SkeletalPhysicsAsset.cpp "$sdk/lib/Debug/Jolt.lib" /link "/PDB:$bc/SkeletalBreakTests.pdb"
 // & "$bc/SkeletalBreakTests.exe"
 // Release는 /MDd 대신 /MD /O2 /DNDEBUG, lib/Release/Jolt.lib를 사용한다.
 #include "../../../Physics/tests/CollisionTestUtils.h"
@@ -196,6 +196,198 @@ static void CheckPoseWriteback(PhysicsWorld& world, SkeletalPhysicsSystem& skele
     CheckEmpty(world, "Writeback tests leave no resources");
 }
 
+// 동기 break의 원자적 거절·속도 상속·반복 요청·끊긴 경계 탐색을 검사한다.
+static void CheckSynchronousBreak(PhysicsWorld& world, SkeletalPhysicsSystem& skeletal)
+{
+    // rest fixture와 세대가 일치하는 요청을 준비한다.
+    using Viewer::BreakStatus;
+    const auto fixture = CreateThreeBodyFixture();
+    const auto frames = FixtureBodyFrames(fixture);
+    Check(skeletal.Register(30, fixture.Asset, fixture.NodeParents, frames), "Break fixture registered");
+    const auto root = skeletal.GetBodyHandle(30, 0);
+    const auto arm = skeletal.GetBodyHandle(30, 1);
+    const auto hand = skeletal.GetBodyHandle(30, 2);
+    const auto wrist = skeletal.GetConstraintHandle(30, 1);
+    Viewer::BreakRequest request{ 30, 0, skeletal.GetRigGeneration(30), skeletal.GetTopologyGeneration(30) };
+    request.WorldImpulse = { 1, 0, 0 };
+    request.WorldPoint = { 0, 1.6f, 0 };
+    auto bad = request;
+    bad.ExpectedTopologyGeneration++;
+    Check(skeletal.BreakConstraint(bad) == BreakStatus::Stale, "Stale topology rejected");
+    bad = request;
+    bad.ExpectedRigGeneration++;
+    Check(skeletal.BreakConstraint(bad) == BreakStatus::Stale, "Stale rig rejected");
+    bad = request;
+    bad.WorldImpulse[0] = NAN;
+    Check(skeletal.BreakConstraint(bad) == BreakStatus::InvalidInput, "NaN impulse rejected");
+    bad = request;
+    bad.WorldImpulse[0] = FLT_MAX;
+    Check(skeletal.BreakConstraint(bad) == BreakStatus::InvalidInput, "Overflow impulse rejected");
+    Check(world.GetConstraintCount() == 2 && skeletal.GetTopologyGeneration(30) == 1, "Rejected break leaves topology");
+    BodyMotion motion;
+    Check(world.GetBodyMotion(arm, motion) && motion == BodyMotion::Kinematic, "Rejected break leaves motion");
+
+    // 목표를 아직 step하지 않아도 목표 pose로 전환하며 COM 속도를 상속한다.
+    std::vector<Math::Matrix4> nodes;
+    for (auto frame : fixture.RestNodeFrames)
+    {
+        frame.Position[0] += 0.01;
+        Math::Matrix4 matrix;
+        Check(Viewer::SkeletalFrames::TryRigidMatrix(frame, matrix), "Break target matrix");
+        nodes.push_back(matrix);
+    }
+    Check(skeletal.UpdateKinematicTargets(30, Math::Matrix4(Math::kIdentity), nodes, 1.0f / 60), "Break targets before step");
+    Check(skeletal.BreakConstraint(request) == BreakStatus::Applied, "Elbow break applied");
+    Check(world.GetBodyCount() == 3 && world.GetConstraintCount() == 1, "Break preserves bodies and wrist");
+    Check(skeletal.GetTopologyGeneration(30) == 2 && skeletal.GetConstraintHandle(30, 0) == InvalidConstraint, "Break publishes topology");
+    Check(world.GetBodyMotion(root, motion) && motion == BodyMotion::Kinematic, "Root stays animation");
+    Check(world.GetBodyMotion(arm, motion) && motion == BodyMotion::Dynamic, "Arm becomes physics");
+    Check(world.GetBodyMotion(hand, motion) && motion == BodyMotion::Dynamic, "Hand becomes physics");
+    ConstraintState state;
+    Check(world.GetConstraintState(wrist, state) && state.Enabled && state.MotorsOff, "Wrist enabled motors off");
+    std::array<double, 3> p{}, v{}, w{}, savedV{}, savedW{};
+    std::array<double, 4> q{};
+    Check(world.GetBodyPose(arm, p, q), "Read synchronized arm");
+    CheckNear(p[0], 0.01, 1e-6, "Arm uses unstepped target");
+    Check(world.GetBodyVelocity(arm, v, w), "Read impulse velocity");
+    CheckNear(v[0], 1.6, 1e-4, "Inherited COM velocity plus impulse once");
+    Check(std::abs(w[2]) > 0.01, "Off center impulse adds angular velocity");
+    savedV = v;
+    savedW = w;
+    Check(skeletal.BreakConstraint(request) == BreakStatus::AlreadyBroken, "Duplicate with old topology already broken");
+    Check(world.GetBodyVelocity(arm, v, w) && v == savedV && w == savedW, "Duplicate adds no impulse");
+    Check(skeletal.GetTopologyGeneration(30) == 2, "Duplicate leaves generation");
+    Check(PhysicsWorldAccess::GetImpl(world)->PairFilter->Pairs.size() == 2, "Broken adjacent pair still excluded");
+
+    // 실제 낙하 후에도 남은 손목의 두 anchor가 붙어 있는지 검사한다.
+    for (int tick = 0; tick < 120; ++tick) Check(world.Step(1.0f / 60), "Broken chain step");
+    const auto* impl = PhysicsWorldAccess::GetImpl(world);
+    const auto& joint = impl->Constraints.at(wrist).Joint;
+    const auto& bodies = impl->World.GetBodyInterface();
+    const auto a = bodies.GetCenterOfMassTransform(impl->SimBodies.at(arm)) * joint->GetLocalSpacePosition1();
+    const auto b = bodies.GetCenterOfMassTransform(impl->SimBodies.at(hand)) * joint->GetLocalSpacePosition2();
+    Check(JPH::Vec3(a - b).Length() <= 0.01f, "Wrist anchor stays connected after fall");
+
+    // 이미 Dynamic인 자손은 재전환하거나 목표 pose로 되돌리지 않는다.
+    request.JointId = 1;
+    Check(skeletal.BreakConstraint(request) == BreakStatus::Stale, "Other joint with old generation stale");
+    request.ExpectedTopologyGeneration = 2;
+    request.WorldImpulse = {};
+    Check(world.SetBodyVelocity(hand, { 0.2, 0.3, 0.4 }, { 0.1, 0.2, 0.3 }), "Set existing dynamic velocity");
+    Check(world.GetBodyVelocity(hand, savedV, savedW), "Snapshot dynamic velocity");
+    Check(skeletal.BreakConstraint(request) == BreakStatus::Applied, "Wrist breaks after elbow");
+    Check(world.GetBodyVelocity(hand, v, w) && v == savedV && w == savedW, "Existing dynamic velocity preserved");
+    Check(skeletal.Unregister(30), "Broken rig released");
+    CheckEmpty(world, "Broken rig resources zero");
+
+    // anchor 위반은 제한 검사 전에 거절하고 상태를 보존한다.
+    auto badFrames = frames;
+    badFrames[2].Position[0] += 0.01;
+    Check(skeletal.Register(31, fixture.Asset, fixture.NodeParents, badFrames), "Misaligned fixture registered");
+    request = { 31, 0, skeletal.GetRigGeneration(31), 1 };
+    Check(skeletal.BreakConstraint(request) == BreakStatus::UnsupportedPose, "Bad internal anchor rejected");
+    Check(world.GetConstraintCount() == 2 && skeletal.GetTopologyGeneration(31) == 1, "Bad pose no partial commit");
+    Check(skeletal.Unregister(31), "Bad pose fixture released");
+
+    // +X twist와 +Y swing을 각각 제한 밖과 안에서 검사한다.
+    for (int pose = 0; pose < 4; ++pose)
+    {
+        const bool twist = pose % 2 == 0;
+        const bool outside = pose < 2;
+        const double angle = outside ? 1.2 : 0.4;
+        const auto rotation = JPH::Quat::sRotation(twist ? JPH::Vec3::sAxisX() : JPH::Vec3::sAxisY(), float(angle));
+        badFrames = frames;
+        badFrames[2].Rotation = { rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW() };
+        const auto rotatedAnchor = rotation * JPH::Vec3(0, 0.25f, 0);
+        for (int axis = 0; axis < 3; ++axis)
+            badFrames[2].Position[axis] = frames[1].Position[axis] + (axis == 1 ? -0.25 : 0) - rotatedAnchor[axis];
+        Check(skeletal.Register(32, fixture.Asset, fixture.NodeParents, badFrames), "Limit pose fixture registered");
+        request = { 32, 0, skeletal.GetRigGeneration(32), 1 };
+        const auto limitWrist = skeletal.GetConstraintHandle(32, 1);
+        const auto* limitImpl = PhysicsWorldAccess::GetImpl(world);
+        const auto& limitJoint = limitImpl->Constraints.at(limitWrist).Joint;
+        const auto& limitBodies = limitImpl->World.GetBodyInterface();
+
+        // 실제 COM anchor 일치와 순수 회전축을 확인해 anchor 선거절을 배제한다.
+        const auto parentTransform = limitBodies.GetCenterOfMassTransform(limitImpl->SimBodies.at(skeletal.GetBodyHandle(32, 1)));
+        const auto childTransform = limitBodies.GetCenterOfMassTransform(limitImpl->SimBodies.at(skeletal.GetBodyHandle(32, 2)));
+        const auto parentAnchor = parentTransform * limitJoint->GetLocalSpacePosition1();
+        const auto childAnchor = childTransform * limitJoint->GetLocalSpacePosition2();
+        Check(JPH::Vec3(parentAnchor - childAnchor).LengthSq() <= 1e-8f, "Limit pose passes anchor precondition");
+        const auto relative = ((parentTransform.GetQuaternion() * limitJoint->GetConstraintToBody1()).Conjugated() *
+            (childTransform.GetQuaternion() * limitJoint->GetConstraintToBody2())).Normalized();
+        JPH::Quat poseSwing, poseTwist;
+        relative.GetSwingTwist(poseSwing, poseTwist);
+        Check((twist ? poseSwing : poseTwist).IsClose(JPH::Quat::sIdentity(), 1e-12f), "Limit pose isolates requested axis");
+        const double limit = twist ? limitJoint->GetTwistMaxAngle() : limitJoint->GetNormalHalfConeAngle();
+        Check(outside ? angle > limit : angle < limit, "Pose angle straddles configured limit");
+
+        // 거절 전 모든 body의 pose와 속도 및 내부 관절 상태를 저장한다.
+        std::array<std::array<double, 3>, 3> positions{}, velocities{}, angularVelocities{};
+        std::array<std::array<double, 4>, 3> rotations{};
+        for (uint32_t body = 0; body < 3; ++body)
+        {
+            const auto handle = skeletal.GetBodyHandle(32, body);
+            Check(world.GetBodyPose(handle, positions[body], rotations[body]), "Snapshot limit pose");
+            Check(world.GetBodyVelocity(handle, velocities[body], angularVelocities[body]), "Snapshot limit velocity");
+        }
+        ConstraintState before;
+        Check(world.GetConstraintState(limitWrist, before), "Snapshot limit wrist state");
+
+        // 각 제한 위반은 구별된 메시지로 실패하며 허용 pose는 실제 break에 성공한다.
+        const auto result = skeletal.BreakConstraint(request);
+        if (outside)
+        {
+            Check(result == BreakStatus::UnsupportedPose,
+                twist ? "Anchor-aligned +X twist excess rejected" : "Anchor-aligned +Y swing excess rejected");
+            Check(world.GetBodyCount() == 3 && world.GetConstraintCount() == 2 &&
+                skeletal.GetTopologyGeneration(32) == 1 && skeletal.GetConstraintHandle(32, 1) == limitWrist &&
+                skeletal.GetConstraintHandle(32, 0) != InvalidConstraint && limitImpl->PairFilter->Pairs.size() == 2,
+                "Limit rejection preserves topology and pairs");
+            Check(world.GetConstraintState(limitWrist, state) && state.Enabled == before.Enabled && state.MotorsOff == before.MotorsOff,
+                "Limit rejection preserves wrist state");
+            for (uint32_t body = 0; body < 3; ++body)
+            {
+                const auto handle = skeletal.GetBodyHandle(32, body);
+                Check(world.GetBodyMotion(handle, motion) && motion == BodyMotion::Kinematic, "Limit rejection preserves motion");
+                Check(world.GetBodyPose(handle, p, q) && p == positions[body] && q == rotations[body], "Limit rejection preserves pose");
+                Check(world.GetBodyVelocity(handle, v, w) && v == velocities[body] && w == angularVelocities[body],
+                    "Limit rejection preserves velocity");
+            }
+        }
+        else
+        {
+            Check(result == BreakStatus::Applied, twist ? "Inside +X twist accepted" : "Inside +Y swing accepted");
+            Check(world.GetConstraintCount() == 1 && skeletal.GetTopologyGeneration(32) == 2, "Inside limit publishes break");
+            Check(world.GetConstraintState(limitWrist, state) && state.Enabled && state.MotorsOff, "Inside limit enables wrist");
+        }
+        Check(skeletal.Unregister(32), "Limit pose fixture released");
+        CheckEmpty(world, "Limit pose resources zero");
+    }
+
+    // 외부 pin은 거절하고 broken 경계 밖 자손은 후속 break에서 제외한다.
+    Check(skeletal.Register(33, fixture.Asset, fixture.NodeParents, frames), "Boundary fixture registered");
+    request = { 33, 0, skeletal.GetRigGeneration(33), 1 };
+    const auto pin = world.CreateSwingTwist({ skeletal.GetBodyHandle(33, 0),
+        skeletal.GetBodyHandle(33, 2), fixture.Asset.Joints[0] });
+    Check(pin != InvalidConstraint, "Unexpected pin created");
+    Check(skeletal.BreakConstraint(request) == BreakStatus::UnsupportedTopology, "Unexpected external pin rejected");
+    Check(world.GetConstraintCount() == 3 && skeletal.GetTopologyGeneration(33) == 1, "Pin rejection leaves topology");
+    Check(world.RemoveConstraint(pin), "Unexpected pin removed");
+    request = { 33, 1, skeletal.GetRigGeneration(33), 1 };
+    Check(skeletal.BreakConstraint(request) == BreakStatus::Applied, "Distal break first");
+    const auto detached = skeletal.GetBodyHandle(33, 2);
+    Check(world.SetBodyVelocity(detached, { 1, 2, 3 }, {}), "Detached velocity");
+    Check(world.GetBodyVelocity(detached, savedV, savedW), "Snapshot detached body");
+    request.JointId = 0;
+    request.ExpectedTopologyGeneration = 2;
+    Check(skeletal.BreakConstraint(request) == BreakStatus::Applied, "Proximal break excludes detached subtree");
+    Check(world.GetBodyVelocity(detached, v, w) && v == savedV && w == savedW, "Detached subtree unchanged");
+    Check(skeletal.Unregister(33), "Boundary fixture released");
+    Check(skeletal.BreakConstraint(request) == BreakStatus::NotFound, "Deleted owner rejected");
+    CheckEmpty(world, "Break tests resources zero");
+}
+
 // 등록·목표 갱신·본 writeback과 실패 뒤 자원 정리를 검사한다.
 int main()
 {
@@ -300,6 +492,9 @@ int main()
 
     // 물리 본 override를 실제 부모 우선 pose 평가기에 전달한다.
     CheckPoseWriteback(world, skeletal);
+
+    // 동기 분리의 성공과 실패 경로를 검사한다.
+    CheckSynchronousBreak(world, skeletal);
     std::printf("SkeletalBreakTests: %zu/%zu PASS\n", g_Checks, g_Checks);
     return 0;
 }

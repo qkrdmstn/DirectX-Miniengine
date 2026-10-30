@@ -1,4 +1,4 @@
-﻿상태: 진행 중 — BC-07 `8dc58b08` 이후 BC-08a-1/2·BC-08b 구현·검증 완료(미커밋), M1까지 Codex 단독 계속 진행 (2026-10-29)
+﻿상태: 진행 중 — BC-08a·08b 24da5640 이후 BC-10 동기 break 구현·검증 완료(미커밋), BC-11 미착수 (2026-10-30)
 
 # BreakConstraint 구현 인계
 
@@ -181,6 +181,10 @@ Dynamic으로 전환할 내부 관절의 양쪽 anchor 거리 ≤1e-4m, 상대 �
 
 commit 순서: 재검증 → 선택 joint 제거 → 대상 body Dynamic 전환 → 내부 관절 enable/모터 Off → 해당 본 제어권 Physics → body wake → 선택 joint의 ChildBody에 impulse 1회 → generation 증가. 이 구간은 사전검증·예약 이후 할당이나 fallible cook 없이 실행한다. preflight 뒤 실패 가능한 API가 남으면 그 단계에서 commit 가능으로 표시하지 않는다.
 
+BC-10 구현(2026-10-30, 24da5640 기준): SkeletalPhysicsSystem::BreakConstraint는 owner/joint → AlreadyBroken → rig/topology 세대 → 유한 입력 순으로 검사한다. broken 경계를 제외한 tree를 순회하고 저장 Kinematic 목표·COM 속도를 PhysicsWorld::ApplyConstraintBreak에 전달한다. world는 모든 body·관절·외부 pin·anchor≤1e-4m·Jolt cone/twist 제한·impulse 결과 범위를 변경 없이 검사한다. 이미 Dynamic이면 실제 pose/속도를 사용한다. 성공 때만 선택 관절 제거·Kinematic 목표 동기화와 Dynamic 전환·저장 속도 복원·내부 관절 enable/모터 Off·wake·ChildBody impulse 1회를 수행한다. 이후 rig joint handle을 invalid로 표시하고 topology를 +1한다. Physics 제어권은 기존 CollectPoseOverrides의 Dynamic 판정으로 표현하며 중복 상태는 추가하지 않는다. scene 스레드/Step 밖 호출 전제는 유지한다.
+
+약 400줄을 world API/등록(BC-10a 약205줄)과 rig 적용/검사(BC-10b 약195줄)로 나눴다. 동기 M1 계약의 의미는 변경하지 않았다. 기존 SkeletalBreakTests target과 BuildJolt.ps1 testTargets를 재사용한다. PhysicsWorldBreak.cpp를 CMake·Physics.vcxproj/.filters에 등록했다. 기존 헤더의 BC-10 선언은 선행 커밋에 있다.
+
 ## 9. 고정 step 프레임 연결 (BC-11)
 
 고정 dt/누적기/최대 catch-up 수는 Static 공통 step 정책을 그대로 쓴다. Scene별 별도 step 또는 한 프레임 두 번 step하지 않는다. animation도 substep dt로 한 번씩 진행한다.
@@ -230,7 +234,8 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-08a-1 | 순수 rig frame·uniform scale 변환 helper·CPU 시험 | 완료(미커밋): CPU 두 구성 706/706, Debug/Release 빌드 PASS / 07 | R+B+CPU |
 | BC-08a-2 | 등록 scale 저장·frame 검증 적용·Kinematic target/COM 속도 | 완료(미커밋): CPU 두 구성 103/103·전체 Debug/Release PASS, COM offset 원점 도달·Dynamic 보존·등록 s 변경/누적드리프트 거절 / 08a-1 | R+B+T |
 | BC-08b | physics pose→node override 수집·기존 palette 경로 연결 준비 | CPU 두 구성227/227 PASS, parent 이동/회전 상쇄·tip local 상속·등록 s 복원·실패 출력 보존, 전체 Debug/Release 빌드 PASS / 03b,08a-2 | R+B+T |
-| BC-10 | 동기 BreakConstraint(검증+commit) | body수3 유지·unbroken 2→1·손목 유지·impulse 1회·AlreadyBroken 무추가 / 08b | R+B+T |
+| BC-10a | 공통 world 동기 break 선검증·commit API/등록 | 완료(미커밋): anchor·limit·외부 pin·impulse 선검증, commit 뒤 fallible cook/할당 없음 / 08b | 약205줄 |
+| BC-10b | rig subtree·세대 적용 + CPU 회귀(BC-10 완료) | 완료(미커밋): 리뷰 보강 후 두 구성 CPU482/482·anchor 일치 twist/swing 초과 거절·제한 안 성공·body3·관절2→1·손목120step·중복무변경, 기존 전체 빌드·비물리 진단 PASS / 10a | CPU15.00+27.80초, 기존 B5.19+6.01초 |
 | BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 전체 world step 횟수 일치·GPU 준비1회·비물리 모드 동등 / 10 | R+B+V |
 | BC-12a | fixture 진단 옵션·GizmoDraw overlay | 3 body/본/anchor 시각화·정지/분리 재현 / 11 | R+B+V |
 | BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 상완 animation 유지·전완/손 낙하·팔꿈치 피부 늘어짐 화면, 스크린샷 / 12a | R+B+V |

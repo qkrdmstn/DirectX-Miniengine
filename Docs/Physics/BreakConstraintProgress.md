@@ -152,3 +152,18 @@ CPU 시험은 실제 Dynamic 두 body와 4-node graph로 owner 이동·회전 �
 환경 실패도 남긴다: 공유 로그 경합으로 첫 Release CPU 명령의 로그 열기가 실패했다. 격리 재검증의 첫 Release SkeletalBreakTests 컴파일도 C1085(No space left on device)로 28.58초·종료1이었다. 이번 검증에서 생성한 TEMP 하위 객체 파일만 정리하고 Release 5종과 전체 빌드를 재실행하여 위 최종 결과를 얻었다. 소스·프로젝트 설정·junction은 바꾸지 않았다. `.mini` 3개와 Report의 SHA-256은 모든 viewer 실행 전후 동일하다.
 
 분류용 diff 자기 검토로 BC-10 혼입을 확인했으며 코드 수정과 새 독립 리뷰는 하지 않았다. BC-10은 PhysicsWorldBreak.cpp 전체와 PhysicsWorld.h·SkeletalPhysicsSystem.h의 break 자료형·선언·TopologyGeneration으로 분리 표시했다. 해당 cpp는 현재 CMake/vcxproj 미등록이므로 위 빌드·시험이 BC-10의 성공 증거는 아니다. BC-11 Scene 연결·section E/Nmesh 검증도 범위 밖이다. 커밋은 하지 않았고 BC-08a/08b hunk 분리는 `bc08-split.txt`에 정리했다.
+### BC-10 완료·미커밋 (2026-10-30, HEAD 24da5640)
+
+| 단계 | 커밋 | 바뀐 파일 | 검증 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-10a/b | 미커밋(사용자 지시: git add/commit/stash 금지) | MiniEngine/Physics/PhysicsWorldBreak.cpp(초안 완성), CMakeLists.txt, Physics.vcxproj/.filters; MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.cpp, tests/SkeletalBreakTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md, Docs/README.md, Docs/Current/CodeMap.md | CPU Debug403/403 10.02초·Release403/403 13.48초 PASS(컴파일 경고0); 전체 Debug5.19초·Release6.01초 PASS(각 기존 C4819 3개·오류0·/restore없음); 물리 OFF component Debug5.20/Release5.14초·Xbot Debug6.21/Release6.16초 PASS, 모두 종료0 | 자기 리뷰 검증 부족1건 보강, 잔여0건; 독립 codex exec는 home directory 탐색 오류로 시작 불가 |
+
+body3개 유지·관절2→1·root Kinematic/자손 Dynamic·손목 enable/모터 Off·COM 속도 상속과 off-center impulse1회·AlreadyBroken 우선/추가 impulse0·세대 증가·다른 joint stale·이미 Dynamic인 body 보존·broken 경계 제외·해제 후 리소스0을 검사했다. 내부 anchor 0.01m 어긋남과 twist 제한 초과는 UnsupportedPose, 외부 pin은 UnsupportedTopology로 변경 없이 거절했다. 자기 리뷰에서 실제 손목 유지/외부 pin 검증 부족1건을 보강하여 120step 후 anchor≤0.01m를 확인했다. 최초 CPU278/278(11.53/16.21초)·전체 빌드13.35/9.68초도 통과했으며 위 표는 보강 후 최종값이다. 추가 diff 자기 리뷰에서 함수·단락 사이 빈 줄과 기존 BOM 보존을 정리했다. BC-10a(world API/등록 약205줄)·10b(rig/시험 약195줄)로 §11에 행을 추가했으며 의미상 계약 차이는 없다.
+
+직접 cl은 시험 머리말 명령에 PhysicsWorldBreak.cpp를 추가했고 Release는 /MD /O2 /DNDEBUG 및 Release/Jolt.lib를 사용했다. 기존 SkeletalBreakTests CMake target/BuildJolt.ps1 testTargets를 재사용했다. 전체 빌드는 worktree 루트의 msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Debug /p:Platform=Windows 및 Release다. 증분 빌드이며 clean rebuild·CTest 전체는 미수행이다.
+
+뷰어는 MiniEngine/ModelViewer에서 ../Build/x64/{Debug,Release}/Output/ModelViewer/ModelViewer.exe -debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6과 -xbot-arm-checks 1로 각각 실행했다. Start-Process -WindowStyle Hidden -Wait로 종료를 기다려 새 로그의 PASS GPU preparation, BC-00 PASS·BC-03a PASS를 확인했다. 첫 Debug component 판정 스크립트가 정상 PASS 항목의 Failed placement 문자열을 실패로 오인했다(프로세스 종료0·실제 PASS). 실패 행 시작만 검사하도록 TEMP 스크립트를 고치고 네 실행을 재검증했다. DirectX debug layer 사용, GPU/driver 재측정·GPU 기반 검증·BC-11 이후 화면 연결은 미수행이다.
+
+로그/산출물은 $env:TEMP/BreakConstraintTests/BC10-root의 SkeletalBreakTests-{Debug,Release}.log, build-{Debug,Release}.log, viewer-*.log, results.txt, results-viewer.txt, verify.ps1, viewer.ps1이다. 독립 리뷰는 codex.ps1 실행정책 차단 후 codex.cmd로 재시도했으나 Error finding codex home: Could not find home directory로 시작되지 않았다. 별도 읽기 전용 diff/초안/계약 자기 리뷰를 수행했다. git 쓰기·메인 체크아웃 수동 수정·junction 변경·.mini/Report 수동 변경 없음이며 viewer 전후 보호 파일 SHA-256 동일이다. BC-11 이후는 착수하지 않았다.
+
+2026-10-30 BC-10 독립 리뷰 지적 1건 처리: 기존 각도 제한 시험의 anchor 선거절을 손 위치 보정으로 제거하고 실제 COM anchor 일치·순수 +X twist/+Y swing·각각 초과 거절 후 상태 불변·각각 제한 안 성공을 검사했다. CPU Debug482/482(15.00초)·Release482/482(27.80초) PASS, 경고0·종료0이며 기존403건 대비79건 증가다. TEMP의 twist/swing 검사 개별 우회 변형도 각각 해당 초과 거절 검사에서 실패해 분기 검증을 확인했다. 구현 버그 없음·구현 코드 변경 없음으로 전체 빌드는 재실행하지 않았다. 로그/변형 소스는 $env:TEMP/BreakConstraintTests/BC10-review-fix, BC-11 미착수다.
