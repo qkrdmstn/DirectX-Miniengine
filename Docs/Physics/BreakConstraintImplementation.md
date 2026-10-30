@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-12a-1 dd219b8e 완료; BC-12a-2 완료(미커밋), Debug/Release 수치 PASS·화면 캡처 확인(Claude), 사람 확인 대기 없음, BC-12b 미착수 (2026-10-30)
+상태: 진행 중 — BC-12a-2 b4afd069 완료; BC-12b 렌더 팔레트 수치 보완 완료(미커밋), Debug/Release 각2회 PASS, 전용 근접 카메라 적용·화면 확인/캡처는 Claude 후속; BC-13a 미착수 (2026-10-30)
 
 # BreakConstraint 구현 인계
 
@@ -249,7 +249,7 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 완료(미커밋): CPU 7종 두 구성2790/2790·전체 빌드·Debug 물리 OFF PASS, step 0/1/4/0·GPU 준비1회·실제 Xbot/선형 animation break/writeback 44검사 PASS / 10 | 리뷰 후 B54.24+68.79초, component15.07초 |
 | BC-12a-1 | 실제 body/관절 진단 조회 API·독립 off-center impulse CPU 시험 | 완료: 실제 pose/COM/속도·broken/enabled·월드 anchor, 실패 출력 보존 / 11 | R+B+CPU |
 | BC-12a-2 | fixture 진단 옵션·GizmoDraw overlay·자동 수치 판정 | 완료(미커밋): 60/180 ticks·Debug/Release 각2회 PASS(접촉 전≤0.01m·이후≤0.02m·마지막≤0.01m), 정상 종료·D3D12 ERROR 0; 화면 캡처 확인(Claude), 사람 확인 대기 없음 / 12a-1 | R+B+V |
-| BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 상완 animation 유지·전완/손 낙하·팔꿈치 피부 늘어짐 화면, 스크린샷 / 12a | R+B+V |
+| BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 수치 완료(미커밋): Debug/Release 각2회 PASS, 독립 animation 상완 오차0·전완 하강·손목 구간별 허용값·관절 수·finite 및 최종 node/렌더 팔레트-실제 body 오차≤1e-3m·독립 animation 거리≥0.1m 확인, 전용 근접 카메라 적용·화면 확인/캡처는 Claude 후속 / 12a | CPU92.42초, 최종 B11.18+25.53초, Xbot V49.39/35.04/25.85/35.40초 |
 | BC-13a | 기본 수명 회귀(M1) | 등록 실패·씬 clear·삭제 직후 지연 명령·double break·리소스0 / 12b | R+B+T+V |
 | BC-09 | (M2) PrepareBreak 일회용 plan·snapshot key 분리 | prepare 무변경·Stale / 13a | R+B+T |
 | BC-14 | (M2) GPU transaction 연결 계약 구현 | 미지원 skin 유지, 준비 실패 시 break 안 함 / 09 | R+B+T+V |
@@ -327,6 +327,17 @@ BC-12a-2 후속 원인 확인·판정 정리(2026-10-30, 미커밋): 판정 변�
 최종 재검증: CPU SkeletalBreak909/909·PhysicsBody393건 두 구성 PASS(컴파일 경고0), 전체 Debug17.19초·Release31.38초 PASS(오류0·기존 C4819 각4건, /restore 없음). fixture Debug52.55/31.69초·Release36.21/24.72초 각2회 PASS·종료0·D3D12 ERROR/CORRUPTION0. 두 구성 접촉 전 최대2.384185791e-7m, Debug 접촉 후0.00992500037m/마지막0.009835194796m, Release 접촉 후0.0133718159m/마지막0.0001645183365m, rootDeltaY=0·finite/topology=1이다. 상세 회귀·시간·로그는 Progress의 후속 기록을 따른다.
 BC-12b 옵션은 `-skeletal-break-xbot 1`로 고정한다. 기존 시작 장면의 Xbot에 왼팔 rig를 등록하고 animation을 재생한다. 60 fixed ticks 후 팔꿈치 joint를 작은 impulse로 분리하고 120 ticks 뒤 수치 판정 로그를 출력한다. 판정: 상완 본 pose가 animation 값과 일치, 전완 COM Y 하강, 손목 anchor 오차가 BC-00 허용값 이내, unbroken 2→1·enabled 0→1, 모든 pose/속도 finite. 화면에서는 팔꿈치 피부 늘어짐을 확인하고 break 전·후 스크린샷을 남긴다.
 
+BC-12b 구현·수치 검증(2026-10-30, HEAD b4afd069, 미커밋): `SkeletalPhysicsChecks`에 Xbot 모드를 추가하여 기존 tick 제어·상태 조회·오버레이·수치 판정을 재사용한다. 기본 Xbot의 NodeId 13/14/15에 `CreateXbotLeftArmAsset`을 등록하며 별도 owner/메시/웨이트/정점을 만들거나 변경하지 않는다. 스킨 section의 실제 E가 일치함을 확인하여 등록하고 기존 scale 분리 경로를 사용한다. 고정 시작 배치의 E로 본 overlay를 월드로 옮긴다. physics는 기존 프레임 경로가 매 tick E를 검증한다. world 공개·별도 step·새 target은 없다. 두 진단 옵션을 함께 주면 Xbot 모드가 우선한다. 기본 Xbot 없는 `-model` 조합은 FAIL 후 정상 종료한다.
+
+별도 `ModelInstance`에서 animation 0을 dt=0부터 같은 1/60초로 계산하고, 매 tick 상완 model pose의 16성분을 비교한다(절대 오차≤1e-5). 실제 world와 목표 world를 서로 비교하지 않는다. tick60 완료 뒤 요청을 넣고 tick61 target 뒤 팔꿈치를 분리한다. impulse는 월드 +X 0.05kg·m/s, 적용점은 직전 전완 COM이다. tick180에서 전완 COM Y를 tick60과 비교하여 0.01m 넘게 하강해야 한다. 초기 unbroken2/enabled0과 최종 unbroken1/enabled1, 상완 Kinematic·전완/손 Dynamic·손목 motorsOff를 검사한다. 70개 본의 모든 pose 성분과 body pose/COM/선속도/각속도의 finite를 누적 확인한다. 기본 VSync와 60/120 tick을 유지하며 캡처 시도는 하지 않았다. 화면 확인과 분리 전후 캡처는 Claude가 후속 수행한다.
+
+계약 명확화: 위 “BC-00 허용값”은 break 사전 anchor 허용값(1e-4m)과 step 후 solver 오차를 혼동할 수 있다. 사용자 지정대로 solver 판정은 BC-12a-2와 동일하게 접촉 전 최대≤0.01m, 접촉 이후 최대≤0.02m, 마지막≤0.01m를 적용한다. 기존 바닥 상면+0.30m 이하·하위 COM 수직속도 1m/s/tick 초과 증가로 최초 접촉 구간을 고정한다. 접촉이 없으면 전 구간에 0.01m를 적용한다. 접촉 전 초과는 기준을 바꾸지 않고 BLOCKED/FAIL을 기록한다. 등록/break 사전 허용값과 solver 설정은 바꾸지 않았다.
+
+Debug 2회 동일: 상완 animationMaxError=0, 전완 deltaY=-1.36082375m, 손목 접촉 전 최대=0.000006665660294m, 접촉 후 최대=0.006326892879m, 마지막=0.00002529360427m. Release 2회 동일: 상완 오차0, deltaY=-1.360850334m, 접촉 전=0.000006643729193m, 접촉 후=0.006328773685m, 마지막=0.00004452272333m. 모두 contact/max tick88, finite/topology=1, unbroken2→1·enabled0→1, BC-12b PASS·정상 종료0·D3D12 ERROR/CORRUPTION0이다. CPU·빌드·회귀·리뷰와 제한은 Progress BC-12b 기록을 따른다. 화면 검증 전이므로 피부 늘어짐의 시각 확인 완료로 기록하지 않는다.
+
+BC-12b 화면 증거 보완(2026-10-30, 미커밋): tick180에서 `CheckRenderPose`가 렌더 준비의 `GetJoints()` 팔레트를 각 사용 section의 E와 함께 읽고 IBM 역변환으로 NodeId14/15 원점을 복원한다. 최종 node 배열도 함께 검사한다. 물리 기대 위치는 `ReadDiagnosticState`의 실제 body 원점에서 `BoneFromBody`를 제거하고 등록 s≈0.01773275를 복원한 frame의 원점이다. Kinematic target/override와 자기 비교하지 않는다. 별도 animation ModelInstance의 mesh node로 독립 E를 계산해 animation 위치를 얻는다. 모든 해당 팔레트에서 두 물리 오차≤1e-3m, 두 animation 거리≥0.1m, finite를 요구하고 팔레트 누락도 FAIL이다.
+Debug 각2회 동일: 전완 팔레트/본 물리 오차4.92415154e-7/1.273155732e-7m, animation 거리1.66850841/1.66850853m; 손 오차1.685873912e-7/1.192092896e-7m, 거리1.226705313/1.22670567m. Release 각2회 동일: 전완 오차9.615579302e-7/1.490116119e-8m, 거리1.668364406/1.668364167m; 손 오차4.951133405e-7/1.192092896e-7m, 거리1.227050066/1.227049947m. 두 스킨 section의 모든 사용 entry PASS이며 최종 BC-12b PASS다.
+`-skeletal-break-xbot 1`에서만 시작 eye=(5.5,-0.15,2.8), at=(5.5,-0.15,0)m를 쓴다. 기존 시작 Xbot X=5와 바닥 높이에 맞춘 45° 근접 시점이며 다른 카메라는 보존한다. 최종 팔레트 반영은 수치로 확인했지만 메시 피부 늘어짐·프레이밍의 시각 확인은 Claude가 후속 캡처로 수행한다. 이번 실행은 캡처를 시도하지 않았다. 빌드·회귀·시간·리뷰는 Progress의 화면 증거 보완 기록을 따른다.
 추가 필수 회귀: zero-step frame, 반복 break 무추가 impulse, 삭제 직후 지연 명령 거절, 부모 평행이동/회전 중 분리 본 world 불변, COM offset, 중복 palette, 비물리 모드 동등. 런타임 기록에는 GPU/driver·구성·명령·fixed dt·오차·body/joint 수를 남긴다.
 
 ## 13. Codex 구현 세션에 그대로 전달할 첫 지시

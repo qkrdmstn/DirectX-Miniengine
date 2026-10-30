@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-12a-1 dd219b8e 완료, BC-12a-2 구현(미커밋)·Debug PASS/Release FAIL·화면 검증 대기 (2026-10-30)
+상태: 진행 중 — BC-12a-2 b4afd069 완료; BC-12b 렌더 팔레트 수치 보완 완료(미커밋), 두 구성 각2회 PASS·화면 확인/캡처는 Claude 후속; BC-13a 미착수 (2026-10-30)
 
 # BreakConstraint 진행 기록
 
@@ -242,3 +242,37 @@ MiniEngine/ModelViewer에서 Debug exe -debug 1 -physics-sim 0 -component-checks
 - 화면: **화면 캡처 확인(Claude), 사람 확인 대기 없음**. 사용자 전달대로 샌드박스 밖 Claude 캡처 성공을 반영: `$env:TEMP/BreakConstraintTests/BC12a2-screens/t002.7.png`(분리 전 세로 본 사슬·COM·anchor), `t005.4.png`(분리 후 아래 두 body가 바닥에 누움). 파일 존재 확인, 재캡처·추가 화면 확인 요청 없음. 이전 캡처 실패/화면 대기 기록은 당시 이력이다.
 - 리뷰: `codex.cmd exec -s read-only --ephemeral`는 `Error finding codex home: Could not find home directory`로 시작 실패. 별도 읽기 전용 diff/계약 자기 리뷰로 대체(지적0건): 접촉tick을 오차와 독립 판단·접촉tick부터 이후구간·최종오차 별도 제한·무접촉 FAIL·물리OFF 경로 불변·한글 역할/단락 주석·코드44줄 변경 확인. 보호대상 .mini3개/Report SHA-256 전후 동일. git add/commit/stash/merge/push·메인 체크아웃 수동 수정·junction 변경 없음, BC-12b 미착수.
 - 로그·재현: `$env:TEMP/BreakConstraintTests/BC12a2-contact`의 measure-{Debug,Release}.log, final-{Debug,Release}-skeletal-{1,2}.log, final-Debug-{basic,component}-1-debug.log, results*.txt, verify.ps1, build.ps1, final-viewers.ps1, collect.ps1(캡처 호출 제거), self-review.txt. 미해결 사항 없음(최종 검증 기준). 커밋은 바깥 Claude 담당.
+
+### BC-12b Xbot 왼팔 분리 진단 (2026-10-30, HEAD b4afd069)
+
+| 단계 | 커밋 | 바뀐 파일 | 검증·시간 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-12b | 미커밋 | ModelViewer.cpp(+5/-1); Scene/tests/SkeletalPhysicsChecks.h(+137/-19); BreakConstraintImplementation.md; BreakConstraintProgress.md; Docs/README.md | CPU 두 구성 PASS, 전체 Debug/Release PASS, Xbot 각2회 PASS, 물리OFF/기존 component PASS, 기존 fixture 두 구성 PASS; 상세 아래 | 독립 codex home 오류로 시작 불가 → 별도 자기 리뷰 지적1(기능 단락 주석) 수정, 잔여0 |
+
+- 구현: 기존 시작 Xbot에 BC-04b asset의 body3/joint2 등록, animation0 재생. SkeletalPhysicsChecks의 기존 60/180 tick·진단 조회·overlay·구간별 손목 판정 재사용. 상완은 별도 ModelInstance의 animation model pose 16성분과 매 tick 비교(≤1e-5). 전완 하강 기준은 분리 직전 tick60 COM. 월드 +X impulse0.05kg·m/s, 직전 전완 COM에 1회 요청. unbroken2→1·enabled0→1·Kinematic1/Dynamic2·motorsOff·전체 본 pose 및 body 속도 finite 검사. 메시/웨이트/정점 변경 없음.
+- CPU: 파일 머리말 cl 명령/Jolt 설정, TEMP의 이전 BC12a2-root CPU 출력 폴더를 재사용(새 큰 복제 없음). SkeletalBreak Debug909/909 20.37초·Release909/909 29.33초, PhysicsBody Debug393건14.37초·Release393건28.35초, 모두 종료0·컴파일 경고0. 이번 생성 obj만 제거. CTest 전체 미수행.
+- 전체 빌드: worktree 루트 `.slnx /m /p:Configuration={Debug,Release} /p:Platform=Windows`, /restore 없음. 최초 Debug20.84초·Release30.55초 PASS. 주석 정리 후 뷰어가 실행 중인 상태에서 Debug 링크를 시작해 LNK1168(exe 잠금) 21.76초 실패; 뷰어 정상 종료를 확인하고 재빌드한 최종 Debug11.18초·Release25.53초 PASS, 오류0·기존 C4819 각4건. 기능 코드는 최초 빌드와 동일하며 최종 빌드는 주석 정리만 반영.
+- Xbot `-debug 1 -skeletal-break-xbot 1`: Debug49.39/35.04초, Release25.85/35.40초 각2회 BC-12b PASS·종료0. 네 실행 모두180ticks·finite/topology=1·unbroken2→1·enabled0→1·상완 animationMaxError0. Debug 반복 수치 동일: 전완deltaY=-1.36082375m, 손목 접촉전 최대0.000006665660294m/접촉후 최대0.006326892879m/마지막0.00002529360427m. Release 반복 동일: deltaY=-1.360850334m, 손목 접촉전0.000006643729193m/접촉후0.006328773685m/마지막0.00004452272333m. 네 실행 모두 contact/max tick88. 손목 허용값은 기존 0.01/0.02/0.01m 유지; BC-00 break 사전 허용값과 solver 오차의 구분을 계약 §12에 명확히 기록.
+- 회귀: Debug `-debug 1 -physics-sim 0 -physics-query-exit 6` 기본35.13초 정상종료0, 같은 옵션에 `-component-checks 1` 추가26.83초703 PASS·FAIL0·PASS GPU preparation·종료0. 공통 검사 코드를 수정했으므로 기존 `-skeletal-break-checks 1`도 최종 바이너리에서 Debug41.20초·Release46.54초 각각 BC-12a PASS·종료0. fixture 손목 수치는 기존 기록과 동일(Debug 최대0.00992500037m, Release 최대0.0133718159m; 구간별 판정 PASS).
+- 뷰어8회 모두 D3D12 ERROR/CORRUPTION0(디버거 출력 수집). 기존 종료 Light live-resource 경고는 유지. DirectX debug layer 사용, GPU 기반 검증 미사용. 환경은 이전 기록 NVIDIA GeForce MX450/driver32.0.15.9186이며 이번 재조회 없음. Start-Process -WindowStyle Hidden -Wait로 수집기를 실행, 내부 viewer180초 제한. 화면 캡처 코드는 호출하지 않았고 캡처 시도 없음. 기본 VSync와 60/120 tick 타이밍 유지. **화면 확인·분리 전후 캡처는 Claude 후속**: 상완/몸통 애니메이션, 전완·손 동반 낙하, 손목 연결 유지, 팔꿈치 피부 늘어짐, 본/COM/anchor overlay를 사람이 확인해야 한다. 수치 기준 미해결 없음, 시각 검증 미완료.
+- 재현/로그: `$env:TEMP/BreakConstraintTests/BC12b`의 verify.ps1, build-final.ps1, collect.ps1(캡처 호출 없음), viewers.ps1, fixtures.ps1, build-*.log, *Tests-*.log, final-{Debug,Release}-skeletal-{1,2}.log, viewer-*-debug.log, final-*-fixture.log, final-Debug-component-1.log, results-extra.txt, build-final-results.txt, self-review.txt. 최초 results.txt 끝에 Windows PowerShell Tee-Object의 UTF-16 append가 섞였으므로 최종 빌드 시간은 별도 build-final-results.txt를 사용한다.
+- 보호 파일 .mini3개와 BreakConstraintReport.md의 실행 전후 SHA-256 동일. git add/commit/stash/merge/push·메인 체크아웃 수동 수정·junction 변경 없음. 커밋은 바깥 Claude 담당. BC-13a는 시작하지 않았다.
+
+#### BC-12b 화면 증거 보완 (2026-10-30, HEAD b4afd069)
+
+| 단계 | 커밋 | 바뀐 파일 | 테스트·빌드·실행·시간 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-12b 화면 보완 | 미커밋 | SkeletalPhysicsChecks.h(이번 보완 +61/-1줄), ModelViewer.cpp(+5줄); Implementation §11/12·상태, 이 Progress·상태, Docs/README.md | CPU 두 구성 PASS; 전체 Debug/Release PASS; Xbot 각2회 PASS; Debug fixture·물리OFF·component PASS; 수치는 아래 | 독립 codex home 오류로 실행 불가, 별도 읽기 전용 자기 리뷰 지적0건 |
+- 렌더 증거: tick180 실제 GetJoints 팔레트(각 사용 section의 Node14/15, palette11/12)와 최종 node를 실제 ReadDiagnosticState body 원점 frame에서 offset 제거·등록 s 복원한 위치에 각각 비교한다. 독립 ModelInstance animation과의 거리도 각각 검사한다. Debug 전완 palette/body 오차4.92415154e-7m·손1.685873912e-7m, Release 전완9.615579302e-7m·손4.951133405e-7m(허용1e-3m). node/body 최대1.273155732e-7m. animation 거리는 두 구성에서 전완 약1.668m·손 약1.227m(최소0.1m). 각2회 반복 동일·모든 사용 entry PASS. 상완 animation 오차0, 기존 낙하·손목 수치도 이전 BC-12b와 동일하다. 상세 수치는 계약 §12와 로그에 있다.
+- CPU: 파일 머리말 cl/Jolt 명령, SkeletalBreak Debug909/909(24.56초)·Release909/909(38.76초), PhysicsBody Debug393건(21.31초)·Release393건(34.55초), 모두 종료0·컴파일 경고0. TEMP 기존 BC12a2-root CPU 폴더 재사용, 이번 obj만 정리해 큰 중복 산출물 없음. CTest 전체 미수행.
+- 전체 빌드: worktree 루트 지정 .slnx /m /p:Configuration={Debug,Release} /p:Platform=Windows, /restore 없이 Debug22.36초·Release39.70초 PASS·오류0. BOM 없는 기존 헤더 C4819 각5건(새 include의 SkeletalPhysicsFrames.h 경고1건 포함), vswhere/pwsh fallback 메시지 유지.
+- 뷰어: 모두 -debug 1. Xbot Debug60.66/37.23초·Release31.21/28.31초 각2회 BC-12b PASS. Debug -skeletal-break-checks 1 fixture34.86초 BC-12a PASS; 물리OFF 기본(-physics-sim 0 -physics-query-exit 6)61.96초 종료0, 같은 명령에 -component-checks 1 추가40.80초 703 PASS·FAIL0·PASS GPU preparation. 7회 모두 종료0·D3D12 ERROR/CORRUPTION0, debug layer 사용·GPU 기반 검증 미사용. GPU/driver는 기존 NVIDIA MX450/32.0.15.9186 기록이며 이번 재조회 없음. Start-Process -WindowStyle Hidden -Wait 수집기 내부 viewer180초 제한. fixture 최초 수집기 인자 배열이 문자열로 풀려 CreateProcess3으로 시작 전 실패(i-f-x), 스크립트만 수정 후 위34.86초 정상 완료.
+- 화면: Xbot 진단에서만 eye=(5.5,-0.15,2.8), at=(5.5,-0.15,0)m 근접 시점. 이번 캡처 시도 없음. Claude 기존 BC12b-screens/t004.5.png·xbot-zoom2.png는 body 낙하 증거이며 메시 피부의 명확한 시각 증거는 아직 아니다. 새 시점에서 전완/손 메시 낙하·팔꿈치 피부 늘어짐·팔꿈치~바닥 화면 높이 절반 이상을 Claude가 확인/캡처한다. 수치 미해결 없음.
+- 로그/재현: $env:TEMP/BreakConstraintTests/BC12b-evidence의 verify.ps1, viewers.ps1, fixture.ps1, collect.ps1(화면 캡처 코드 없음), build-{Debug,Release}.log, *Tests-*.log, final-*-skeletal-*.log와 *-debug.log, final-Debug-{fixture,component}-1.log, results.txt/results-extra.txt, self-review.txt. .mini3개·Report SHA-256 전후 동일, git diff --check PASS. git add/commit/stash/merge/push·메인 체크아웃 수동 수정·junction 변경 없음. 다음 단계 미착수.
+#### BC-12b 화면 캡처 확인 (Claude, 2026-10-30)
+
+- 방법: Codex 샌드박스 밖에서 Debug `-debug 1 -skeletal-break-xbot 1` 실행 중 PrintWindow로 창을 캡처했다. 종료0.
+- 분리 전: `$env:TEMP/BreakConstraintTests/BC12b-screens2/p004.3.png` — 근접 카메라, 왼팔이 몸 옆에 매달려 애니메이션 중, overlay 본·COM·anchor 표시.
+- 분리 후: `$env:TEMP/BreakConstraintTests/BC12b-screens2/p006.1.png`, 확대 `after-zoom2.png` — 상완은 팔꿈치 anchor(빨강) 위치에 남고, 전완·손 메시가 바닥으로 떨어져 다리 사이에 놓인다. 렌더 메시가 물리 pose를 따른다(팔레트 수치 검사와 일치).
+- 한계: Xbot은 관절마다 조각이 나뉜 마네킹 형태라 팔꿈치 정점이 두 본에 걸친 영역이 작다. 그래서 NDC25 슬라이드처럼 길게 늘어나는 피부 띠는 거의 보이지 않고 전완이 분리되어 보인다. 코드 결함이 아니라 자산 특성이며, 피부가 이어진 캐릭터 자산으로 확인하는 것은 M1 범위 밖 후속이다.
+- 독립 리뷰(Codex): BC-12b 구현 지적 0건. 이후 렌더 팔레트 검사·근접 카메라 보완은 Codex 자기 리뷰 지적 0건.

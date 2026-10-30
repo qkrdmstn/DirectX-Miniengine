@@ -238,10 +238,14 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"physics-sim",m_UsePhysicsSim);
     CommandLineArgs::GetInteger(L"physics-sim-checks",m_PhysicsSimChecks);
 
-    // 골격 진단은 공통 simulation을 켜고 별도 fixture만 추가한다.
+    // 골격 진단은 공통 simulation을 켜고 fixture 또는 기존 Xbot을 검사한다.
     uint32_t skeletalChecks = 0;
     CommandLineArgs::GetInteger(L"skeletal-break-checks", skeletalChecks);
     m_SkeletalChecks.Enabled = skeletalChecks == 1;
+    uint32_t skeletalXbot = 0;
+    CommandLineArgs::GetInteger(L"skeletal-break-xbot", skeletalXbot);
+    m_SkeletalChecks.Xbot = skeletalXbot == 1;
+    m_SkeletalChecks.Enabled |= m_SkeletalChecks.Xbot;
     if (m_SkeletalChecks.Enabled) m_UsePhysicsSim = 1;
 
     // 충돌 표시와 물리 조회 진단 옵션을 읽는다.
@@ -405,6 +409,11 @@ void ModelViewer::Startup( void )
         if (!object->GetMeshComponents().empty())
         { m_CutOwner = object->GetId(); m_CutMesh = object->GetMeshComponents().front()->GetId(); break; }
     m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
+
+    // Xbot 진단에서만 왼팔과 바닥을 크게 담는 시작 시점을 사용한다.
+    if (m_SkeletalChecks.Xbot)
+        m_Camera.SetEyeAtUp(Vector3(5.5f, -0.15f, 2.8f), Vector3(5.5f, -0.15f, 0.0f), Vector3(kYUnitVector));
+
     m_Camera.SetZRange(0.1f, 1000.0f);
     auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
     controller->EnableMomentum(false);
