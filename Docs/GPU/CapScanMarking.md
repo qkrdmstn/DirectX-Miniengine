@@ -1,4 +1,4 @@
-상태: 진행 중 — master `6f328257`(단계 1·1b) 기준 S1 구현·MX450 지정 검증 완료(미커밋); S2·S2b·S3 미착수 (2026-10-30)
+상태: 진행 중 — S1 커밋 `3a17454f`; 그 기준 S2 구현·MX450 검증 완료(미커밋); S2b·S3 미착수 (2026-10-30)
 
 # Cap 선택을 누적합 기반 교대 표시로 바꾸기
 
@@ -108,3 +108,24 @@ S1은 구조만 바꾸고 결과는 그대로 두어 배치 변경의 회귀를 
 - 새 D3D12 ERROR/CORRUPTION은 없고 failedEarSegments=0이다. 다만 기존과 같은 Bunny y=-240의 uncappedSegments=207, y=-230의 49 및 badBoundaryMask=1이 남는다. y=0의 badBoundaryMask=2, 렌더 타깃 WARNING, DXGI ERROR #80도 1b 로그에 존재한다. checksum 일치는 이 문제들의 해결을 뜻하지 않는다.
 - 로그·백업·DXIL·실행 스크립트는 저장소 밖 `%TEMP%/cap-s1/`에 있다. 실행 파일·PDB·모델 복사와 HDR/RAW 저장은 하지 않았다. C: 여유는 시작 2.854 GiB, 최종 빌드 후 약 1.91 GiB였고 검사 시 1.5 GiB 미만은 없었다. `Get-PSDrive C`가 Free를 반환하지 않아 .NET `DriveInfo.AvailableFreeSpace`로 보완했다.
 - 통제된 m=1024 경계·1024 초과 loop·잘못된 연결·SerialMode 직접 입력, 면적 상쇄가 큰 경계 및 5060 Ti는 미검증이다. S2 이후 단계와 독립된 새 세션 리뷰는 수행하지 않았다.
+
+## 9. S2 실행 기록
+
+- 캐시 경로(m ≤ 1024)에 wave 번호·연속 k개 위치 소유·2-barrier `BlockExclusiveSum`을 적용했다.
+- 위치 키 `asuint(Point2(slot))`의 x/y 사전순 최솟값을 캐시 위치 0으로 회전한다. 초기 Next 배열을 임시 저장소로 쓰고 barrier 하나를 추가했다.
+- 동일 위치 키는 순회 중 첫 점을 유지하므로 정확히 중복된 점은 이론적인 비결정성 원인으로 남는다. 회전으로 방향 계산의 면적 합산 순서도 바뀐다.
+- 볼록/공선 후보를 먼저 scan하고 parity로 교대 표시한 후보만 기존 점 집합과 `InTriangle`로 검사한다.
+- 통과 후보의 두 번째 scan으로 경계 앞쪽 최대 Remaining-3개를 제거한다. 공선은 삼각형을 쓰지 않는다.
+- 연속 두 라운드의 제거가 0이면 같은 라운드에서 모든 후보를 재검사하고 첫 ear 하나만 제거한다.
+- 캐시는 `min(m,4096)` 라운드까지 병렬 진행한다. 단일 스레드 마무리는 넣지 않았다.
+- m > 1024는 기존 해시 선택 경로를 유지한다. 캐시 SerialMode는 같은 표시 규칙으로 첫 통과 후보 하나만 제거한다.
+- KDop 뒤 DWORD `58+2*Sections`부터 rounds/marked/removed를 추가했다. rounds는 양쪽 경로, 나머지는 캐시만 집계한다.
+- 캐시 플래그 bit3은 제거 선택, bit4는 reflex 검사점이다. marked 합계에는 무진행 재검사 후보도 포함한다.
+- 라운드 끝 tid 0이 Remaining 갱신·LastRemoved 보관·Removed 초기화를 함께 수행한다. barrier 뒤에는 LastRemoved만 읽으며 라운드 시작 reset/barrier는 제거했다.
+- 삼각형·완료 기록과 마지막 세 점의 최소 원래 슬롯 규칙은 유지했다.
+- DXC `cs_6_0 -HV 2021` Debug/Release 조합의 64/256/512가 모두 통과했다. 공유 메모리는 각각 24,692/24,884/25,140 B다.
+- 첫 구현은 leader 슬롯(원자 배정)에서 시작해 같은 바이너리 반복에서 checksum이 달랐다(Bunny y=0 라운드 18 대 26). 위 회전과 LastRemoved 수정으로 해결했다.
+- MX450 Debug/Release 빌드 exit 0, `git diff --check` 통과. Cube y=0·45°, Bunny y=0·-240·-230·재절단을 Debug/Release 각 3회 실행해 모두 기하 검증 통과, 3회 checksum 동일, 새 D3D12 ERROR/CORRUPTION 없음. Release 64/512(Bunny y=0·재절단)는 256과 checksum 동일. 결과는 1b/S1과 다른 새 기준선이다(Bunny y=0 side별 366 삼각형, checksum `0x4179d9f985871654`/`0x059991a19771220e`).
+- 진단(Release 256): Bunny y=0 rounds 22·marked 369·removed 367, y=-240 15·397·396, y=-230 34·451·447, 재절단 두 번째 45·191·175, Cube y=0 2·6·5. 표시 후보의 ear 비율은 92~99%지만 라운드는 추정(8~9)보다 많다. 후보가 활성 정점의 일부라 라운드당 제거가 1/2보다 작다.
+- 성능은 **S1(`3a17454f`) 대비**로 쟀다(§6의 1b 대비 조건과 구분). MX450 Release Bunny 벤치를 S1→S2 교차 순서로 각 3회: S1 medianGpuMs 6.18/6.24/5.59·cap 3.38/3.51/3.10 ms, S2 3.48/4.30/3.50·1.67/1.89/1.67 ms. 범위가 겹치지 않아 개선으로 판정한다. 5060 Ti는 미측정이다.
+- 새 Codex 리뷰(구현과 별도 실행): blocker·major 없음, 문서 동기화 지적만 반영했다. 기존 Bunny y=-240 uncappedSegments=207, y=-230 49, badBoundaryMask는 그대로 남는다. 로그·스크립트는 `%TEMP%/cap-s2/`다.

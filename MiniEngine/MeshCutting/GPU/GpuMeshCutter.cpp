@@ -230,7 +230,7 @@ namespace MeshCutting
 
         // scratch, metadata, descriptor, readback의 논리 크기를 개별 정렬한다.
         const uint64_t scratchBytes = segments * 128 + buckets * 4 + segments * 8;
-        const uint64_t metadataBytes = (20 + sectionCount * 2 + 2 * KDopWordsPerSide) * 4;
+        const uint64_t metadataBytes = (20 + sectionCount * 2 + 2 * KDopWordsPerSide + 3) * 4;
         bytes += allocated(scratchBytes);
         bytes += allocated(metadataBytes);
         bytes += allocated(sectionCount * sizeof(CutSection));
@@ -289,16 +289,24 @@ namespace MeshCutting
         }
     }
 
-    // fence가 끝난 뒤 작은 metadata와 GPU timestamp만 읽는다.
+    // fence가 끝난 뒤 cap 누적 진단을 포함한 metadata와 GPU timestamp만 읽는다.
     bool CutJob::Poll()
     {
         if (Collected) return true;
         if (!Graphics::g_CommandManager.IsFenceComplete(Fence)) return false;
-        Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide);
+
+        // 기존 KDop 뒤에 추가한 세 DWORD까지 함께 읽는다.
+        Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide + 3);
         std::memcpy(Status.data(), StatusReadback.Map(), Status.size() * 4);
         StatusReadback.Unmap();
 
-        // Metadata 끝의 면별 18-DOP을 해석하며 기여 정점이 없는 면은 sentinel을 해석하지 않고 비운다.
+        // section 수에 따른 진단 시작 위치에서 라운드·표시·실제 제거 합계를 해석한다.
+        const uint32_t capBase = 58 + Constants.Sections * 2;
+        CapRounds = Status[capBase];
+        CapMarked = Status[capBase + 1];
+        CapRemoved = Status[capBase + 2];
+
+        // 기존 면별 18-DOP을 해석하며 기여 정점이 없는 면은 sentinel을 해석하지 않고 비운다.
         for (uint32_t side = 0; side < 2; ++side)
         {
             const uint32_t base = 80 / 4 + Constants.Sections * 2 + side * KDopWordsPerSide;
@@ -479,7 +487,9 @@ namespace MeshCutting
             out->Provenance.Create(L"Cut current-parent provenance", uint32_t(vertices * 32), 1);
             out->CapMaterial.Create(L"Cut cap material",1,sizeof(material));
         }
-        std::vector<uint32_t> initial(20 + c.Sections * 2 + 2 * KDopWordsPerSide, 0);
+
+        // KDop 뒤의 cap 진단 세 DWORD도 0으로 초기화한다.
+        std::vector<uint32_t> initial(20 + c.Sections * 2 + 2 * KDopWordsPerSide + 3, 0);
         for (uint32_t side = 0; side < 2; ++side) for (uint32_t k = 0; k < 3; ++k) initial[8 + side * 6 + k] = 0xffffffff;
         // 면별 18-DOP의 최솟값 단어는 최대 sentinel로, 최댓값 단어와 개수는 0으로 시작한다.
         for (uint32_t side = 0; side < 2; ++side)

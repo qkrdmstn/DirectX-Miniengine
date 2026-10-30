@@ -36,6 +36,8 @@ namespace MeshCutting
         std::array<KDop18, 2> SideDop{};
         std::array<bool, 2> SideDopValid{};
         std::array<double, 4> StageMs{};
+        // 라운드는 전체 경로, 표시·제거 합계는 캐시 경로만 집계한다.
+        uint32_t CapRounds = 0, CapMarked = 0, CapRemoved = 0;
         double GpuMilliseconds = 0, ReadyMilliseconds = 0;
         std::chrono::steady_clock::time_point Started;
         bool Collected = false;

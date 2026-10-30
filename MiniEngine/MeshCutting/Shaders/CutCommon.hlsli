@@ -23,6 +23,8 @@ RWByteAddressBuffer PoseA : register(u1);
 RWByteAddressBuffer DataB : register(u2);
 RWByteAddressBuffer PoseB : register(u3);
 RWByteAddressBuffer Meta : register(u4);
+// Meta DWORD: section 카운터 [20,20+2*Sections), KDop 38개 뒤에 cap 진단 3개를 추가한다.
+// [58+2*Sections,+1,+2]는 각각 capRounds, capMarked, capRemoved이며 기존 오프셋은 유지한다.
 RWByteAddressBuffer Ring : register(u5);
 RWByteAddressBuffer OriginA : register(u6);
 RWByteAddressBuffer OriginB : register(u7);
