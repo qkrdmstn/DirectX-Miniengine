@@ -43,6 +43,59 @@ namespace MeshCutting
                 Read<uint16_t>(data,section.IbOffset+at*2));
         }
 
+        // 정수의 바이트를 고정 순서로 결합해 위치 비트를 그대로 해시한다.
+        void HashWord(uint64_t& hash, uint32_t word)
+        {
+            // FNV-1a에 하위 바이트부터 넣어 부동소수점 연산을 피한다.
+            for (uint32_t byte = 0; byte < 4; ++byte)
+            {
+                hash ^= (word >> (byte * 8)) & 0xffu;
+                hash *= 1099511628211ull;
+            }
+        }
+
+        // winding을 보존하는 회전만 정규화하고 삼각형 순서와 무관한 cap checksum을 출력한다.
+        void PrintCapChecksum(const uint8_t* vertices, const CutSection& section, uint32_t count, uint32_t side)
+        {
+            // 세 위치의 원시 비트를 읽고 가장 작은 순환 회전을 고른다.
+            std::vector<uint64_t> hashes;
+            for (uint32_t tri = 0; tri < count; tri += 3)
+            {
+                std::array<std::array<uint32_t, 3>, 3> points;
+                for (uint32_t corner = 0; corner < 3; ++corner)
+                    points[corner] = Read<std::array<uint32_t, 3>>(vertices, size_t(section.VertexStart + tri + corner) * 40);
+                uint32_t first = 0;
+                for (uint32_t rotation = 1; rotation < 3; ++rotation)
+                {
+                    for (uint32_t corner = 0; corner < 3; ++corner)
+                    {
+                        const auto& candidate = points[(rotation + corner) % 3];
+                        const auto& current = points[(first + corner) % 3];
+                        if (candidate == current) continue;
+                        if (candidate < current) first = rotation;
+                        break;
+                    }
+                }
+
+                // 정규화한 삼각형을 해시하되 반대 winding은 합치지 않는다.
+                uint64_t hash = 14695981039346656037ull;
+                for (uint32_t corner = 0; corner < 3; ++corner)
+                    for (uint32_t word : points[(first + corner) % 3]) HashWord(hash, word);
+                hashes.push_back(hash);
+            }
+
+            // 정렬 후 결합해 출력 예약 순서를 무시하고 중복 개수는 보존한다.
+            std::sort(hashes.begin(), hashes.end());
+            uint64_t checksum = 14695981039346656037ull;
+            for (uint64_t hash : hashes)
+            {
+                HashWord(checksum, uint32_t(hash));
+                HashWord(checksum, uint32_t(hash >> 32));
+            }
+            Utility::Printf("Static cut cap checksum: side=%u triangles=%zu hash=0x%016llx\n",
+                side, hashes.size(), static_cast<unsigned long long>(checksum));
+        }
+
         // 각 면 출력 정점을 읽어 CPU에서 double로 18-DOP을 구하고 GPU 값과 절대+상대 허용오차로 비교한다.
         void ValidateSideDop(CutJob& job)
         {
@@ -330,6 +383,10 @@ namespace MeshCutting
                     ++triangles;
                 }
             }
+
+            // 기존 검사를 마친 cap 위치로 순서 무관 checksum을 기록한다.
+            PrintCapChecksum(vertices, Sections.back(), Status[20 + side * Constants.Sections + Constants.Sections - 1], side);
+
             data.Unmap(); pose.Unmap(); origin.Unmap();
             Require(std::abs(capArea-expectedArea) <= std::max(1.0e-8, expectedArea*0.001), "Cap area does not match closed boundary");
             Utility::Printf("GPU cut validation passed: side=%u triangles=%u capArea=%.9f expected=%.9f signedVolume=%.9f\n",

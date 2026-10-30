@@ -1,8 +1,8 @@
-상태: 완료 — `3dc5d6ba` 기반 선택·기즈모, `f2138029` 기준 다중 Static CutJob 제출 1단계 검증 완료·미커밋 (2026-10-29)
+상태: 완료 — `3dc5d6ba` 기반 선택·기즈모, `f2138029` 기준 다중 Static CutJob, `1532fc60` 기준 cap 단계 1 경로 기록·미커밋; cap 결과 불변은 미확인 (2026-10-30)
 
 # 현재 Scene과 유한 평면 코드 지도
 
-현재 구현은 객체 선택·TRS 편집과 유한 평면의 기하·격자 표시까지다. 실제 GPU 절단, 교차 미리보기, 유한 영역에 일부만 걸친 메시의 절단 정책은 미구현이다. 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.
+현재 구현은 객체 선택·TRS 편집, 유한 평면의 기하·격자 표시와 Static GPU 절단·cap·재절단을 포함한다. 유한 영역을 넘는 교차는 후보 전체를 거절한다. Skeletal 절단과 교차 미리보기는 미구현이다. 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.
 
 ## 실행 흐름
 
@@ -13,6 +13,7 @@
 | 선택 | `PickObject`, `CutPlaneSystem::Pick`, `NearestPickHit` | 생성 조각은 경계 구 뒤 충돌 hull 교점을 검사하고 원본 구·유한 직사각형과 월드 거리로 비교한다. |
 | 편집 | `TransformGizmo`, `GetEditTargetPivot`, `GizmoMath::KeepPivot` | 생성 Mesh의 경계 중심으로 기즈모를 표시·편집하고 노란 hull 모서리로 선택을 표시한다. 평면 크기 모드는 로컬 X/Z만 바꾼다. |
 | 스냅샷 | `CutPlaneSystem::BuildData`, `TryBuildCutPlaneData` | 평면 설명과 현재 GameObject TRS로 기하 데이터를 계산한다. |
+| cap·진단 | `CapEarsCS::main`, `CutJob::ValidateDiagnostics`, `PrintCapChecksum` | `CAP_THREADS` 기본 256으로 기존 귀 선택을 분담한다. 진단에서 위치 원시 비트와 winding을 보존하는 순서 무관 cap checksum을 출력한다. 비교 결과와 한계는 [단계 1 기록](../GPU/CapParallelOptimization.md)을 따른다. |
 | 표시 | `Scene::Render`, `RenderCutPlanes` | 모델을 렌더하고 메인 투명 메시 뒤·후처리 전에 평면당 테두리·격자 22개 선을 그린다. 장면 깊이를 검사하며 깊이를 쓰지 않는다. |
 
 ## 소유권과 공간 계약

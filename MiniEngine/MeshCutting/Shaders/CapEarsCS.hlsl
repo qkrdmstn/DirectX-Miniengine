@@ -1,4 +1,8 @@
 #include "CutCommon.hlsli"
+
+#ifndef CAP_THREADS
+#define CAP_THREADS 256
+#endif
 groupshared uint Remaining,Removed;
 groupshared float Orientation;
 groupshared uint Cached,LoopLeader,AllPoints;
@@ -19,10 +23,22 @@ uint Kind(uint i){return Cached!=0?CachedKind[i]:Ring.Load(i*128+60);}
 uint Selected(uint i){return Cached!=0?CachedSelected[i]:Ring.Load(i*128+88);}
 
 
-// 입력 삼각형 순서가 단조로워도 한 라운드에 여러 귀가 선택되도록 우선순위를 섞는다.
-uint Priority(uint id,uint round)
+// 슬롯 배정 순서와 무관하게 투영 위치 비트와 라운드로 우선순위를 섞는다.
+uint Priority(uint2 key,uint round)
 {
-    uint h=id+0x9e3779b9u*(round+1);h^=h>>16;h*=0x7feb352du;h^=h>>15;h*=0x846ca68bu;return h^(h>>16);
+    // 두 좌표 비트를 결합한 뒤 라운드별로 분산한다.
+    uint h=key.x+0x9e3779b9u;h^=key.y+0x9e3779b9u+(h<<6)+(h>>2);
+    h+=0x9e3779b9u*(round+1);h^=h>>16;h*=0x7feb352du;h^=h>>15;h*=0x846ca68bu;return h^(h>>16);
+}
+// 우선순위 동률은 위치 비트 사전순으로 풀고 같은 위치에서만 슬롯 ID를 쓴다.
+bool PriorityLess(uint id,uint priority,uint other,uint otherPriority)
+{
+    // 해시가 다르면 위치를 다시 읽지 않고 비교한다.
+    if(priority!=otherPriority)return priority<otherPriority;
+
+    // 위치 비트까지 같을 때만 슬롯 순서로 최종 동률을 푼다.
+    uint2 key=asuint(P2(id)),otherKey=asuint(P2(other));
+    return key.x<otherKey.x || (key.x==otherKey.x && (key.y<otherKey.y || (key.y==otherKey.y && id<other)));
 }
 // 경계에 닿는 점도 귀 안에 있다고 판정해 잘못된 대각선을 만들지 않는다.
 bool InTriangle(float2 p,float2 a,float2 b,float2 c,float sign)
@@ -31,35 +47,45 @@ bool InTriangle(float2 p,float2 a,float2 b,float2 c,float sign)
         && Cross2(a-c,p-c)*sign>=-Epsilon*Epsilon;
 }
 // 한 경계에 한 그룹을 배정하고 그룹 내부에서 귀 검사와 안전한 다중 제거를 병렬 수행한다.
-[numthreads(64,1,1)]
+[numthreads(CAP_THREADS,1,1)]
 void main(uint3 group:SV_GroupID,uint tid:SV_GroupIndex)
 {
+    // 유효 loop를 확인하고 그룹 공통 상태를 초기화한다.
     uint leader=group.x+group.y*65535,count=min(Meta.Load(4),MaxSegments);
     if(leader>=count||Ring.Load(leader*128+48)!=leader||(Ring.Load(leader*128+52)&5)!=0)return;
     if(tid==0){Cached=count<=1024?1:0;LoopLeader=leader;AllPoints=(Ring.Load(leader*128+52)&2)!=0?1:0;}
     GroupMemoryBarrierWithGroupSync();
-    if(Cached!=0)for(uint cache=tid;cache<count;cache+=64)
+
+    // 작은 경계를 공유 메모리에 복사한다.
+    if(Cached!=0)for(uint cache=tid;cache<count;cache+=CAP_THREADS)
     {
         CachedPoints[cache]=Point2(cache);CachedNext[cache]=Next(cache);CachedPrev[cache]=Prev(cache);
         CachedActive[cache]=Ring.Load(cache*128+48)==leader?1:0;CachedKind[cache]=CachedSelected[cache]=0;
     }
     GroupMemoryBarrierWithGroupSync();
+
+    // 활성 점 수와 방향을 구한다.
     if(tid==0)
     {
         Remaining=0;float area=0;
         for(uint j=0;j<count;j++)if(Active(j)!=0){Remaining++;area+=Cross2(P2(j),P2(Nxt(j)));}
         Orientation=area>=0?1:-1;
+
         // 아주 큰/퇴화한 단면은 surface 절단을 유지하고 cap만 생략한다.
         if(Remaining>4096||abs(area)<Epsilon*Epsilon)Remaining=0;
     }
     GroupMemoryBarrierWithGroupSync();
     if(Remaining<3)return;
+
+    // 기존 라운드 상한과 선택 규칙으로 귀를 반복 제거한다.
     for(uint round=0;round<min(count,SerialMode==0?256u:4096u) && Remaining>3;round++)
     {
+        // 이번 라운드의 제거 수를 초기화한다.
         if(tid==0)Removed=0;
         GroupMemoryBarrierWithGroupSync();
+
         // 단순 다각형의 귀 내부 검사는 reflex/collinear 정점만 필요하다. Selected는 이 단계에서 임시 reflex mask다.
-        for(uint reflex=tid;reflex<count;reflex+=64)
+        for(uint reflex=tid;reflex<count;reflex+=CAP_THREADS)
         {
             if(Active(reflex)==0)continue;
             float turn=Cross2(P2(reflex)-P2(Prv(reflex)),P2(Nxt(reflex))-P2(reflex))*Orientation;
@@ -67,7 +93,9 @@ void main(uint3 group:SV_GroupID,uint tid:SV_GroupIndex)
             if(Cached!=0)CachedSelected[reflex]=flag;else Ring.Store(reflex*128+88,flag);
         }
         AllMemoryBarrierWithGroupSync();
-        for(uint i=SerialMode==1?(tid==0?0:count):tid;i<count;i+=SerialMode==1?1:64)
+
+        // 활성 후보의 귀 또는 공선 여부를 판정한다.
+        for(uint i=SerialMode==1?(tid==0?0:count):tid;i<count;i+=SerialMode==1?1:CAP_THREADS)
         {
             if(Active(i)==0)continue;
             uint a=Prv(i),c=Nxt(i);float2 p=P2(a),q=P2(i),r=P2(c);
@@ -84,30 +112,43 @@ void main(uint3 group:SV_GroupID,uint tid:SV_GroupIndex)
             if(Cached!=0)CachedKind[i]=kind;else Ring.Store(i*128+60,kind);
         }
         AllMemoryBarrierWithGroupSync();
+
         // 제거되는 세 점이 겹치지 않도록 현재 경계의 양쪽 두 이웃과 우선순위를 비교한다.
-        for(uint v=tid;v<count;v+=64)
+        for(uint v=tid;v<count;v+=CAP_THREADS)
         {
             if(Active(v)==0)continue;
             if(Kind(v)==0){if(Cached!=0)CachedSelected[v]=0;else Ring.Store(v*128+88,0);continue;}
             uint a=Prv(v),c=Nxt(v);uint neighbors[4]={a,c,Prv(a),Nxt(c)};bool selected=true;
-            uint priority=Priority(v,round);
+            uint priority=Priority(asuint(P2(v)),round);
             [unroll]for(uint n=0;n<4;n++)
             {
-                uint otherPriority=Priority(neighbors[n],round);
-                if(Kind(neighbors[n])!=0 && (otherPriority<priority || (otherPriority==priority && neighbors[n]<v)))selected=false;
+                uint otherPriority=Priority(asuint(P2(neighbors[n])),round);
+                if(Kind(neighbors[n])!=0 && PriorityLess(neighbors[n],otherPriority,v,priority))selected=false;
             }
             if(Cached!=0)CachedSelected[v]=selected?1:0;else Ring.Store(v*128+88,selected?1:0);
         }
         AllMemoryBarrierWithGroupSync();
+
         // 동시에 지워도 최소 세 점은 남도록 잔여가 작은 경우 최저 후보 하나만 고른다.
         if(tid==0 && (Remaining<=5||SerialMode!=0))
         {
-            bool chosen=false;
+            // 병렬 선택을 통과한 후보 중 같은 우선순위 키의 최솟값을 찾는다.
+            uint chosen=count,chosenPriority=0;
             for(uint z=0;z<count;z++)if(Active(z)!=0 && Selected(z)!=0)
-            {if(chosen){if(Cached!=0)CachedSelected[z]=0;else Ring.Store(z*128+88,0);}chosen=true;}
+            {
+                uint priority=Priority(asuint(P2(z)),round);
+                if(chosen==count || PriorityLess(z,priority,chosen,chosenPriority))
+                {chosen=z;chosenPriority=priority;}
+            }
+
+            // 최솟값 후보 하나만 남겨 잔여 점 수를 보장한다.
+            for(uint clear=0;clear<count;clear++)if(Active(clear)!=0 && Selected(clear)!=0 && clear!=chosen)
+            {if(Cached!=0)CachedSelected[clear]=0;else Ring.Store(clear*128+88,0);}
         }
         AllMemoryBarrierWithGroupSync();
-        for(uint v2=tid;v2<count;v2+=64)
+
+        // 선택된 점의 삼각형을 기록하고 연결을 갱신한다.
+        for(uint v2=tid;v2<count;v2+=CAP_THREADS)
         {
             if(Active(v2)==0||Selected(v2)==0)continue;
             uint a=Prv(v2),c=Nxt(v2);
@@ -117,10 +158,14 @@ void main(uint3 group:SV_GroupID,uint tid:SV_GroupIndex)
             InterlockedAdd(Removed,1);
         }
         AllMemoryBarrierWithGroupSync();
+
+        // 제거 수를 반영하고 진행이 없으면 중단한다.
         if(tid==0)Remaining-=Removed;
         GroupMemoryBarrierWithGroupSync();
         if(Removed==0)return;
     }
+
+    // 마지막 세 점을 기록하고 loop 완료를 표시한다.
     if(tid==0 && Remaining==3)
     {
         for(uint i=0;i<count;i++)if(Active(i)!=0)
