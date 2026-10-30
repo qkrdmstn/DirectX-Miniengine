@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -192,23 +192,35 @@ namespace Graphics
     EnumVar DebugZoom("Graphics/Display/Magnify Pixels", kDebugZoomOff, kDebugZoomCount, DebugZoomLabels);
 }
 
+// 유효한 표시 크기로 스왑 체인과 디스플레이 종속 버퍼를 재생성한다.
 void Display::Resize(uint32_t width, uint32_t height)
 {
+    // 크기가 0이면 GPU 대기와 표시 크기 변경 전에 종료한다.
+    if (width == 0 || height == 0)
+        return;
+
+    // 기존 버퍼를 사용하는 GPU 작업이 끝날 때까지 기다린다.
     g_CommandManager.IdleGPU();
 
+    // 새 표시 크기를 저장한다.
     g_DisplayWidth = width;
     g_DisplayHeight = height;
 
+    // 변경된 표시 해상도를 진단 출력에 기록한다.
     DEBUGPRINT("Changing display resolution to %ux%u", width, height);
 
+    // 표시 전 버퍼를 새 크기로 생성한다.
     g_PreDisplayBuffer.Create(L"PreDisplay Buffer", width, height, 1, SwapChainFormat);
 
+    // 크기를 변경하기 전에 기존 스왑 체인 버퍼를 해제한다.
     for (uint32_t i = 0; i < SWAP_CHAIN_BUFFER_COUNT; ++i)
         g_DisplayPlane[i].Destroy();
 
+    // 스왑 체인 버퍼의 크기를 변경한다.
     ASSERT(s_SwapChain1 != nullptr);
     ASSERT_SUCCEEDED(s_SwapChain1->ResizeBuffers(SWAP_CHAIN_BUFFER_COUNT, width, height, SwapChainFormat, 0));
 
+    // 변경된 스왑 체인 버퍼를 다시 연결한다.
     for (uint32_t i = 0; i < SWAP_CHAIN_BUFFER_COUNT; ++i)
     {
         ComPtr<ID3D12Resource> DisplayPlane;
@@ -216,10 +228,13 @@ void Display::Resize(uint32_t width, uint32_t height)
         g_DisplayPlane[i].CreateFromSwapChain(L"Primary SwapChain Buffer", DisplayPlane.Detach());
     }
 
+    // 현재 버퍼 인덱스를 처음으로 되돌린다.
     g_CurrentBuffer = 0;
 
+    // 스왑 체인 갱신 후 GPU 작업 완료를 기다린다.
     g_CommandManager.IdleGPU();
 
+    // 표시 크기에 의존하는 나머지 렌더링 버퍼를 갱신한다.
     ResizeDisplayDependentBuffers(g_NativeWidth, g_NativeHeight);
 }
 

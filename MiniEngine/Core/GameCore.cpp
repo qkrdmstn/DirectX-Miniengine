@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -159,13 +159,24 @@ namespace GameCore
     //--------------------------------------------------------------------------------------
     // Called every time the application receives a message
     //--------------------------------------------------------------------------------------
+    // 창 메시지를 처리하고 유효한 크기 변경을 디스플레이에 전달한다.
     LRESULT CALLBACK WndProc( HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam )
     {
+        // 메시지 종류에 따라 크기 변경과 종료를 처리한다.
         switch( message )
         {
         case WM_SIZE:
-            Display::Resize((UINT)(UINT64)lParam & 0xFFFF, (UINT)(UINT64)lParam >> 16);
+        {
+            // 최소화되거나 크기가 0인 창은 버퍼를 재생성하지 않는다.
+            const UINT width = LOWORD(lParam);
+            const UINT height = HIWORD(lParam);
+            if (wParam == SIZE_MINIMIZED || width == 0 || height == 0)
+                break;
+
+            // 유효한 창 크기로 디스플레이 버퍼를 갱신한다.
+            Display::Resize(width, height);
             break;
+        }
 
         case WM_DESTROY:
             PostQuitMessage(0);
@@ -175,6 +186,7 @@ namespace GameCore
             return DefWindowProc( hWnd, message, wParam, lParam );
         }
 
+        // 처리한 메시지는 기본 창 처리기로 넘기지 않는다.
         return 0;
     }
 
