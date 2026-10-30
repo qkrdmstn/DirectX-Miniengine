@@ -477,6 +477,107 @@ namespace Viewer
         CheckComponent(physics.GetReservedBodyCount() == 0, "BC-11 animated fixture cleanup");
     }
 
+    // Scene 삭제와 대기 요청의 실제 프레임 경로에서 수명 자원을 검사한다.
+    class SkeletalLifetimeChecks
+    {
+    public:
+        // 기존 CPU 등록 실패·중복 break 시험에 없는 Scene 경계만 검사한다.
+        static void Run()
+        {
+            // 모델과 GPU 자원이 없는 별도 Scene에서도 실제 owner ID와 공통 world를 사용한다.
+            const auto fixture = MiniPhysics::CreateThreeBodyFixture();
+            std::vector<MiniPhysics::SkeletalRigidFrame> frames;
+            for (const auto& body : fixture.Asset.Bodies)
+                frames.push_back(fixture.RestNodeFrames[body.Node]);
+            Scene scene;
+            PhysicsSystem physics(scene);
+            physics.Initialize(true, 16, true);
+            auto& skeletal = physics.GetSkeletalPhysics();
+
+            // 직접 삭제·사용자 삭제 경로·다중 rig Scene clear·Physics clear를 각각 확인한다.
+            for (unsigned mode = 0; mode < 4; ++mode)
+            {
+                const ObjectId owner = scene.CreateObject("BC-13a lifetime").GetId();
+                CheckComponent(skeletal.Register(owner, fixture.Asset, fixture.NodeParents, frames),
+                    "BC-13a lifetime register");
+                BreakRequest request{ owner, 0, skeletal.GetRigGeneration(owner), 1 };
+                request.WorldImpulse = { 1, 0, 0 };
+                physics.QueueBreak(request);
+                CheckComponent(physics.m_World.GetBodyCount() == 3 && physics.m_World.GetConstraintCount() == 2 &&
+                    physics.m_World.GetExcludedPairCount() == 2 && physics.GetReservedBodyCount() == 3,
+                    "BC-13a resources present before cleanup");
+
+                // Scene clear는 분리된 rig와 아직 Kinematic인 두 번째 rig를 함께 지운다.
+                if (mode == 2)
+                {
+                    CheckComponent(skeletal.BreakConstraint(request) == BreakStatus::Applied,
+                        "BC-13a break before scene clear");
+                    const ObjectId second = scene.CreateObject("BC-13a second rig").GetId();
+                    CheckComponent(skeletal.Register(second, fixture.Asset, fixture.NodeParents, frames),
+                        "BC-13a second rig register");
+                    scene.Clear();
+                }
+                else if (mode == 3)
+                {
+                    // 명시적 Physics clear는 world 종료 전에 대기 요청까지 버린다.
+                    physics.Clear();
+                    CheckComponent(physics.m_PendingBreaks.empty(), "BC-13a physics clear discards queued break");
+                    scene.Clear();
+                }
+                else
+                {
+                    // 사용자 경로의 즉시 해제와 Scene 직접 삭제의 다음 프레임 정리를 구분한다.
+                    if (mode == 1)
+                        physics.RemoveTarget(owner, InvalidComponentId);
+                    CheckComponent(scene.DeleteObject(owner), "BC-13a owner deleted");
+                }
+
+                // 삭제 직후 도착한 값 기반 요청도 zero-step 정리 뒤에는 대상을 찾지 못한다.
+                if (mode != 3)
+                {
+                    physics.QueueBreak(request);
+                    CheckComponent(physics.AdvanceSimulation(0) == 0, "BC-13a zero-step cleanup");
+                    CheckComponent(physics.m_PendingBreaks.size() == 2, "BC-13a delayed commands wait for step");
+                    const auto before = physics.GetQueuedBreakDiagnostics();
+                    CheckEmpty(physics);
+                    CheckComponent(physics.AdvanceSimulation(PhysicsStepClock::FixedSeconds) == 1,
+                        "BC-13a delayed commands consumed at fixed step");
+                    CheckComponent(physics.m_PendingBreaks.empty(), "BC-13a delayed queue drained");
+
+                    // 큐에서 소비한 두 요청 모두 실제 반환값이 NotFound여야 한다.
+                    const auto after = physics.GetQueuedBreakDiagnostics();
+                    CheckComponent(after.Processed - before.Processed == 2 && after.NotFound - before.NotFound == 2,
+                        "BC-13a consumed queued breaks both NotFound");
+                }
+
+                // 각 경우의 완료 직후와 반복 정리 뒤에 네 종류 자원을 모두 검사한다.
+                CheckEmpty(physics);
+                const ObjectId next = scene.CreateObject("BC-13a ID after deletion").GetId();
+                CheckComponent(next > owner, "BC-13a deleted owner ID never reused");
+                scene.Clear();
+            }
+            physics.Clear();
+            CheckEmpty(physics);
+
+            // 세 삭제 경로에서 소비한 여섯 요청의 결과를 합산한 뒤에만 PASS를 출력한다.
+            const auto results = physics.GetQueuedBreakDiagnostics();
+            CheckComponent(results.Processed == 6 && results.NotFound == 6,
+                "BC-13a all six consumed queued breaks NotFound");
+            Utility::Printf("BC-13a PASS: scene lifetime resources=0 consumed=6 NotFound=6 fixedDt=1/60\n");
+        }
+
+    private:
+        // world를 공개하지 않고 friend 진단에서 실제 body·관절·pair·예약을 읽는다.
+        static void CheckEmpty(const PhysicsSystem& physics)
+        {
+            // query body와 rig 메타데이터도 함께 정리돼야 한다.
+            CheckComponent(physics.m_World.GetBodyCount() == 0 && physics.m_World.GetColliderCount() == 0 &&
+                physics.m_World.GetConstraintCount() == 0 && physics.m_World.GetExcludedPairCount() == 0 &&
+                physics.GetReservedBodyCount() == 0 && physics.m_Skeletal.GetRigCount() == 0,
+                "BC-13a body joint pair reservation rig resources zero");
+        }
+    };
+
     // 공통 fixed step과 실제 모델의 animation·palette·GPU 준비 횟수를 검사한다.
     inline void CheckFixedSimulationPoses(const Scene& source, GraphicsContext& context)
     {
@@ -560,6 +661,7 @@ namespace Viewer
         physics.Clear();
         CheckComponent(physics.GetReservedBodyCount() == 0, "BC-11 shared world cleanup");
         CheckAnimatedBreakOrder(context);
+        SkeletalLifetimeChecks::Run();
     }
 
     // 같은 초기 상태의 기준 wrapper와 Scene 분리 경로의 전체 출력을 비교한다.

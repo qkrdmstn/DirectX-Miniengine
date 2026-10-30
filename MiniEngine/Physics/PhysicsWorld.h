@@ -187,6 +187,8 @@ namespace MiniPhysics
         bool GetConstraintState(ConstraintHandle handle, ConstraintState& state) const;
         // 논리 관절 수를 반환하며 disabled 관절도 포함한다.
         size_t GetConstraintCount() const;
+        // 수명 회귀 진단에서 살아 있는 인접 pair 제외 수를 읽는다.
+        size_t GetExcludedPairCount() const;
         // 호출자가 같은 rig의 직접 인접 pair에만 적용하며 중복 호출은 성공한다.
         bool ExcludeBodyPair(BodyHandle first, BodyHandle second);
 

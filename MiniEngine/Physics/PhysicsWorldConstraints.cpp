@@ -160,6 +160,13 @@ namespace MiniPhysics
         return m_Impl ? m_Impl->Constraints.size() : 0;
     }
 
+    // 정리 뒤 충돌 제외 pair가 남지 않았는지 SDK 자료형 없이 확인한다.
+    size_t PhysicsWorld::GetExcludedPairCount() const
+    {
+        // 초기화 전과 Shutdown 뒤에는 제외 자원이 없다.
+        return m_Impl ? m_Impl->PairFilter->Pairs.size() : 0;
+    }
+
     // rig 등록자가 지정한 직접 인접 pair만 body 수명 동안 충돌에서 제외한다.
     bool PhysicsWorld::ExcludeBodyPair(BodyHandle first, BodyHandle second)
     {

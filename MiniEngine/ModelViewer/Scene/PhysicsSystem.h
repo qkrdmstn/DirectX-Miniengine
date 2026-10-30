@@ -50,6 +50,14 @@ namespace Viewer
         unsigned UpdateFrame(GraphicsContext& context, double deltaSeconds, float animationSeconds);
         // 다음 fixed step의 목표 갱신 뒤 동기 break를 처리한다.
         void QueueBreak(const BreakRequest& request);
+        // 큐에서 실제 처리한 요청과 그중 NotFound 결과의 누적 수다. Clear 뒤에도 보존한다.
+        struct QueuedBreakDiagnostics
+        {
+            uint64_t Processed = 0;
+            uint64_t NotFound = 0;
+        };
+        // world를 노출하지 않고 큐 소비 결과만 읽는다.
+        QueuedBreakDiagnostics GetQueuedBreakDiagnostics() const { return m_QueuedBreakDiagnostics; }
         // 실행한 고정 step 수를 진단에서 읽는다.
         uint64_t GetSimulationStepCount() const { return m_StepCount; }
         // 등록된 동적 메시 body 수를 읽는다.
@@ -108,9 +116,11 @@ namespace Viewer
         // 일반 owner와 물리 owner의 최종 pose를 각각 한 번 확정한다.
         void FinalizeSimulationPoses();
         std::vector<BreakRequest> m_PendingBreaks;
+        QueuedBreakDiagnostics m_QueuedBreakDiagnostics;
         friend class CutTransaction;
         friend class EditApplyChecks;
         friend class EditDeleteChecks;
+        friend class SkeletalLifetimeChecks;
         using Key = std::pair<ObjectId, ComponentId>;
         struct Entry
         {

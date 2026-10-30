@@ -20,7 +20,7 @@ static void CheckEmpty(PhysicsWorld& world, const char* message)
     // 공개 수와 내부 pair 필터를 함께 읽는다.
     const auto* impl = PhysicsWorldAccess::GetImpl(world);
     Check(world.GetBodyCount() == 0 && world.GetConstraintCount() == 0 && world.GetReservedCount() == 0 &&
-        impl->PairFilter->Pairs.empty(), message);
+        impl->PairFilter->Pairs.empty() && world.GetExcludedPairCount() == 0, message);
 }
 
 // BoneFromBody가 identity인 fixture는 body 원점 frame이 해당 본의 rest frame과 같다.
@@ -496,6 +496,7 @@ int main()
     // fixture 등록은 body 3·disabled 관절 2·인접 pair 2를 만들고 frame과 질량을 지킨다.
     Check(skeletal.Register(1, fixture.Asset, fixture.NodeParents, fixtureFrames), "Fixture registered");
     Check(world.GetBodyCount() == 3 && world.GetConstraintCount() == 2 && impl->PairFilter->Pairs.size() == 2, "Fixture resources");
+    Check(world.GetExcludedPairCount() == 2, "Public excluded pair count");
     Check(skeletal.IsRegistered(1) && skeletal.GetRigGeneration(1) == 1, "Fixture generation");
     Check(!skeletal.Register(1, xbot, xbotParents, xbotFrames) && world.GetBodyCount() == 3, "Duplicate owner rejected");
     for (uint32_t i = 0; i < 2; ++i)

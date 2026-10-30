@@ -275,8 +275,14 @@ namespace Viewer
 
             // 최신 목표를 사용해 대기 중인 break를 소비한다.
             for (const auto& request : m_PendingBreaks)
-                Utility::Printf("Skeletal break: owner=%llu status=%u\n", request.Owner,
-                    unsigned(m_Skeletal.BreakConstraint(request)));
+            {
+                // 실제 반환값으로 처리 수와 NotFound 수를 함께 기록한다.
+                const auto status = m_Skeletal.BreakConstraint(request);
+                ++m_QueuedBreakDiagnostics.Processed;
+                if (status == BreakStatus::NotFound)
+                    ++m_QueuedBreakDiagnostics.NotFound;
+                Utility::Printf("Skeletal break: owner=%llu status=%u\n", request.Owner, unsigned(status));
+            }
             m_PendingBreaks.clear();
 
             // 공통 world를 고정 시간으로 한 번 진행한다.

@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-12a-2 b4afd069 완료; BC-12b 렌더 팔레트 수치 보완 완료(미커밋), 두 구성 각2회 PASS·화면 확인/캡처는 Claude 후속; BC-13a 미착수 (2026-10-30)
+상태: 완료 — M1(BC-00~BC-13a), BC-13a 독립 리뷰(Codex) 지적 2건 수정, 미커밋(커밋 해시는 Claude가 커밋 후 채움) (2026-10-30)
 
 # BreakConstraint 진행 기록
 
@@ -276,3 +276,67 @@ MiniEngine/ModelViewer에서 Debug exe -debug 1 -physics-sim 0 -component-checks
 - 분리 후: `$env:TEMP/BreakConstraintTests/BC12b-screens2/p006.1.png`, 확대 `after-zoom2.png` — 상완은 팔꿈치 anchor(빨강) 위치에 남고, 전완·손 메시가 바닥으로 떨어져 다리 사이에 놓인다. 렌더 메시가 물리 pose를 따른다(팔레트 수치 검사와 일치).
 - 한계: Xbot은 관절마다 조각이 나뉜 마네킹 형태라 팔꿈치 정점이 두 본에 걸친 영역이 작다. 그래서 NDC25 슬라이드처럼 길게 늘어나는 피부 띠는 거의 보이지 않고 전완이 분리되어 보인다. 코드 결함이 아니라 자산 특성이며, 피부가 이어진 캐릭터 자산으로 확인하는 것은 M1 범위 밖 후속이다.
 - 독립 리뷰(Codex): BC-12b 구현 지적 0건. 이후 렌더 팔레트 검사·근접 카메라 보완은 Codex 자기 리뷰 지적 0건.
+
+### BC-13a 기본 수명 회귀·M1 마무리 (2026-10-30, HEAD 4f9dbcf7)
+
+| 단계 | 커밋 | 바뀐 파일 | 검증·리뷰 |
+| --- | --- | --- | --- |
+| BC-13a | 미커밋(Claude 후속) | PhysicsWorld.h(+2), PhysicsWorldConstraints.cpp(+7), PhysicsSystem.h(+1), Scene/tests/MeshComponentChecks.h(+92), Scene/tests/SkeletalBreakTests.cpp(+2/-1); 이 Progress, Implementation, Docs/README.md, Docs/Current/CodeMap.md | CPU 두 구성·두 빌드·지정 viewer6회 PASS, 수명40건 PASS·리소스0, 지연요청6건 NotFound, D3D12 ERROR/CORRUPTION0; 별도 자기 리뷰 유효 지적0건 |
+
+- 구현: 기존 시험에 없는 Scene 직접 삭제, RemoveTarget 후 삭제, 분리된 rig와 Kinematic rig의 다중 Scene clear, 대기 break가 있는 Physics clear만 기존 component 진단에 추가했다. 삭제 전/직후 요청을 큐에 넣고 zero-step에서 rig 정리, 다음 fixed step에서 NotFound 소비를 검사한다. body·query·관절·pair·예약·rig 수0과 큐 소진, owner ID 미재사용을 확인한다. 새 읽기 전용 GetExcludedPairCount는 양수2/정리0을 CPU에서도 검사한다. 기존 런타임 frame/pose/물리 OFF 경로 변경은 없다. 새 파일·target이 없어 CMake/testTargets/vcxproj 추가 등록은 없다. C++ 변경 합계104추가/1삭제로 약300줄 이내다.
+- 계약: 기존 구현과 충돌하는 설계 결정은 없다. Scene 삭제/clear의 정리는 다음 AdvanceSimulation 시작(zero-step 포함), Physics clear는 즉시 큐까지 제거한다는 기존 의미를 §12에 명시했다. 계약 상태·§11, README 해당 행, 이 worktree CodeMap의 SkeletalPhysicsSystem/SkeletalPhysicsChecks/두 옵션/수명 진단을 M1 완료로 동기화했다. BC-09/14는 범위 밖이며 다음 단계는 시작하지 않았다.
+
+기존 시험과 추가 필수 회귀의 대응(중복 작성 없음):
+
+| 조건 | 담당 시험·기존 이름 | 이번 실행 근거 |
+| --- | --- | --- |
+| 등록 실패 정리·예약0 | SkeletalBreakTests::main: `Injected failure rolls back resources`(7단계), `Capacity failure leaves no reservation`, CheckEmpty | CPU Debug/Release 재실행 PASS |
+| Unregister/Clear/소멸자0 | 같은 main: `Unregister frees all resources`, `Clear frees all resources`, `Destructor frees all resources` | CPU 두 구성 PASS |
+| 중복 break·impulse 추가 없음 | CheckSynchronousBreak: `Duplicate with old topology already broken`, `Duplicate adds no impulse`, `Duplicate leaves generation`, `Broken rig resources zero` | CPU 두 구성 PASS, 선속도·각속도·topology 불변 |
+| Scene clear·삭제 직후 지연 명령 | SkeletalLifetimeChecks::Run: `BC-13a zero-step cleanup`, `consumed queued breaks both NotFound`(3회), `all six consumed queued breaks NotFound`, `delayed queue drained`, `body joint pair reservation rig resources zero` | 독립 리뷰 수정 후 Debug component 744 PASS/FAIL0. 실제 큐 반환값의 소비 수/NotFound 차이 각2/2, 합계6/6 검사 뒤 BC-13a PASS |
+| zero-step·GPU 프레임당1회·비물리 동등 | 기존 CheckFixedSimulationPoses/CheckAnimatedBreakOrder, CheckScenePoseEquivalence/CheckScenePosePhases | Debug component 전체743 PASS, FAIL0, PASS GPU preparation |
+| 부모 평행이동/회전 중 분리 본 world 불변 | 기존 CheckPoseWriteback: `Moved owner overrides collected`, CheckPoseMatrix | CPU 두 구성 PASS |
+| COM offset | 기존 CheckPoseTargets, PhysicsBodyTests의 독립 COM/off-center impulse 시험 | CPU 두 구성 PASS |
+| 중복 palette | 기존 XbotArmChecks::CheckXbotPoseFinalization: syntheticDuplicateEntries=2 | BC-03a 기존 완료 증거 재사용; 이 단계 -xbot-arm-checks는 재실행하지 않음 |
+
+CPU·전체 빌드(컴파일+실행/빌드 실측, 초):
+
+| 검사 | Debug | Release |
+| --- | --- | --- |
+| SkeletalBreakTests(파일 머리말 cl/Jolt 명령) | 910/910 PASS, 29.10 | 910/910 PASS, 40.55 |
+| PhysicsBodyTests(파일 머리말 cl/Jolt 명령) | 393 PASS, 21.71 | 393 PASS, 22.59 |
+| 전체 ModelViewer.slnx /m /p:Configuration=구성 /p:Platform=Windows | PASS, 80.00 | PASS, 93.11 |
+
+- CPU는 /utf-8, Debug /MDd, Release /MD /O2 /DNDEBUG와 해당 Jolt.lib를 사용했다. 모두 종료0·컴파일 경고0. 산출물은 TEMP/BreakConstraintTests의 기존 BC12a2-root/{시험}-{구성} 폴더를 재사용하고 이번 obj만 제거해 큰 산출물 복사본을 만들지 않았다. CTest 전체는 미수행이다. 빌드는 worktree 루트에서 /restore 없이 수행했고 오류0·기존 코드페이지 C4819 각24건, vswhere/pwsh fallback 메시지가 남았다.
+
+뷰어(모두 -debug 1, 지정 cwd=MiniEngine/ModelViewer, 각1회):
+
+| 구성·옵션 | 결과 | 초 |
+| --- | --- | --- |
+| Debug -skeletal-break-xbot 1 | BC-12b PASS | 40.99 |
+| Release -skeletal-break-xbot 1 | BC-12b PASS | 39.64 |
+| Debug -skeletal-break-checks 1 | BC-12a PASS | 39.17 |
+| Release -skeletal-break-checks 1 | BC-12a PASS | 36.96 |
+| Debug -physics-sim 0 -physics-query-exit 6 | 정상 종료 | 30.82 |
+| Debug -physics-sim 0 -component-checks 1 -physics-query-exit 6 | 743 PASS/FAIL0, PASS GPU preparation, BC-13a PASS | 29.73 |
+
+- 여섯 실행 모두 정상 종료0·D3D12 ERROR/CORRUPTION0. Start-Process -WindowStyle Hidden -Wait로 수집기를 실행하고 수집기 안 viewer에180초 제한을 뒀다. 화면 캡처 코드는 호출하지 않았다. CPU합113.95초, 빌드합173.11초, viewer합217.31초다.
+- fixedDt=1/60초, Xbot/fixture 각180ticks, unbroken2→1/enabled0→1, Kinematic1/Dynamic2·finite/topology1. Xbot Debug/Release 전완deltaY=-1.36082375/-1.360850334m, 상완animationMaxError0, 손목 접촉후최대0.006326892879/0.006328773685m·마지막0.00002529360427/0.00004452272333m. fixture rootDelta0, childDelta=-2.514346242/-2.537089825m, 손목 접촉후최대0.00992500037/0.0133718159m·마지막0.009835194796/0.0001645183365m로 기존 구간별 허용값 PASS다. 전완/손 팔레트와 body의 기존 수치 검사도 PASS다.
+- 실제 선택 GPU 로그 NVIDIA GeForce MX450(1906MB), driver32.0.15.9186은 이번 레지스트리 재조회로 확인했다. DirectX debug layer 사용, GPU 기반 검증 미사용. 기존 하이브리드 초기화 메시지와 종료 Light live-resource WARNING은 남으며 ERROR로 숨기지 않았다.
+- 리뷰: `codex.cmd exec -s read-only --ephemeral`는 `Error finding codex home: Could not find home directory`로 시작 실패. 구현 뒤 별도 읽기 전용 diff/계약/기존 시험 대조 자기 리뷰로 대체, 유효 지적0건(리뷰 시간 별도 미측정). 정상 동작을 바꾸는 코드 없이 진단만 추가했으며 함수 역할/단락 한글 주석을 확인했다. git diff --check PASS.
+- 보호: .mini3개와 BreakConstraintReport.md SHA-256 전후 동일. 기존 변경 상태를 그대로 보존했다. git add/commit/stash/merge/push, 메인 체크아웃 수동 수정, junction 변경, 새 화면 캡처 없음. 미해결 기능/검증 실패 없음. 현재 Xbot은 관절마다 나뉜 자산이라 긴 피부 띠가 거의 보이지 않는 기존 한계는 유지된다(Claude의 BC-12b 화면 확인은 바로 위 기록). 사람이 다시 볼 때는 상완/몸통 애니메이션, 전완·손 낙하, 손목 연결을 확인한다.
+- 로그/재현: `$env:TEMP/BreakConstraintTests/BC13a`의 verify.ps1, viewers.ps1, collect.ps1(캡처 없음·180초 제한), results.txt/results-extra.txt/viewer-results.txt, build-{Debug,Release}.log, *Tests-*.log, final-*.log, viewer-*-debug.log, independent-review.txt, self-review.txt, protected-{before,after}.json. 수치·실행 PASS와 기존 시각 증거를 분리해 기록했다. 커밋 해시는 Claude가 커밋 후 채운다.
+
+#### BC-13a 독립 리뷰(Codex) 지적 2건 수정 (2026-10-30, HEAD 4f9dbcf7)
+
+| 단계 | 커밋 | 바뀐 파일 | 검증·리뷰 |
+| --- | --- | --- | --- |
+| BC-13a 리뷰 수정 | 미커밋 | PhysicsSystem.h(+9), PhysicsSimulation.cpp(+8/-2), Scene/tests/MeshComponentChecks.h(이번 수정 +14/-4); Implementation, 이 Progress, Docs/README.md | CPU 두 구성·Debug/Release 빌드 PASS, Debug component744 PASS/FAIL0·Xbot PASS·물리OFF 정상종료, D3D12 ERROR/CORRUPTION0. 독립 리뷰(Codex) 지적 2건 수정, 별도 자기 리뷰 잔여0 |
+
+- 지적1: 직접 호출한 NotFound 대신 큐 소비 경로의 실제 반환값을 읽는다. 읽기 전용 QueuedBreakDiagnostics의 Processed/NotFound를 각 묶음 전후 2/2, 마지막 6/6으로 검사한다. Clear 뒤에도 누적값을 보존하여 최종 PASS를 이 검사에 연결했다. 기존의 별도 직접 NotFound 호출은 제거했다. 위 회귀 대응표도 실제 검사명으로 정정했다. 지적2: `if (mode == 1)`과 RemoveTarget 실행문을 별도 줄로 나눴다. 코드 수정 합계 +31/-6줄이며 새 기능·파일·target은 없다.
+- CPU(머리말 cl 명령, /utf-8·Debug /MDd·Release /MD /O2 /DNDEBUG): SkeletalBreak Debug910/910 PASS 19.98초, Release910/910 PASS 61.84초; PhysicsBody Debug393 PASS 32.79초, Release393 PASS 66.89초. 모두 종료0·컴파일 경고0. 산출물은 기존 TEMP/BreakConstraintTests/BC12a2-root 하위 시험별 폴더, 이번 로그는 BC13a-review-fixes에 저장했다. CTest 전체는 미실행이다.
+- 전체 빌드: worktree 루트에서 지정 `.slnx /m /p:Configuration={Debug,Release} /p:Platform=Windows`, /restore 없이 각각114.32/96.59초 PASS·오류0·기존 C4819 경고21개. 변형 복구 후 Debug 재빌드30.14초 PASS·오류0·기존 경고3개.
+- Debug viewer(모두 -debug 1, cwd=MiniEngine/ModelViewer): `-physics-sim 0 -component-checks 1 -physics-query-exit 6` 98.79초·744 PASS/FAIL0·GPU preparation PASS·실제 큐6/6 NotFound; `-skeletal-break-xbot 1` 58.71초·BC-12b PASS; 물리OFF 기본 `-physics-sim 0 -physics-query-exit 6` 48.08초·정상종료. 원본 복구 후 component 재실행43.85초·744 PASS/FAIL0·큐6/6·GPU preparation PASS. 네 정상 실행 모두 종료0·D3D12 ERROR/CORRUPTION0. Start-Process -WindowStyle Hidden -Wait 수집기의 viewer 내부180초 제한을 사용했다. Release viewer는 이번 수정에서 재실행하지 않았다.
+- 변형 검증 1회: 실제 BreakConstraint 호출은 유지하고 반환값을 버린 뒤 Prepared로 대체했다. Debug 빌드19.34초 PASS 후 component56.10초 실행에서 `FAIL condition=0: BC-13a consumed queued breaks both NotFound`를 검출했고 BC-13a PASS는 출력되지 않았다. 예상된 예외 종료(-529697949, 수집기1)이며 정상 회귀 실패로 세지 않는다. 소스 바이트를 finally에서 복구했고 SHA-256 전후 `CE63C325C6F563477231194CA2CDE3A1FE199145E7F9FB74EFFA5C07FF890675` 일치. 복구본의 빌드·component 재실행 PASS는 바로 위 기록이다.
+- 리뷰: 새 `codex.cmd exec -s read-only --ephemeral`는 home directory 오류로 시작 불가. 별도 읽기 전용 자기 리뷰에서 계약·diff·Run·큐 소비 지점을 대조했고 잔여 유효 지적0건이다. `git diff --check` PASS. 로그: `$env:TEMP/BreakConstraintTests/BC13a-review-fixes`의 verify.ps1, viewers.ps1, collect.ps1, mutation.ps1, results.txt, viewer-results.txt, results-extra.txt, mutation-results.txt, self-review.txt, build-*.log, mutation-*.log, restored-*.log, final-*.log, viewer-*-debug.log. mutation-results.txt의 Windows PowerShell 혼합 인코딩 NUL은 완료 후 제거하여 UTF-8로 저장했다.
+- 보호/인계: .mini3개와 BreakConstraintReport.md SHA-256 전후 동일. 메인 체크아웃 수동 수정·junction 변경·git add/commit/stash/merge/push 없음. 기존 다른 미커밋 파일은 보존했고 다음 단계는 시작하지 않았다. 미해결 사항 없음. 새 화면 캡처는 하지 않았다. 사람은 기존 Xbot 진단 시점에서 상완/몸통 애니메이션·전완/손 낙하·손목 연결을 확인할 수 있다. 관절별 메시 자산이라 긴 피부 띠가 거의 보이지 않는 기존 한계는 그대로다.

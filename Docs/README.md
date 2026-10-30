@@ -42,7 +42,7 @@
 | [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `39db69f3` 조회 구현 완료; 동적 조각 물리는 StaticPiecePhysics로 대체, Skeletal 물리는 후속 |
 | [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — 7a~7d 완료, `26302519` 기반 바닥 최소 1,000×1,000 m 확장; 8단계 전체 검증 미진행 (2026-10-28) |
 | [BreakConstraintDesign.md](Physics/BreakConstraintDesign.md) | UE5.3.2 관절 해제·Actor 유지·physics pose 반영 원리 | 설계안 — `5f56b93d` 재대조, 구현 계약은 아래 인계 문서 참조 (2026-10-28) |
-| [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트 | 진행 중 — BC-12a-2 b4afd069 완료; BC-12b 렌더 수치 보완 완료(미커밋), Debug/Release 각2회 PASS·최종 node/팔레트와 실제 body 일치·독립 animation 거리 확인·전용 근접 카메라, 화면 확인/캡처는 Claude 후속; BC-13a 미착수 (2026-10-30) |
+| [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트 | 완료 — M1(BC-00~BC-13a), BC-13a 독립 리뷰 지적 2건 수정·미커밋(해시는 Claude 후속). 실제 큐6/6 NotFound 자동 검사, CPU 두 구성·Debug/Release 빌드·Debug 회귀 PASS, 결과 버리기 변형 FAIL·SHA-256 복구. 수명 리소스0·D3D12 ERROR0. BC-09/14 GPU 절단은 후속 (2026-10-30) |
 
 ## NDC — 기법 근거
 

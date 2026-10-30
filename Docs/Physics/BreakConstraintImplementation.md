@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-12a-2 b4afd069 완료; BC-12b 렌더 팔레트 수치 보완 완료(미커밋), Debug/Release 각2회 PASS, 전용 근접 카메라 적용·화면 확인/캡처는 Claude 후속; BC-13a 미착수 (2026-10-30)
+상태: 완료 — M1(BC-00~BC-13a), BC-13a 독립 리뷰 지적 2건 수정, 미커밋(커밋 해시는 Claude가 커밋 후 채움)
 
 # BreakConstraint 구현 인계
 
@@ -248,9 +248,9 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-10b | rig subtree·세대 적용 + CPU 회귀(BC-10 완료) | 완료(미커밋): 리뷰 보강 후 두 구성 CPU482/482·anchor 일치 twist/swing 초과 거절·제한 안 성공·body3·관절2→1·손목120step·중복무변경, 기존 전체 빌드·비물리 진단 PASS / 10a | CPU15.00+27.80초, 기존 B5.19+6.01초 |
 | BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 완료(미커밋): CPU 7종 두 구성2790/2790·전체 빌드·Debug 물리 OFF PASS, step 0/1/4/0·GPU 준비1회·실제 Xbot/선형 animation break/writeback 44검사 PASS / 10 | 리뷰 후 B54.24+68.79초, component15.07초 |
 | BC-12a-1 | 실제 body/관절 진단 조회 API·독립 off-center impulse CPU 시험 | 완료: 실제 pose/COM/속도·broken/enabled·월드 anchor, 실패 출력 보존 / 11 | R+B+CPU |
-| BC-12a-2 | fixture 진단 옵션·GizmoDraw overlay·자동 수치 판정 | 완료(미커밋): 60/180 ticks·Debug/Release 각2회 PASS(접촉 전≤0.01m·이후≤0.02m·마지막≤0.01m), 정상 종료·D3D12 ERROR 0; 화면 캡처 확인(Claude), 사람 확인 대기 없음 / 12a-1 | R+B+V |
-| BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 수치 완료(미커밋): Debug/Release 각2회 PASS, 독립 animation 상완 오차0·전완 하강·손목 구간별 허용값·관절 수·finite 및 최종 node/렌더 팔레트-실제 body 오차≤1e-3m·독립 animation 거리≥0.1m 확인, 전용 근접 카메라 적용·화면 확인/캡처는 Claude 후속 / 12a | CPU92.42초, 최종 B11.18+25.53초, Xbot V49.39/35.04/25.85/35.40초 |
-| BC-13a | 기본 수명 회귀(M1) | 등록 실패·씬 clear·삭제 직후 지연 명령·double break·리소스0 / 12b | R+B+T+V |
+| BC-12a-2 | fixture 진단 옵션·GizmoDraw overlay·자동 수치 판정 | 완료 `b4afd069`: 60/180 ticks·Debug/Release 각2회 PASS(접촉 전≤0.01m·이후≤0.02m·마지막≤0.01m), 정상 종료·D3D12 ERROR 0; 화면 캡처 확인(Claude), 사람 확인 대기 없음 / 12a-1 | R+B+V |
+| BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 완료 `4f9dbcf7`: Debug/Release PASS, 독립 animation 상완 오차0·전완 하강·손목 구간별 허용값·관절 수·finite 및 최종 node/렌더 팔레트-실제 body 오차≤1e-3m·독립 animation 거리≥0.1m 확인, 전용 근접 카메라·Claude 화면 확인은 Progress 기록 참조 / 12a | CPU92.42초, 최종 B11.18+25.53초, Xbot V49.39/35.04/25.85/35.40초 |
+| BC-13a | 기본 수명 회귀(M1) | 완료(미커밋): 독립 리뷰(Codex) 지적 2건 수정. 실제 큐 소비 결과 각2/2·합계6/6 NotFound 자동 검사, body/관절/pair/예약0. CPU 두 구성·두 빌드·Debug component/Xbot/물리OFF PASS, 결과 버리기 변형 FAIL·SHA-256 복구 / 12b | 수정 후 CPU181.50초, B114.32+96.59초; 세부 실행·복구 검증은 Progress |
 | BC-09 | (M2) PrepareBreak 일회용 plan·snapshot key 분리 | prepare 무변경·Stale / 13a | R+B+T |
 | BC-14 | (M2) GPU transaction 연결 계약 구현 | 미지원 skin 유지, 준비 실패 시 break 안 함 / 09 | R+B+T+V |
 
@@ -339,6 +339,16 @@ BC-12b 화면 증거 보완(2026-10-30, 미커밋): tick180에서 `CheckRenderPo
 Debug 각2회 동일: 전완 팔레트/본 물리 오차4.92415154e-7/1.273155732e-7m, animation 거리1.66850841/1.66850853m; 손 오차1.685873912e-7/1.192092896e-7m, 거리1.226705313/1.22670567m. Release 각2회 동일: 전완 오차9.615579302e-7/1.490116119e-8m, 거리1.668364406/1.668364167m; 손 오차4.951133405e-7/1.192092896e-7m, 거리1.227050066/1.227049947m. 두 스킨 section의 모든 사용 entry PASS이며 최종 BC-12b PASS다.
 `-skeletal-break-xbot 1`에서만 시작 eye=(5.5,-0.15,2.8), at=(5.5,-0.15,0)m를 쓴다. 기존 시작 Xbot X=5와 바닥 높이에 맞춘 45° 근접 시점이며 다른 카메라는 보존한다. 최종 팔레트 반영은 수치로 확인했지만 메시 피부 늘어짐·프레이밍의 시각 확인은 Claude가 후속 캡처로 수행한다. 이번 실행은 캡처를 시도하지 않았다. 빌드·회귀·시간·리뷰는 Progress의 화면 증거 보완 기록을 따른다.
 추가 필수 회귀: zero-step frame, 반복 break 무추가 impulse, 삭제 직후 지연 명령 거절, 부모 평행이동/회전 중 분리 본 world 불변, COM offset, 중복 palette, 비물리 모드 동등. 런타임 기록에는 GPU/driver·구성·명령·fixed dt·오차·body/joint 수를 남긴다.
+
+BC-13a 기본 수명 회귀는 기존 시험을 재사용한다. 등록 실패 7단계·용량 부족·Clear/소멸자 뒤 body·관절·pair·예약 0은 `SkeletalBreakTests::main`과 `CheckEmpty`, 중복 break의 AlreadyBroken·선속도/각속도·topology 불변은 `CheckSynchronousBreak`가 담당한다. 기존 시험명과 나머지 추가 필수 회귀의 대응은 Progress BC-13a 표를 따른다.
+
+빠진 Scene 경계는 `MeshComponentChecks.h`의 `SkeletalLifetimeChecks::Run`을 기존 `-component-checks 1` 진단에 붙인다. Scene 직접 삭제, RemoveTarget 후 삭제, 분리된 rig와 Kinematic rig를 함께 Scene clear, 대기 break가 있는 Physics clear를 검사한다. 기존 구현대로 Scene 삭제/clear의 물리 정리는 다음 `AdvanceSimulation` 시작에 수행하며 zero-step에서도 자원이 0이어야 한다. 삭제 전·직후 큐에 넣은 요청은 다음 fixed step에서 NotFound로 소비되고 추가 자원을 만들지 않는다. Physics clear는 즉시 큐까지 비운다. 이는 기존 프레임 경계 계약을 명시한 것으로 삭제 동작이나 설계를 변경하지 않는다. `PhysicsWorld::GetExcludedPairCount`는 SDK 타입을 노출하지 않는 읽기 전용 진단이다. 새 파일/target은 없다.
+
+독립 리뷰 보완: 별도 직접 호출의 NotFound와 큐 비움만으로는 소비 경로의 결과를 증명하지 못했다. `PhysicsSystem::GetQueuedBreakDiagnostics`는 실제 `AdvanceSimulation` 큐 소비 호출의 반환값으로 Processed/NotFound 누적 수를 읽기 전용으로 제공한다. 두 수는 Clear 뒤에도 보존한다. 세 삭제 경로에서 각각 소비 전후 차이가 2/2이고 마지막 합계가 6/6인지 검사한 뒤에만 BC-13a PASS를 출력한다. 중복된 직접 NotFound 검사는 제거했다. world와 삭제/step 동작은 그대로 유지한다. 대응 시험은 Progress BC-13a 표의 `consumed queued breaks both NotFound`와 `all six consumed queued breaks NotFound`다.
+
+리뷰 수정 최종 검증: CPU SkeletalBreak910/910·PhysicsBody393건 두 구성 PASS, 전체 Debug/Release 빌드 PASS. Debug component744 PASS/FAIL0·큐6/6 NotFound, Xbot BC-12b PASS, 물리OFF 기본 정상종료, D3D12 ERROR/CORRUPTION0이다. 큐 반환값을 버리고 Prepared로 대체한 변형은 새 검사에서 FAIL했고 PASS에 도달하지 못했다. SHA-256 일치로 원본 복구 후 Debug 재빌드·component744 PASS/FAIL0·D3D12 ERROR0을 재확인했다. 독립 리뷰(Codex) 지적 2건 수정, 별도 자기 리뷰 잔여0. 측정 시간·명령·변형·복구 근거는 Progress의 리뷰 수정 기록을 따른다.
+
+BC-13a 검증(2026-10-30, HEAD `4f9dbcf7`, 미커밋): SkeletalBreak910/910·PhysicsBody393건을 Debug/Release 모두 PASS, 전체 Debug/Release 빌드 PASS, 지정 viewer 6회 모두 종료0·D3D12 ERROR/CORRUPTION0이다. component 진단743 PASS/FAIL0 중 신규 수명40건 PASS와 실제 큐 NotFound6건을 확인했다. Xbot/fixture 두 구성 모두 기존 낙하·anchor·finite·topology 판정 PASS다. 시간·명령·시험 대응·리뷰·GPU/driver는 Progress BC-13a에 기록했다. 새 캡처는 시도하지 않았다. M1 화면 근거는 Progress의 기존 Claude BC-12b 캡처 확인을 따른다. Xbot은 관절마다 나뉜 자산이라 긴 피부 띠가 거의 보이지 않는 한계도 그대로 유지한다. BC-09·BC-14/GPU 절단은 미구현 범위다.
 
 ## 13. Codex 구현 세션에 그대로 전달할 첫 지시
 
