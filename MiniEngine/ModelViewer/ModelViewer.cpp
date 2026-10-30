@@ -48,6 +48,7 @@
 #include "Scene/tests/SkeletalPhysicsChecks.h"
 #include "Scene/tests/EditApplyChecks.h"
 #include "Scene/tests/EditDeleteChecks.h"
+#include "Scene/tests/RetiredResourceChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -108,10 +109,17 @@ private:
     uint32_t m_PhysicsCutChecks = 0;
     Viewer::PhysicsCutScenario m_CutScenario;
     uint32_t m_CutWaitFrames = 0;
+    uint32_t m_DemoTower = 0;
+    float m_DemoCutSeconds = 3.0f;
+    bool m_DemoCutDone = false;
     uint32_t m_CutSettleFrames = 0;
     size_t m_BodiesBeforeCuts = 0;
     bool m_PhysicsCutChecked = false;
     std::vector<double> m_CutGpuSamples, m_CutReadySamples;
+    std::array<std::vector<double>, 4> m_CutStageSamples;
+    char m_BenchmarkText[160] = {};
+    char m_BenchmarkStageText[160] = {};
+    std::string m_GpuName;
     Math::Vector3 m_LastCutNormal{Math::kYUnitVector};
     bool m_CaptureComplete = false;
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
@@ -215,6 +223,50 @@ void LoadIBLTextures()
         g_IBLSet.Increment();
 }
 
+// 시연용 큐브 탑의 한 변 길이(m)와 층 사이 초기 틈이다.
+constexpr float kDemoTowerSide = 1.6f;
+constexpr float kDemoTowerGap = 0.02f;
+
+// 시연용으로 Cube 모델 count개를 층마다 6도씩 비틀어 원점 위에 쌓는다.
+void CreateDemoTower(Viewer::Scene& scene, const std::shared_ptr<const Model>& cube, uint32_t count)
+{
+    // 모델 경계 상자로 가장 긴 변이 kDemoTowerSide가 되는 배율과 중심을 구한다.
+    const Vector3 dimensions = cube->m_BoundingBox.GetDimensions();
+    const float longest = std::max(float(dimensions.GetX()), std::max(float(dimensions.GetY()), float(dimensions.GetZ())));
+    const float scale = kDemoTowerSide / longest;
+    const Vector3 center = cube->m_BoundingBox.GetCenter() * scale;
+
+    // 층마다 작은 틈을 두고 Y축으로 조금씩 회전해 모델 중심을 탑 축에 맞춘다.
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const Quaternion rotation(Vector3(kYUnitVector), float(i) * 6.0f * XM_PI / 180.0f);
+        const Vector3 position(0.0f, (kDemoTowerSide + kDemoTowerGap) * (float(i) + 0.5f), 0.0f);
+        auto& object = scene.CreateObject("TowerCube" + std::to_string(i), cube);
+        object.SetTransform(Viewer::SceneTransform(rotation, Vector3(scale, scale, scale), position - rotation * center));
+    }
+}
+
+// 벤치마크 화면에 남길 현재 D3D12 장치의 GPU 이름을 읽는다.
+static std::string GetDeviceGpuName()
+{
+    // 장치의 LUID로 DXGI 어댑터를 찾는다.
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumAdapterByLuid(Graphics::g_Device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))))
+        return "unknown";
+
+    // 어댑터 설명을 UTF-8로 바꾼다. Utility::WideStringToUTF8은 잘못된 플래그로 실패해 쓰지 않는다.
+    DXGI_ADAPTER_DESC1 desc;
+    char name[128] = {};
+    if (FAILED(adapter->GetDesc1(&desc)) ||
+        !WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr))
+        return "unknown";
+
+    // 이름과 전용 메모리 크기를 한 줄로 만든다.
+    return std::string(name) + " (" + std::to_string(desc.DedicatedVideoMemory >> 20) + " MB)";
+}
+
 // 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
@@ -293,6 +345,13 @@ void ModelViewer::Startup( void )
     SSAO::Enable = true;
 
     Renderer::Initialize();
+    m_GpuName = GetDeviceGpuName();
+
+    // 요청된 경우 queue 자원 지연 해제 검사를 모델 로딩 전에 실행한다.
+    uint32_t retiredResourceChecks = 0;
+    if (CommandLineArgs::GetInteger(L"retired-resource-checks", retiredResourceChecks)
+        && retiredResourceChecks == 1)
+        Viewer::RetiredResourceChecks::Run();
 
     LoadIBLTextures();
 
@@ -303,10 +362,19 @@ void ModelViewer::Startup( void )
     if (CommandLineArgs::GetInteger(L"rebuild", rebuildValue))
         forceRebuild = rebuildValue != 0;
 
-    if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
+    // 큐브 탑 시연 옵션을 읽는다. 켜면 기본 모델 대신 탑만 만든다.
+    CommandLineArgs::GetInteger(L"demo-tower", m_DemoTower);
+    CommandLineArgs::GetFloat(L"demo-cut-sec", m_DemoCutSeconds);
+    m_DemoTower = std::min(m_DemoTower, 16u);
+
+    if (m_DemoTower)
+        CreateDemoTower(m_Scene, Renderer::LoadModel(L"Models/cube.glb", forceRebuild), m_DemoTower);
+    else if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
     {
+        // 기본 장면에 정적 대형 Dragon 모델을 포함해 여러 절단 후보를 함께 확인한다.
         m_Scene.CreateObject("Cube", Renderer::LoadModel(L"Models/cube.glb", forceRebuild));
         m_Scene.CreateObject("Bunny", Renderer::LoadModel(L"Models/bunny.glb", forceRebuild));
+        m_Scene.CreateObject("Dragon", Renderer::LoadModel(L"Models/dragon.glb", forceRebuild));
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
     }
     else
@@ -328,7 +396,7 @@ void ModelViewer::Startup( void )
     for (const auto& object : m_Scene.GetObjects())
     {
         const ModelInstance* model = object->GetModelInstance();
-        if (!model || float(model->GetModel()->m_BoundingSphere.GetRadius()) <= 0.0f)
+        if (m_DemoTower || !model || float(model->GetModel()->m_BoundingSphere.GetRadius()) <= 0.0f)
             continue;
         const float scale = 2.0f / float(model->GetModel()->m_BoundingSphere.GetRadius());
         const float x = (float(index++) - 0.5f * float(m_Scene.GetObjects().size() - 1)) * 5.0f;
@@ -376,7 +444,7 @@ void ModelViewer::Startup( void )
         m_CutScenario.Configure(cutScenario,m_Cutting);
 
     // 세 검사 옵션의 기본 실행 상태를 정하고 명시적인 시작 옵션을 우선 적용한다.
-    uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active()) ? 1u : 0u;
+    uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active() || m_DemoTower != 0) ? 1u : 0u;
     CommandLineArgs::GetInteger(L"physics-running",physicsRunning);
     g_PhysicsRunning = physicsRunning != 0;
 
@@ -408,12 +476,26 @@ void ModelViewer::Startup( void )
     for (const auto& object : m_Scene.GetObjects())
         if (!object->GetMeshComponents().empty())
         { m_CutOwner = object->GetId(); m_CutMesh = object->GetMeshComponents().front()->GetId(); break; }
-    m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
 
-    // Xbot 진단에서만 왼팔과 바닥을 크게 담는 시작 시점을 사용한다.
+    // 기본 장면과 큐브 탑에 맞는 시작 시점을 선택한다.
+    if (m_DemoTower)
+        m_Camera.SetEyeAtUp(Vector3(12.0f, 6.0f, 16.0f), Vector3(0.0f, 3.5f, 0.0f), Vector3(kYUnitVector));
+    else
+        m_Camera.SetEyeAtUp(Vector3(10.0f, 7.0f, 15.0f), Vector3(kZero), Vector3(kYUnitVector));
+
+    // Xbot 진단은 객체 순서와 무관하게 실제 모델 중심에서 왼팔과 바닥을 크게 담는다.
     if (m_SkeletalChecks.Xbot)
-        m_Camera.SetEyeAtUp(Vector3(5.5f, -0.15f, 2.8f), Vector3(5.5f, -0.15f, 0.0f), Vector3(kYUnitVector));
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == "Xbot" && object->GetModelInstance())
+            {
+                const Vector3 center = object->GetTransform().ToAffine() *
+                    object->GetModelInstance()->GetModel()->m_BoundingSphere.GetCenter();
+                const Vector3 target = center + Vector3(0.5f, -0.15f, 0.0f);
+                m_Camera.SetEyeAtUp(target + Vector3(0.0f, 0.0f, 2.8f), target, Vector3(kYUnitVector));
+                break;
+            }
 
+    // 확정된 시작 시점으로 이동 제어기를 초기화한다.
     m_Camera.SetZRange(0.1f, 1000.0f);
     auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
     controller->EnableMomentum(false);
@@ -450,6 +532,16 @@ void ModelViewer::Startup( void )
     m_SkeletalChecks.Start(m_Scene, m_Physics);
     if (m_SkeletalChecks.Enabled) g_PhysicsRunning = true;
 
+    // 시연 탑이 있으면 바닥 위 두 번째 층 중심을 지나는 45도 절단 평면을 배치한다.
+    std::array<double, 3> floorCenter{}, floorHalf{};
+    auto* demoPlane = m_DemoTower ? m_Scene.FindObject(m_ActiveCutPlane) : nullptr;
+    if (demoPlane && m_Physics.GetFloorBox(floorCenter, floorHalf))
+    {
+        const float floorTop = float(floorCenter[1] + floorHalf[1]);
+        const Quaternion tilt(Vector3(kZUnitVector), XM_PIDIV4);
+        demoPlane->SetTransform(Viewer::SceneTransform(tilt, Vector3(1.0f, 1.0f, 1.0f),
+            Vector3(0.0f, floorTop + kDemoTowerSide * 1.5f, 0.0f)));
+    }
     if (m_PhysicsSimChecks) Viewer::RunPhysicsSimChecks(m_Scene, m_Physics);
     if (m_ViewDiagnosticPending)
         Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
@@ -487,6 +579,8 @@ void ModelViewer::Update( float deltaT )
         Viewer::RunPhysicsQueryChecks(m_Scene,m_Physics,m_UsePhysicsQuery != 0,m_PhysicsCapacity);
         m_QuerySelfTest = 0;
     }
+    const bool wasCuttingBusy = m_Cutting.IsBusy();
+    const bool wasBenchmarkAtUpdateStart = m_BenchmarkRemaining != 0;
     m_Cutting.Update();
     for (const Viewer::CutResultEntry& cutResult : m_Cutting.DrainResults())
     {
@@ -498,18 +592,38 @@ void ModelViewer::Update( float deltaT )
             {
                 m_CutGpuSamples.push_back(cutResult.GpuMs);
                 m_CutReadySamples.push_back(cutResult.ReadyMs);
+                for (size_t stage = 0; stage < m_CutStageSamples.size(); ++stage)
+                    m_CutStageSamples[stage].push_back(cutResult.StageMs[stage]);
             }
             --m_BenchmarkRemaining;
             if (!m_BenchmarkRemaining && !m_CutGpuSamples.empty())
             {
                 std::sort(m_CutGpuSamples.begin(), m_CutGpuSamples.end());
                 std::sort(m_CutReadySamples.begin(),m_CutReadySamples.end());
+                const double medianGpu = m_CutGpuSamples[m_CutGpuSamples.size()/2];
+                const double p95Gpu = m_CutGpuSamples[std::min(m_CutGpuSamples.size()-1, size_t(m_CutGpuSamples.size()*0.95))];
+                const double medianReady = m_CutReadySamples[m_CutReadySamples.size()/2];
                 Utility::Printf("Static cut benchmark: samples=%zu medianGpuMs=%.6f p95GpuMs=%.6f medianReadyMs=%.3f error=%u\n",
-                    m_CutGpuSamples.size(), m_CutGpuSamples[m_CutGpuSamples.size()/2],
-                    m_CutGpuSamples[std::min(m_CutGpuSamples.size()-1, size_t(m_CutGpuSamples.size()*0.95))],m_CutReadySamples[m_CutReadySamples.size()/2],cutResult.Error);
+                    m_CutGpuSamples.size(), medianGpu, p95Gpu, medianReady, cutResult.Error);
+
+                // 디버거가 없는 PC에서도 읽도록 같은 결과를 화면 텍스트로 남긴다.
+                snprintf(m_BenchmarkText, sizeof(m_BenchmarkText),
+                    "Cut benchmark: samples=%zu medianGpuMs=%.6f p95GpuMs=%.6f medianReadyMs=%.3f error=%u",
+                    m_CutGpuSamples.size(), medianGpu, p95Gpu, medianReady, cutResult.Error);
+
+                // 단계별 GPU 시간도 각각 정렬해 중앙값을 화면 텍스트로 남긴다.
+                double stageMedian[4] = {};
+                for (size_t stage = 0; stage < m_CutStageSamples.size(); ++stage)
+                {
+                    std::vector<double>& samples = m_CutStageSamples[stage];
+                    std::sort(samples.begin(), samples.end());
+                    stageMedian[stage] = samples[samples.size()/2];
+                }
+                snprintf(m_BenchmarkStageText, sizeof(m_BenchmarkStageText),
+                    "Cut stages median ms: clip=%.4f boundary=%.4f cap=%.4f finalize=%.4f",
+                    stageMedian[0], stageMedian[1], stageMedian[2], stageMedian[3]);
             }
         }
-        else if (m_AutoCuts && !m_Cutting.IsBusy()) { --m_AutoCuts; ++m_AutoCutIndex; }
         // 기본은 위치 보존이며, 명시한 진단 간격만 새 B의 실제 Transform에 적용한다.
         if (cutResult.Status == Viewer::CutResultStatus::Published)
         {
@@ -604,6 +718,12 @@ void ModelViewer::Update( float deltaT )
     gfxContext.Finish();
     m_Physics.SyncColliders();
     m_Cutting.SubmitPending();
+    // active 완료와 마지막 pending 거절을 포함해 batch busy→idle 전환당 자동 요청 하나를 소비한다.
+    if (wasCuttingBusy && !m_Cutting.IsBusy() && m_AutoCuts && !wasBenchmarkAtUpdateStart)
+    {
+        --m_AutoCuts;
+        ++m_AutoCutIndex;
+    }
     if (cutKey)
     {
         MeshCutting::CutPlaneData plane;
@@ -611,6 +731,16 @@ void ModelViewer::Update( float deltaT )
         {
             if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
         }
+    }
+
+    // 시연 탑은 시뮬레이션이 정한 시간만큼 진행되면 배치한 평면으로 한 번 자른다.
+    const uint64_t demoCutStep = uint64_t(m_DemoCutSeconds * 60.0f);
+    if (m_DemoTower && !m_DemoCutDone && m_DemoCutSeconds > 0.0f && m_Physics.GetSimulationStepCount() >= demoCutStep)
+    {
+        MeshCutting::CutPlaneData plane;
+        if (m_CutPlanes.BuildData(m_ActiveCutPlane, plane) && m_Cutting.RequestAll(plane, m_CapMode))
+            m_LastCutNormal = Vector3(plane.WorldPlane);
+        m_DemoCutDone = true;
     }
     // 시뮬레이션 중 자동 절단은 깨어 있는 body가 모두 sleep할 때까지 기다린다.
     bool waitingForSleep = false;
@@ -888,6 +1018,16 @@ void ModelViewer::RenderUI(GraphicsContext& context)
         !m_Physics.IsSimulationEnabled() ? "disabled" : (bool(g_PhysicsRunning) ? "running" : "paused"),
         m_Physics.GetSimulationBodyCount());
     if (m_CutGap > 0) text.DrawFormattedString("Diagnostic piece separation: %.3f\n",m_CutGap);
+
+    // -cut-benchmark 실행 중에는 남은 횟수를, 끝나면 측정 결과를 표시한다.
+    if (m_BenchmarkRemaining) text.DrawFormattedString("Cut benchmark: running, %u cuts left\n", m_BenchmarkRemaining);
+    else if (m_BenchmarkText[0])
+    {
+        text.DrawFormattedString("%s\n", m_BenchmarkText);
+        text.DrawFormattedString("%s\n", m_BenchmarkStageText);
+        text.DrawFormattedString("GPU: %s\n", m_GpuName.c_str());
+    }
+
     text.DrawFormattedString("L: %s axes | Esc during drag: cancel | Mode: %s\n",
         m_Gizmo.IsLocal() ? "Local" : "World", m_Gizmo.GetMode() == Viewer::TransformGizmo::View ? "View" :
         (m_Gizmo.GetMode() == Viewer::TransformGizmo::Translate ? "Move" :

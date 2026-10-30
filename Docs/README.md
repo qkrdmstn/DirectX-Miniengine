@@ -14,7 +14,7 @@
 
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
-| [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | `3dc5d6ba` 기반 조각 hull 선택·중심 기즈모·선택 모서리 갱신 |
+| [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — BreakConstraint M1과 master `913031f3` 병합 검증; 다중 Static CutJob·cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30) |
 | [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749` 기반, GPU 연결 `673b56b6`; 수동 입력 검증 범위는 본문 참조 |
 | [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `673b56b6` Compute pose 연결, 검증은 본문·GPU 설계 참조 |
 | [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `3dc5d6ba` 기반 조각 hull 선택·중심 기즈모·노란 선택 모서리 구현, CPU/실행 진단 통과; 수동 화면 미확인 |
@@ -25,6 +25,9 @@
 | --- | --- | --- |
 | [GPUCuttingSystemDesign.md](GPU/GPUCuttingSystemDesign.md) | GPU 절단 설계·다중 MeshComponent 기반 | `673b56b6` Static 구현, Skeletal·물리는 설계 |
 | [StaticCutImplementation.md](GPU/StaticCutImplementation.md) | Static GPU 절단·열린 경계·재절단·성능 | `673b56b6` GPU 절단 + `39db69f3` 커밋된 Jolt 후보 조회·반복 절단 회귀 완료 |
+| [CapParallelOptimization.md](GPU/CapParallelOptimization.md) | cap 그룹 크기·결정성·MX450 비교 측정 | 진행 중 — 단계 1·1b `6f328257`; 단계 3(CapScanMarking)으로 5060 Ti 1.70 ms, 목표 달성; 1c 미착수 |
+| [CapScanMarking.md](GPU/CapScanMarking.md) | cap 선택을 누적합 기반 교대 표시로 교체 | 진행 중 — S1 `3a17454f`, S2 `1a7d77ed`(5060 Ti 1.70 ms, finalize 흔들림 미조사), 기존 미캡핑 진단 잔존; S2b·S3 미착수 |
+| [ConcurrentCutJobs.md](GPU/ConcurrentCutJobs.md) | 여러 Static CutJob 제출·작업별 snapshot·완료 게시 | 완료 — `f2138029` 기준 1단계, Debug/Release·20회 실행 검증, 미커밋 |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
@@ -48,7 +51,8 @@
 
 | 문서 | 용도 | 상태 / 읽을 때의 주의 |
 | --- | --- | --- |
-| [NDC25Reference.md](NDC/NDC25Reference.md) | 원본 NDC25 기법과 근거 등급 | 근거 문서. 8절의 프로젝트 대응은 과거 CPU 구현 기록 |
+| [NDC25Reference.md](NDC/NDC25Reference.md) | 원본 NDC25 기법과 근거 등급 | `3dc5d6ba` 기준 절단 패치 스키닝 해석 연결 (2026-10-28); 8절의 프로젝트 대응은 과거 CPU 구현 기록 |
+| [NDC25CutPatchSkinning.md](NDC/NDC25CutPatchSkinning.md) | 절단 패치의 본 재부착 대신 스키닝하는 아이디어·단계별 해석·적용 범위 | 완료 — `3dc5d6ba` 기준 사용자 제공 두 슬라이드·대사 해석 기록, 구현 결정 아님 (2026-10-28) |
 | [NDC25WoundAndLayeredMesh.md](NDC/NDC25WoundAndLayeredMesh.md) | 상처 표현(클립·데칼·디폼·레퍼런스 포즈)과 Dead Island 2 이중 메시 분석 | 설계안 — `425491c5` 기준 슬라이드 근거 정리, 구현 전 (2026-10-28) |
 
 ## NDC/History — 과거 절단 알고리즘 설계

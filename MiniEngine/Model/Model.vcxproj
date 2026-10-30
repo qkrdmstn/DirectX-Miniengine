@@ -80,6 +80,7 @@
     <ClInclude Include="json.hpp" />
     <ClInclude Include="LightManager.h" />
     <ClInclude Include="MeshConvert.h" />
+    <ClInclude Include="MeshBufferPacking.h" />
     <ClInclude Include="Model.h" />
     <ClInclude Include="PosedGeometry.h" />
     <ClInclude Include="GeometryRevision.h" />

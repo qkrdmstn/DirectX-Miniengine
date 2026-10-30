@@ -306,5 +306,6 @@
     <ClInclude Include="Scene\SkeletalPhysicsSystem.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\SkeletalPhysicsFrames.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
+    <ClInclude Include="Scene\tests\RetiredResourceChecks.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

@@ -3,7 +3,10 @@
 #include "PhysicsSystem.h"
 #include "CutTransaction.h"
 #include "../../MeshCutting/GPU/GpuMeshCutter.h"
+#include <array>
 #include <deque>
+#include <chrono>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -24,6 +27,7 @@ namespace Viewer
         const char* Reason = nullptr;   // Failed일 때 정적 문자열 이유
         double GpuMs = 0;
         double ReadyMs = 0;
+        std::array<double, 4> StageMs{};  // clip, boundary, cap, finalize GPU ms
     };
 
     // Scene 변경은 완료된 GPU 작업을 프레임 입력 경계에서 게시할 때만 수행한다.
@@ -34,7 +38,7 @@ namespace Viewer
         explicit CuttingSystem(Scene& scene, PhysicsSystem& physics) : m_Scene(scene), m_Physics(physics) {}
         // 정점 준비가 끝난 Static 컴포넌트와 평면을 고정해 작업을 시작한다.
         bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0);
-        // 현재 절단 영역의 Static 후보를 고정하고 이후 프레임에서 하나씩 제출한다.
+        // 현재 절단 영역의 Static 후보를 고정하고 이후 프레임에서 제한된 수만큼 제출한다.
         bool RequestAll(const MeshCutting::CutPlaneData& plane, uint32_t capMode = 0);
         // Scene.Update 뒤 준비된 pose로 다음 후보를 제출하고 변경된 후보는 건너뛴다.
         void SubmitPending();
@@ -49,7 +53,11 @@ namespace Viewer
         // 원본과 결과가 제출된 GPU 작업을 참조하는 동안 작업을 유지한다.
         void Clear();
         // 진행 중 작업이 있는지 확인한다.
-        bool IsBusy() const { return bool(m_Job) || !m_Pending.empty(); }
+        bool IsBusy() const
+        {
+            // 제출된 작업 또는 아직 소비하지 않은 후보가 있는지 확인한다.
+            return !m_Active.empty() || !m_Pending.empty();
+        }
         // 입력 거절과 마지막 작업 결과를 화면에 표시한다.
         const char* GetStatusText() const { return m_StatusText; }
         // 마지막 완료 작업의 GPU 및 요청→완료 시간을 읽는다.
@@ -67,20 +75,31 @@ namespace Viewer
 
     private:
         friend class EditDeleteChecks;
+        struct ActiveCut
+        {
+            std::unique_ptr<MeshCutting::CutJob> Job;
+            ObjectId Owner = InvalidObjectId;
+            ComponentId Mesh = InvalidComponentId;
+            std::shared_ptr<const GeometryRevision> Input;
+            Math::Matrix4 World;
+            uint64_t EditGeneration = 0;
+            uint64_t ReservedBytes = 0;
+            bool Publish = true;
+        };
         // 단일 요청과 대기열 내부 제출이 공유하는 GPU 작업 시작 경로다.
         bool Submit(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane,
             bool publish, float worldEpsilon, uint32_t capMode);
+        // 예외 원인을 소유 버퍼에 보존하고 대상·용량 진단을 할당 없이 기록한다.
+        void RejectInput(ObjectId owner, ComponentId mesh, const GeometryRevision& geometry,
+            uint64_t requestedWorking, const char* reason) noexcept;
+        // Update에서 front 하나의 완료 결과만 장면에 반영한다.
+        bool UpdateOne();
         // 여러 후보 중 하나라도 성공했으면 마지막 비교차 후보가 성공 안내를 덮지 않는다.
         void FinishBatch();
         Scene& m_Scene;
         PhysicsSystem& m_Physics;
-        std::unique_ptr<MeshCutting::CutJob> m_Job;
-        ObjectId m_Owner = InvalidObjectId;
-        ComponentId m_Mesh = InvalidComponentId;
-        Math::Matrix4 m_World;
-        uint64_t m_EditGeneration = 0;
+        std::deque<ActiveCut> m_Active;
         CutBudget m_Budget;
-        bool m_Publish = true;
         // 결과 목록에 한 칸을 확보한다. 가득 차 있으면 가장 오래된 결과를 버리며 게시 전에 호출해 이후 push가 할당하지 않게 한다.
         void ReserveResultSlot();
         static constexpr size_t MaxPendingResults = 256;
@@ -91,7 +110,20 @@ namespace Viewer
         MeshCutting::CutPlaneData m_PendingPlane{};
         uint32_t m_PendingCapMode = 0;
         const char* m_StatusText = "Ready";
+        char m_RejectionText[256]{};
+        bool m_SubmissionDeferred = false;
         bool m_BatchActive = false;
         uint32_t m_BatchApplied = 0;
+        double m_BatchGpuMs = 0;
+        char m_BatchText[192]{};
+        std::chrono::steady_clock::time_point m_BatchStarted{};
+        uint32_t m_PeakInFlight = 0;
+        uint32_t m_InFlightLimit = 2;
+        uint64_t m_MemoryLimitBytes = 1024ull * 1024 * 1024;
+        uint64_t m_ReservedBytes = 0;
+        uint64_t m_PeakReservedBytes = 0;
+        uint64_t m_PeakRetiredBytes = 0;
+        double m_UpdateMaxMs = 0;
+        uint32_t m_ProcessedMaxPerFrame = 0;
     };
 }

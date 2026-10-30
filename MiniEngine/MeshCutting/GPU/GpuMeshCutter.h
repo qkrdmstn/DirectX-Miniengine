@@ -36,6 +36,9 @@ namespace MeshCutting
         std::array<KDop18, 2> SideDop{};
         std::array<bool, 2> SideDopValid{};
         std::array<double, 4> StageMs{};
+        // 라운드는 전체 경로, 표시·제거 합계는 캐시 경로만 집계한다.
+        uint32_t CapRounds = 0, CapMarked = 0, CapRemoved = 0;
+        uint32_t CapMaxLoop = 0, CapHashLoops = 0;
         double GpuMilliseconds = 0, ReadyMilliseconds = 0;
         std::chrono::steady_clock::time_point Started;
         bool Collected = false;
@@ -51,15 +54,31 @@ namespace MeshCutting
         std::array<std::shared_ptr<const GeometryRevision>, 2> BuildResults();
     };
 
+    // 큰 입력의 표면과 경계 집계로 출력 공간을 제한한다.
+    struct CutCapacityPlan
+    {
+        std::vector<uint32_t> SurfaceVertices;
+        uint32_t MaxSegments = 0;
+    };
+
     class GpuMeshCutter
     {
     public:
         // 첫 절단 중 shader/PSO 생성으로 멈추지 않도록 장면 시작에서 파이프라인을 준비한다.
         static void Prepare();
+        // 큰 입력만 작은 GPU count pass를 완료해 실제 출력 용량을 계산한다.
+        static CutCapacityPlan PlanCapacity(const GeometryRevision& input, const PosedGeometry& posed,
+            const Math::AffineTransform& world, const CutPlaneData& plane, float epsilon, bool force = false);
+        // 지원 용량 계약 안에서 작업별 임시 GPU 메모리 예약치를 보수적으로 계산한다.
+        // 원본 geometry·부모 lineage·posed cache는 이 값에 포함하지 않는다.
+        // snapshotDiagnostics가 참이면 진단용 입력 복제와 최대 readback 묶음은 포함한다.
+        static uint64_t EstimateWorkingBytes(const GeometryRevision& input, const PosedGeometry& posed,
+            bool snapshotDiagnostics = false, const CutCapacityPlan* capacity = nullptr);
         // 현재 posed GPU 정점을 입력으로 Static A/B 표면·경계·cap을 같은 queue에서 계산한다.
         static std::unique_ptr<CutJob> Submit(std::shared_ptr<const GeometryRevision> input,
             const PosedGeometry& posed, const Math::AffineTransform& world,
             const CutPlaneData& plane, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0,
-            const std::vector<Math::BoundingSphere>& bounds = {}, bool snapshotDiagnostics = false);
+            const std::vector<Math::BoundingSphere>& bounds = {}, bool snapshotDiagnostics = false,
+            const CutCapacityPlan* capacity = nullptr, uint64_t retainedLimitBytes = 512ull * 1024 * 1024);
     };
 }

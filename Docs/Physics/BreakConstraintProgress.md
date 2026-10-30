@@ -1,4 +1,4 @@
-상태: 완료 — M1(BC-00~BC-13a), BC-13a 독립 리뷰(Codex) 지적 2건 수정, 미커밋(커밋 해시는 Claude가 커밋 후 채움) (2026-10-30)
+상태: 완료 — M1(BC-00~BC-13a), master `913031f3` 병합 충돌 해결·검증 완료, 미커밋(Claude가 커밋) (2026-10-30)
 
 # BreakConstraint 진행 기록
 
@@ -340,3 +340,27 @@ CPU·전체 빌드(컴파일+실행/빌드 실측, 초):
 - 변형 검증 1회: 실제 BreakConstraint 호출은 유지하고 반환값을 버린 뒤 Prepared로 대체했다. Debug 빌드19.34초 PASS 후 component56.10초 실행에서 `FAIL condition=0: BC-13a consumed queued breaks both NotFound`를 검출했고 BC-13a PASS는 출력되지 않았다. 예상된 예외 종료(-529697949, 수집기1)이며 정상 회귀 실패로 세지 않는다. 소스 바이트를 finally에서 복구했고 SHA-256 전후 `CE63C325C6F563477231194CA2CDE3A1FE199145E7F9FB74EFFA5C07FF890675` 일치. 복구본의 빌드·component 재실행 PASS는 바로 위 기록이다.
 - 리뷰: 새 `codex.cmd exec -s read-only --ephemeral`는 home directory 오류로 시작 불가. 별도 읽기 전용 자기 리뷰에서 계약·diff·Run·큐 소비 지점을 대조했고 잔여 유효 지적0건이다. `git diff --check` PASS. 로그: `$env:TEMP/BreakConstraintTests/BC13a-review-fixes`의 verify.ps1, viewers.ps1, collect.ps1, mutation.ps1, results.txt, viewer-results.txt, results-extra.txt, mutation-results.txt, self-review.txt, build-*.log, mutation-*.log, restored-*.log, final-*.log, viewer-*-debug.log. mutation-results.txt의 Windows PowerShell 혼합 인코딩 NUL은 완료 후 제거하여 UTF-8로 저장했다.
 - 보호/인계: .mini3개와 BreakConstraintReport.md SHA-256 전후 동일. 메인 체크아웃 수동 수정·junction 변경·git add/commit/stash/merge/push 없음. 기존 다른 미커밋 파일은 보존했고 다음 단계는 시작하지 않았다. 미해결 사항 없음. 새 화면 캡처는 하지 않았다. 사람은 기존 Xbot 진단 시점에서 상완/몸통 애니메이션·전완/손 낙하·손목 연결을 확인할 수 있다. 관절별 메시 자산이라 긴 피부 띠가 거의 보이지 않는 기존 한계는 그대로다.
+
+### master 병합(913031f3)
+
+- 작업: 현재 break-constraint worktree에서 이미 시작된 master 병합의 충돌 해결·검증. add/commit/abort/stash/checkout/reset은 실행하지 않았다. index의 두 unmerged 항목은 Claude의 add/commit 전까지 그대로 남는다.
+- 충돌 파일 2개: `CodeMap.md` 상태 줄은 BreakConstraint M1과 다중 Static CutJob·cap 단계 1의 근거 및 cap 결과 불변 미확인 한계를 함께 보존했다. `ModelViewer::Startup`은 기본/탑 카메라와 골격 진단 근접 카메라를 통합하고, 골격 검사 Start와 탑 절단 평면 배치를 모두 유지했다.
+- 추가 의미 수정: Dragon 추가로 기본 모델 수가 3→4, Xbot 정규화 중심 X가 5→7.5m로 바뀐다. 이전 고정 eye/at X=5.5m 대신 이름이 Xbot인 객체의 실제 변환된 모델 경계 구 중심에 (0.5,-0.15,0)m를 더해 target을 구하고 eye는 target+(0,0,2.8)m로 정한다. ObjectId·생성 순서에 의존하지 않는다. `-demo-tower`는 Xbot을 만들지 않으며 기존 탑 카메라를 유지한다. 이 조합의 골격 진단은 기존 StartXbot의 명시적 실패 경로를 따른다.
+- 의미 충돌 확인: StartXbot은 이미 이름 검색이며 rig의 owner ID는 찾은 객체에서 받는다. 새 Dragon을 포함한 component/fixed-step 검사는 실제 owner 목록을 순회한다. ModelViewer의 완료 수집→UpdateFrame(고정 step·최종 pose·GPU 준비 1회)→collider 동기화→다음 절단 제출 순서를 보존했다. 자동 병합된 CuttingSystem/CutTransaction의 호출·게시 예산, GPU buffer/posed resource의 fence 수명, 프로젝트 source/header 등록을 대조했고 추가 수정은 필요하지 않았다. Shift 빠른 이동·DRED·다중 작업·cap 병렬화는 master 코드를 유지했다. Geometry/는 변경하지 않았다.
+- CPU: 파일 머리말의 cl/Jolt 설정을 사용하고 PhysicsWorldBreak 및 SkeletalPhysicsAsset 구현도 함께 링크했다. 산출물과 로그는 `$env:TEMP/BreakConstraintTests/merge` 아래 각 test/config 폴더에 두었다. SkeletalBreakTests Debug 910/910(10.59초), Release 910/910(14.78초), PhysicsBodyTests Debug 393(7.91초), Release 393(11.64초), 모두 PASS·종료0·컴파일 경고0.
+- 전체 빌드: worktree 루트에서 `msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration={Debug,Release} /p:Platform=Windows`, /restore 없음. 최초 Debug 93.10초/Release 116.88초 PASS, 각 오류0·경고187(C4819). 주석 정리 후 최종 증분 Debug 9.01초/Release 3.68초 PASS·오류0. 최종 Debug 경고10, Release 경고0. DevShell의 vswhere fallback 메시지는 있으나 빌드 성공.
+
+| 구성 | 실행 옵션 | 결과 | 종료 | 초 | D3D12 ERROR/CORRUPTION |
+| --- | --- | --- | --- | --- | --- |
+| Debug | `-physics-sim 0 -physics-query-exit 6` | 기본 실행 PASS | 0 | 29.50 | 0 |
+| Debug | `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6` | 1043 PASS·FAIL0, GPU preparation PASS, BC-13a 수명 검사 포함 | 0 | 29.91 | 0 |
+| Debug | `-debug 1 -skeletal-break-checks 1` | BC-12a PASS·180ticks | 0 | 32.76 | 0 |
+| Debug | `-debug 1 -skeletal-break-xbot 1` | BC-12b PASS·180ticks | 0 | 29.65 | 0 |
+| Release | `-debug 1 -skeletal-break-xbot 1` | BC-12b PASS·180ticks | 0 | 36.50 | 0 |
+| Debug | `-debug 1 -physics-sim 0 -model Models/cube.glb -cut-benchmark 2 -cut-validate 1 -cut-expect-publications 1 -physics-query-exit 6` | samples2·error0·publication1·GPU geometry 검증 PASS | 0 | 23.97 | 0 |
+
+- 벤치마크는 기본 warmup3+측정2회. median/p95 GPU 0.728704ms, medianReady 13.725ms. 양쪽 결과의 GPU geometry·cap checksum 진단도 출력됐다. 이는 Cube 회귀이며 Dragon 대형 절단·다중 동시 작업·cap 불변의 전체 재검증은 아니다.
+- Xbot: Debug/Release animationMaxError0·finite1·topology1·unbroken2→1·enabled0→1. Debug childDeltaY=-1.29034698m, freeFallMaxError=0.000006665660294m, contactMaxError=0.006118501071m, finalError=0.000001498733923m. Release childDeltaY=-1.290358186m, contactMaxError=0.006116380915m, finalError=0.000001517286591m. 두 구성 contactTick87이며 기존 허용치를 그대로 통과했다. 새 정적 모델의 경계가 CreateFloor의 높이 계산에 참여하므로 이전 3모델 장면 수치와 동일할 필요는 없다.
+- 실행 환경: MiniEngine/ModelViewer를 작업 디렉터리로 사용. Start-Process -WindowStyle Hidden -Wait로 debugger 출력 수집기를 실행하고 내부 viewer는 180초 제한. 직접 D3D12 debug layer 사용, GPU 기반 검증은 미사용. 실제 선택 GPU 로그는 NVIDIA GeForce MX450(1906MB). 이번 Win32_VideoController 조회는 접근 거부로 driver 재조회 불가(이전 기록 32.0.15.9186). D3D12 경고(PS 출력 채널·중복 transition·종료 live resource)는 있으나 ERROR/CORRUPTION은 6건 모두0. 화면 시각 검사는 수행하지 않았다.
+- 보호: 메인 체크아웃·Packages/vcpkg_installed/ThirdParty junction·.mini·BreakConstraintReport.md는 수동 수정하지 않았다. 실행 후 .mini 부산물은 되돌리지 않았다. Report SHA-256은 전후 EAC8B2801444E30A377E7447F3A0F15F88E21B147403DBFFDAD1A1D8CD42DEF5로 동일.
+- 정적 검증: git diff --check PASS, rg로 충돌 표시 없음. CodeMap 상태·README 행 동기화. 로그/재현 스크립트: merge/verify.ps1, build-final.ps1, collect.ps1, viewers.ps1, results.txt, build-final-results.txt, results-extra.txt 및 build/test/viewer 로그. 미해결 기능 충돌 없음. Git index의 충돌 해제와 커밋은 Claude가 수행한다.

@@ -13,6 +13,7 @@
 
 #include "pch.h"
 #include "CommandListManager.h"
+#include "GraphicsCore.h"
 
 CommandQueue::CommandQueue(D3D12_COMMAND_LIST_TYPE Type) :
     m_Type(Type),
@@ -58,11 +59,90 @@ CommandListManager::~CommandListManager()
     Shutdown();
 }
 
+// retired 자원을 완료하고 GPU queue를 종료한다.
 void CommandListManager::Shutdown()
 {
+    // 남은 retired resource는 queue가 살아 있을 때 완료시킨 뒤 해제한다.
+    if (!m_RetiredResources.empty())
+    {
+        WaitForReadyQueues();
+        m_RetiredResources.clear();
+        m_RetiredResourceBytes = 0;
+    }
+
+    // queue 순서를 기존대로 종료한다.
     m_GraphicsQueue.Shutdown();
     m_ComputeQueue.Shutdown();
     m_CopyQueue.Shutdown();
+}
+
+// allocation 실패 시에도 원본 owner가 resource를 놓기 전에 준비된 queue를 완료시킨다.
+void CommandListManager::WaitForReadyQueues() noexcept
+{
+    // 준비된 queue만 기다리므로 부분 초기화·중복 종료에서도 null queue를 호출하지 않는다.
+    if (m_GraphicsQueue.IsReady()) m_GraphicsQueue.WaitForIdle();
+    if (m_ComputeQueue.IsReady()) m_ComputeQueue.WaitForIdle();
+    if (m_CopyQueue.IsReady()) m_CopyQueue.WaitForIdle();
+}
+
+// 각 ready queue의 snapshot fence가 모두 완료됐는지 비대기 방식으로 확인한다.
+bool CommandListManager::IsRetiredResourceComplete(const RetiredResource& retired) noexcept
+{
+    // 종료된 queue는 Shutdown 전에 drain되므로 더 이상 미완료 작업이 없다.
+    if (m_GraphicsQueue.IsReady() && !m_GraphicsQueue.IsFenceComplete(retired.FenceValues[0])) return false;
+    if (m_ComputeQueue.IsReady() && !m_ComputeQueue.IsFenceComplete(retired.FenceValues[1])) return false;
+    if (m_CopyQueue.IsReady() && !m_CopyQueue.IsFenceComplete(retired.FenceValues[2])) return false;
+    return true;
+}
+
+// 제출 자원을 강하게 보관하고 세 queue의 마지막 제출 fence를 기록한다.
+void CommandListManager::RetireResource(ID3D12Resource* resource) noexcept
+{
+    // null resource는 보관하지 않는다.
+    if (resource == nullptr) return;
+
+    // fence snapshot은 마지막 제출값이며 아직 제출되지 않은 목록은 호출자가 먼저 제출해야 한다.
+    RetiredResource retired{};
+    retired.Resource = resource;
+    retired.FenceValues = {
+        m_GraphicsQueue.IsReady() ? m_GraphicsQueue.GetNextFenceValue() - 1 : 0,
+        m_ComputeQueue.IsReady() ? m_ComputeQueue.GetNextFenceValue() - 1 : 0,
+        m_CopyQueue.IsReady() ? m_CopyQueue.GetNextFenceValue() - 1 : 0
+    };
+    retired.Bytes = resource->GetDesc().Width;
+
+    // 이미 끝난 자원은 목록에 넣지 않고 강한 임시 참조를 놓는다.
+    if (IsRetiredResourceComplete(retired)) return;
+
+    // vector allocation 실패 시 원래 wrapper가 소유권을 유지하므로 GPU를 drain한 뒤 반환한다.
+    try
+    {
+        m_RetiredResources.push_back(std::move(retired));
+        m_RetiredResourceBytes += m_RetiredResources.back().Bytes;
+    }
+    catch (...)
+    {
+        WaitForReadyQueues();
+    }
+}
+
+// 완료 fence를 지난 항목만 제거하며 GPU 완료를 기다리지 않는다.
+void CommandListManager::CollectRetiredResources() noexcept
+{
+    // 완료된 각 항목의 보관 byte 수를 빼고 strong reference를 해제한다.
+    auto it = m_RetiredResources.begin();
+    while (it != m_RetiredResources.end())
+    {
+        if (IsRetiredResourceComplete(*it))
+        {
+            m_RetiredResourceBytes -= it->Bytes;
+            it = m_RetiredResources.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 void CommandQueue::Create(ID3D12Device* pDevice)
@@ -115,19 +195,22 @@ void CommandListManager::CreateNewCommandList( D3D12_COMMAND_LIST_TYPE Type, ID3
     (*List)->SetName(L"CommandList");
 }
 
+// 명령 목록을 제출하고 펜스 신호 실패 시 장치 제거 원인을 보고한다.
 uint64_t CommandQueue::ExecuteCommandList( ID3D12CommandList* List )
 {
+    // 제출과 펜스 값 갱신을 직렬화한다.
     std::lock_guard<std::mutex> LockGuard(m_FenceMutex);
 
     ASSERT_SUCCEEDED(((ID3D12GraphicsCommandList*)List)->Close());
 
-    // Kickoff the command list
+    // 닫힌 명령 목록을 큐에 제출한다.
     m_CommandQueue->ExecuteCommandLists(1, &List);
 
-    // Signal the next fence value (with the GPU)
-    m_CommandQueue->Signal(m_pFence, m_NextFenceValue);
+    // GPU 펜스 신호의 실패를 진단한다.
+    if (FAILED(m_CommandQueue->Signal(m_pFence, m_NextFenceValue)))
+        Graphics::ReportDeviceRemoved("CommandQueue::ExecuteCommandList Signal");
 
-    // And increment the fence value.  
+    // 제출에 사용한 값을 반환하고 다음 펜스 값으로 진행한다.
     return m_NextFenceValue++;
 }
 
@@ -166,8 +249,10 @@ void CommandQueue::StallForProducer(CommandQueue& Producer)
     m_CommandQueue->Wait(Producer.m_pFence, Producer.m_NextFenceValue - 1);
 }
 
+// 펜스 완료를 기다리고 이벤트 등록 실패 시 장치 제거 원인을 보고한다.
 void CommandQueue::WaitForFence(uint64_t FenceValue)
 {
+    // 이미 완료된 펜스는 대기하지 않는다.
     if (IsFenceComplete(FenceValue))
         return;
 
@@ -178,7 +263,12 @@ void CommandQueue::WaitForFence(uint64_t FenceValue)
     {
         std::lock_guard<std::mutex> LockGuard(m_EventMutex);
 
-        m_pFence->SetEventOnCompletion(FenceValue, m_FenceEventHandle);
+        // 이벤트 등록 실패 시 무한 대기에 들어가지 않는다.
+        if (FAILED(m_pFence->SetEventOnCompletion(FenceValue, m_FenceEventHandle)))
+        {
+            Graphics::ReportDeviceRemoved("CommandQueue::WaitForFence SetEventOnCompletion");
+            return;
+        }
         WaitForSingleObject(m_FenceEventHandle, INFINITE);
         m_LastCompletedFenceValue = FenceValue;
     }

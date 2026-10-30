@@ -49,7 +49,6 @@ public:
 
     virtual void Update( float dt ) override;
 
-    void SlowMovement( bool enable ) { m_FineMovement = enable; }
     void SlowRotation( bool enable ) { m_FineRotation = enable; }
 
     void EnableMomentum( bool enable ) { m_Momentum = enable; }
@@ -72,7 +71,6 @@ private:
     float m_CurrentHeading;
     float m_CurrentPitch;
 
-    bool m_FineMovement;
     bool m_FineRotation;
     bool m_Momentum;
 

@@ -17,6 +17,8 @@
 #include <queue>
 #include <mutex>
 #include <stdint.h>
+#include <array>
+#include <wrl/client.h>
 #include "CommandAllocatorPool.h"
 
 class CommandQueue
@@ -121,11 +123,44 @@ public:
         m_CopyQueue.WaitForIdle();
     }
 
+    // scene thread 전용이며 queue 제출과 동시에 호출하지 않는다.
+    // 제출된 명령의 resource 참조를 queue fence가 완료될 때까지 보관한다. 미제출 명령은 호출자가 먼저 제출해야 한다.
+    void RetireResource(ID3D12Resource* resource) noexcept;
+    // scene thread 전용이며 queue 제출과 동시에 호출하지 않는다.
+    // 완료된 retired resource만 대기 없이 해제한다.
+    void CollectRetiredResources() noexcept;
+    // scene thread에서 보관 중인 retired resource 수를 반환한다.
+    size_t GetRetiredResourceCount() const noexcept
+    {
+        // scene thread에서 보관 중인 retired resource 수를 반환한다.
+        return m_RetiredResources.size();
+    }
+    // scene thread에서 보관 중인 buffer resource의 논리 byte 합을 반환한다.
+    uint64_t GetRetiredResourceBytes() const noexcept
+    {
+        // scene thread에서 보관 중인 buffer resource의 논리 Width 합을 반환한다.
+        return m_RetiredResourceBytes;
+    }
+
 private:
+
+    struct RetiredResource
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> Resource;
+        std::array<uint64_t, 3> FenceValues;
+        uint64_t Bytes;
+    };
+
+    // retired 목록에 필요한 queue fence가 모두 끝났는지 확인한다.
+    bool IsRetiredResourceComplete(const RetiredResource& retired) noexcept;
+    // allocation 실패 시 resource 소유권이 원본 wrapper에 남아 있는 동안 GPU를 완료시킨다.
+    void WaitForReadyQueues() noexcept;
 
     ID3D12Device* m_Device;
 
     CommandQueue m_GraphicsQueue;
     CommandQueue m_ComputeQueue;
     CommandQueue m_CopyQueue;
+    std::vector<RetiredResource> m_RetiredResources;
+    uint64_t m_RetiredResourceBytes = 0;
 };

@@ -478,17 +478,21 @@ void Graphics::PreparePresentSDR(void)
     Context.Finish();
 }
 
+// 출력 프레임을 표시하고 Present 실패 시 장치 제거 원인을 보고한다.
 void Display::Present(void)
 {
+    // 현재 출력 형식에 맞게 백 버퍼를 준비한다.
     if (g_bEnableHDROutput)
         PreparePresentHDR();
     else
         PreparePresentSDR();
 
+    // 표시 요청 실패를 확인하고 장치 제거 정보를 출력한다.
     UINT PresentInterval = s_EnableVSync ? std::min(4, (int)Round(s_FrameTime * 60.0f)) : 0;
+    if (FAILED(s_SwapChain1->Present(PresentInterval, 0)))
+        Graphics::ReportDeviceRemoved("Display::Present");
 
-    s_SwapChain1->Present(PresentInterval, 0);
-
+    // 프레임 인덱스와 시간 정보를 갱신한다.
     g_CurrentBuffer = (g_CurrentBuffer + 1) % SWAP_CHAIN_BUFFER_COUNT;
 
     // Test robustness to handle spikes in CPU time

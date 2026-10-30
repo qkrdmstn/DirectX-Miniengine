@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -18,17 +18,21 @@
 #include "CommandContext.h"
 #include "BufferManager.h"
 #include "UploadBuffer.h"
+#include <stdexcept>
 
 using namespace Graphics;
 
+// GPU 기본 버퍼를 생성하고 할당 실패는 호출자가 원복할 수 있는 예외로 전달한다.
 void GpuBuffer::Create( const std::wstring& name, uint32_t NumElements, uint32_t ElementSize, const void* initialData )
 {
+    // 이전 자원을 비우고 넓은 정수 곱으로 새 byte 크기를 계산한다.
     Destroy();
 
     m_ElementCount = NumElements;
     m_ElementSize = ElementSize;
-    m_BufferSize = NumElements * ElementSize;
+    m_BufferSize = size_t(NumElements) * ElementSize;
 
+    // 기본 heap과 buffer의 생성 조건을 고정한다.
     D3D12_RESOURCE_DESC ResourceDesc = DescribeBuffer();
 
     m_UsageState = D3D12_RESOURCE_STATE_COMMON;
@@ -40,14 +44,19 @@ void GpuBuffer::Create( const std::wstring& name, uint32_t NumElements, uint32_t
     HeapProps.CreationNodeMask = 1;
     HeapProps.VisibleNodeMask = 1;
 
-    ASSERT_SUCCEEDED( g_Device->CreateCommittedResource( &HeapProps, D3D12_HEAP_FLAG_NONE,
-        &ResourceDesc, m_UsageState, nullptr, MY_IID_PPV_ARGS(&m_pResource)) );
+    // 실패한 resource를 참조하기 전에 HRESULT를 예외로 전달한다.
+    const HRESULT result = g_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
+        &ResourceDesc, m_UsageState, nullptr, MY_IID_PPV_ARGS(&m_pResource));
+    if (FAILED(result))
+        throw std::runtime_error("GPU buffer allocation failed, HRESULT=" + std::to_string(uint32_t(result)));
 
+    // 생성된 자원의 주소와 선택적 초기 업로드를 준비한다.
     m_GpuVirtualAddress = m_pResource->GetGPUVirtualAddress();
 
     if (initialData)
         CommandContext::InitializeBuffer(*this, initialData, m_BufferSize);
 
+    // 개발 빌드의 자원 이름과 파생 view를 등록한다.
 #ifdef RELEASE
     (name);
 #else
@@ -57,14 +66,17 @@ void GpuBuffer::Create( const std::wstring& name, uint32_t NumElements, uint32_t
     CreateDerivedViews();
 }
 
+// 업로드 원본으로 버퍼를 만들고 GPU 메모리 부족 시 잘못된 포인터 접근을 막는다.
 void GpuBuffer::Create( const std::wstring& name, uint32_t NumElements, uint32_t ElementSize, const UploadBuffer& srcData, uint32_t srcOffset )
 {
+    // 이전 자원을 비우고 넓은 정수 곱으로 새 byte 크기를 계산한다.
     Destroy();
 
     m_ElementCount = NumElements;
     m_ElementSize = ElementSize;
-    m_BufferSize = NumElements * ElementSize;
+    m_BufferSize = size_t(NumElements) * ElementSize;
 
+    // 기본 heap과 buffer의 생성 조건을 고정한다.
     D3D12_RESOURCE_DESC ResourceDesc = DescribeBuffer();
 
     m_UsageState = D3D12_RESOURCE_STATE_COMMON;
@@ -76,14 +88,18 @@ void GpuBuffer::Create( const std::wstring& name, uint32_t NumElements, uint32_t
     HeapProps.CreationNodeMask = 1;
     HeapProps.VisibleNodeMask = 1;
 
-    ASSERT_SUCCEEDED( 
-        g_Device->CreateCommittedResource( &HeapProps, D3D12_HEAP_FLAG_NONE,
-            &ResourceDesc, m_UsageState, nullptr, MY_IID_PPV_ARGS(&m_pResource)) );
+    // 실패한 resource를 참조하기 전에 HRESULT를 예외로 전달한다.
+    const HRESULT result = g_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
+        &ResourceDesc, m_UsageState, nullptr, MY_IID_PPV_ARGS(&m_pResource));
+    if (FAILED(result))
+        throw std::runtime_error("GPU buffer allocation failed, HRESULT=" + std::to_string(uint32_t(result)));
 
+    // 생성된 자원의 주소와 선택적 초기 업로드를 준비한다.
     m_GpuVirtualAddress = m_pResource->GetGPUVirtualAddress();
 
     CommandContext::InitializeBuffer(*this, srcData, srcOffset);
 
+    // 개발 빌드의 자원 이름과 파생 view를 등록한다.
 #ifdef RELEASE
     (name);
 #else

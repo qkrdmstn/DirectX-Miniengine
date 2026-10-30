@@ -71,6 +71,7 @@
     <ClInclude Include="ParticleEffects.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="MeshBufferPacking.h"><Filter>Source Files</Filter></ClInclude>
     <ClInclude Include="MeshConvert.h">
       <Filter>Source Files</Filter>
     </ClInclude>

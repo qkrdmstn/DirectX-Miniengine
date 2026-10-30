@@ -17,6 +17,7 @@
 #include "CompiledShaders/CutBoundsCS.h"
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 using namespace Math;
@@ -74,22 +75,242 @@ namespace MeshCutting
         Initialize();
     }
 
-    // 입력과 출력의 strong reference가 먼저 해제되지 않도록 GPU 완료를 보장한다.
-    CutJob::~CutJob()
+    // 큰 입력의 동일 clip 판정으로 출력 개수만 읽고 실제 버퍼 할당은 예산 검사 뒤로 미룬다.
+    CutCapacityPlan GpuMeshCutter::PlanCapacity(const GeometryRevision& input, const PosedGeometry& posed,
+        const AffineTransform& world, const CutPlaneData& plane, float epsilon, bool force)
     {
-        if (Fence) Graphics::g_CommandManager.WaitForFence(Fence);
+        // 먼저 기존 draw 검사를 수행하고 작은 입력은 기존 최악 용량 경로를 유지한다.
+        EstimateWorkingBytes(input, posed, false);
+        uint64_t triangles = 0;
+        for (size_t i = 0; i < input.GetSections().size(); ++i)
+            for (uint32_t d = 0; d < input.GetMesh(i).numDraws; ++d)
+                triangles += input.GetMesh(i).draw[d].primCount / 3;
+        if (!force && triangles * 9 <= 1000000) return {};
+        if (!posed.IsReady() || !std::isfinite(epsilon) || epsilon <= 0)
+            throw std::invalid_argument("Cut count requires prepared geometry");
+
+        // count descriptor는 최대 4096 draw로 제한하고 작은 upload page만 사용한다.
+        std::vector<CutSection> sections;
+        uint32_t first = 0;
+        for (uint32_t i = 0; i < input.GetSections().size(); ++i)
+        {
+            const Mesh& mesh = input.GetMesh(i);
+            for (uint32_t d = 0; d < mesh.numDraws; ++d)
+            {
+                if (sections.size() == 4096)
+                    throw std::length_error("Cut count draw limit exceeded (4096)");
+                const auto& draw = mesh.draw[d];
+                sections.push_back({ mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
+                    draw.startIndex, draw.baseVertex, draw.primCount / 3, posed.GetOffset(input.GetSections()[i].SourceMesh),
+                    first, 0, draw.primCount * 2, mesh.psoFlags, i, d, mesh.vbSize / mesh.vbStride, 0 });
+                first += draw.primCount / 3;
+            }
+        }
+        sections.push_back({});
+
+        // 기존 clip shader의 출력 용량 0 모드로 표면·경계 카운터만 갱신한다.
+        Initialize();
+        CutConstants constants{};
+        constants.Plane = Transpose(Matrix4(world)) * plane.WorldPlane;
+        constants.LocalToRectangle = plane.WorldToPlane * Matrix4(world);
+        const Vector3 normal(plane.WorldPlane);
+        const Vector3 u = Normalize(Cross(normal, Abs(normal.GetY()) < 0.9f ? Vector3(kYUnitVector) : Vector3(kXUnitVector)));
+        constants.ProjectU = Transpose(Matrix4(world)) * Vector4(u, 0);
+        constants.ProjectV = Transpose(Matrix4(world)) * Vector4(Cross(normal, u), 0);
+        constants.Epsilon = epsilon;
+        constants.Triangles = first;
+        constants.Sections = uint32_t(sections.size());
+        std::vector<uint32_t> initial(20 + sections.size() * 2, 0);
+        ByteAddressBuffer metadata;
+        StructuredBuffer descriptors;
+        ReadbackBuffer readback;
+        metadata.Create(L"Cut preflight counters", uint32_t(initial.size()), 4, initial.data());
+        descriptors.Create(L"Cut preflight sections", uint32_t(sections.size()), sizeof(CutSection), sections.data());
+        readback.Create(L"Cut preflight readback", uint32_t(initial.size()), 4);
+        GraphicsContext& graphics = GraphicsContext::Begin(L"Cut capacity count");
+        auto& compute = graphics.GetComputeContext();
+        compute.SetRootSignature(Root);
+        compute.SetPipelineState(Pipelines[0]);
+        compute.SetConstant(1, 0, 0);
+        compute.SetDynamicConstantBufferView(0, sizeof(constants), &constants);
+        compute.SetBufferSRV(2, input.GetDataBuffer());
+        compute.SetBufferSRV(3, posed.GetBuffer());
+        compute.SetBufferSRV(4, descriptors);
+        compute.TransitionResource(metadata, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        for (uint32_t slot = 5; slot < 13; ++slot) compute.SetBufferUAV(slot, metadata);
+        compute.Dispatch1D(first, 64);
+        graphics.CopyBuffer(readback, metadata);
+        graphics.Finish(true);
+
+        // CPU에는 작은 개수 배열만 읽고 오류나 불가능한 개수면 원본을 유지한다.
+        std::memcpy(initial.data(), readback.Map(), initial.size() * 4);
+        readback.Unmap();
+        if (initial[0] || initial[1] > first)
+            throw std::runtime_error("Cut capacity count failed");
+        CutCapacityPlan plan;
+        plan.MaxSegments = std::max(1u, initial[1]);
+        for (size_t i = 0; i + 1 < sections.size(); ++i)
+        {
+            const uint32_t count = std::max(initial[20 + i], initial[20 + sections.size() + i]);
+            if (count > sections[i].Triangles * 6 || count % 3)
+                throw std::runtime_error("Cut capacity count exceeds triangle bound");
+            plan.SurfaceVertices.push_back(count);
+        }
+        return plan;
     }
 
-    // fence가 끝난 뒤 작은 metadata와 GPU timestamp만 읽는다.
+    // 지원 용량 계약과 Submit의 draw 해석에 맞춰 임시 자원 예약치를 계산한다.
+    // 원본 geometry·부모 lineage·posed cache는 별도 소유이므로 포함하지 않는다.
+    uint64_t GpuMeshCutter::EstimateWorkingBytes(const GeometryRevision& input, const PosedGeometry& posed,
+        bool snapshotDiagnostics, const CutCapacityPlan* capacity)
+    {
+        // CPU draw 정보로 작업량과 출력 정점 용량을 합산한다.
+        uint64_t triangles = 0;
+        uint64_t surfaceVertices = 0;
+        size_t capacityIndex = 0;
+        uint64_t sectionCount = 1; // 양쪽이 공유하는 cap section이다.
+        for (size_t i = 0; i < input.GetSections().size(); ++i)
+        {
+            const Mesh& mesh = input.GetMesh(i);
+            if (mesh.psoFlags & PSOFlags::kHasSkin)
+                throw std::invalid_argument("Skeletal cutting is not enabled");
+            if ((mesh.psoFlags & 3) != 3 || mesh.vbStride == 0 ||
+                (mesh.ibFormat != DXGI_FORMAT_R16_UINT && mesh.ibFormat != DXGI_FORMAT_R32_UINT) || mesh.ibOffset % 4 != 0)
+                throw std::invalid_argument("Unsupported static index layout");
+
+            // 각 draw의 index 범위와 정점 용량을 Submit과 같은 규칙으로 검사한다.
+            for (uint32_t d = 0; d < mesh.numDraws; ++d)
+            {
+                const Mesh::Draw& draw = mesh.draw[d];
+                const uint32_t indexStride = mesh.ibFormat == DXGI_FORMAT_R32_UINT ? 4 : 2;
+                if (draw.primCount % 3 || (uint64_t(draw.startIndex) + draw.primCount) * indexStride > mesh.ibSize ||
+                    uint64_t(mesh.ibOffset) + mesh.ibSize > input.GetDataBuffer().GetBufferSize() ||
+                    draw.baseVertex > mesh.vbSize / mesh.vbStride)
+                    throw std::invalid_argument("Invalid static draw range");
+                const uint64_t drawTriangles = draw.primCount / 3;
+                if (drawTriangles > 1000000 - triangles)
+                    throw std::length_error("Cut input triangle limit exceeded (1000000)");
+                triangles += drawTriangles;
+                surfaceVertices += capacity && !capacity->SurfaceVertices.empty() ? capacity->SurfaceVertices.at(capacityIndex++) : drawTriangles * 6;
+                ++sectionCount;
+            }
+        }
+
+        // 입력 삼각형과 GPU byte offset 한계를 검사해 잘못된 예약을 거절한다.
+        if (triangles == 0)
+            throw std::length_error("Cut input has no triangles");
+        if (triangles > 1000000)
+            throw std::length_error("Cut input triangle limit exceeded (1000000)");
+        const uint64_t segments = capacity && !capacity->SurfaceVertices.empty() ? capacity->MaxSegments : triangles;
+        if (capacity && !capacity->SurfaceVertices.empty() &&
+            (capacityIndex != capacity->SurfaceVertices.size() || segments == 0 || segments > triangles))
+            throw std::length_error("Invalid cut capacity plan");
+        const uint64_t vertices = surfaceVertices + segments * 3;
+        if (vertices > std::numeric_limits<uint32_t>::max() / 48)
+            throw std::length_error("Cut output byte offsets exceed uint32 range");
+        uint64_t buckets = 1;
+        while (buckets < segments * 4) buckets *= 2;
+
+        // 개별 D3D12 buffer마다 64 KiB 정렬 여유를 더한다.
+        constexpr uint64_t AllocationGranularity = 64 * 1024;
+        const auto allocated = [](uint64_t bytes) -> uint64_t
+        {
+            constexpr uint64_t granularity = 64 * 1024;
+            if (bytes > std::numeric_limits<uint64_t>::max() - (granularity - 1))
+                throw std::length_error("Static cut estimate overflow");
+            return ((bytes + granularity - 1) / granularity) * granularity;
+        };
+        uint64_t bytes = 0;
+
+        // A/B의 Data·Pose·Provenance 출력 버퍼는 각 양쪽 크기로 따로 정렬한다.
+        bytes += allocated(vertices * 48) * 2;
+        bytes += allocated(vertices * 40) * 2;
+        bytes += allocated(vertices * 32) * 2;
+        bytes += allocated(sizeof(MaterialConstants)) * 2;
+
+        // scratch, metadata, descriptor, readback의 논리 크기를 개별 정렬한다.
+        const uint64_t scratchBytes = segments * 128 + buckets * 4 + segments * 8;
+        const uint64_t metadataBytes = (20 + sectionCount * 2 + 2 * KDopWordsPerSide + 5) * 4;
+        bytes += allocated(scratchBytes);
+        bytes += allocated(metadataBytes);
+        bytes += allocated(sectionCount * sizeof(CutSection));
+        bytes += allocated(metadataBytes);
+        bytes += allocated(5 * sizeof(uint64_t));
+
+        // 13개 GPU buffer 외 counter·query heap·동적 constant allocator page를 더한다.
+        bytes += AllocationGranularity * 3;
+
+        // 네 초기 upload 각각의 CPU allocator 사용을 2 MiB 단위로 올림한다.
+        const auto uploadAllocation = [](uint64_t size) -> uint64_t
+        {
+            constexpr uint64_t pageSize = 2 * 1024 * 1024;
+            if (size > std::numeric_limits<uint64_t>::max() - (pageSize - 1))
+                throw std::length_error("Static cut upload estimate overflow");
+            return ((size + pageSize - 1) / pageSize) * pageSize;
+        };
+        const uint64_t descriptorBytes = sectionCount * sizeof(CutSection);
+        bytes += uploadAllocation(sizeof(MaterialConstants)) * 2;
+        bytes += uploadAllocation(metadataBytes);
+        bytes += uploadAllocation(descriptorBytes);
+
+        // 명시적 진단은 원본 입력 snapshot과 추가 readback 버퍼를 만들어 그 임시 공간도 예약한다.
+        if (snapshotDiagnostics)
+        {
+            const uint64_t poseSnapshotBytes = posed.GetBuffer().GetBufferSize();
+            const uint64_t dataSnapshotBytes = input.GetDataBuffer().GetBufferSize();
+            if (poseSnapshotBytes > std::numeric_limits<uint32_t>::max() ||
+                dataSnapshotBytes > std::numeric_limits<uint32_t>::max())
+                throw std::length_error("Static cut diagnostic snapshot exceeds supported buffer size");
+            bytes += allocated(poseSnapshotBytes);
+            bytes += allocated(dataSnapshotBytes);
+
+            // ValidateDiagnostics의 boundary·양쪽 surface readback과 각 면 DOP pose readback을 합산한다.
+            bytes += allocated(segments * 128);
+            bytes += allocated(vertices * 48) * 2;
+            bytes += allocated(vertices * 40) * 4;
+            bytes += allocated(vertices * 32) * 2;
+        }
+        return bytes;
+    }
+
+    // 제출 입력·출력 resource를 GPU 완료 전 해제하지 않도록 작업 fence를 기다린다.
+    CutJob::~CutJob()
+    {
+        // 제출한 command list가 입력·출력 resource를 모두 사용 완료할 때까지 기다린다.
+        if (Fence != 0)
+            Graphics::g_CommandManager.WaitForFence(Fence);
+
+        // revision이나 renderer에 전달되지 않은 단독 소유 출력만 완료 후 직접 해제한다.
+        if (Fence != 0)
+        {
+            for (const auto& output : Output)
+                if (output && output.use_count() == 1)
+                    output->ReleaseGpuResourcesAfterCompletion();
+        }
+    }
+
+    // fence가 끝난 뒤 cap 누적 진단을 포함한 metadata와 GPU timestamp만 읽는다.
     bool CutJob::Poll()
     {
         if (Collected) return true;
         if (!Graphics::g_CommandManager.IsFenceComplete(Fence)) return false;
-        Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide);
+
+        // 기존 KDop 뒤에 추가한 다섯 DWORD까지 함께 읽는다.
+        Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide + 5);
         std::memcpy(Status.data(), StatusReadback.Map(), Status.size() * 4);
         StatusReadback.Unmap();
 
-        // Metadata 끝의 면별 18-DOP을 해석하며 기여 정점이 없는 면은 sentinel을 해석하지 않고 비운다.
+        // section 수에 따른 진단 시작 위치에서 라운드·표시·실제 제거 합계를 해석한다.
+        const uint32_t capBase = 58 + Constants.Sections * 2;
+        CapRounds = Status[capBase];
+        CapMarked = Status[capBase + 1];
+        CapRemoved = Status[capBase + 2];
+
+        // 기존 합계 뒤에서 최대 경계 길이와 hash 경로 loop 수를 해석한다.
+        CapMaxLoop = Status[capBase + 3];
+        CapHashLoops = Status[capBase + 4];
+
+        // 기존 면별 18-DOP을 해석하며 기여 정점이 없는 면은 sentinel을 해석하지 않고 비운다.
         for (uint32_t side = 0; side < 2; ++side)
         {
             const uint32_t base = 80 / 4 + Constants.Sections * 2 + side * KDopWordsPerSide;
@@ -163,10 +384,16 @@ namespace MeshCutting
 
     // GPU 절단을 제출하고 명시적 진단에서만 같은 시점의 부모 정점·인덱스를 보존한다.
     std::unique_ptr<CutJob> GpuMeshCutter::Submit(std::shared_ptr<const GeometryRevision> input,
-        const PosedGeometry& posed, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics)
+        const PosedGeometry& posed, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics, const CutCapacityPlan* capacity, uint64_t retainedLimitBytes)
     {
         if (!input || !posed.IsReady() || !std::isfinite(epsilon) || epsilon <= 0)
             throw std::invalid_argument("Static cut requires prepared geometry");
+        // Submit도 같은 지원 용량 계약을 확인해 scheduler 추정과 작업 생성 조건을 맞춘다.
+        const uint64_t workingEstimate = EstimateWorkingBytes(*input, posed, snapshotDiagnostics, capacity);
+        (void)workingEstimate;
+        // 큰 입력은 작은 count 결과 없이 최악 용량 버퍼를 만들지 않는다.
+        if ((!capacity || capacity->SurfaceVertices.empty()) && workingEstimate > 512ull * 1024 * 1024)
+            throw std::length_error("Large cut requires a capacity plan");
         Initialize();
         auto job = std::make_unique<CutJob>();
         job->Started = std::chrono::steady_clock::now();
@@ -191,14 +418,20 @@ namespace MeshCutting
                     draw.startIndex, draw.baseVertex, draw.primCount / 3,
                     posed.GetOffset(job->Input->GetSections()[i].SourceMesh), uint32_t(total), uint32_t(vertices),
                     draw.primCount * 2, mesh.psoFlags, i, d, mesh.vbSize / mesh.vbStride, 0 };
+                if (capacity && !capacity->SurfaceVertices.empty())
+                    s.VertexCapacity = capacity->SurfaceVertices.at(job->Sections.size());
                 total += s.Triangles; vertices += s.VertexCapacity;
                 job->Sections.push_back(s); job->Templates.push_back(mesh);
             }
         }
-        if (total == 0 || total > 1000000 || vertices + total * 3 > 1000000)
-            throw std::length_error("Static cut capacity exceeds supported budget");
+        // 기존 용량 상한은 유지하고 거절된 입력·출력 조건을 구분한다.
+        if (total == 0)
+            throw std::length_error("Cut input has no triangles");
+        if (total > 1000000)
+            throw std::length_error("Cut input triangle limit exceeded (1000000)");
+        const uint64_t segments = capacity && !capacity->SurfaceVertices.empty() ? capacity->MaxSegments : total;
         // cap도 독립 section이며 양쪽에서 같은 topology를 반대로 사용한다.
-        CutSection cap{}; cap.VertexStart = uint32_t(vertices); cap.VertexCapacity = uint32_t(total * 3); cap.Flags = 31;
+        CutSection cap{}; cap.VertexStart = uint32_t(vertices); cap.VertexCapacity = uint32_t(segments * 3); cap.Flags = 31;
         job->Sections.push_back(cap);
         Mesh capTemplate = job->Templates.front(); capTemplate.psoFlags = 31;
         capTemplate.materialCBV = 0xffff; capTemplate.srvTable = CapTextureTable;
@@ -207,8 +440,13 @@ namespace MeshCutting
         const auto parent = job->Input->GetGenerated();
         const uint32_t generation = parent ? parent->Generation + 1 : 1;
         const uint64_t parentBytes = parent ? parent->LineageBytes : 0;
-        if (generation > 32 || parentBytes + vertices * 240 > 512ull * 1024 * 1024)
-            throw std::length_error("Cut retained history/output memory budget exceeded");
+        // 재절단 깊이 제한과 부모·양쪽 출력의 보관 예산을 별도로 진단한다.
+        if (generation > 32)
+            throw std::length_error("Cut history depth limit exceeded (32)");
+        // 기본 512 MiB를 유지하며 명시 작업 예산도 최대 1024 MiB 안에서만 허용한다.
+        retainedLimitBytes = std::max(512ull * 1024 * 1024, std::min(retainedLimitBytes, 1024ull * 1024 * 1024));
+        if (parentBytes + vertices * 240 > retainedLimitBytes)
+            throw std::length_error("Cut retained geometry budget exceeded (limitBytes=" + std::to_string(retainedLimitBytes) + ")");
         auto& c = job->Constants;
         c.Plane = Transpose(Matrix4(world)) * plane.WorldPlane;
         c.LocalToRectangle = plane.WorldToPlane * Matrix4(world);
@@ -231,9 +469,18 @@ namespace MeshCutting
         c.Epsilon = epsilon; c.HalfWidth = plane.HalfWidth; c.HalfHeight = plane.HalfHeight;
         c.Triangles = uint32_t(total); c.Sections = uint32_t(job->Sections.size()); c.VertexCapacity = uint32_t(vertices);
         c.DepthOffset = uint32_t(vertices * 28); c.IndexOffset = uint32_t(vertices * 44);
-        c.MaxSegments = uint32_t(total); uint32_t buckets = 1;
-        while (buckets < total * 4) buckets *= 2;
-        c.HashMask = buckets - 1; c.HashOffset = uint32_t(total * 128); c.HashLinksOffset = c.HashOffset + buckets * 4;
+        c.MaxSegments = uint32_t(segments); uint32_t buckets = 1;
+        while (buckets < segments * 4) buckets *= 2;
+        c.HashMask = buckets - 1; c.HashOffset = uint32_t(segments * 128); c.HashLinksOffset = c.HashOffset + buckets * 4;
+
+        // 양쪽 cap이 공유하는 재질 상수를 요청별로 준비한다.
+        MaterialConstants material{};
+        material.baseColorFactor[0] = 0.8f;
+        material.baseColorFactor[1] = 0.22f;
+        material.baseColorFactor[2] = 0.12f;
+        material.baseColorFactor[3] = 1;
+        material.normalTextureScale = 1;
+        material.roughnessFactor = 0.8f;
         for (auto& out : job->Output)
         {
             out = std::make_shared<GeometryBuffers>(); out->Source = job->Input->GetSource();
@@ -242,26 +489,49 @@ namespace MeshCutting
             out->Data.Create(L"Cut surface/depth/index", uint32_t(vertices * 48), 1);
             out->Pose.Create(L"Canonical cut pose", uint32_t(vertices * 40), 1);
             out->Provenance.Create(L"Cut current-parent provenance", uint32_t(vertices * 32), 1);
-            MaterialConstants material{};
-            material.baseColorFactor[0]=0.8f;material.baseColorFactor[1]=0.22f;material.baseColorFactor[2]=0.12f;material.baseColorFactor[3]=1;
-            material.normalTextureScale=1;material.roughnessFactor=0.8f;
-            out->CapMaterial.Create(L"Cut cap material",1,sizeof(material),&material);
+            out->CapMaterial.Create(L"Cut cap material",1,sizeof(material));
         }
-        std::vector<uint32_t> initial(20 + c.Sections * 2 + 2 * KDopWordsPerSide, 0);
+
+        // KDop 뒤의 cap 진단 다섯 DWORD도 0으로 초기화한다.
+        std::vector<uint32_t> initial(20 + c.Sections * 2 + 2 * KDopWordsPerSide + 5, 0);
         for (uint32_t side = 0; side < 2; ++side) for (uint32_t k = 0; k < 3; ++k) initial[8 + side * 6 + k] = 0xffffffff;
         // 면별 18-DOP의 최솟값 단어는 최대 sentinel로, 최댓값 단어와 개수는 0으로 시작한다.
         for (uint32_t side = 0; side < 2; ++side)
             for (uint32_t axis = 0; axis < 9; ++axis)
                 initial[20 + c.Sections * 2 + side * KDopWordsPerSide + axis] = 0xffffffff;
-        job->Metadata.Create(L"Cut counts/status/bounds", uint32_t(initial.size()), 4, initial.data());
+        job->Metadata.Create(L"Cut counts/status/bounds", uint32_t(initial.size()), 4);
         job->Scratch.Create(L"Cut boundary graph/hash", c.HashLinksOffset + c.MaxSegments * 8, 1);
-        job->Descriptors.Create(L"Cut sections", c.Sections, sizeof(CutSection), job->Sections.data());
+        job->Descriptors.Create(L"Cut sections", c.Sections, sizeof(CutSection));
         job->StatusReadback.Create(L"Cut metadata readback", uint32_t(initial.size()), 4);
         job->TimeReadback.Create(L"Cut timestamp readback", 5, 8);
         D3D12_QUERY_HEAP_DESC q{}; q.Count = 5; q.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-        ASSERT_SUCCEEDED(Graphics::g_Device->CreateQueryHeap(&q, IID_PPV_ARGS(job->Queries.GetAddressOf())));
+        // command list 기록 전에 query와 진단 snapshot을 모두 확보해 할당 실패를 원복한다.
+        if (FAILED(Graphics::g_Device->CreateQueryHeap(&q, IID_PPV_ARGS(job->Queries.GetAddressOf()))))
+            throw std::runtime_error("Cut timestamp query allocation failed");
+        if (snapshotDiagnostics)
+        {
+            job->DiagnosticInputPose.Create(L"Diagnostic parent pose", uint32_t(posed.GetBuffer().GetBufferSize()), 1);
+            job->DiagnosticInputData.Create(L"Diagnostic parent geometry", uint32_t(job->Input->GetDataBuffer().GetBufferSize()), 1);
+        }
         GraphicsContext& graphics = GraphicsContext::Begin(L"Static mesh cut");
         auto& compute = graphics.GetComputeContext();
+
+        // GPU 버퍼의 초기 내용을 현재 작업 command list에 비동기 업로드한다.
+        const auto uploadInitialData = [&graphics](GpuBuffer& destination, const void* data, size_t bytes)
+        {
+            // 업로드 메모리를 복사하고 목적지를 읽기 상태로 전이한다.
+            DynAlloc upload = graphics.ReserveUploadMemory(bytes);
+            std::memcpy(upload.DataPtr, data, bytes);
+            graphics.TransitionResource(destination, D3D12_RESOURCE_STATE_COPY_DEST);
+            graphics.CopyBufferRegion(destination, 0, upload.Buffer, upload.Offset, bytes);
+            graphics.TransitionResource(destination, D3D12_RESOURCE_STATE_GENERIC_READ);
+        };
+
+        // cap material과 dispatch metadata를 GPU 실행 전에 같은 queue에 기록한다.
+        uploadInitialData(job->Output[0]->CapMaterial, &material, sizeof(material));
+        uploadInitialData(job->Output[1]->CapMaterial, &material, sizeof(material));
+        uploadInitialData(job->Metadata, initial.data(), initial.size() * sizeof(uint32_t));
+        uploadInitialData(job->Descriptors, job->Sections.data(), job->Sections.size() * sizeof(CutSection));
         graphics.InsertTimeStamp(job->Queries.Get(), 0);
         compute.TransitionResource(job->Scratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         compute.ClearUAV(job->Scratch);
@@ -312,8 +582,6 @@ namespace MeshCutting
         {
             auto& inputPose = const_cast<ByteAddressBuffer&>(posed.GetBuffer());
             auto& inputData = const_cast<ByteAddressBuffer&>(job->Input->GetDataBuffer());
-            job->DiagnosticInputPose.Create(L"Diagnostic parent pose",uint32_t(inputPose.GetBufferSize()),1);
-            job->DiagnosticInputData.Create(L"Diagnostic parent geometry",uint32_t(inputData.GetBufferSize()),1);
             graphics.CopyBuffer(job->DiagnosticInputPose,inputPose);
             graphics.CopyBuffer(job->DiagnosticInputData,inputData);
             graphics.TransitionResource(inputPose,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

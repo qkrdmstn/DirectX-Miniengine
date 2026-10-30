@@ -20,4 +20,6 @@ struct GeometryBuffers
     uint64_t LineageBytes = 0;
     // 이미 제출한 GPU 명령이 사용하는 geometry를 완료 전에 해제하지 않는다.
     ~GeometryBuffers();
+    // 미게시 출력의 마지막 GPU 사용이 완료된 뒤 내부 GPU buffer를 즉시 해제한다.
+    void ReleaseGpuResourcesAfterCompletion() noexcept;
 };

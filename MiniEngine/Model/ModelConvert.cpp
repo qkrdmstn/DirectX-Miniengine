@@ -19,6 +19,7 @@
 #include "glTF.h"
 #include "TextureConvert.h"
 #include "MeshConvert.h"
+#include "MeshBufferPacking.h"
 #include "TextureManager.h"
 #include "GraphicsCommon.h"
 #include "../Core/Utility.h"
@@ -27,6 +28,8 @@
 #include <fstream>
 #include <map>
 #include <unordered_map>
+#include <limits>
+#include <stdexcept>
 
 using namespace DirectX;
 using namespace Math;
@@ -39,6 +42,7 @@ static inline Vector3 SafeNormalize(Vector3 x)
     return lenSq < 1e-10f ? Vector3(kXUnitVector) : x * RecipSqrt(lenSq);
 }
 
+// 같은 형식과 재질의 primitive를 묶고 byte stream과 draw 원소 offset을 구성한다.
 void Renderer::CompileMesh(
     std::vector<Mesh*>& meshList,
     std::vector<byte>& bufferMemory,
@@ -49,11 +53,7 @@ void Renderer::CompileMesh(
     AxisAlignedBox& boundingBox
     )
 {
-    // We still have a lot of work to do.  Now that we know about all of the primitives in this mesh
-    // and have standardized their vertex buffer streams, we must set out to identify which primitives
-    // have the same vertex format and material.  These can share a PSO and Vertex/Index buffer views.
-    // There may be more than one draw call per group due to 16-bit indices.
-
+    // 원본 primitive를 표준 vertex stream으로 변환하고 전체 경계를 계산한다.
     size_t totalVertexSize = 0;
     size_t totalDepthVertexSize = 0;
     size_t totalIndexSize = 0;
@@ -72,6 +72,7 @@ void Renderer::CompileMesh(
     boundingSphere = sphereOS;
     boundingBox = bboxOS;
 
+    // 동일 render 형식끼리 묶고 각 index group의 4-byte 정렬 공간을 확보한다.
     std::map<uint32_t, std::vector<Primitive*>> renderMeshes;
     for (auto& prim : primitives)
     {
@@ -82,7 +83,11 @@ void Renderer::CompileMesh(
         totalIndexSize += Math::AlignUp(prim.IB->size(), 4);
     }
 
-    uint32_t totalBufferSize = (uint32_t)(totalVertexSize + totalDepthVertexSize + totalIndexSize);
+    // 파일 형식의 32-bit byte offset 범위를 넘는 geometry는 저장 전에 거부한다.
+    const size_t totalBufferSize = totalVertexSize + totalDepthVertexSize + totalIndexSize;
+    const size_t maxGeometrySize = (std::numeric_limits<uint32_t>::max)();
+    if (totalBufferSize > maxGeometrySize || bufferMemory.size() > maxGeometrySize - totalBufferSize)
+        throw std::overflow_error("Model geometry exceeds 32-bit buffer offsets");
 
     Utility::ByteArray stagingBuffer;
     stagingBuffer.reset(new std::vector<byte>(totalBufferSize));
@@ -92,6 +97,7 @@ void Renderer::CompileMesh(
     uint32_t curDepthVBOffset = (uint32_t)totalVertexSize;
     uint32_t curIBOffset = curDepthVBOffset + (uint32_t)totalDepthVertexSize;
 
+    // 각 group의 stream 영역과 draw 목록을 생성한다.
     for (auto& iter : renderMeshes)
     {
         size_t numDraws = iter.second.size();
@@ -100,7 +106,7 @@ void Renderer::CompileMesh(
         size_t vbDepthSize = 0;
         size_t ibSize = 0;
 
-        // Compute local space bounding sphere for all submeshes
+        // group에 속한 primitive의 stream 크기와 local 경계를 합산한다.
         BoundingSphere collectiveSphere(kZero);
 
         for (auto& draw : iter.second)
@@ -111,6 +117,7 @@ void Renderer::CompileMesh(
             collectiveSphere = collectiveSphere.Union(draw->m_BoundsLS);
         }
 
+        // mesh view의 offset과 크기는 모두 byte 단위로 기록한다.
         mesh->bounds[0] = collectiveSphere.GetCenter().GetX();
         mesh->bounds[1] = collectiveSphere.GetCenter().GetY();
         mesh->bounds[2] = collectiveSphere.GetCenter().GetZ();
@@ -140,30 +147,31 @@ void Renderer::CompileMesh(
 
         mesh->numDraws = (uint16_t)numDraws;
 
+        // stream은 byte 위치에 복사하고 draw에는 vertex/index 개수를 기록한다.
         uint32_t drawIdx = 0;
-        uint32_t curVertOffset = 0;
-        uint32_t curIndexOffset = 0;
+        MeshBufferPacking packing;
         for (auto& draw : iter.second)
         {
             Mesh::Draw& d = mesh->draw[drawIdx++];
             d.primCount = draw->primCount;
-            d.baseVertex = curVertOffset;
-            d.startIndex = curIndexOffset;
-            std::memcpy(uploadMem + curVBOffset + curVertOffset, draw->VB->data(), draw->VB->size());
-            curVertOffset += (uint32_t)draw->VB->size() / draw->vertexStride;
-            std::memcpy(uploadMem + curDepthVBOffset, draw->DepthVB->data(), draw->DepthVB->size());
-            std::memcpy(uploadMem + curIBOffset + curIndexOffset, draw->IB->data(), draw->IB->size());
-            curIndexOffset += (uint32_t)draw->IB->size() >> (draw->index32 + 1);
+            const auto location = packing.Append(
+                uploadMem + curVBOffset, uploadMem + curDepthVBOffset, uploadMem + curIBOffset,
+                draw->VB->data(), draw->VB->size(), draw->vertexStride,
+                draw->DepthVB->data(), draw->DepthVB->size(),
+                draw->IB->data(), draw->IB->size(), draw->index32 ? 4u : 2u);
+            d.baseVertex = location.BaseVertex;
+            d.startIndex = location.StartIndex;
         }
 
+        // 다음 group의 index view 시작만 정렬하며 draw 원소 offset에는 padding을 넣지 않는다.
         curVBOffset += (uint32_t)vbSize;
         curDepthVBOffset += (uint32_t)vbDepthSize;
         curIBOffset += (uint32_t)Math::AlignUp(ibSize, 4);
-        curIndexOffset = Math::AlignUp(curIndexOffset, 4);
 
         meshList.push_back(mesh);
     }
 
+    // 완성된 staging 영역을 모델의 geometry 영역에 추가한다.
     bufferMemory.insert(bufferMemory.end(), stagingBuffer->begin(), stagingBuffer->end());
 }
 

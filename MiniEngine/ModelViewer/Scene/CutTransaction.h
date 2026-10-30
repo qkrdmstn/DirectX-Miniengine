@@ -12,6 +12,8 @@ namespace Viewer
         static constexpr uint32_t MaxNewBodiesPerFrame = 4;
         // 현재 프레임의 남은 예산에서 bodies개를 차감한다. 초과하면 아무것도 차감하지 않고 false다.
         bool TryConsume(uint32_t bodies);
+        // 이미 쓴 예산이 있고 요청 자체는 가능한 크기일 때 다음 프레임으로 미룰지 확인한다.
+        bool ShouldDefer(uint32_t bodies);
         // 진단용으로 프레임당 상한을 낮춘다. 기본값은 MaxNewBodiesPerFrame이며 생산 경로는 호출하지 않는다.
         void SetLimit(uint32_t limit) { m_Limit = limit; }
 

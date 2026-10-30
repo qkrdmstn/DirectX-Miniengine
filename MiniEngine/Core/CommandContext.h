@@ -186,7 +186,13 @@ protected:
     LinearAllocator m_GpuLinearAllocator;
 
     std::wstring m_ID;
-    void SetID(const std::wstring& ID) { m_ID = ID; }
+    // 컨텍스트 ID를 DRED에서 볼 수 있는 명령 목록 이름에도 반영한다.
+    void SetID(const std::wstring& ID)
+    {
+        // 재사용 시 빈 ID도 반영하여 이전 작업 이름이 남지 않게 한다.
+        m_ID = ID;
+        m_CommandList->SetName(ID.empty() ? L"CommandList" : ID.c_str());
+    }
 
     D3D12_COMMAND_LIST_TYPE m_Type;
 };
