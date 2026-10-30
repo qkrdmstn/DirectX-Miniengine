@@ -99,7 +99,7 @@ namespace Viewer
         // -cut-memory-mb를 signed 정수로 읽고 작업별 GPU 임시 메모리 한도로 변환한다.
         uint64_t ReadCutMemoryLimitBytes()
         {
-            constexpr uint64_t DefaultMiB = 256;
+            constexpr uint64_t DefaultMiB = 1024;
             std::wstring limitText;
             if (!CommandLineArgs::GetString(L"cut-memory-mb", limitText))
                 return DefaultMiB * 1024 * 1024;
@@ -116,7 +116,7 @@ namespace Viewer
             }
             catch (const std::exception&)
             {
-                Utility::Printf("Invalid -cut-memory-mb value; using default 256\n");
+                Utility::Printf("Invalid -cut-memory-mb value; using default 1024\n");
                 return DefaultMiB * 1024 * 1024;
             }
         }
@@ -315,6 +315,7 @@ namespace Viewer
         Utility::Printf("Static cut candidates: count=%zu\n",m_Pending.size());
         if (m_Pending.empty()) { m_StatusText = "No static mesh in the cut area"; return false; }
         m_BatchActive = true; m_BatchApplied = 0;
+        m_BatchGpuMs = 0;
         m_BatchStarted = std::chrono::steady_clock::now();
         m_PeakInFlight = 0;
         m_PeakReservedBytes = 0;
@@ -395,12 +396,24 @@ namespace Viewer
         if (removed) m_StatusText = "Cancelled - cut target deleted";
     }
 
-    // 성공한 후보가 있으면 전체 요청의 완료 상태를 남긴다.
+    // 성공한 후보가 있으면 전체 요청의 완료 상태와 절단 시간을 남긴다.
+    // 화면 문구에는 절단 수, 절단당 평균 GPU 시간, GPU 합계와 요청 전체 경과 시간을 표시한다.
     void CuttingSystem::FinishBatch()
     {
         if (!m_BatchActive || IsBusy()) return;
-        if (m_BatchApplied) m_StatusText = "Cut complete";
+
+        // 요청 시작부터 마지막 게시까지의 경과 시간을 구한다.
         const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - m_BatchStarted).count();
+
+        // 게시한 절단이 있으면 시간 요약을 상태 문구로 바꾼다.
+        if (m_BatchApplied)
+        {
+            sprintf_s(m_BatchText, "Cut complete - cuts=%u avgGpu=%.3f ms totalGpu=%.3f ms total=%.1f ms",
+                m_BatchApplied, m_BatchGpuMs / m_BatchApplied, m_BatchGpuMs, elapsedMs);
+            m_StatusText = m_BatchText;
+        }
+
+        // 기존 로그와 예산 진단을 출력한다.
         Utility::Printf("Static cut batch complete: published=%u elapsedMs=%.3f peakActiveJobs=%u activeLimit=%u\n",
             m_BatchApplied, elapsedMs, m_PeakInFlight, m_InFlightLimit);
         Utility::Printf("Static cut budget: limitBytes=%llu peakReservedBytes=%llu peakRetiredLogicalBytes=%llu updateMaxMs=%.3f processedMaxPerFrame=%u\n",
@@ -615,7 +628,10 @@ namespace Viewer
         m_Active.pop_front();
         m_PeakRetiredBytes = std::max(m_PeakRetiredBytes, Graphics::g_CommandManager.GetRetiredResourceBytes());
         if (m_BatchActive && LastOther)
+        {
             ++m_BatchApplied;
+            m_BatchGpuMs += LastGpuMs;
+        }
         return true;
     }
 

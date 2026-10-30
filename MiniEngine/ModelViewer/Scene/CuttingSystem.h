@@ -114,10 +114,12 @@ namespace Viewer
         bool m_SubmissionDeferred = false;
         bool m_BatchActive = false;
         uint32_t m_BatchApplied = 0;
+        double m_BatchGpuMs = 0;
+        char m_BatchText[192]{};
         std::chrono::steady_clock::time_point m_BatchStarted{};
         uint32_t m_PeakInFlight = 0;
         uint32_t m_InFlightLimit = 2;
-        uint64_t m_MemoryLimitBytes = 256ull * 1024 * 1024;
+        uint64_t m_MemoryLimitBytes = 1024ull * 1024 * 1024;
         uint64_t m_ReservedBytes = 0;
         uint64_t m_PeakReservedBytes = 0;
         uint64_t m_PeakRetiredBytes = 0;

@@ -26,6 +26,7 @@ cap shader의 4096 제한은 전체 입력 후보 수가 아니라 loop별 처�
 - 입력 삼각형 1,000,000개, generation 32, 부모 lineage와 양쪽 예상 출력 512MiB 제한은 유지한다.
 - 출력 byte offset의 uint32 범위, 계획 배열 길이와 경계 수를 검사한다. 실제 emit에서도 capacity overflow를 검사하며 오류 결과는 게시하지 않는다.
 - 작업별·합산 예약은 `-cut-memory-mb` 범위 안에서 제한한다. 개별 초과는 거절하고 합산 초과는 기존 작업 수집 후 다시 제출한다.
+- 2026-10-30: 기본값을 256에서 상한인 1024 MiB로 올렸다(`ReadCutMemoryLimitBytes`). Dragon y=0은 작업 636 MB·유지 627 MB라 256에서는 거절됐고, 1024에서는 MX450 Release에서 절단·게시 검증이 통과한다(1회 단계 ms: clip 52·boundary 0.5·cap 6.0·finalize 12.4). 출력 축소 없이 예산만 올린 것이며 VRAM이 작은 GPU에서는 `-cut-memory-mb`로 낮출 수 있다.
 - count 비용은 `CutJob::Started` 및 GPU timestamp보다 앞에 있다. 큰 입력의 `ReadyMs`와 GPU 작업 시간은 count 비용을 포함하지 않으며 batch 경과 시간에는 포함된다.
 - `GpuBuffer::Create`, `ReadbackBuffer::Create/Map`과 절단 query heap은 할당/매핑 실패를 예외로 전달한다. 큰 진단 snapshot은 command list 기록 전에 확보해 할당 실패 시 원본을 유지한다.
 - 실제 VRAM 고갈을 강제로 발생시키는 검증은 하지 않는다. 메모리 예산 거절 검증과 실패 경로 코드 리뷰를 구분한다.
