@@ -1,4 +1,4 @@
-상태: 완료 — M1(BC-00~BC-13a), BC-13a 독립 리뷰 지적 2건 수정, 미커밋(커밋 해시는 Claude가 커밋 후 채움)
+상태: 완료 — M1(BC-00~BC-13a) 0c7fcaa7 (2026-10-30). BC-12a-1 dd219b8e, BC-12a-2 b4afd069, BC-12b 4f9dbcf7, BC-13a 0c7fcaa7. M2(BC-09·BC-14) 미착수
 
 # BreakConstraint 구현 인계
 
@@ -231,26 +231,26 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | 단계 | 변경 파일·한 개념 | 완료 증거 / 선행 | 기준 비용 |
 | --- | --- | --- | --- |
 | BC-00 | Xbot 진단 로그만 추가(동작 변경 없음): 왼팔 NodeId·parent, `E * Gnode` scale/shear, 본 길이(월드 m), 재생 중 손목 anchor·상대 자세 범위 | 로그 값을 이 문서 2·6·8절에 기록 / 지금 가능 | R+B+V |
-| BC-01 | SkeletonPose.h parent map + Model/tests/SkeletonPoseTests.cpp | 구현 완료(uncommitted): CPU 16/16 PASS, Debug 재빌드는 Jolt 외부 캐시 권한 차단 / 선행 00 완료 | R+CPU 1.19초 |
-| BC-02 | override evaluator + 같은 테스트 | 구현 완료(uncommitted): CPU 32/32 PASS; override=0 동등, 물리 본 고정·자손 local·skeletonRoot·실패 시 출력 보존 / 01 | R+CPU 0.91초 |
-| BC-03a | ModelInstance animation/finalize 분리 | override=0 pose/palette 동등, 중복 palette node 갱신 / 02 | R+B+T |
-| BC-03b | Scene CPU/GPU 단계 분리·wrapper | 비물리 Debug/Release 실행·애니메이션 회귀 / 03a | R+B+V |
+| BC-01 | SkeletonPose.h parent map + Model/tests/SkeletonPoseTests.cpp | 완료 `d044de76`: CPU 16/16 PASS, Debug 재빌드는 Jolt 외부 캐시 권한 차단 / 선행 00 완료 | R+CPU 1.19초 |
+| BC-02 | override evaluator + 같은 테스트 | 완료 `619022e6`: CPU 32/32 PASS; override=0 동등, 물리 본 고정·자손 local·skeletonRoot·실패 시 출력 보존 / 01 | R+CPU 0.91초 |
+| BC-03a | ModelInstance animation/finalize 분리 | 완료 `e572d865`: override=0 pose/palette 동등, 중복 palette node 갱신 / 02 | R+B+T |
+| BC-03b | Scene CPU/GPU 단계 분리·wrapper | 완료 `71e115e0`: 비물리 Debug/Release 실행·애니메이션 회귀 / 03a | R+B+V |
 | BC-04a | SkeletalPhysicsAsset 중립 API·검증·CPU 거절 시험 | 완료 `8593a0be`: CPU 42/42·최적화 42/42 PASS, Debug/Release 빌드 PASS / 00,01 | 최종 B=6.89+7.41초 |
 | BC-04b | fixture·Xbot 왼팔 rig 값·CPU 자산 시험 | 완료 `d31863a7`: CPU 82/82·최적화82/82, Debug/Release PASS / 04a | B=105.21+119.91초, CPU=1.19+3.37초 |
 | BC-05 | 공통 body Kinematic·Dynamic·impulse API/시험 | 완료 `84ecea1f`: CPU 362/362 두 구성, Debug/Release 빌드·비물리 컴포넌트 PASS / 04b | B=40.82+136.18초, CPU=7.63+10.26초 |
 | BC-06a | constraint 수명/enable/motor API + 명시적 인접 pair 필터·body 정리 연결 (BC-06 API 부분) | 완료 `f6a14195`: 3 body·2 joints 생성/삭제, Kinematic disable / 05 | API 약 280줄 |
 | BC-06b | PhysicsConstraintTests·기존 body 회귀·빌드·자기 리뷰 (BC-06 검증 부분) | 완료 `f6a14195`: CPU 관절200/200·body362/362 두 구성, Debug/Release 빌드·비물리 진단 PASS / 06a | B=129.26+138.98초 |
 | BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 완료 `8dc58b08`: CPU 64/64 두 구성, 주입 실패 7단계·용량 실패 역정리·해제/Clear/소멸 뒤 body·관절·pair·예약 0, Debug/Release 빌드·비물리 진단 PASS / 04~06 | B=52.13+43.36초, CPU=17.76+19.18초 |
-| BC-08a-1 | 순수 rig frame·uniform scale 변환 helper·CPU 시험 | 완료(미커밋): CPU 두 구성 706/706, Debug/Release 빌드 PASS / 07 | R+B+CPU |
-| BC-08a-2 | 등록 scale 저장·frame 검증 적용·Kinematic target/COM 속도 | 완료(미커밋): CPU 두 구성 103/103·전체 Debug/Release PASS, COM offset 원점 도달·Dynamic 보존·등록 s 변경/누적드리프트 거절 / 08a-1 | R+B+T |
-| BC-08b | physics pose→node override 수집·기존 palette 경로 연결 준비 | CPU 두 구성227/227 PASS, parent 이동/회전 상쇄·tip local 상속·등록 s 복원·실패 출력 보존, 전체 Debug/Release 빌드 PASS / 03b,08a-2 | R+B+T |
-| BC-10a | 공통 world 동기 break 선검증·commit API/등록 | 완료(미커밋): anchor·limit·외부 pin·impulse 선검증, commit 뒤 fallible cook/할당 없음 / 08b | 약205줄 |
-| BC-10b | rig subtree·세대 적용 + CPU 회귀(BC-10 완료) | 완료(미커밋): 리뷰 보강 후 두 구성 CPU482/482·anchor 일치 twist/swing 초과 거절·제한 안 성공·body3·관절2→1·손목120step·중복무변경, 기존 전체 빌드·비물리 진단 PASS / 10a | CPU15.00+27.80초, 기존 B5.19+6.01초 |
-| BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 완료(미커밋): CPU 7종 두 구성2790/2790·전체 빌드·Debug 물리 OFF PASS, step 0/1/4/0·GPU 준비1회·실제 Xbot/선형 animation break/writeback 44검사 PASS / 10 | 리뷰 후 B54.24+68.79초, component15.07초 |
-| BC-12a-1 | 실제 body/관절 진단 조회 API·독립 off-center impulse CPU 시험 | 완료: 실제 pose/COM/속도·broken/enabled·월드 anchor, 실패 출력 보존 / 11 | R+B+CPU |
+| BC-08a-1 | 순수 rig frame·uniform scale 변환 helper·CPU 시험 | 완료 `24da5640`: CPU 두 구성 706/706, Debug/Release 빌드 PASS / 07 | R+B+CPU |
+| BC-08a-2 | 등록 scale 저장·frame 검증 적용·Kinematic target/COM 속도 | 완료 `24da5640`: CPU 두 구성 103/103·전체 Debug/Release PASS, COM offset 원점 도달·Dynamic 보존·등록 s 변경/누적드리프트 거절 / 08a-1 | R+B+T |
+| BC-08b | physics pose→node override 수집·기존 palette 경로 연결 준비 | 완료 `24da5640`: CPU 두 구성227/227 PASS, parent 이동/회전 상쇄·tip local 상속·등록 s 복원·실패 출력 보존, 전체 Debug/Release 빌드 PASS / 03b,08a-2 | R+B+T |
+| BC-10a | 공통 world 동기 break 선검증·commit API/등록 | 완료 `e7a608dc`: anchor·limit·외부 pin·impulse 선검증, commit 뒤 fallible cook/할당 없음 / 08b | 약205줄 |
+| BC-10b | rig subtree·세대 적용 + CPU 회귀(BC-10 완료) | 완료 `e7a608dc`: 리뷰 보강 후 두 구성 CPU482/482·anchor 일치 twist/swing 초과 거절·제한 안 성공·body3·관절2→1·손목120step·중복무변경, 기존 전체 빌드·비물리 진단 PASS / 10a | CPU15.00+27.80초, 기존 B5.19+6.01초 |
+| BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 완료 `686d1c7a`: CPU 7종 두 구성2790/2790·전체 빌드·Debug 물리 OFF PASS, step 0/1/4/0·GPU 준비1회·실제 Xbot/선형 animation break/writeback 44검사 PASS / 10 | 리뷰 후 B54.24+68.79초, component15.07초 |
+| BC-12a-1 | 실제 body/관절 진단 조회 API·독립 off-center impulse CPU 시험 | 완료 `dd219b8e`: 실제 pose/COM/속도·broken/enabled·월드 anchor, 실패 출력 보존 / 11 | R+B+CPU |
 | BC-12a-2 | fixture 진단 옵션·GizmoDraw overlay·자동 수치 판정 | 완료 `b4afd069`: 60/180 ticks·Debug/Release 각2회 PASS(접촉 전≤0.01m·이후≤0.02m·마지막≤0.01m), 정상 종료·D3D12 ERROR 0; 화면 캡처 확인(Claude), 사람 확인 대기 없음 / 12a-1 | R+B+V |
 | BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 완료 `4f9dbcf7`: Debug/Release PASS, 독립 animation 상완 오차0·전완 하강·손목 구간별 허용값·관절 수·finite 및 최종 node/렌더 팔레트-실제 body 오차≤1e-3m·독립 animation 거리≥0.1m 확인, 전용 근접 카메라·Claude 화면 확인은 Progress 기록 참조 / 12a | CPU92.42초, 최종 B11.18+25.53초, Xbot V49.39/35.04/25.85/35.40초 |
-| BC-13a | 기본 수명 회귀(M1) | 완료(미커밋): 독립 리뷰(Codex) 지적 2건 수정. 실제 큐 소비 결과 각2/2·합계6/6 NotFound 자동 검사, body/관절/pair/예약0. CPU 두 구성·두 빌드·Debug component/Xbot/물리OFF PASS, 결과 버리기 변형 FAIL·SHA-256 복구 / 12b | 수정 후 CPU181.50초, B114.32+96.59초; 세부 실행·복구 검증은 Progress |
+| BC-13a | 기본 수명 회귀(M1) | 완료 `0c7fcaa7`: 독립 리뷰(Codex) 지적 2건 수정. 실제 큐 소비 결과 각2/2·합계6/6 NotFound 자동 검사, body/관절/pair/예약0. CPU 두 구성·두 빌드·Debug component/Xbot/물리OFF PASS, 결과 버리기 변형 FAIL·SHA-256 복구 / 12b | 수정 후 CPU181.50초, B114.32+96.59초; 세부 실행·복구 검증은 Progress |
 | BC-09 | (M2) PrepareBreak 일회용 plan·snapshot key 분리 | prepare 무변경·Stale / 13a | R+B+T |
 | BC-14 | (M2) GPU transaction 연결 계약 구현 | 미지원 skin 유지, 준비 실패 시 break 안 함 / 09 | R+B+T+V |
 
