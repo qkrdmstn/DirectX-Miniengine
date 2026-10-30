@@ -2,7 +2,7 @@
 
 # ModelViewer GameObject와 Gizmo
 
-`MiniEngine/ModelViewer`를 작업 디렉터리로 실행하면 Cube·Bunny·Xbot이 각각 X=-5/0/5에 배치된다.
+`MiniEngine/ModelViewer`를 작업 디렉터리로 실행하면 Cube·Bunny·Dragon·Xbot이 각각 X=-7.5/-2.5/2.5/7.5에 배치된다.
 Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::PlayAnimation`으로 클립 하나를 지정한다.
 원점의 4×4 청록색 격자는 모델 없는 Cut Plane 객체이며 시작 시 선택된 객체는 없다.
 평면 내부를 클릭하면 선택되고 테두리가 노란색으로 바뀐다. 이동·회전·TRS Undo는 모델과 같다.
@@ -34,6 +34,7 @@ Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::P
 | `Ctrl+Z` | 마지막 완료 드래그 한 번 취소; 최근 128개 보관 |
 | 오른쪽 버튼 유지 + 마우스 | 카메라 회전 |
 | 오른쪽 버튼 유지 + `WASD` / `QE` | 카메라 이동 / 상승·하강 |
+| 위 카메라 이동 중 왼쪽/오른쪽 `Shift` 유지 | 이동 목표 속도 4배, 해제 시 기본 배율 복귀. 이동 감속 토글은 제공하지 않는다 |
 
 드래그 중에는 카메라와 Gizmo 도구 모드 전환을 차단한다. V 표시 모드는 전환할 수 있다. 핸들이 객체 선택보다 우선한다.
 오른쪽 버튼으로 카메라를 조작하는 동안에는 Q/W/E/R로 도구를 바꾸지 않는다.
@@ -56,7 +57,7 @@ ModelViewer는 비독점 마우스 입력을 사용해 선택과 카메라 조�
 - 변형은 `Vc=inverse(SourceFrame)*node*skin(p)`를 Compute에 저장하고 VS에서 `Wc`를 한 번 적용한다. source 프레임과 target 이동은 독립이며, 기존 화면을 보존하려면 Attached target을 SourceFrame으로 맞춘다. `SetPlacement`는 둘을 함께 검증·게시한다.
 - 기본 정책 `FollowModel`은 공유 pose를 따라가고 `Frozen`은 다음 유효 Update의 node/joint snapshot을 고정한다. 선택 본 분리·기여 보정 정책은 아직 없다.
 - 렌더는 각 컴포넌트의 현재 revision section만 등록한다. Static node bound와 Skeletal 전체 본 변환 구의 합으로 컴포넌트 경계를 만들며, 스킨 경계는 보수적이지만 느슨할 수 있다. 첫 유효 pose 전·기준 변경 후·pose 실패 시 선택을 보류한다.
-- 컴포넌트 GPU 버퍼 삭제는 현재 전역 GPU 완료를 기다린다. 단계별 검증은 [GPU 설계 14절](../GPU/GPUCuttingSystemDesign.md)을 따른다.
+- `PosedGeometry`의 이미 제출된 GPU 사용은 세 queue의 fence 기준으로 지연 해제한다. 일반 컴포넌트 삭제는 상수·geometry 의존 수명을 위해 전역 GPU 대기를 유지한다. [다중 절단 검증](../GPU/ConcurrentCutJobs.md)을 따른다.
 
 `Scene::CreateObject`, `FindObject`, `DeleteObject`, `Clear`로 객체를 관리한다. 사용자 삭제는 `DeleteEditTarget`(`ObjectSelection`)이 절단 대기 후보와 물리 body·query 매핑을 먼저 즉시 제거한 뒤 조각은 `GameObject::RemoveMeshComponent`, owner는 `DeleteObject`로 지운다.
 매 프레임 `Scene::Update` 후 기본·그림자 pass에서 각각 `Scene::Render`를 호출한다.

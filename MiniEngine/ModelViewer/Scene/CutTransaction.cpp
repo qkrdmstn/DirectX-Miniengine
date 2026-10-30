@@ -27,6 +27,21 @@ namespace Viewer
         return true;
     }
 
+    // 현재 프레임에서 가능한 2-body 요청이 초과하면 다음 프레임으로 넘긴다.
+    bool CutBudget::ShouldDefer(uint32_t bodies)
+    {
+        // 새 프레임이면 소비량을 비워 다음 요청을 즉시 허용한다.
+        const uint64_t frame = Graphics::GetFrameCount();
+        if (frame != m_Frame)
+        {
+            m_Frame = frame;
+            m_Used = 0;
+        }
+
+        // limit보다 큰 요청은 원래 불가능한 진단 조건이므로 영구 대기시키지 않는다.
+        return m_Used != 0 && bodies <= m_Limit && m_Used + bodies > m_Limit;
+    }
+
     // 실행·정지·sleep 여부와 무관하게 교체할 부모 body가 있는지 확인한다.
     bool CutTransaction::CanCut(const PhysicsSystem& physics, ObjectId owner, ComponentId mesh, const char*& reason)
     {

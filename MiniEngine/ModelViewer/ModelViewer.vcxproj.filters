@@ -299,5 +299,6 @@
     <ClInclude Include="Scene\tests\EditTargetChecks.h"><Filter>Header Files</Filter></ClInclude>
     <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
+    <ClInclude Include="Scene\tests\RetiredResourceChecks.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

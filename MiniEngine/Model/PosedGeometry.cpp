@@ -70,12 +70,12 @@ PosedGeometry::PosedGeometry(const Model& model)
         m_Buffer.Create(L"Instance posed vertices", static_cast<uint32_t>(size), 1);
 }
 
-// 삭제와 모델 교체 시 이전 프레임이 읽는 자원을 GPU 완료 전 해제하지 않는다.
+// 제출된 이전 프레임이 읽는 버퍼를 queue fence 완료까지 지연 해제한다.
 PosedGeometry::~PosedGeometry()
 {
-    // 첫 경로는 전역 완료를 기다리며, 지연 해제 큐 최적화는 후속 단계에서 다룬다.
-    if (m_Buffer.GetBufferSize() > 0)
-        Graphics::g_CommandManager.IdleGPU();
+    // GPU resource의 강한 참조를 manager에 넘기고 wrapper를 즉시 정리한다.
+    if (m_Buffer.GetResource() != nullptr)
+        Graphics::g_CommandManager.RetireResource(m_Buffer.GetResource());
 }
 
 // 스키닝과 node 변환을 같은 graphics queue에 기록하고 결과를 SRV 상태로 넘긴다.

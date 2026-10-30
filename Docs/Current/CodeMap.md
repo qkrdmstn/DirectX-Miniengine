@@ -1,4 +1,4 @@
-상태: 완료 — `3dc5d6ba` 기반 생성 조각 선택·중심 기즈모·선택 표시 갱신; CPU·실행 검증과 수동 확인 한계는 Scene.md 참조 (2026-10-28)
+상태: 완료 — `3dc5d6ba` 기반 선택·기즈모, `f2138029` 기준 다중 Static CutJob 제출 1단계 검증 완료·미커밋 (2026-10-29)
 
 # 현재 Scene과 유한 평면 코드 지도
 
@@ -25,6 +25,7 @@
 | `ModelViewer/Scene/ObjectSelection.*`, `PickHit.h` | 원본 경계 구·생성 조각 hull 선택, 조각 중심 피벗, 객체/조각 ID와 월드 거리 비교를 제공한다. |
 | `ModelViewer/Scene/TransformGizmo.*`, `SceneTransform.h` | 객체 TRS 편집과 입력 처리를 담당한다. 조작·Undo 계약은 [Scene.md](Scene.md)를 따른다. |
 | `ModelViewer/Scene/CutPlaneSystem.*` | Scene을 참조하고 ObjectId별 `CutPlaneDesc`를 소유한다. 별도 평면 TRS를 보관하지 않는다. `Find`는 삭제된 객체를 거절한다. |
+| `ModelViewer/Scene/CuttingSystem.*` | 작업별 대상 snapshot과 `CutJob`을 보관하고 후보를 기본 2개까지 제출한다. 완료는 제출 순서대로 프레임당 하나씩 게시한다. [검증과 제한](../GPU/ConcurrentCutJobs.md) 참조. |
 | `MeshCutting/Geometry/CutPlane.*`의 `CutPlaneDesc` | 로컬 XZ, y=0 직사각형의 `Width`와 `Height`를 정의한다. |
 | `CutPlaneData` | `WorldPlane`은 정규화된 `Vector4(n, d)`이며 식은 n·x+d=0이다. `WorldToPlane`은 affine 역변환, `HalfWidth`·`HalfHeight`는 로컬 반크기, `WorldCorners`는 네 월드 모서리다. |
 | `ModelViewer/Scene/CutPlaneRenderer.*`, `Shaders/CutPlaneVS.hlsl`, `CutPlanePS.hlsl` | 스냅샷으로 선을 만들고 전용 line PSO로 표시한다. 절단 결과 버퍼는 생성하지 않는다. |

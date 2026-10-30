@@ -46,6 +46,7 @@
 #include "Scene/tests/EditTargetChecks.h"
 #include "Scene/tests/EditApplyChecks.h"
 #include "Scene/tests/EditDeleteChecks.h"
+#include "Scene/tests/RetiredResourceChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -302,6 +303,12 @@ void ModelViewer::Startup( void )
 
     Renderer::Initialize();
 
+    // 요청된 경우 queue 자원 지연 해제 검사를 모델 로딩 전에 실행한다.
+    uint32_t retiredResourceChecks = 0;
+    if (CommandLineArgs::GetInteger(L"retired-resource-checks", retiredResourceChecks)
+        && retiredResourceChecks == 1)
+        Viewer::RetiredResourceChecks::Run();
+
     LoadIBLTextures();
 
     std::wstring gltfFileName;
@@ -493,6 +500,8 @@ void ModelViewer::Update( float deltaT )
         Viewer::RunPhysicsQueryChecks(m_Scene,m_Physics,m_UsePhysicsQuery != 0,m_PhysicsCapacity);
         m_QuerySelfTest = 0;
     }
+    const bool wasCuttingBusy = m_Cutting.IsBusy();
+    const bool wasBenchmarkAtUpdateStart = m_BenchmarkRemaining != 0;
     m_Cutting.Update();
     for (const Viewer::CutResultEntry& cutResult : m_Cutting.DrainResults())
     {
@@ -522,7 +531,6 @@ void ModelViewer::Update( float deltaT )
                     m_CutGpuSamples.size(), medianGpu, p95Gpu, medianReady, cutResult.Error);
             }
         }
-        else if (m_AutoCuts && !m_Cutting.IsBusy()) { --m_AutoCuts; ++m_AutoCutIndex; }
         // 기본은 위치 보존이며, 명시한 진단 간격만 새 B의 실제 Transform에 적용한다.
         if (cutResult.Status == Viewer::CutResultStatus::Published)
         {
@@ -615,6 +623,12 @@ void ModelViewer::Update( float deltaT )
     gfxContext.Finish();
     m_Physics.SyncColliders();
     m_Cutting.SubmitPending();
+    // active 완료와 마지막 pending 거절을 포함해 batch busy→idle 전환당 자동 요청 하나를 소비한다.
+    if (wasCuttingBusy && !m_Cutting.IsBusy() && m_AutoCuts && !wasBenchmarkAtUpdateStart)
+    {
+        --m_AutoCuts;
+        ++m_AutoCutIndex;
+    }
     if (cutKey)
     {
         MeshCutting::CutPlaneData plane;

@@ -92,6 +92,7 @@
     <ClInclude Include="Scene\tests\EditDeleteChecks.h" />
     <ClInclude Include="Scene\tests\EditTargetChecks.h" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
+    <ClInclude Include="Scene\tests\RetiredResourceChecks.h" />
     <ClInclude Include="Scene\ComponentId.h" />
     <ClInclude Include="Scene\MeshComponent.h" />
     <ClInclude Include="Scene\tests\MeshComponentChecks.h" />

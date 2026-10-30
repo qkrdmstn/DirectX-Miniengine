@@ -114,6 +114,8 @@ void EmitTriangle(uint side, uint section, Vertex a, Vertex b, Vertex c)
 {
     Section s=Inputs[section]; uint start;
     Meta.InterlockedAdd(80+(side*Sections+section)*4,3,start);
+    // 사전 집계는 동일한 삼각형 판정 뒤 카운터만 남긴다.
+    if(VertexCapacity==0)return;
     if(start+3>s.VertexCapacity){Fail(2);return;}
     WriteVertex(side,s,start,a);WriteVertex(side,s,start+1,b);WriteVertex(side,s,start+2,c);
 }

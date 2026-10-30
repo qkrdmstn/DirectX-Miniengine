@@ -59,7 +59,10 @@ void main(uint3 id:SV_DispatchThreadID)
             if(d[edge]==0&&d[(edge+1)%3]==0){enter=v[(edge+1)%3].P;exit=v[edge].P;gotEnter=gotExit=true;}
     }
     if(!gotEnter||!gotExit||length(Project(enter)-Project(exit))<=Epsilon)return;
-    uint at;Meta.InterlockedAdd(4,1,at);if(at>=MaxSegments){Fail(2);return;}
+    uint at;Meta.InterlockedAdd(4,1,at);
+    // 사전 집계는 경계 개수만 기록하고 큰 scratch를 만들지 않는다.
+    if(VertexCapacity==0)return;
+    if(at>=MaxSegments){Fail(2);return;}
     Ring.Store3(at*128,asuint(enter));Ring.Store3(at*128+12,asuint(exit));
     Ring.Store2(at*128+24,asuint(Project(enter)));Ring.Store2(at*128+32,asuint(Project(exit)));
     // 1=면 내부 교차, 2=양쪽 중 양의 표면 모서리, 4=음의 표면 모서리 후보다.
