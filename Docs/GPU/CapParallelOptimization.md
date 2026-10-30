@@ -1,4 +1,4 @@
-상태: 진행 중 — 단계 1·1b `6f328257`; 단계 3은 [CapScanMarking.md](CapScanMarking.md) S1 `3a17454f`·S2 `1a7d77ed`로 5060 Ti medianGpuMs 1.70 ms(목표 ≤ 2 ms 달성); 1c·S2b·S3 미착수 (2026-10-30)
+상태: 진행 중 — 단계 1·1b `6f328257`, S2 `1a7d77ed` 이후 전체 지원 loop MC 통일·해시 귀 선택 제거·D/R 검증 완료, 미커밋; 현재 계약은 [CapScanMarking.md](CapScanMarking.md) 10절 (2026-10-30)
 
 # Cap 삼각분할 병렬화 개선
 

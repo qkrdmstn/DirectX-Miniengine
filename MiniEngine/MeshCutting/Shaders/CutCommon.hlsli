@@ -25,7 +25,8 @@ RWByteAddressBuffer PoseB : register(u3);
 RWByteAddressBuffer Meta : register(u4);
 // Meta DWORD: section 카운터 [20,20+2*Sections), KDop 38개 뒤에 cap 진단 5개를 추가한다.
 // [58+2*Sections,+1,+2]는 각각 capRounds, capMarked, capRemoved이며 기존 오프셋은 유지한다.
-// [61+2*Sections,+1]는 각각 capMaxLoop, capHashLoops이다.
+// [61+2*Sections,+1]는 각각 capMaxLoop, capMappedLoops다.
+// [63+2*Sections]는 큰 loop scan map 구간을 예약하는 원자 cursor다.
 RWByteAddressBuffer Ring : register(u5);
 RWByteAddressBuffer OriginA : register(u6);
 RWByteAddressBuffer OriginB : register(u7);

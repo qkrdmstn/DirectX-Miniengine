@@ -1,4 +1,4 @@
-상태: 진행 중 — S1 `3a17454f`, S2 `1a7d77ed` 완료(5060 Ti medianGpuMs 1.70 ms로 목표 ≤ 2 ms 달성); S2b·S3 미착수 (2026-10-30)
+상태: 진행 중 — S2 `1a7d77ed` 이후 전체 지원 loop MC 통일·해시 귀 선택 제거·Debug/Release 검증 완료, 미커밋 (2026-10-30)
 
 # Cap 선택을 누적합 기반 교대 표시로 바꾸기
 
@@ -131,3 +131,46 @@ S1은 구조만 바꾸고 결과는 그대로 두어 배치 변경의 회귀를 
 - 5060 Ti(사용자 측정, `1a7d77ed` Release, 같은 벤치 인수) 3회: medianGpuMs 1.696/1.704/1.705, p95 1.996/2.001/2.107 ms. 시작점 3.889 ms 대비 약 56% 감소로 목표(≤ 2 ms)를 중앙값 기준 달성했다. 단계 ms는 clip 0.09, boundary 0.14, cap 1.004(20회 내내 ±0.004), finalize 0.108~0.87이다. capRounds 22·marked 369·removed 367로 MX450과 같다.
 - finalize는 처음 약 3회(readyMs 5~9)만 0.108 ms이고 이후(readyMs 약 29) 0.37~0.87 ms로 흔들려 전체 변동의 대부분을 만든다. 0.108이면 전체는 약 1.35 ms다. 원인은 미조사이며 cap 범위 밖의 별도 조사로 남긴다.
 - 새 Codex 리뷰(구현과 별도 실행): blocker·major 없음, 문서 동기화 지적만 반영했다. 기존 Bunny y=-240 uncappedSegments=207, y=-230 49, badBoundaryMask는 그대로 남는다. 로그·스크립트는 `%TEMP%/cap-s2/`다.
+
+
+## 10. 전체 지원 loop에 MC 적용 (2026-10-30, 미커밋)
+
+사용자 결정: 정점 수에 따른 해시 기반 ear clipping 전환을 폐기하고 모든 지원 loop에 병렬 MC 교대 표시를 적용한다. 위 S1/S2의 1024 초과 해시 경로 유지 결정은 당시 기록이며 현재 계약은 이 절을 따른다.
+
+- `CapEarsCS::main`은 loop 길이 1024 이하를 공유 메모리에, 초과를 전역 scratch의 canonical 경계 순서 map에 보관한다. 저장 위치만 다르고 후보 parity·귀 판정·잔여 3점 보호·무진행 재검사·SerialMode 규칙은 같다.
+- `SelectMapped`는 큰 loop 자신의 정점만 순회한다. `Priority`/`PriorityLess`와 해시 우선순위 선택 블록을 삭제했다. 경계 끝점 연결용 hash는 유지한다.
+- canonical 시작점은 전체 loop의 투영 위치 비트 최솟값이다. 같은 위치 중복에 관한 기존 결정성 한계는 유지한다.
+- scratch tail에 segment당 4B map을 추가한다. Metadata 끝의 원자 cursor로 loop별 공간을 예약하고, 각 Ring 슬롯 +112에 역방향 rank를 보관한다. +92는 경계 분류 완료 후 reflex 플래그로 재사용한다.
+- `GpuMeshCutter::EstimateWorkingBytes`, `Submit`, `CutJob::Poll`의 scratch·metadata·readback 크기를 함께 갱신했다. map 생성과 전역 상태 갱신 사이에는 UAV를 포함하는 그룹 동기화를 사용한다.
+- 기존 진단 word의 의미를 `capMappedLoops`로 바꿔 전역 MC 경로 사용 수를 기록한다. 해시 귀 선택 진단은 제거한다.
+- 지원 범위를 늘리는 단계는 아니다. `LinkBoundaryCS::main`의 전체 segment 4096 제한과 `CapEarsCS::main`의 최대 순회 4096은 유지한다.
+- 큰 loop도 한 그룹이 처리하며 ear 판정은 활성 여부를 포함해 loop 슬롯 전체를 방문한다. 1024 경계를 넘는 알고리즘 전환은 제거하지만 공유/전역 메모리의 성능 차이와 정점 수 증가 비용은 남는다.
+
+### 검증 결과
+
+- Luna가 코드 구현, 별도 Codex 실행이 정적 리뷰를 수행했다. blocker/major는 없었고 마지막 진단 rename·중복 UAV 읽기 제거도 재검토했다.
+- 최종 ModelViewer.slnx Debug/Release 빌드 exit 0(각 약 35/41초), `git diff --check` 통과. DXC cs_6_0/HV2021의 CAP_THREADS 64/256/512 컴파일도 통과했다. 256의 groupshared 선언 합계는 24,888 B다.
+- 최종 Cube y=0·45°, Bunny y=0·-240·-230·재절단을 Debug/Release 각각 1회 실행했다. 기하·부모 보존·게시 검증 통과, 기존 S2 로그와 side별 cap checksum이 모두 같다.
+- 저장소 밖에서 만든 검증용 원통의 단일 loop 1025개와 두 개의 1026점 loop를 Debug/Release 각각 검증했다. capMappedLoops는 각각 1/2, uncappedSegments=0, 면적·부모 보존·게시 검증 통과. 중간 구현 Debug에서는 1024/1026/2048/4096점 loop도 통과했다.
+- 실제 Dragon y=0.08(최대 loop 1070, loop 2, 전체 경계 1513)은 최종 Release + debug layer + cut-validate에서 기하·부모 보존·게시 검증 통과했다. 기존 badBoundaryMask=2는 남는다. 새 D3D12 ERROR/CORRUPTION은 없고 기존 렌더 타깃 WARNING은 남는다.
+- Dragon y=0.03의 대형 진단 snapshot은 예상 1,104,150,528 B가 1 GiB 작업 예산을 넘어 Debug/Release에서 사전 거절됐다. 이 입력은 진단 snapshot 없는 아래 벤치·게시로 확인했다. 예산 보호를 바꾸지 않았다.
+- 실행 helper는 자신이 만든 프로세스를 게시 marker 뒤 종료했다. 정상 종료·사용자 마우스 조작 검증은 아니다. 64/512의 큰 loop GPU 실행, 큰 loop SerialMode, 통제된 무진행 fallback 및 광범위 반복 결정성 검사는 남는다.
+
+### Dragon 성능과 해석
+
+MX450 / driver 591.86 / 1920×1080 / Release / `-debug 0 -model Models/dragon.glb -cut-benchmark 20 -cut-y Y -cut-expect-publications 1`. 각 입력은 warmup 3개 + 측정 20개인 독립 실행 1회다. cap은 마지막 20개 단계 시간의 산술 중앙값, 전체 GPU는 benchmark 출력이다. 두 중앙값과 나머지 단계의 중앙값 합이 전체 중앙값과 정확히 같지는 않다.
+
+| Y | 최대 loop 정점 | loop 수 | 전체 경계 정점 | 최종 cap ms | 최종 전체 GPU ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 | 459 | 2 | 540 | 2.837232 | 35.780608 |
+| 0.03 | 1053 | 4 | 2369 | 23.475200 | 57.577472 |
+| 0.08 | 1070 | 2 | 1513 | 22.622208 | 55.996960 |
+
+- 동일 Y=0.03의 변경 전 20회 벤치는 cap 102.287360 / 전체 135.296928 ms였다. 이번 관측에서는 cap 약 77%, 전체 약 57% 감소했다. 변경 전후 독립 실행 각 1회로, 교차 3회 성능 확정 조건을 충족한 결과는 아니다.
+- cap timer는 여러 loop의 그룹을 처리한 dispatch 전체 경과 시간이며 개별 loop 시간의 합이 아니다. capRounds는 loop별 라운드의 합계다. loop 개수·최대 길이·단면 모양이 모두 달라 위 세 행만으로 각 요인의 독립 효과를 확정하지 않는다.
+- 전역 MC 경로도 여전히 초기 loop 길이의 슬롯을 매 라운드 검사하고, 잔여 정점이 1024 이하가 되어도 공유 캐시로 옮기지 않는다. 흩어진 Ring 상태·좌표 조회와 loop당 한 그룹 제약이 남는다. 정확한 비용 분리는 하드웨어 프로파일링이 필요하다.
+- 1024는 하드웨어 정점 한계가 아니라 현재 배열 크기다. 정점당 약 24 B이므로 1280점도 현재 32 KiB 한도에 들어간다. 캐시 상한 확대와 잔여 정점 압축 후 캐시 전환은 후속 후보이며 이번 변경에는 넣지 않았다.
+- 임시 원통은 임계점·복수 loop의 정확성 검증용이다. 원통 수치를 Dragon과 직접 비교해 성능을 해석하지 않는다.
+- 사용자가 언급한 5060 Ti의 약 6 ms와 위 MX450 수치는 다른 환경이다. 이 변경의 5060 Ti 성능은 미측정이다.
+
+원본 로그·fixture 생성기·실행 스크립트·집계는 저장소 밖 `%TEMP%/cap-mc-all/`에 있다. 기존 Core 사용자 변경과 모델 자산은 수정하지 않았다.

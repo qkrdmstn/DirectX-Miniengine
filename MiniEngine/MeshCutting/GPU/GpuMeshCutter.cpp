@@ -229,8 +229,8 @@ namespace MeshCutting
         bytes += allocated(sizeof(MaterialConstants)) * 2;
 
         // scratch, metadata, descriptor, readback의 논리 크기를 개별 정렬한다.
-        const uint64_t scratchBytes = segments * 128 + buckets * 4 + segments * 8;
-        const uint64_t metadataBytes = (20 + sectionCount * 2 + 2 * KDopWordsPerSide + 5) * 4;
+        const uint64_t scratchBytes = segments * 128 + buckets * 4 + segments * 12;
+        const uint64_t metadataBytes = (20 + sectionCount * 2 + 2 * KDopWordsPerSide + 6) * 4;
         bytes += allocated(scratchBytes);
         bytes += allocated(metadataBytes);
         bytes += allocated(sectionCount * sizeof(CutSection));
@@ -296,7 +296,7 @@ namespace MeshCutting
         if (!Graphics::g_CommandManager.IsFenceComplete(Fence)) return false;
 
         // 기존 KDop 뒤에 추가한 다섯 DWORD까지 함께 읽는다.
-        Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide + 5);
+        Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide + 6);
         std::memcpy(Status.data(), StatusReadback.Map(), Status.size() * 4);
         StatusReadback.Unmap();
 
@@ -306,9 +306,9 @@ namespace MeshCutting
         CapMarked = Status[capBase + 1];
         CapRemoved = Status[capBase + 2];
 
-        // 기존 합계 뒤에서 최대 경계 길이와 hash 경로 loop 수를 해석한다.
+        // 기존 합계 뒤에서 최대 경계 길이와 scan 매핑 loop 수를 해석한다.
         CapMaxLoop = Status[capBase + 3];
-        CapHashLoops = Status[capBase + 4];
+        CapMappedLoops = Status[capBase + 4];
 
         // 기존 면별 18-DOP을 해석하며 기여 정점이 없는 면은 sentinel을 해석하지 않고 비운다.
         for (uint32_t side = 0; side < 2; ++side)
@@ -492,15 +492,15 @@ namespace MeshCutting
             out->CapMaterial.Create(L"Cut cap material",1,sizeof(material));
         }
 
-        // KDop 뒤의 cap 진단 다섯 DWORD도 0으로 초기화한다.
-        std::vector<uint32_t> initial(20 + c.Sections * 2 + 2 * KDopWordsPerSide + 5, 0);
+        // KDop 뒤의 cap 진단과 scan scratch allocator DWORD를 0으로 초기화한다.
+        std::vector<uint32_t> initial(20 + c.Sections * 2 + 2 * KDopWordsPerSide + 6, 0);
         for (uint32_t side = 0; side < 2; ++side) for (uint32_t k = 0; k < 3; ++k) initial[8 + side * 6 + k] = 0xffffffff;
         // 면별 18-DOP의 최솟값 단어는 최대 sentinel로, 최댓값 단어와 개수는 0으로 시작한다.
         for (uint32_t side = 0; side < 2; ++side)
             for (uint32_t axis = 0; axis < 9; ++axis)
                 initial[20 + c.Sections * 2 + side * KDopWordsPerSide + axis] = 0xffffffff;
         job->Metadata.Create(L"Cut counts/status/bounds", uint32_t(initial.size()), 4);
-        job->Scratch.Create(L"Cut boundary graph/hash", c.HashLinksOffset + c.MaxSegments * 8, 1);
+        job->Scratch.Create(L"Cut boundary graph/hash/ear map", c.HashLinksOffset + c.MaxSegments * 12, 1);
         job->Descriptors.Create(L"Cut sections", c.Sections, sizeof(CutSection));
         job->StatusReadback.Create(L"Cut metadata readback", uint32_t(initial.size()), 4);
         job->TimeReadback.Create(L"Cut timestamp readback", 5, 8);

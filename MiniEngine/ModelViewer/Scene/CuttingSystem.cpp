@@ -601,10 +601,10 @@ namespace Viewer
             LastGpuMs, LastReadyMs, LastSegments, LastCaps, LastUncapped, LastError,
             static_cast<unsigned long long>(LastOther));
 
-        // KDop 뒤에서 수집한 cap 합계와 최대 경계 길이·hash 경로 사용 횟수를 출력한다.
-        Utility::Printf("Static cut cap diagnostics: failedEarSegments=%u badBoundaryMask=%u capRounds=%u capMarked=%u capRemoved=%u capMaxLoop=%u capHashLoops=%u\n",
+        // KDop 뒤에서 수집한 cap 합계와 최대 경계 길이·매핑 loop 수를 출력한다.
+        Utility::Printf("Static cut cap diagnostics: failedEarSegments=%u badBoundaryMask=%u capRounds=%u capMarked=%u capRemoved=%u capMaxLoop=%u capMappedLoops=%u\n",
             job.Status[6],job.Status[7],job.CapRounds,job.CapMarked,job.CapRemoved,
-            job.CapMaxLoop,job.CapHashLoops);
+            job.CapMaxLoop,job.CapMappedLoops);
 
         Utility::Printf("Static cut stages ms: clip=%.6f boundary=%.6f cap=%.6f finalize=%.6f\n",
             job.StageMs[0],job.StageMs[1],job.StageMs[2],job.StageMs[3]);
