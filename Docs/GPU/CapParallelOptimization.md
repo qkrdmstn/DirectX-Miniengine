@@ -1,4 +1,4 @@
-상태: 진행 중 — 단계 1·1b `6f328257`, S2 `1a7d77ed` 이후 전체 지원 loop MC 통일·해시 귀 선택 제거·D/R 검증 완료, 미커밋; 현재 계약은 [CapScanMarking.md](CapScanMarking.md) 10절 (2026-10-30)
+상태: 진행 중 — 단계 1·1b `6f328257`, S2 `1a7d77ed` 이후 전체 지원 loop MC 통일·해시 귀 선택 제거·D/R 검증 완료 `0553410b`; 현재 계약은 [CapScanMarking.md](CapScanMarking.md) 10절 (2026-10-30)
 
 # Cap 삼각분할 병렬화 개선
 
@@ -72,7 +72,7 @@ groupshared uint TestCount;
 - 성능: MX450 Release `-model Models/bunny.glb -debug 0 -cut-benchmark 20 -cut-y 0 -cut-expect-publications 1`을 변경 전/후 각 3회 실행해 `medianGpuMs`와 cap 단계 값의 중앙값을 기록한다. 3회 범위가 겹치면 개선으로 판정하지 않는다.
 - 최종 목표 판정은 사용자의 5060 Ti 같은 명령 결과로 한다. cap 단계만으로 2 ms에 못 미치면 그 값과 남은 단계 비중을 기록하고 3단계 여부를 다시 정한다.
 
-## 7. 단계 1 실행 기록 (2026-10-30, 미커밋)
+## 7. 단계 1 실행 기록 (2026-10-30, `6f328257`)
 
 - `CapEarsCS::main`의 그룹 크기와 다섯 stride만 `CAP_THREADS`로 바꿨다. 기본 256, `#ifndef` 재정의 가능이다. 64로 치환하면 주석·상수 선언을 제외한 실행 토큰은 기준 커밋과 같고, SerialMode·라운드 상한·barrier·C++ Dispatch는 유지한다. 컴파일된 공유 메모리 선언 합계는 28,696 B다.
 - `CutJob::ValidateDiagnostics`에서 `PrintCapChecksum`을 호출한다. 위치의 32비트 원시 값으로 winding을 유지하는 순환 회전을 정규화하고, 삼각형별 FNV-1a 64비트 해시를 정렬 후 결합한다. 기존 검사는 유지한다. 추출한 실제 C++ 함수의 순서·회전 불변과 winding·1비트·부호 있는 0·중복·빈 cap 구분 검사도 통과했다.
@@ -124,7 +124,7 @@ Release `-debug 0` 성능이다. 각 칸은 **medianGpuMs / cap 중앙값(ms)**�
 
 조사 항목: 셰이더 변형 컴파일 방식(빌드 시 헤더 생성 규칙, vcxproj 등록), MiniEngine의 `DispatchIndirect` 사용법, loop 정점 수를 이미 계산하는 곳이 있는지와 Ring의 빈 필드, 여러 loop·1024 초과 경계 처리, 각 변형의 레지스터 사용량 확인 방법.
 
-## 10. 단계 1b 실행 기록 (2026-10-30, 미커밋)
+## 10. 단계 1b 실행 기록 (2026-10-30, `6f328257`)
 
 MX450 / 드라이버 591.86. 로그는 `%TEMP%/cap-parallel-step1b/`.
 

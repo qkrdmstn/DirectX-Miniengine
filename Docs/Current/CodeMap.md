@@ -1,4 +1,4 @@
-상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 검증 완료·미커밋; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); 전체 지원 loop MC 통일은 구현·D/R 검증 완료·미커밋
+상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료)
 
 # 현재 Scene과 유한 평면 코드 지도
 
