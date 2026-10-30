@@ -238,6 +238,15 @@ void main(uint3 group:SV_GroupID,uint tid:SV_GroupIndex)
 
         // 순회 실패는 그룹 전체가 cap을 생략하도록 전달한다.
         Cached=LoopLength<=1024?1:0;
+
+        // 순회에 성공한 경계의 최대 길이와 비캐시 hash 경로 사용 횟수를 기록한다.
+        if(LoopLength!=0)
+        {
+            uint ignored;
+            Meta.InterlockedMax((61+2*Sections)*4,LoopLength,ignored);
+            if(LoopLength>=3 && Cached==0)
+                Meta.InterlockedAdd((62+2*Sections)*4,1,ignored);
+        }
     }
     GroupMemoryBarrierWithGroupSync();
     if(LoopLength<3)return;
