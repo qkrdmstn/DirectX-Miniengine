@@ -32,6 +32,78 @@ static std::vector<SkeletalRigidFrame> FixtureBodyFrames(const SkeletalPhysicsFi
     return frames;
 }
 
+// 진단 조회가 실제 step 결과를 읽고 실패 시 이전 묶음을 보존하는지 검사한다.
+static void CheckDiagnosticState(PhysicsWorld& world, SkeletalPhysicsSystem& skeletal)
+{
+    // 정지 fixture에서 body 세 개와 disabled 관절 두 개를 읽는다.
+    const auto fixture = CreateThreeBodyFixture();
+    Check(skeletal.Register(20, fixture.Asset, fixture.NodeParents, FixtureBodyFrames(fixture)), "Diagnostic register");
+    Viewer::SkeletalRigState state;
+    Check(skeletal.ReadDiagnosticState(20, state), "Diagnostic read rest");
+    Check(state.Bodies.size() == 3 && state.Joints.size() == 2, "Diagnostic counts");
+    for (size_t i = 0; i < state.Bodies.size(); ++i)
+    {
+        const auto& body = state.Bodies[i];
+        Check(body.Node == i && body.Motion == BodyMotion::Kinematic, "Diagnostic node and motion");
+        for (size_t axis = 0; axis < 3; ++axis)
+        {
+            CheckNear(body.Frame.Position[axis], fixture.RestNodeFrames[i].Position[axis], 1e-6, "Diagnostic rest pose");
+            CheckNear(body.CenterOfMass[axis], body.Frame.Position[axis], 1e-6, "Diagnostic rest COM");
+            CheckNear(body.Linear[axis], 0, 1e-6, "Diagnostic rest linear velocity");
+            CheckNear(body.Angular[axis], 0, 1e-6, "Diagnostic rest angular velocity");
+        }
+    }
+    for (size_t i = 0; i < state.Joints.size(); ++i)
+    {
+        const auto& joint = state.Joints[i];
+        Check(!joint.Broken && !joint.Solver.Enabled && joint.Solver.MotorsOff, "Diagnostic resting joint");
+        CheckNear(float(joint.ParentAnchor.GetY()), 1.75 - 0.5 * i, 1e-6, "Diagnostic world anchor");
+        Check(float(Math::Length(joint.ParentAnchor - joint.ChildAnchor)) < 1e-6, "Diagnostic anchor coincidence");
+    }
+
+    // 목표와 다른 실제 원점 pose를 주면 회전된 body-local anchor도 월드로 변환해야 한다.
+    const auto root = skeletal.GetBodyHandle(20, 0);
+    Check(world.SetBodyTransform(root, { 3, 4, 5 }, { 0, 0, std::sqrt(0.5), std::sqrt(0.5) }),
+        "Diagnostic rotated actual pose");
+    Check(skeletal.ReadDiagnosticState(20, state), "Diagnostic read actual instead of target");
+    Check(state.Bodies[0].Frame.Position == std::array<double, 3>{ 3, 4, 5 }, "Diagnostic actual position");
+    CheckNear(float(state.Joints[0].ParentAnchor.GetX()), 3.25, 1e-6, "Diagnostic rotated anchor X");
+    CheckNear(float(state.Joints[0].ParentAnchor.GetY()), 4, 1e-6, "Diagnostic rotated anchor Y");
+    CheckNear(float(state.Joints[0].ParentAnchor.GetZ()), 5, 1e-6, "Diagnostic translated anchor Z");
+    Check(world.SetBodyTransform(root, { 0, 2, 0 }, { 0, 0, 0, 1 }), "Diagnostic restore root");
+
+    // 실제 분리와 120 step 뒤의 COM 하강 및 살아 있는 손목 오차를 확인한다.
+    Check(skeletal.BreakConstraint({ 20, 0, skeletal.GetRigGeneration(20), 1 }) == Viewer::BreakStatus::Applied,
+        "Diagnostic break");
+    for (unsigned tick = 0; tick < 120; ++tick)
+    {
+        Check(world.Step(1.0f / 60), "Diagnostic world step");
+        Check(skeletal.ReadDiagnosticState(20, state), "Diagnostic finite step state");
+        Check(float(Math::Length(state.Joints[1].ParentAnchor - state.Joints[1].ChildAnchor)) <= 0.01f,
+            "Diagnostic wrist anchor tolerance");
+    }
+    CheckNear(state.Bodies[0].CenterOfMass[1], 2, 1e-6, "Diagnostic root stays");
+    Check(state.Bodies[1].CenterOfMass[1] < 1.5 && state.Bodies[2].CenterOfMass[1] < 1,
+        "Diagnostic detached COM falls");
+    Check(state.Bodies[1].Motion == BodyMotion::Dynamic && state.Bodies[2].Motion == BodyMotion::Dynamic,
+        "Diagnostic detached motion");
+    Check(state.Joints[0].Broken && !state.Joints[0].Solver.Enabled && state.Joints[1].Solver.Enabled &&
+        state.Joints[1].Solver.MotorsOff, "Diagnostic broken and enabled separated");
+
+    // 미등록 owner와 마지막 body 또는 살아 있는 관절의 stale handle은 부분 결과도 게시하지 않는다.
+    const double previousY = state.Bodies[1].CenterOfMass[1];
+    Check(!skeletal.ReadDiagnosticState(999, state), "Diagnostic unknown owner rejected");
+    Check(world.RemoveConstraint(skeletal.GetConstraintHandle(20, 1)), "Diagnostic stale joint setup");
+    Check(!skeletal.ReadDiagnosticState(20, state), "Diagnostic stale joint rejected");
+    Check(world.DestroyBody(skeletal.GetBodyHandle(20, 2)), "Diagnostic stale last body setup");
+    Check(!skeletal.ReadDiagnosticState(20, state), "Diagnostic stale last body rejected");
+    Check(state.Bodies.size() == 3 && state.Joints.size() == 2 &&
+        state.Bodies[1].CenterOfMass[1] == previousY && state.Joints[1].Solver.Enabled,
+        "Diagnostic failure preserves output");
+    skeletal.Clear();
+    CheckEmpty(world, "Diagnostic cleanup");
+}
+
 // 본 pose 등록·전체 목표 선검증·COM 속도·Dynamic 보존을 검사한다.
 static void CheckPoseTargets(PhysicsWorld& world, SkeletalPhysicsSystem& skeletal)
 {
@@ -495,6 +567,9 @@ int main()
 
     // 동기 분리의 성공과 실패 경로를 검사한다.
     CheckSynchronousBreak(world, skeletal);
+
+    // 뷰어 진단에 전달할 실제 물리 상태와 실패 보존을 검사한다.
+    CheckDiagnosticState(world, skeletal);
     std::printf("SkeletalBreakTests: %zu/%zu PASS\n", g_Checks, g_Checks);
     return 0;
 }

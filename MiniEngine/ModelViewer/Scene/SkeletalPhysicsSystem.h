@@ -25,6 +25,28 @@ namespace Viewer
         std::array<float, 3> WorldImpulse{}, WorldPoint{};
     };
 
+    // 렌더 진단은 목표가 아니라 step 이후 실제 body 상태를 읽는다.
+    struct SkeletalBodyState
+    {
+        uint32_t Node = MiniPhysics::InvalidSkeletalId;
+        MiniPhysics::SkeletalRigidFrame Frame;
+        std::array<double, 3> CenterOfMass{}, Linear{}, Angular{};
+        MiniPhysics::BodyMotion Motion = MiniPhysics::BodyMotion::Kinematic;
+    };
+
+    struct SkeletalJointState
+    {
+        bool Broken = false;
+        MiniPhysics::ConstraintState Solver;
+        Math::Vector3 ParentAnchor{ Math::kZero }, ChildAnchor{ Math::kZero };
+    };
+
+    struct SkeletalRigState
+    {
+        std::vector<SkeletalBodyState> Bodies;
+        std::vector<SkeletalJointState> Joints;
+    };
+
     enum class BreakStatus
     {
         Prepared, Applied, NotFound, AlreadyBroken, Stale,
@@ -56,6 +78,8 @@ namespace Viewer
             const std::vector<Math::Matrix4>& nodePoses, float fixedDt);
         // 저장한 목표와 COM 속도를 읽으며 실패하면 출력을 보존한다.
         bool GetBodyTarget(ObjectId owner, uint32_t bodyId, SkeletalBodyTarget& target) const;
+        // 실제 pose·COM·속도·양쪽 anchor를 읽으며 실패하면 출력 전체를 보존한다.
+        bool ReadDiagnosticState(ObjectId owner, SkeletalRigState& output) const;
         // 현재 Dynamic body만 등록 배율을 복원한 model node override로 수집한다.
         // 실패하면 호출자의 override 배열을 보존한다.
         bool CollectPoseOverrides(ObjectId owner, const Math::Matrix4& modelToWorld,

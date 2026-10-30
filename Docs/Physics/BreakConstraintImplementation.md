@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-10 e7a608dc 이후 BC-11 공통 fixed-step 연결·독립 리뷰 3건 수정(미커밋), BC-12a 미착수 (2026-10-30)
+상태: 진행 중 — BC-11 686d1c7a 완료; BC-12a-1 진단 상태 조회·독립 impulse CPU 시험 구현(미커밋), BC-12a-2 뷰어 미착수 (2026-10-30)
 
 # BreakConstraint 구현 인계
 
@@ -247,7 +247,8 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-10a | 공통 world 동기 break 선검증·commit API/등록 | 완료(미커밋): anchor·limit·외부 pin·impulse 선검증, commit 뒤 fallible cook/할당 없음 / 08b | 약205줄 |
 | BC-10b | rig subtree·세대 적용 + CPU 회귀(BC-10 완료) | 완료(미커밋): 리뷰 보강 후 두 구성 CPU482/482·anchor 일치 twist/swing 초과 거절·제한 안 성공·body3·관절2→1·손목120step·중복무변경, 기존 전체 빌드·비물리 진단 PASS / 10a | CPU15.00+27.80초, 기존 B5.19+6.01초 |
 | BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 완료(미커밋): CPU 7종 두 구성2790/2790·전체 빌드·Debug 물리 OFF PASS, step 0/1/4/0·GPU 준비1회·실제 Xbot/선형 animation break/writeback 44검사 PASS / 10 | 리뷰 후 B54.24+68.79초, component15.07초 |
-| BC-12a | fixture 진단 옵션·GizmoDraw overlay | 3 body/본/anchor 시각화·정지/분리 재현 / 11 | R+B+V |
+| BC-12a-1 | 실제 body/관절 진단 조회 API·독립 off-center impulse CPU 시험 | 완료: 실제 pose/COM/속도·broken/enabled·월드 anchor, 실패 출력 보존 / 11 | R+B+CPU |
+| BC-12a-2 | fixture 진단 옵션·GizmoDraw overlay·자동 수치 판정 | 미착수: 60 ticks 후 joint0 분리, 120 ticks 뒤 판정/종료·스크린샷 / 12a-1 | R+B+V |
 | BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 상완 animation 유지·전완/손 낙하·팔꿈치 피부 늘어짐 화면, 스크린샷 / 12a | R+B+V |
 | BC-13a | 기본 수명 회귀(M1) | 등록 실패·씬 clear·삭제 직후 지연 명령·double break·리소스0 / 12b | R+B+T+V |
 | BC-09 | (M2) PrepareBreak 일회용 plan·snapshot key 분리 | prepare 무변경·Stale / 13a | R+B+T |
@@ -306,6 +307,8 @@ cl /nologo /std:c++17 /EHsc /W4 /utf-8 /I MiniEngine/Core /I MiniEngine/Model "/
 ```
 
 Physics 테스트 target은 `SkeletalAssetTests`, `PhysicsConstraintTests`, `SkeletalBreakTests`를 담당 단계에서 CMake/BuildJolt.ps1의 testTargets에 각각 등록한다. 예: `./Tools/BuildJolt.ps1 -Configuration Debug -Target SkeletalBreakTests -RunTests`, Release도 동일 실행. Scene 연결 변경은 저장소 지침의 ModelViewer.slnx Debug/Release 빌드를 모두 수행한다.
+
+BC-12a 분할(2026-10-30): 실제 world 상태 조회·시험, 자동 fixture 모델/옵션 연결, 화면 투영/overlay 및 자동 종료를 합치면 약 400줄 이상으로 예상하여 §11을 12a-1(진단 조회·독립 impulse 시험)과 12a-2(뷰어 적용)로 나눴다. 이번 실행은 사용자 분할 규칙에 따라 12a-1만 수행한다. `SkeletalPhysicsSystem::ReadDiagnosticState`는 step 밖의 scene 스레드에서 실제 body 원점 frame·COM·COM 선속도/월드 각속도·운동 방식·관절 broken/enabled/motorsOff·양쪽 월드 anchor를 임시 묶음으로 읽고 전부 성공했을 때만 출력한다. 미등록 owner·stale body/관절은 출력 전체를 보존한다. world와 Jolt 타입은 공개하지 않는다. CPU는 실제 pose와 목표의 차이, 회전/이동된 anchor, 120 step 손목 오차≤0.01m와 finite 상태·낙하를 검사한다. 별도 단일 body 시험은 회전·COM offset 상자에 접촉/관절/step 없이 impulse를 가해 J/m과 r cross J의 응답, COM impulse의 추가 회전 0을 비교한다. 기존 CMake/BuildJolt testTargets에 등록된 두 시험 파일을 확장하므로 새 등록은 없다. 뷰어 옵션·overlay·60/120 tick 자동 종료 계약은 12a-2에 그대로 남긴다.
 
 BC-12a 옵션은 `-skeletal-break-checks 1`로 고정하고 자동 fixture를 사용한다. 기존 모델은 변경하지 않는다. 새 GameObject 하나에 pose fixture를 등록하고 기존 화면의 bone/body 중심·anchor를 view-projection 후 GizmoDraw로 그린다. 60 fixed ticks 후 joint0을 0 impulse로 분리하고 120 ticks 뒤 수치 판정/종료 로그를 출력한다. root Y는 초기값 유지, child COM Y 하강, 살아 있는 손목 anchor 오차≤0.01m, 모든 pose/속도 finite를 검사한다. 별도 off-center impulse CPU 시험은 접촉/관절 없는 단일 body로 수행한다.
 

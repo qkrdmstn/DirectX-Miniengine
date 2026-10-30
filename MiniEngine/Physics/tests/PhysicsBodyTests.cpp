@@ -786,6 +786,47 @@ static void TestKinematicMotion()
     Check(world.GetReservedCount() == 0, "Static guard cleaned");
 }
 
+// 접촉·관절이 없는 단일 body로 off-center impulse의 선속도와 각속도를 독립 검증한다.
+static void TestIsolatedOffCenterImpulse()
+{
+    // 원점과 COM이 다른 상자를 회전·평행이동해 월드 작용점을 구분한다.
+    PhysicsWorld world;
+    world.Initialize(4);
+    const AggregateGeom geom = MakeBoxGeom({ 0.3, 0.2, -0.1 }, { 0.5, 0.5, 0.5 });
+    auto desc = MakeDesc(geom);
+    desc.Position = { 3, 4, 5 };
+    desc.Rotation = { 0, 0, std::sqrt(0.5), std::sqrt(0.5) };
+    PreparedBody prepared;
+    Check(world.PrepareBody(desc, prepared), "Isolated impulse prepare");
+    const auto handle = world.CommitBody(std::move(prepared), true);
+    Check(handle != InvalidBody && world.GetBodyCount() == 1 && world.GetConstraintCount() == 0,
+        "Isolated impulse has only one free body");
+    std::array<double, 3> com{}, linear{}, angular{};
+    double mass = 0;
+    Check(world.GetBodyCenterOfMass(handle, com) && world.GetBodyMass(handle, mass), "Isolated impulse COM and mass");
+    CheckVector(com, { 2.8, 4.3, 4.9 }, 1e-5);
+
+    // step 전 정지 상태에서 J/m과 r cross J의 +Z 응답을 직접 비교한다.
+    Check(world.GetBodyVelocity(handle, linear, angular), "Isolated impulse initial velocity");
+    CheckVector(linear, {}, 1e-6);
+    CheckVector(angular, {}, 1e-6);
+    auto point = com;
+    point[1] -= 1;
+    Check(world.AddBodyImpulse(handle, { mass, 0, 0 }, point), "Isolated off-center impulse");
+    Check(world.GetBodyVelocity(handle, linear, angular), "Isolated impulse response");
+    CheckVector(linear, { 1, 0, 0 }, 1e-5);
+    CheckVector(angular, { 0, 0, 6 }, 0.3);
+
+    // COM에 같은 impulse를 주면 선속도만 늘고 추가 회전은 생기지 않는다.
+    const auto previousAngular = angular;
+    Check(world.AddBodyImpulse(handle, { mass, 0, 0 }, com), "Isolated COM impulse");
+    Check(world.GetBodyVelocity(handle, linear, angular), "Isolated COM response");
+    CheckVector(linear, { 2, 0, 0 }, 1e-5);
+    CheckVector(angular, previousAngular, 1e-6);
+    world.Clear();
+    Check(world.GetReservedCount() == 0, "Isolated impulse cleanup");
+}
+
 // 실제 Jolt를 링크한 body 수명 검증을 한 번에 실행한다.
 int main()
 {
@@ -817,6 +858,9 @@ int main()
 
         // Kinematic 이동과 운동 방식 전환 및 impulse를 검사한다.
         TestKinematicMotion();
+
+        // BC-12a 회전 응답은 관절과 접촉이 없는 별도 body에서 검사한다.
+        TestIsolatedOffCenterImpulse();
 
         // 통과한 검사 수를 출력한다.
         std::printf("PhysicsBodyTests: %zu checks passed\n", g_Checks);

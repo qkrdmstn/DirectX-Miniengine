@@ -224,6 +224,53 @@ namespace Viewer
         return true;
     }
 
+    // scene 스레드의 step 바깥에서 실제 body와 관절 상태를 한 묶음으로 읽는다.
+    bool SkeletalPhysicsSystem::ReadDiagnosticState(ObjectId owner, SkeletalRigState& output) const
+    {
+        // 미등록 owner와 오래된 handle은 호출자의 이전 결과를 보존한다.
+        const auto found = m_Rigs.find(owner);
+        if (found == m_Rigs.end()) return false;
+        const auto& rig = found->second;
+        SkeletalRigState result;
+        result.Bodies.resize(rig.Bodies.size());
+        result.Joints.resize(rig.Joints.size());
+        std::vector<Math::Matrix4> matrices(rig.Bodies.size());
+
+        // Kinematic 목표 대신 world의 실제 원점 pose와 COM 속도를 수집한다.
+        for (size_t i = 0; i < rig.Bodies.size(); ++i)
+        {
+            auto& body = result.Bodies[i];
+            body.Node = rig.Asset.Bodies[i].Node;
+            const auto handle = rig.Bodies[i];
+            if (!m_World.GetBodyPose(handle, body.Frame.Position, body.Frame.Rotation) ||
+                !m_World.GetBodyCenterOfMass(handle, body.CenterOfMass) ||
+                !m_World.GetBodyVelocity(handle, body.Linear, body.Angular) ||
+                !m_World.GetBodyMotion(handle, body.Motion) ||
+                !SkeletalFrames::TryRigidMatrix(body.Frame, matrices[i])) return false;
+            for (size_t axis = 0; axis < 3; ++axis)
+                if (!std::isfinite(body.CenterOfMass[axis]) || !std::isfinite(body.Linear[axis]) ||
+                    !std::isfinite(body.Angular[axis])) return false;
+        }
+
+        // 끊긴 관절도 양쪽 anchor를 남겨 분리 전후 overlay에 사용할 수 있게 한다.
+        for (size_t i = 0; i < rig.Joints.size(); ++i)
+        {
+            auto& state = result.Joints[i];
+            const auto& joint = rig.Asset.Joints[i];
+            state.Broken = rig.Joints[i] == MiniPhysics::InvalidConstraint;
+            if (!state.Broken && !m_World.GetConstraintState(rig.Joints[i], state.Solver)) return false;
+            Math::Matrix4 parent, child;
+            if (!SkeletalFrames::TryRigidMatrix(joint.ParentBodyFromJoint, parent) ||
+                !SkeletalFrames::TryRigidMatrix(joint.ChildBodyFromJoint, child)) return false;
+            state.ParentAnchor = Math::Vector3((matrices[joint.ParentBody] * parent).GetW());
+            state.ChildAnchor = Math::Vector3((matrices[joint.ChildBody] * child).GetW());
+        }
+
+        // 모든 조회가 성공한 경우에만 새 진단 상태를 게시한다.
+        output = std::move(result);
+        return true;
+    }
+
     // 선택 관절 아래의 연결된 body만 검증하고 동기 분리를 게시한다.
     BreakStatus SkeletalPhysicsSystem::BreakConstraint(const BreakRequest& request)
     {

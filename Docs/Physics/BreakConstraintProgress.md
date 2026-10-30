@@ -193,3 +193,13 @@ MiniEngine/ModelViewer에서 Debug exe -debug 1 -physics-sim 0 -component-checks
 로그·CPU 산출물·변형 전 소스는 `$env:TEMP/BreakConstraintTests/BC11-review-fix`에 있다. `verify.ps1`, `pose-tests.ps1`, `viewer.ps1`, `capture-viewer.ps1`, `mutations.ps1`과 검사별 로그를 보관한다.
 
 변형 복구 후 최종 확인: 원본 바이트 SHA-256 동일, Debug 재빌드9.17초·오류0·C4819 경고3건, component 재실행28.97초·종료0·PASS 행703개(BC-11 44건 포함)·FAIL0·최종 GPU preparation PASS를 확인했다. 디버그 출력의 D3D12 ERROR/CORRUPTION은0이며 종료 시 Light 관련 live-resource 경고는 위 Static 실행과 동일하다. 실행 전후 .mini 3개와 Report의 SHA-256이 모두 같고 git add/commit/stash 및 메인 체크아웃 수동 수정은 하지 않았다. git diff --check PASS다.
+
+### BC-12a-1 진단 조회·독립 impulse 시험 (2026-10-30, HEAD `686d1c7a`)
+
+- 분할: BC-12a를 12a-1(실제 body/관절 진단 조회 API·CPU 시험)과 12a-2(뷰어 옵션·overlay·자동 판정)로 나눴다. 이유는 계약 문서 §12 BC-12a 분할 문단.
+- 바뀐 파일: `SkeletalPhysicsSystem.h/.cpp`(`ReadDiagnosticState`, 상태 구조체 3개), `Scene/tests/SkeletalBreakTests.cpp`(`CheckDiagnosticState`), `Physics/tests/PhysicsBodyTests.cpp`(`TestIsolatedOffCenterImpulse`). 코드 약 190줄.
+- CPU: SkeletalBreakTests·PhysicsBodyTests Debug/Release 모두 종료0 PASS(36.02/39.36초, 21.33/26.56초).
+- 빌드: Debug 57.05초 오류0(Codex), Release 150초 오류0(Claude 재실행). 기존 C4819 경고만 있음.
+- 실행: Debug `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6` 종료0·PASS 703행·실패0·`PASS GPU preparation`, 물리 OFF 기본 실행 종료0. 이번 단계는 뷰어 호출 경로가 없어 화면 변화 없음.
+- 리뷰: Codex 사용량 한도로 구현 실행이 Release 빌드 기록 중 끊겼다. Claude가 이어받아 diff 자기 리뷰(지적 0: 함수·단락 한글 주석, 실패 시 출력 보존, impulse 기대값 r×J/I=6 손계산 일치)와 Release 빌드·뷰어 실행을 했다.
+- 로그: `$env:TEMP/BreakConstraintTests/BC12a-root`, `$env:TEMP/BreakConstraintTests/BC12a-claude`.
