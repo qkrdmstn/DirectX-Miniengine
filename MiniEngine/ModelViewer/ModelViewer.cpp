@@ -109,6 +109,7 @@ private:
     size_t m_BodiesBeforeCuts = 0;
     bool m_PhysicsCutChecked = false;
     std::vector<double> m_CutGpuSamples, m_CutReadySamples;
+    char m_BenchmarkText[160] = {};
     Math::Vector3 m_LastCutNormal{Math::kYUnitVector};
     bool m_CaptureComplete = false;
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
@@ -509,9 +510,16 @@ void ModelViewer::Update( float deltaT )
             {
                 std::sort(m_CutGpuSamples.begin(), m_CutGpuSamples.end());
                 std::sort(m_CutReadySamples.begin(),m_CutReadySamples.end());
+                const double medianGpu = m_CutGpuSamples[m_CutGpuSamples.size()/2];
+                const double p95Gpu = m_CutGpuSamples[std::min(m_CutGpuSamples.size()-1, size_t(m_CutGpuSamples.size()*0.95))];
+                const double medianReady = m_CutReadySamples[m_CutReadySamples.size()/2];
                 Utility::Printf("Static cut benchmark: samples=%zu medianGpuMs=%.6f p95GpuMs=%.6f medianReadyMs=%.3f error=%u\n",
-                    m_CutGpuSamples.size(), m_CutGpuSamples[m_CutGpuSamples.size()/2],
-                    m_CutGpuSamples[std::min(m_CutGpuSamples.size()-1, size_t(m_CutGpuSamples.size()*0.95))],m_CutReadySamples[m_CutReadySamples.size()/2],cutResult.Error);
+                    m_CutGpuSamples.size(), medianGpu, p95Gpu, medianReady, cutResult.Error);
+
+                // 디버거가 없는 PC에서도 읽도록 같은 결과를 화면 텍스트로 남긴다.
+                snprintf(m_BenchmarkText, sizeof(m_BenchmarkText),
+                    "Cut benchmark: samples=%zu medianGpuMs=%.6f p95GpuMs=%.6f medianReadyMs=%.3f error=%u",
+                    m_CutGpuSamples.size(), medianGpu, p95Gpu, medianReady, cutResult.Error);
             }
         }
         else if (m_AutoCuts && !m_Cutting.IsBusy()) { --m_AutoCuts; ++m_AutoCutIndex; }
@@ -896,6 +904,11 @@ void ModelViewer::RenderUI(GraphicsContext& context)
         !m_Physics.IsSimulationEnabled() ? "disabled" : (bool(g_PhysicsRunning) ? "running" : "paused"),
         m_Physics.GetSimulationBodyCount());
     if (m_CutGap > 0) text.DrawFormattedString("Diagnostic piece separation: %.3f\n",m_CutGap);
+
+    // -cut-benchmark 실행 중에는 남은 횟수를, 끝나면 측정 결과를 표시한다.
+    if (m_BenchmarkRemaining) text.DrawFormattedString("Cut benchmark: running, %u cuts left\n", m_BenchmarkRemaining);
+    else if (m_BenchmarkText[0]) text.DrawFormattedString("%s\n", m_BenchmarkText);
+
     text.DrawFormattedString("L: %s axes | Esc during drag: cancel | Mode: %s\n",
         m_Gizmo.IsLocal() ? "Local" : "World", m_Gizmo.GetMode() == Viewer::TransformGizmo::View ? "View" :
         (m_Gizmo.GetMode() == Viewer::TransformGizmo::Translate ? "Move" :
