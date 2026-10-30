@@ -3,6 +3,7 @@
 #include "PhysicsSystem.h"
 #include "CutTransaction.h"
 #include "../../MeshCutting/GPU/GpuMeshCutter.h"
+#include <array>
 #include <deque>
 #include <chrono>
 #include <memory>
@@ -26,6 +27,7 @@ namespace Viewer
         const char* Reason = nullptr;   // Failed일 때 정적 문자열 이유
         double GpuMs = 0;
         double ReadyMs = 0;
+        std::array<double, 4> StageMs{};  // clip, boundary, cap, finalize GPU ms
     };
 
     // Scene 변경은 완료된 GPU 작업을 프레임 입력 경계에서 게시할 때만 수행한다.

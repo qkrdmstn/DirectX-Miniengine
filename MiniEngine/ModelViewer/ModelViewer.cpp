@@ -110,7 +110,10 @@ private:
     size_t m_BodiesBeforeCuts = 0;
     bool m_PhysicsCutChecked = false;
     std::vector<double> m_CutGpuSamples, m_CutReadySamples;
+    std::array<std::vector<double>, 4> m_CutStageSamples;
     char m_BenchmarkText[160] = {};
+    char m_BenchmarkStageText[160] = {};
+    std::string m_GpuName;
     Math::Vector3 m_LastCutNormal{Math::kYUnitVector};
     bool m_CaptureComplete = false;
     Viewer::CutPlaneSystem m_CutPlanes{m_Scene};
@@ -234,6 +237,27 @@ void CreateDemoTower(Viewer::Scene& scene, const std::shared_ptr<const Model>& c
     }
 }
 
+// 벤치마크 화면에 남길 현재 D3D12 장치의 GPU 이름을 읽는다.
+static std::string GetDeviceGpuName()
+{
+    // 장치의 LUID로 DXGI 어댑터를 찾는다.
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumAdapterByLuid(Graphics::g_Device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))))
+        return "unknown";
+
+    // 어댑터 설명을 UTF-8로 바꾼다. Utility::WideStringToUTF8은 잘못된 플래그로 실패해 쓰지 않는다.
+    DXGI_ADAPTER_DESC1 desc;
+    char name[128] = {};
+    if (FAILED(adapter->GetDesc1(&desc)) ||
+        !WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr))
+        return "unknown";
+
+    // 이름과 전용 메모리 크기를 한 줄로 만든다.
+    return std::string(name) + " (" + std::to_string(desc.DedicatedVideoMemory >> 20) + " MB)";
+}
+
 // 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
@@ -302,6 +326,7 @@ void ModelViewer::Startup( void )
     SSAO::Enable = true;
 
     Renderer::Initialize();
+    m_GpuName = GetDeviceGpuName();
 
     // 요청된 경우 queue 자원 지연 해제 검사를 모델 로딩 전에 실행한다.
     uint32_t retiredResourceChecks = 0;
@@ -513,6 +538,8 @@ void ModelViewer::Update( float deltaT )
             {
                 m_CutGpuSamples.push_back(cutResult.GpuMs);
                 m_CutReadySamples.push_back(cutResult.ReadyMs);
+                for (size_t stage = 0; stage < m_CutStageSamples.size(); ++stage)
+                    m_CutStageSamples[stage].push_back(cutResult.StageMs[stage]);
             }
             --m_BenchmarkRemaining;
             if (!m_BenchmarkRemaining && !m_CutGpuSamples.empty())
@@ -529,6 +556,18 @@ void ModelViewer::Update( float deltaT )
                 snprintf(m_BenchmarkText, sizeof(m_BenchmarkText),
                     "Cut benchmark: samples=%zu medianGpuMs=%.6f p95GpuMs=%.6f medianReadyMs=%.3f error=%u",
                     m_CutGpuSamples.size(), medianGpu, p95Gpu, medianReady, cutResult.Error);
+
+                // 단계별 GPU 시간도 각각 정렬해 중앙값을 화면 텍스트로 남긴다.
+                double stageMedian[4] = {};
+                for (size_t stage = 0; stage < m_CutStageSamples.size(); ++stage)
+                {
+                    std::vector<double>& samples = m_CutStageSamples[stage];
+                    std::sort(samples.begin(), samples.end());
+                    stageMedian[stage] = samples[samples.size()/2];
+                }
+                snprintf(m_BenchmarkStageText, sizeof(m_BenchmarkStageText),
+                    "Cut stages median ms: clip=%.4f boundary=%.4f cap=%.4f finalize=%.4f",
+                    stageMedian[0], stageMedian[1], stageMedian[2], stageMedian[3]);
             }
         }
         // 기본은 위치 보존이며, 명시한 진단 간격만 새 B의 실제 Transform에 적용한다.
@@ -921,7 +960,12 @@ void ModelViewer::RenderUI(GraphicsContext& context)
 
     // -cut-benchmark 실행 중에는 남은 횟수를, 끝나면 측정 결과를 표시한다.
     if (m_BenchmarkRemaining) text.DrawFormattedString("Cut benchmark: running, %u cuts left\n", m_BenchmarkRemaining);
-    else if (m_BenchmarkText[0]) text.DrawFormattedString("%s\n", m_BenchmarkText);
+    else if (m_BenchmarkText[0])
+    {
+        text.DrawFormattedString("%s\n", m_BenchmarkText);
+        text.DrawFormattedString("%s\n", m_BenchmarkStageText);
+        text.DrawFormattedString("GPU: %s\n", m_GpuName.c_str());
+    }
 
     text.DrawFormattedString("L: %s axes | Esc during drag: cancel | Mode: %s\n",
         m_Gizmo.IsLocal() ? "Local" : "World", m_Gizmo.GetMode() == Viewer::TransformGizmo::View ? "View" :

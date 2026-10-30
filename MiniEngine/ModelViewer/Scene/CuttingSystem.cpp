@@ -607,6 +607,7 @@ namespace Viewer
         entry.Reason = failure;
         entry.GpuMs = LastGpuMs;
         entry.ReadyMs = LastReadyMs;
+        entry.StageMs = job.StageMs;
         m_Results.push_back(entry);
 
         // 완료한 작업을 해제하고 묶음 진행 상태를 갱신한다.
