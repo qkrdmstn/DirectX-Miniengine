@@ -31,6 +31,8 @@ namespace Graphics
 
     void Initialize(bool RequireDXRSupport=false);
     void Shutdown(void);
+    // 장치 제거 사유와 선택적으로 수집한 DRED 정보를 출력한다.
+    void ReportDeviceRemoved(const char* where);
 
     bool IsDeviceNvidia(ID3D12Device* pDevice);
     bool IsDeviceAMD(ID3D12Device* pDevice);

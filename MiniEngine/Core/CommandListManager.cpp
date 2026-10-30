@@ -13,6 +13,7 @@
 
 #include "pch.h"
 #include "CommandListManager.h"
+#include "GraphicsCore.h"
 
 CommandQueue::CommandQueue(D3D12_COMMAND_LIST_TYPE Type) :
     m_Type(Type),
@@ -194,19 +195,22 @@ void CommandListManager::CreateNewCommandList( D3D12_COMMAND_LIST_TYPE Type, ID3
     (*List)->SetName(L"CommandList");
 }
 
+// 명령 목록을 제출하고 펜스 신호 실패 시 장치 제거 원인을 보고한다.
 uint64_t CommandQueue::ExecuteCommandList( ID3D12CommandList* List )
 {
+    // 제출과 펜스 값 갱신을 직렬화한다.
     std::lock_guard<std::mutex> LockGuard(m_FenceMutex);
 
     ASSERT_SUCCEEDED(((ID3D12GraphicsCommandList*)List)->Close());
 
-    // Kickoff the command list
+    // 닫힌 명령 목록을 큐에 제출한다.
     m_CommandQueue->ExecuteCommandLists(1, &List);
 
-    // Signal the next fence value (with the GPU)
-    m_CommandQueue->Signal(m_pFence, m_NextFenceValue);
+    // GPU 펜스 신호의 실패를 진단한다.
+    if (FAILED(m_CommandQueue->Signal(m_pFence, m_NextFenceValue)))
+        Graphics::ReportDeviceRemoved("CommandQueue::ExecuteCommandList Signal");
 
-    // And increment the fence value.  
+    // 제출에 사용한 값을 반환하고 다음 펜스 값으로 진행한다.
     return m_NextFenceValue++;
 }
 
@@ -245,8 +249,10 @@ void CommandQueue::StallForProducer(CommandQueue& Producer)
     m_CommandQueue->Wait(Producer.m_pFence, Producer.m_NextFenceValue - 1);
 }
 
+// 펜스 완료를 기다리고 이벤트 등록 실패 시 장치 제거 원인을 보고한다.
 void CommandQueue::WaitForFence(uint64_t FenceValue)
 {
+    // 이미 완료된 펜스는 대기하지 않는다.
     if (IsFenceComplete(FenceValue))
         return;
 
@@ -257,7 +263,12 @@ void CommandQueue::WaitForFence(uint64_t FenceValue)
     {
         std::lock_guard<std::mutex> LockGuard(m_EventMutex);
 
-        m_pFence->SetEventOnCompletion(FenceValue, m_FenceEventHandle);
+        // 이벤트 등록 실패 시 무한 대기에 들어가지 않는다.
+        if (FAILED(m_pFence->SetEventOnCompletion(FenceValue, m_FenceEventHandle)))
+        {
+            Graphics::ReportDeviceRemoved("CommandQueue::WaitForFence SetEventOnCompletion");
+            return;
+        }
         WaitForSingleObject(m_FenceEventHandle, INFINITE);
         m_LastCompletedFenceValue = FenceValue;
     }

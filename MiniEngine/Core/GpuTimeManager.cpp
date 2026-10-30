@@ -94,19 +94,28 @@ void GpuTimeManager::StopTimer(CommandContext& Context, uint32_t TimerIdx)
     Context.InsertTimeStamp(sm_QueryHeap, TimerIdx * 2 + 1);
 }
 
+// 타임스탬프를 매핑하고 실패하면 읽기를 중단하여 널 포인터 접근을 막는다.
 void GpuTimeManager::BeginReadBack(void)
 {
+    // 펜스 완료 후 읽기 범위를 매핑하고 실패를 진단한다.
     Graphics::g_CommandManager.WaitForFence(sm_Fence);
 
     D3D12_RANGE Range;
     Range.Begin = 0;
     Range.End = (sm_NumTimers * 2) * sizeof(uint64_t);
-    ASSERT_SUCCEEDED(sm_ReadBackBuffer->Map(0, &Range, reinterpret_cast<void**>(&sm_TimeStampBuffer)));
+    sm_TimeStampBuffer = nullptr;
+    if (FAILED(sm_ReadBackBuffer->Map(0, &Range, reinterpret_cast<void**>(&sm_TimeStampBuffer))))
+    {
+        sm_TimeStampBuffer = nullptr;
+        Graphics::ReportDeviceRemoved("GpuTimeManager::BeginReadBack Map");
+        return;
+    }
 
+    // 매핑된 구간에서 유효한 타이밍 범위를 얻는다.
     sm_ValidTimeStart = sm_TimeStampBuffer[0];
     sm_ValidTimeEnd = sm_TimeStampBuffer[1];
 
-    // On the first frame, with random values in the timestamp query heap, we can avoid a misstart.
+    // 첫 프레임의 초기화되지 않은 쿼리 값은 유효 범위에서 제외한다.
     if (sm_ValidTimeEnd < sm_ValidTimeStart)
     {
         sm_ValidTimeStart = 0ull;
@@ -114,13 +123,17 @@ void GpuTimeManager::BeginReadBack(void)
     }
 }
 
+// 매핑에 성공한 경우에만 해제하고 다음 프레임의 쿼리를 제출한다.
 void GpuTimeManager::EndReadBack(void)
 {
-    // Unmap with an empty range to indicate nothing was written by the CPU
+    // 매핑 실패 시 해제와 후속 타이밍 명령 제출을 생략한다.
+    if (!sm_TimeStampBuffer)
+        return;
     D3D12_RANGE EmptyRange = {};
     sm_ReadBackBuffer->Unmap(0, &EmptyRange);
     sm_TimeStampBuffer = nullptr;
 
+    // 다음 프레임에 읽을 타임스탬프를 기록하고 복사한다.
     CommandContext& Context = CommandContext::Begin();
     Context.InsertTimeStamp(sm_QueryHeap, 1);
     Context.ResolveTimeStamps(sm_ReadBackBuffer, sm_QueryHeap, sm_NumTimers * 2);
@@ -128,11 +141,15 @@ void GpuTimeManager::EndReadBack(void)
     sm_Fence = Context.Finish();
 }
 
+// 매핑 실패 시 0을 반환하고 유효한 타임스탬프만 시간으로 환산한다.
 float GpuTimeManager::GetTime(uint32_t TimerIdx)
 {
-    ASSERT(sm_TimeStampBuffer != nullptr, "Time stamp readback buffer is not mapped");
+    // 매핑 여부와 타이머 인덱스를 확인한다.
+    if (!sm_TimeStampBuffer || TimerIdx >= sm_NumTimers)
+        return 0.0f;
     ASSERT(TimerIdx < sm_NumTimers, "Invalid GPU timer index");
 
+    // 유효 범위 안에서 양수인 시간 차이만 반환한다.
     uint64_t TimeStamp1 = sm_TimeStampBuffer[TimerIdx * 2];
     uint64_t TimeStamp2 = sm_TimeStampBuffer[TimerIdx * 2 + 1];
 
