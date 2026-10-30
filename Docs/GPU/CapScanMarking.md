@@ -1,4 +1,4 @@
-상태: 설계안 — master `1532fc60` + cap 단계 1·1b(미커밋) 기준, 구현 전 (2026-10-30)
+상태: 진행 중 — master `6f328257`(단계 1·1b) 기준 S1 구현·MX450 지정 검증 완료(미커밋); S2·S2b·S3 미착수 (2026-10-30)
 
 # Cap 선택을 누적합 기반 교대 표시로 바꾸기
 
@@ -85,3 +85,26 @@ S1은 구조만 바꾸고 결과는 그대로 두어 배치 변경의 회귀를 
 - 해시 선택보다 선택이 규칙적이라 가는 삼각형(sliver)이 늘 수 있다. 논문도 Mark-and-cut의 각도 품질이 가장 낮았다. 렌더·물리 hull에 문제가 되는지 캡처로 확인한다.
 - `RankBoundaryCS`가 loop 내 순서를 남기는지 미확인이다. 남기지 않으면 tid 0 순회 비용이 추가된다.
 - 1024 초과 loop는 해시 경로가 남아 결과 성질이 두 가지가 된다. 별도 단계에서 정리한다.
+
+## 8. S1 실행 기록 (2026-10-30, 미커밋)
+
+- 실제 시작 HEAD는 `6f328257`이었다. 코드 변경은 `CapEarsCS.hlsl`만이다. `main`에서 leader부터 최대 `min(count,4096)`번 순회해 닫힘·슬롯 범위·leader 일치를 확인하고, 실패 시 cap을 생략한다.
+- 길이 m ≤ 1024인 loop를 경계 순서로 캐시하고 `CachedSlot`으로 Ring 기록 슬롯을 복원한다. `CachedFlags`는 bit0 Active, bit1–2 Kind, bit3 Selected(ear 판정 전에는 임시 reflex)이며 위치별 소유 스레드만 쓴다. `SerialMode`에서도 캐시 후보 판정과 플래그 정리는 소유 스레드가 수행하고 최저 후보 선택은 tid 0이 한다.
+- 위치 키 해시와 라운드 상한은 유지했다. `Slot`으로 동률의 원래 슬롯과 삼각형 슬롯 ID를 보존하고, 마지막 세 점도 최소 원래 슬롯에 기록한다. m > 1024는 기존 슬롯 인덱스 경로를 사용한다. scan·교대 표시와 C++·FinalizeCutCS·CutCommon 변경은 없다.
+- MX450에서 256 스레드 Debug/Release 각각 Cube 2종·Bunny 4종을 1회씩, Bunny y=0은 총 3회씩 실행했다. 모두 exit 0, 완료 marker·publication 검증 통과. 아래는 각 구성의 단계 1b 로그와 비교한 양쪽 cap checksum 결과다(재절단은 두 publication 모두 비교).
+
+| 입력 | side별 삼각형 수 | Debug / Release의 1b 대비 checksum |
+| --- | --- | --- |
+| Cube y=0 | 5 / 5 | 동일 / 동일 |
+| Cube 45° | 2 / 2 | 동일 / 동일 |
+| Bunny y=0 | 364 / 364 | 3회 모두 동일 / 3회 모두 동일 |
+| Bunny y=-240 | 396 / 396 | 동일 / 동일 |
+| Bunny y=-230 | 449 / 449 | 동일 / 동일 |
+| Bunny 재절단 | 364 / 364 → 161 / 161 | 두 publication 모두 동일 / 동일 |
+
+- Release 64/512 스레드도 Bunny y=0·재절단을 각 1회 실행해 256 및 1b와 checksum이 모두 같았다. 경계 순서로 바뀐 면적 합산은 이번 입력의 checksum을 바꾸지 않았다.
+- DXC `cs_6_2` 출력의 groupshared 합계는 24,608 B(배열 24,576 + 스칼라 32), 32 KiB 이하이다. 256 복원 후 백업과 SHA256 `B74BDC6743E821BF9E9A3222F78D49E11CB932C94EF33D89D47A45A9EB752BFC` 일치, 최종 Debug/Release의 MeshCutting·ModelViewer 빌드 exit 0, `git diff --check` 통과. 기존 C4819 및 `pwsh.exe`를 찾지 못하는 빌드 메시지는 남아 있다.
+- Release 256, `-debug 0 -model Models/bunny.glb -cut-benchmark 20 -cut-y 0 -cut-expect-publications 1` 3회의 medianGpuMs / cap 중앙값(ms)은 **3.980224 / 2.180688**, **4.454880 / 2.158352**, **5.709824 / 2.796672**다. cap은 마지막 측정 20개(warmup 제외)의 산술 중앙값이다. 1b와 교차 측정하지 않았으므로 개선으로 판정하지 않는다.
+- 새 D3D12 ERROR/CORRUPTION은 없고 failedEarSegments=0이다. 다만 기존과 같은 Bunny y=-240의 uncappedSegments=207, y=-230의 49 및 badBoundaryMask=1이 남는다. y=0의 badBoundaryMask=2, 렌더 타깃 WARNING, DXGI ERROR #80도 1b 로그에 존재한다. checksum 일치는 이 문제들의 해결을 뜻하지 않는다.
+- 로그·백업·DXIL·실행 스크립트는 저장소 밖 `%TEMP%/cap-s1/`에 있다. 실행 파일·PDB·모델 복사와 HDR/RAW 저장은 하지 않았다. C: 여유는 시작 2.854 GiB, 최종 빌드 후 약 1.91 GiB였고 검사 시 1.5 GiB 미만은 없었다. `Get-PSDrive C`가 Free를 반환하지 않아 .NET `DriveInfo.AvailableFreeSpace`로 보완했다.
+- 통제된 m=1024 경계·1024 초과 loop·잘못된 연결·SerialMode 직접 입력, 면적 상쇄가 큰 경계 및 5060 Ti는 미검증이다. S2 이후 단계와 독립된 새 세션 리뷰는 수행하지 않았다.
