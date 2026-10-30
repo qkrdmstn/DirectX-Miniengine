@@ -88,6 +88,8 @@ namespace Viewer
         const std::vector<std::unique_ptr<GameObject>>& GetObjects() const { return m_Objects; }
         // 모든 owner의 애니메이션을 진행하고 최종 확정 전 node pose를 공개한다.
         void EvaluateAnimations(float deltaTime);
+        // 미확정 모델만 dt=0으로 평가하여 첫 zero-step 프레임을 준비한다.
+        void InitializePoses();
         // 모든 owner를 override 없이 확정한다.
         // 개별 물리 override 전달 전에 호출한다.
         bool FinalizePoses();
@@ -95,6 +97,8 @@ namespace Viewer
         bool FinalizeObjectPose(ObjectId id, const NodePhysicsPose* overrides, uint32_t overrideCount);
         // 확정된 CPU pose를 소비하여 컴포넌트별 GPU geometry를 한 번 준비한다.
         void PrepareMeshes(GraphicsContext& context);
+        // 렌더 프레임당 GPU 준비 호출 수를 진단한다.
+        uint64_t GetMeshPreparationCount() const { return m_MeshPreparationCount; }
         // 비물리 호출자를 위해 CPU 평가·확정과 GPU 준비를 연속 수행한다.
         void Update(GraphicsContext& context, float deltaTime);
         void Render(Renderer::MeshSorter& sorter) const;
@@ -102,6 +106,7 @@ namespace Viewer
     private:
         // Clear and deletion never reset this counter, so stale IDs stay invalid.
         ObjectId m_NextId = 1;
+        uint64_t m_MeshPreparationCount = 0;
         std::vector<std::unique_ptr<GameObject>> m_Objects;
     };
 }

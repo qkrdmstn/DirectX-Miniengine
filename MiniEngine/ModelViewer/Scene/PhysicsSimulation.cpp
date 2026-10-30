@@ -1,5 +1,6 @@
 ﻿#include "PhysicsSystem.h"
 #include "Utility.h"
+#include "SkeletalPhysicsFrames.h"
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -157,18 +158,139 @@ namespace Viewer
         Utility::Printf("Physics simulation: %s\n", running ? "running" : "paused");
     }
 
-    // 입력 뒤 GPU 준비 전에 오래된 body를 정리하고 공통 world를 고정 간격으로 진행한다.
+    // 요청을 보관하고 다음 실제 substep에서 최신 목표를 반영한 뒤 처리한다.
+    void PhysicsSystem::QueueBreak(const BreakRequest& request)
+    {
+        // zero-step과 pause 프레임에서는 요청을 소비하지 않는다.
+        m_PendingBreaks.push_back(request);
+    }
+
+    // 실제 렌더 section에서 공통 E를 구하고 물리 본에 종속된 Nmesh는 거절한다.
+    bool PhysicsSystem::ReadSkeletalPose(const GameObject& object, Math::Matrix4& frame,
+        std::vector<Math::Matrix4>& nodes) const
+    {
+        // 모델 없는 fixture는 Scene pose를 확정할 수 없으므로 등록 대상에서 제외한다.
+        const auto* instance = object.GetModelInstance();
+        if (!instance) return false;
+        const auto& model = *instance->GetModel();
+        nodes.assign(instance->GetNodeTransforms(), instance->GetNodeTransforms() + model.m_NumNodes);
+        const auto& rig = m_Skeletal.m_Rigs.at(object.GetId());
+        frame = Math::Matrix4(object.GetTransform().ToAffine());
+        bool found = false;
+
+        // 모든 스킨 section의 E와 본 ancestry를 검사한다.
+        for (const auto& component : object.GetMeshComponents())
+            for (size_t section = 0; section < component->GetGeometry()->GetSections().size(); ++section)
+            {
+                const auto& mesh = component->GetGeometry()->GetMesh(section);
+                if (!mesh.numJoints) continue;
+                if (mesh.meshCBV >= nodes.size() || rig.NodeParents.size() != nodes.size()) return false;
+                for (NodeId node = NodeId(mesh.meshCBV); node != MiniPhysics::InvalidSkeletalId; node = rig.NodeParents[node])
+                    for (const auto& body : rig.Asset.Bodies)
+                        if (body.Node == node) return false;
+                const Math::Matrix4 current = Math::Matrix4(component->GetWorldTransform(object.GetTransform())) *
+                    Math::Matrix4(Math::Invert(component->GetDeformBinding().SourceFrame.ToAffine())) * nodes[mesh.meshCBV];
+                MiniPhysics::SkeletalRigidFrame rigid;
+                float scale = 0;
+                if (!SkeletalFrames::TrySplitUniformFrame(current, rigid, scale)) return false;
+                if (found)
+                {
+                    DirectX::XMFLOAT4X4 delta;
+                    DirectX::XMStoreFloat4x4(&delta, Math::Invert(frame) * current);
+                    for (unsigned row = 0; row < 4; ++row)
+                        for (unsigned col = 0; col < 4; ++col)
+                            if (std::abs(delta.m[row][col] - (row == col ? 1.0f : 0.0f)) > 1e-4f) return false;
+                }
+                frame = current;
+                found = true;
+            }
+        return true;
+    }
+
+    // 물리 override를 animation local에 합성하고 모든 팔레트를 한 번만 확정한다.
+    void PhysicsSystem::FinalizeSimulationPoses()
+    {
+        // 등록 owner는 Dynamic 본만 덮어쓰고 나머지 owner는 기존 평가 결과를 확정한다.
+        for (const auto& object : m_Scene.GetObjects())
+        {
+            if (!object->GetModelInstance()) continue;
+            std::vector<NodePhysicsPose> overrides;
+            if (m_Skeletal.IsRegistered(object->GetId()))
+            {
+                Math::Matrix4 frame(Math::kIdentity);
+                std::vector<Math::Matrix4> nodes;
+                if (!ReadSkeletalPose(*object, frame, nodes) ||
+                    !m_Skeletal.CollectPoseOverrides(object->GetId(), frame, overrides))
+                    throw std::runtime_error("Unsupported skeletal writeback frame");
+            }
+            if (!m_Scene.FinalizeObjectPose(object->GetId(), overrides.data(), uint32_t(overrides.size())))
+                throw std::runtime_error("Simulation pose finalization failed");
+        }
+    }
+
+    // 실제 뷰어와 진단이 같은 프레임 경로에서 simulation과 GPU 준비를 수행한다.
+    unsigned PhysicsSystem::UpdateFrame(GraphicsContext& context, double deltaSeconds, float animationSeconds)
+    {
+        // 삭제 body 정리와 고정 substep을 먼저 완료한다.
+        const unsigned steps = AdvanceSimulation(deltaSeconds);
+
+        // 물리 여부에 맞는 pose를 렌더 프레임당 한 번 준비한다.
+        if (IsSimulationEnabled())
+            m_Scene.PrepareMeshes(context);
+        else
+            m_Scene.Update(context, animationSeconds);
+        return steps;
+    }
+
+    // 공통 fixed clock 안에서 animation부터 최종 pose까지 진행하고 GPU 준비는 호출자에게 남긴다.
     unsigned PhysicsSystem::AdvanceSimulation(double deltaSeconds)
     {
         // pause 또는 zero-step 프레임에서도 삭제 body는 먼저 제거한다.
+        for (auto it = m_Skeletal.m_Rigs.begin(); it != m_Skeletal.m_Rigs.end();)
+        {
+            const ObjectId owner = it->first;
+            ++it;
+            if (!m_Scene.FindObject(owner)) m_Skeletal.Unregister(owner);
+        }
         SyncBodies();
         const unsigned steps = m_StepClock.Advance(deltaSeconds, m_SimulationEnabled && m_Running);
 
-        // 실패한 solver step은 성공으로 보고하지 않으며 렌더용 pose는 마지막에 한 번 반영한다.
+        // animation 평가와 Kinematic 목표 뒤에 요청을 처리하고 world는 substep마다 한 번만 진행한다.
         for (unsigned i = 0; i < steps; ++i)
-            if (!StepSimulation(float(PhysicsStepClock::FixedSeconds)))
+        {
+            // 이번 substep의 animation pose를 평가한다.
+            const float dt = float(PhysicsStepClock::FixedSeconds);
+            m_Scene.EvaluateAnimations(dt);
+
+            // 평가된 pose로 모든 Kinematic 목표와 상속 속도를 갱신한다.
+            for (const auto& object : m_Scene.GetObjects())
+                if (m_Skeletal.IsRegistered(object->GetId()))
+                {
+                    Math::Matrix4 frame(Math::kIdentity);
+                    std::vector<Math::Matrix4> nodes;
+                    if (!ReadSkeletalPose(*object, frame, nodes) ||
+                        !m_Skeletal.UpdateKinematicTargets(object->GetId(), frame, nodes, dt))
+                        throw std::runtime_error("Unsupported skeletal target frame");
+                }
+
+            // 최신 목표를 사용해 대기 중인 break를 소비한다.
+            for (const auto& request : m_PendingBreaks)
+                Utility::Printf("Skeletal break: owner=%llu status=%u\n", request.Owner,
+                    unsigned(m_Skeletal.BreakConstraint(request)));
+            m_PendingBreaks.clear();
+
+            // 공통 world를 고정 시간으로 한 번 진행한다.
+            if (!StepSimulation(dt))
                 throw std::runtime_error("Physics simulation step failed");
-        ApplyBodyPoses();
+
+            // 물리 pose를 기록하고 owner별 node와 팔레트를 확정한다.
+            ApplyBodyPoses();
+            FinalizeSimulationPoses();
+        }
+
+        // 처음 생성된 모델만 dt=0으로 준비하며 기존 zero-step pose와 animation 시간은 보존한다.
+        if (m_SimulationEnabled && steps == 0)
+            m_Scene.InitializePoses();
         return steps;
     }
 

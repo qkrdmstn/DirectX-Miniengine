@@ -1,4 +1,4 @@
-﻿상태: 진행 중 — BC-07 `8dc58b08` 이후 BC-08a-1/2·BC-08b 미커밋 변경 분류·재검증 완료, BC-10 초안은 분리 표시 (2026-10-30)
+상태: 진행 중 — BC-10 `e7a608dc` 이후 BC-11 완료·독립 리뷰 3건 수정(미커밋), BC-12a 미착수 (2026-10-30)
 
 # BreakConstraint 진행 기록
 
@@ -156,7 +156,7 @@ CPU 시험은 실제 Dynamic 두 body와 4-node graph로 owner 이동·회전 �
 
 | 단계 | 커밋 | 바뀐 파일 | 검증 | 리뷰 |
 | --- | --- | --- | --- | --- |
-| BC-10a/b | 미커밋(사용자 지시: git add/commit/stash 금지) | MiniEngine/Physics/PhysicsWorldBreak.cpp(초안 완성), CMakeLists.txt, Physics.vcxproj/.filters; MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.cpp, tests/SkeletalBreakTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md, Docs/README.md, Docs/Current/CodeMap.md | CPU Debug403/403 10.02초·Release403/403 13.48초 PASS(컴파일 경고0); 전체 Debug5.19초·Release6.01초 PASS(각 기존 C4819 3개·오류0·/restore없음); 물리 OFF component Debug5.20/Release5.14초·Xbot Debug6.21/Release6.16초 PASS, 모두 종료0 | 자기 리뷰 검증 부족1건 보강, 잔여0건; 독립 codex exec는 home directory 탐색 오류로 시작 불가 |
+| BC-10a/b | `e7a608dc` | MiniEngine/Physics/PhysicsWorldBreak.cpp(초안 완성), CMakeLists.txt, Physics.vcxproj/.filters; MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.cpp, tests/SkeletalBreakTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md, Docs/README.md, Docs/Current/CodeMap.md | CPU Debug403/403 10.02초·Release403/403 13.48초 PASS(컴파일 경고0); 전체 Debug5.19초·Release6.01초 PASS(각 기존 C4819 3개·오류0·/restore없음); 물리 OFF component Debug5.20/Release5.14초·Xbot Debug6.21/Release6.16초 PASS, 모두 종료0 | 자기 리뷰 검증 부족1건 보강, 잔여0건; 독립 codex exec는 home directory 탐색 오류로 시작 불가 |
 
 body3개 유지·관절2→1·root Kinematic/자손 Dynamic·손목 enable/모터 Off·COM 속도 상속과 off-center impulse1회·AlreadyBroken 우선/추가 impulse0·세대 증가·다른 joint stale·이미 Dynamic인 body 보존·broken 경계 제외·해제 후 리소스0을 검사했다. 내부 anchor 0.01m 어긋남과 twist 제한 초과는 UnsupportedPose, 외부 pin은 UnsupportedTopology로 변경 없이 거절했다. 자기 리뷰에서 실제 손목 유지/외부 pin 검증 부족1건을 보강하여 120step 후 anchor≤0.01m를 확인했다. 최초 CPU278/278(11.53/16.21초)·전체 빌드13.35/9.68초도 통과했으며 위 표는 보강 후 최종값이다. 추가 diff 자기 리뷰에서 함수·단락 사이 빈 줄과 기존 BOM 보존을 정리했다. BC-10a(world API/등록 약205줄)·10b(rig/시험 약195줄)로 §11에 행을 추가했으며 의미상 계약 차이는 없다.
 
@@ -167,3 +167,29 @@ body3개 유지·관절2→1·root Kinematic/자손 Dynamic·손목 enable/모�
 로그/산출물은 $env:TEMP/BreakConstraintTests/BC10-root의 SkeletalBreakTests-{Debug,Release}.log, build-{Debug,Release}.log, viewer-*.log, results.txt, results-viewer.txt, verify.ps1, viewer.ps1이다. 독립 리뷰는 codex.ps1 실행정책 차단 후 codex.cmd로 재시도했으나 Error finding codex home: Could not find home directory로 시작되지 않았다. 별도 읽기 전용 diff/초안/계약 자기 리뷰를 수행했다. git 쓰기·메인 체크아웃 수동 수정·junction 변경·.mini/Report 수동 변경 없음이며 viewer 전후 보호 파일 SHA-256 동일이다. BC-11 이후는 착수하지 않았다.
 
 2026-10-30 BC-10 독립 리뷰 지적 1건 처리: 기존 각도 제한 시험의 anchor 선거절을 손 위치 보정으로 제거하고 실제 COM anchor 일치·순수 +X twist/+Y swing·각각 초과 거절 후 상태 불변·각각 제한 안 성공을 검사했다. CPU Debug482/482(15.00초)·Release482/482(27.80초) PASS, 경고0·종료0이며 기존403건 대비79건 증가다. TEMP의 twist/swing 검사 개별 우회 변형도 각각 해당 초과 거절 검사에서 실패해 분기 검증을 확인했다. 구현 버그 없음·구현 코드 변경 없음으로 전체 빌드는 재실행하지 않았다. 로그/변형 소스는 $env:TEMP/BreakConstraintTests/BC10-review-fix, BC-11 미착수다.
+
+### BC-11 완료·미커밋 (2026-10-30, HEAD `e7a608dc`)
+
+| 단계 | 커밋 | 바뀐 파일 | 검증 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-11 | 미커밋(Claude 커밋 담당) | MiniEngine/ModelViewer/ModelViewer.cpp; Scene/PhysicsSimulation.cpp, PhysicsSystem.h/.cpp, SkeletalPhysicsSystem.h, Scene.h/.cpp, tests/MeshComponentChecks.h; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md, Docs/README.md, Docs/Current/CodeMap.md | CPU Debug/Release 각2790/2790(7종) PASS; 전체 리뷰후Debug54.24초·Release68.79초 PASS(오류0·C4819경고19/19·/restore없음); Debug 물리OFF component15.07초·Xbot15.68초 PASS·종료0, BC-11 프레임/실제rig/animation 44검사 PASS; 기본6.24초 종료0·Static 442검사 PASS | 독립 리뷰3건 수정; break 선소비·target 생략 변형은 새 예상 목표 검사에서 실패 확인; 아래 재검증 기록 참조 |
+
+BC-10 커밋 칸을 e7a608dc로 채웠다. 공통 PhysicsStepClock의1/60초·최대4회 정책 안에서 animation→Kinematic target→대기break→world step1회→Static/본writeback→owner별pose확정으로 연결했다. GPU 준비는 렌더 프레임당1회이며 비물리는 기존 Update를 유지한다. zero-step/pause에는 대기break와 이전pose를 유지하고 신규모델만 dt=0으로 준비한다. 실제section E 일치·Nmesh ancestry·uniform frame을 검증하며 world 공개는 없다. 의미상 계약 차이 없음, BC-12a 이후 미착수, git add/commit/stash/merge/push 없음.
+
+CPU 결과(Debug/Release, 컴파일경고0): SkeletalBreakTests482/482(19.44/22.73초), PhysicsBodyTests362(14.70/16.91초), PhysicsConstraintTests286/286(20.71/21.53초), PhysicsStepTests427(24.83/12.78초), SkeletalFrameTests706/706(2.18/1.38초), SceneMathTests495, SkeletonPoseTests32. SceneMath/SkeletonPose 시간은 별도 측정하지 않았다. 산출물/로그/재현스크립트는 $env:TEMP/BreakConstraintTests/BC11-root의 verify.ps1, pose-tests.ps1, build-final.ps1, viewer.ps1, viewer-extra.ps1 및 이름별 로그다. 최초 전체빌드67.70/46.93초도 성공했다. 신규 C4244는 NodeId 명시변환으로 수정 후 최종빌드 통과했다. clean rebuild/CTest 전체/Release뷰어 미수행이다.
+
+MiniEngine/ModelViewer에서 Debug exe -debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6 및 -xbot-arm-checks 1을 Start-Process -WindowStyle Hidden -Wait로 실행했다. 새 MeshComponentChecks.log의 BC-11 PASS39개·PASS GPU preparation, XbotArmChecks.log의 BC-00/03a PASS를 확인했다. 별도복제Scene에서 step0/1/4/0, wrapper와 전체node/position/normal팔레트동등, GPU0/substep·1/frame, 실제정규화Xbot queued break→Dynamic2개 writeback, 이후zero-step보존·자원0을 확인했다. 기본실행은 검사옵션 없이 물리OFF와 종료옵션만 사용해 종료0, 기존Static진단은 -physics-sim 1 -physics-sim-checks 1 -physics-query-exit 6으로 종료0이나 PASS문자열은 별도캡처하지 못했다. DirectX debug layer 사용, GPU기반검증·GPU/driver재측정·BC-12 시각데모 미수행이다. .mini3개와 Report SHA-256은 모든 실행 전후 동일하며 메인체크아웃·junction은 수동수정하지 않았다.
+
+#### BC-11 독립 리뷰 지적 3건 수정 (2026-10-30, `e7a608dc` 기준 미커밋)
+
+1. [중간] GPU 준비 검사의 자기충족성: `PhysicsSystem::UpdateFrame`으로 simulation 진행과 GPU 준비를 묶었다. `ModelViewer::Update`와 `CheckFixedSimulationPoses`가 같은 함수를 호출하고, 준비 카운터를 그 전후로 비교한다. substep 0/1/4/0의 모든 프레임에서 +1을 확인한다. 검사 자체의 직접 `PrepareMeshes` 호출과 중복 카운터 검사를 제거했다.
+2. [중간] target→break→step 순서의 증거 부족: `CheckAnimatedBreakOrder`에 root가 X로 6m/s 움직이는 두 body·한 관절 fixture를 추가했다. 두 animation key의 기울기로 독립 계산한 이번 substep 목표 x=6dt, COM 선속도 (6,0,0)·각속도0, 분리 후 x=6dt+6dt와 y=1.5−9.8dt²를 검사한다. X 이동에는 기본 damping의 작은 오차만 허용하며 world 값을 서로 비교하지 않는다. 기존 Xbot 검사도 유지했다. 기존 39건에서 중복 프레임 검사4건을 줄이고 fixture9건을 더해 **BC-11 총44건 PASS**다.
+3. [낮음] `AdvanceSimulation`의 substep 본문을 animation 평가·Kinematic 목표·break 소비·world step·writeback/확정의 다섯 기능 단락으로 나누고, 빈 줄과 단락별 한 줄 한글 주석을 붙였다. 추가 함수의 역할 주석도 기록했다.
+
+재검증: CPU 7종은 머리말의 cl 명령·Jolt 설정으로 Debug/Release 각각2790/2790 PASS(482 break, 362 body, 286 constraint, 427 step, 706 frame, 495 scene math, 32 skeleton pose). worktree 루트 `.slnx /m /p:Configuration={Debug,Release} /p:Platform=Windows` 빌드는 /restore 없이 Debug54.24초·Release68.79초, 각각 오류0·C4819 경고19건이다. Debug `-debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6`에서 BC-11 44건·최종 GPU preparation PASS(15.07초), 기존 Xbot 진단 BC-00/03a PASS(15.68초), 물리OFF 기본 실행 종료0(6.24초)를 확인했다. 기존 `-physics-sim 1 -physics-sim-checks 1`은 디버그 출력 수집 실행에서 validation passed·442검사·종료0(55.98초)을 확인했다. DirectX debug layer 사용, GPU 기반 검증은 사용하지 않았다. Static 진단 종료 시 기존 Light 관련 live-resource 경고가 있었고 D3D12 ERROR/CORRUPTION은 없었다.
+
+순서 변형 검증: `PhysicsSimulation.cpp` 원본 바이트를 TEMP에 보관한 뒤 break 소비를 target 갱신 앞으로 옮긴 Debug 변형과 target 갱신을 생략한 Debug 변형을 각각 빌드·실행했다. 둘 다 `FAIL ... BC-11 target equals independent animation sample`을 기록했다. 실패 예외 후 프로세스가 남아 45초 제한으로 해당 진단 프로세스를 종료했다. 각 실행의 finally에서 원본 바이트를 복구했고 SHA-256 동일을 확인했다. 구현 동작 버그는 발견하지 않았으며 검증 경로·회귀 증거·주석만 보완했다. BC-12a는 시작하지 않았다.
+
+로그·CPU 산출물·변형 전 소스는 `$env:TEMP/BreakConstraintTests/BC11-review-fix`에 있다. `verify.ps1`, `pose-tests.ps1`, `viewer.ps1`, `capture-viewer.ps1`, `mutations.ps1`과 검사별 로그를 보관한다.
+
+변형 복구 후 최종 확인: 원본 바이트 SHA-256 동일, Debug 재빌드9.17초·오류0·C4819 경고3건, component 재실행28.97초·종료0·PASS 행703개(BC-11 44건 포함)·FAIL0·최종 GPU preparation PASS를 확인했다. 디버그 출력의 D3D12 ERROR/CORRUPTION은0이며 종료 시 Light 관련 live-resource 경고는 위 Static 실행과 동일하다. 실행 전후 .mini 3개와 Report의 SHA-256이 모두 같고 git add/commit/stash 및 메인 체크아웃 수동 수정은 하지 않았다. git diff --check PASS다.

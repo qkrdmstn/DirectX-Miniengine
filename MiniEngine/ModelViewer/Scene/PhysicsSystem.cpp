@@ -271,6 +271,7 @@ namespace Viewer
 
         // world 종료 전에 skeletal rig 자원을 관절→body 순서로 해제한다.
         m_Skeletal.Clear();
+        m_PendingBreaks.clear();
 
         // 조회 참조를 지운 뒤 준비 body와 simulation body까지 world에서 회수한다.
         for (auto& entry : m_Entries) RemoveEntry(entry.second);

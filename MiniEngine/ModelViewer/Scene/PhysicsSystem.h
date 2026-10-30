@@ -46,6 +46,10 @@ namespace Viewer
         void SetSimulationRunning(bool running);
         // 프레임 경계에서 body 정리·최대 네 고정 step·pose 반영을 수행한다.
         unsigned AdvanceSimulation(double deltaSeconds);
+        // 공통 simulation 진행과 렌더 프레임의 GPU 준비를 함께 조율한다.
+        unsigned UpdateFrame(GraphicsContext& context, double deltaSeconds, float animationSeconds);
+        // 다음 fixed step의 목표 갱신 뒤 동기 break를 처리한다.
+        void QueueBreak(const BreakRequest& request);
         // 실행한 고정 step 수를 진단에서 읽는다.
         uint64_t GetSimulationStepCount() const { return m_StepCount; }
         // 등록된 동적 메시 body 수를 읽는다.
@@ -98,6 +102,12 @@ namespace Viewer
         SkeletalPhysicsSystem& GetSkeletalPhysics() { return m_Skeletal; }
 
     private:
+        // 실제 스킨 section의 공통 E와 애니메이션 node pose를 검증한다.
+        bool ReadSkeletalPose(const GameObject& object, Math::Matrix4& frame,
+            std::vector<Math::Matrix4>& nodes) const;
+        // 일반 owner와 물리 owner의 최종 pose를 각각 한 번 확정한다.
+        void FinalizeSimulationPoses();
+        std::vector<BreakRequest> m_PendingBreaks;
         friend class CutTransaction;
         friend class EditApplyChecks;
         friend class EditDeleteChecks;

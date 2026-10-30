@@ -214,6 +214,15 @@ namespace Viewer
                 object->m_ModelInstance->EvaluateAnimation(deltaTime);
     }
 
+    // 아직 확정하지 않은 모델만 시간을 진행하지 않고 초기 pose로 준비한다.
+    void Scene::InitializePoses()
+    {
+        // 기존 유효 pose와 물리 override는 그대로 유지한다.
+        for (const auto& object : m_Objects)
+            if (object->m_ModelInstance && !object->m_ModelInstance->HasValidPose())
+                object->m_ModelInstance->Update(0.0f);
+    }
+
     // 모든 모델을 애니메이션 pose로 확정한다.
     // 개별 물리 writeback보다 먼저 호출한다.
     bool Scene::FinalizePoses()
@@ -239,6 +248,9 @@ namespace Viewer
     // CPU pose를 다시 평가하지 않고 각 컴포넌트의 GPU geometry를 준비한다.
     void Scene::PrepareMeshes(GraphicsContext& context)
     {
+        // substep 수와 독립적인 GPU 준비 호출 수를 기록한다.
+        ++m_MeshPreparationCount;
+
         // 무효 pose도 Update에 전달하여 이전 준비 상태를 해제하고 GPU 기록을 생략한다.
         for (const auto& object : m_Objects)
         {

@@ -85,6 +85,7 @@ namespace Viewer
         static uint32_t DiagFailRegistrationStep;
 
     private:
+        friend class PhysicsSystem;
         struct Rig
         {
             uint64_t Generation = 0;

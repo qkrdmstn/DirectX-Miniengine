@@ -1,4 +1,4 @@
-﻿# 프로젝트 문서 목차
+# 프로젝트 문서 목차
 
 현재 Static GPU 절단·단면·재절단과 같은 GameObject의 조각 MeshComponent 관리가 연결되어 있다. Jolt v5.6.0의 조회용 collider를 자동 등록해 평면 후보를 찾는다. 열린 경계는 cap만 생략한다. Skeletal 절단·동적 낙하/접촉 반응은 미구현이며 과거 CPU 경로는 Git 기록에서 비교한다.
 
@@ -42,7 +42,7 @@
 | [PhysicsIntegrationPlan.md](Physics/PhysicsIntegrationPlan.md) | Jolt 조회 이후 동적 조각·proxy·절단 transaction 계획 | 진행 중 — `39db69f3` 조회 구현 완료; 동적 조각 물리는 StaticPiecePhysics로 대체, Skeletal 물리는 후속 |
 | [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — 7a~7d 완료, `26302519` 기반 바닥 최소 1,000×1,000 m 확장; 8단계 전체 검증 미진행 (2026-10-28) |
 | [BreakConstraintDesign.md](Physics/BreakConstraintDesign.md) | UE5.3.2 관절 해제·Actor 유지·physics pose 반영 원리 | 설계안 — `5f56b93d` 재대조, 구현 계약은 아래 인계 문서 참조 (2026-10-28) |
-| [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트 | 진행 중 — BC-08a·08b 24da5640; BC-10a/b 동기 break 완료(미커밋), CPU 두 구성403/403·전체 빌드·물리 OFF 진단 PASS, BC-11 미착수 (2026-10-30) |
+| [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트 | 진행 중 — BC-10 e7a608dc; BC-11 fixed-step 완료(미커밋), CPU 두 구성2790/2790·전체 빌드·Debug 물리 OFF/프레임44검사 PASS·독립 리뷰3건 수정, BC-12a 미착수 (2026-10-30) |
 
 ## NDC — 기법 근거
 

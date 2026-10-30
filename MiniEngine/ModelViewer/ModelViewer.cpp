@@ -564,13 +564,11 @@ void ModelViewer::Update( float deltaT )
         if (m_CutPlanes.Find(hit.Id)) m_ActiveCutPlane = hit.Id;
     }
 
-    // 삭제되거나 교체된 body는 다음 simulation step보다 먼저 회수한다.
-    m_Physics.AdvanceSimulation(deltaT);
-
-    // 확정된 컴포넌트 배치로 한 번만 GPU pose를 준비한다.
+    // 공통 프레임 경로에서 고정 step과 GPU pose 준비를 완료한다.
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
+    m_Physics.UpdateFrame(gfxContext, deltaT, m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
 
-    m_Scene.Update(gfxContext, m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
+    // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
     if (m_ComponentChecksPending)
     {
         Viewer::CheckPreparedMeshComponents(m_Scene, gfxContext);

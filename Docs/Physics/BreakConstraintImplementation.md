@@ -1,4 +1,4 @@
-﻿상태: 진행 중 — BC-08a·08b 24da5640 이후 BC-10 동기 break 구현·검증 완료(미커밋), BC-11 미착수 (2026-10-30)
+상태: 진행 중 — BC-10 e7a608dc 이후 BC-11 공통 fixed-step 연결·독립 리뷰 3건 수정(미커밋), BC-12a 미착수 (2026-10-30)
 
 # BreakConstraint 구현 인계
 
@@ -204,6 +204,16 @@ render frame마다:
 
 substep이 0회면 이전 최종 pose를 재사용하고 animation을 추가 진행하지 않는다. 최초 준비는 dt=0 animation 평가→Finalize 후 수행한다. 기존 비물리 모드는 기존 Update wrapper로 동일 동작을 유지한다. Physics on에서만 이 고정 step 경로를 사용한다.
 
+BC-11 구현(2026-10-30, HEAD `e7a608dc`, 미커밋): `PhysicsSystem::AdvanceSimulation`이 기존 `PhysicsStepClock`(1/60초, 최대4회 catch-up) 안에서 EvaluateAnimations → section E/목표 검증·UpdateKinematicTargets → QueueBreak 요청을 BreakConstraint로 동기 처리 → StepSimulation 1회 → Static ApplyBodyPoses → Dynamic CollectPoseOverrides/FinalizeObjectPose 순서로 진행한다. owner마다 substep당 한 번만 확정한다. ModelViewer와 통합 검사는 같은 PhysicsSystem::UpdateFrame을 호출한다. 이 함수가 AdvanceSimulation 뒤 physics on에서 PrepareMeshes를 렌더 프레임당 한 번 호출하고, off에서는 기존 Scene::Update와 animation-step-ms 동작을 유지한다. 물리 on에서는 공통 fixed dt만 쓴다.
+
+zero-step/pause는 이전 pose·팔레트·대기 요청을 보존한다. 신규 모델은 Scene::InitializePoses가 Update(0)으로 준비한다. 삭제 owner rig는 step 전에 해제하고 Clear는 대기 요청도 버린다. QueueBreak는 ID·세대·값만 저장하며 결과를 owner/status로 로그에 기록한다. world는 private이고 PhysicsSystem만 friend로 rig 메타데이터를 읽는다. E는 실제 Wc/SourceFrame/Nmesh로 구하며 section 사이 상대행렬 오차1e-4, uniform/shear는 기존 helper 기준이다. Nmesh가 rig body node 또는 자손이면 거절한다. 스킨 section 없는 모델 fixture는 owner world를 E로 쓴다. 무효 target/writeback frame은 예외로 중단하며 조용히 근사하거나 animation으로 대체하지 않는다.
+
+검증: SkeletalBreak482·PhysicsBody362·PhysicsConstraint286·PhysicsStep427·SkeletalFrame706·SceneMath495·SkeletonPose32건을 Debug/Release 각각 모두 PASS(구성당2790건, 합5580건)했다. 직접 cl·산출물은 시험 머리말과 `$env:TEMP/BreakConstraintTests/BC11-root`의 verify.ps1/pose-tests.ps1을 따른다. 전체 msbuild는 /restore 없이 최종 증분23.59/12.79초·종료0·오류0·기존 C4819경고6/0이다. 최초 빌드67.70/46.93초도 성공했다. 신규 C4244 한 건은 NodeId 명시변환으로 없앴다.
+
+Debug 물리OFF `-component-checks 1 -physics-query-exit 6`은11.56초·종료0·PASS GPU preparation, 초기 BC-11 추가39검사 PASS였으며 독립 리뷰 수정 후 공통 프레임/선형 animation 검사는44건 PASS다. 별도 Scene에서 최초/반복 zero-step, step0/1/4/0, world 총횟수, wrapper와 전체 node·position/normal palette 동등, substep GPU0·프레임 GPU1, 실제 정규화 Xbot rig의 queued break·Dynamic2개 writeback·zero-step 보존·자원0을 검사한다. 물리OFF `-xbot-arm-checks 1`도18.37초·종료0·BC-00/03a PASS다. 물리OFF 기본 실행9.15초와 기존 `-physics-sim 1 -physics-sim-checks 1` 실행10.14초도 종료0이다(후자는 PASS 문자열 별도 캡처 없음). 모두 -debug 1과 종료옵션을 사용했다. .mini3개·Report 해시는 전후 동일했다. 독립 리뷰 수정 재검증은 Progress의 BC-11 기록에 있다. 공통 UpdateFrame에서 GPU 준비를 측정하고 선형 animation의 예상 목표·상속 속도·step 후 pose를 독립 계산한다. break 선소비·target 생략 변형은 새 검사에서 실패하며 복구 후 Debug 재빌드·component 703 PASS 행(BC-11 44건 포함)·D3D12 ERROR/CORRUPTION0을 확인했다. GPU 기반 검증·driver 재조회·CTest·Release viewer·BC-12 시각 데모는 미수행이다.
+
+별도 diff 자기 리뷰에서 진단 복제 owner의 정규화 scale 누락1건을 고치고 최종 빌드·진단으로 재검증했다. 초기 zero-step 평가 누락은 구현 중 수정했다. 독립 리뷰는 사용자 지시대로 Claude 담당이다. 새 파일/target은 없으며 코드·검사225줄 변경으로 §11 분할은 필요하지 않다. 의미상 계약 차이는 없다. 커밋·git add/stash·메인 체크아웃 수동 수정·junction 변경·BC-12a 이후 구현은 하지 않았다.
+
 ## 10. GPU 통합 지점 (BC-14, M2)
 
 CPU 명시적 break는 GPU와 무관하게 시험한다. 최종 절단에서는 physics plan과 GPU 결과가 모두 준비되기 전까지 관절을 변경하지 않는다. 기존 Static의 PrepareGeometryReplacement/CutTransaction 기반이 완료된 뒤 확장한다.
@@ -236,7 +246,7 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-08b | physics pose→node override 수집·기존 palette 경로 연결 준비 | CPU 두 구성227/227 PASS, parent 이동/회전 상쇄·tip local 상속·등록 s 복원·실패 출력 보존, 전체 Debug/Release 빌드 PASS / 03b,08a-2 | R+B+T |
 | BC-10a | 공통 world 동기 break 선검증·commit API/등록 | 완료(미커밋): anchor·limit·외부 pin·impulse 선검증, commit 뒤 fallible cook/할당 없음 / 08b | 약205줄 |
 | BC-10b | rig subtree·세대 적용 + CPU 회귀(BC-10 완료) | 완료(미커밋): 리뷰 보강 후 두 구성 CPU482/482·anchor 일치 twist/swing 초과 거절·제한 안 성공·body3·관절2→1·손목120step·중복무변경, 기존 전체 빌드·비물리 진단 PASS / 10a | CPU15.00+27.80초, 기존 B5.19+6.01초 |
-| BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 전체 world step 횟수 일치·GPU 준비1회·비물리 모드 동등 / 10 | R+B+V |
+| BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 완료(미커밋): CPU 7종 두 구성2790/2790·전체 빌드·Debug 물리 OFF PASS, step 0/1/4/0·GPU 준비1회·실제 Xbot/선형 animation break/writeback 44검사 PASS / 10 | 리뷰 후 B54.24+68.79초, component15.07초 |
 | BC-12a | fixture 진단 옵션·GizmoDraw overlay | 3 body/본/anchor 시각화·정지/분리 재현 / 11 | R+B+V |
 | BC-12b | Xbot 왼팔 rig 등록·팔꿈치 break 데모 | 상완 animation 유지·전완/손 낙하·팔꿈치 피부 늘어짐 화면, 스크린샷 / 12a | R+B+V |
 | BC-13a | 기본 수명 회귀(M1) | 등록 실패·씬 clear·삭제 직후 지연 명령·double break·리소스0 / 12b | R+B+T+V |

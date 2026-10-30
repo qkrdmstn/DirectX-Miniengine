@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "../Scene.h"
+#include "../PhysicsSystem.h"
 #include "Renderer.h"
 #include "Utility.h"
 #include <algorithm>
@@ -396,6 +397,171 @@ namespace Viewer
         return values;
     }
 
+    // 선형 animation의 독립 예상값으로 target 갱신과 break 및 step의 순서를 검사한다.
+    inline void CheckAnimatedBreakOrder(GraphicsContext& context)
+    {
+        // 메시 없는 4-node 모델은 root가 1초 동안 X로 6m 움직인다.
+        auto model = std::make_shared<Model>();
+        model->m_NumNodes = 4;
+        model->m_NumMeshes = model->m_NumJoints = 0;
+        model->m_NumAnimations = 1;
+        model->m_SceneGraph = std::make_unique<GraphNode[]>(4);
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            auto& node = model->m_SceneGraph[i];
+            node.matrixIdx = i;
+            node.hasChildren = i < 3;
+            node.xform = Math::Matrix4(Math::OrthogonalTransform(Math::Quaternion(Math::kIdentity),
+                Math::Vector3(0, i == 0 ? 2.0f : -0.5f, 0)));
+            node.rotation = Math::Quaternion(Math::kIdentity);
+            node.scale = { 1, 1, 1 };
+        }
+        const float keys[] = { 0, 2, 0, 6, 2, 0 };
+        model->m_KeyFrameData = std::make_unique<uint8_t[]>(sizeof(keys));
+        std::memcpy(model->m_KeyFrameData.get(), keys, sizeof(keys));
+        model->m_CurveData = std::make_unique<AnimationCurve[]>(1);
+        auto& curve = model->m_CurveData[0];
+        curve.targetPath = AnimationCurve::kTranslation;
+        curve.interpolation = AnimationCurve::kLinear;
+        curve.keyFrameFormat = AnimationCurve::kFloat;
+        curve.keyFrameStride = 3;
+        curve.numSegments = curve.rangeScale = 1;
+        model->m_Animations = std::make_unique<AnimationSet[]>(1);
+        model->m_Animations[0] = { 1, 0, 1 };
+
+        // 관절 하나만 남겨 break 후 자식 하나가 외력 간섭 없이 자유 낙하하게 한다.
+        Scene scene;
+        auto& object = scene.CreateObject("Animated break order", model);
+        object.LoopAllAnimations();
+        scene.InitializePoses();
+        auto fixture = MiniPhysics::CreateThreeBodyFixture();
+        fixture.Asset.Bodies.resize(2);
+        fixture.Asset.Joints.resize(1);
+        PhysicsSystem physics(scene);
+        physics.Initialize(true, 8, true);
+        auto& skeletal = physics.GetSkeletalPhysics();
+        const auto* instance = object.GetModelInstance();
+        const auto* nodes = instance->GetNodeTransforms();
+        const Math::Matrix4 identity(Math::kIdentity);
+        CheckComponent(skeletal.RegisterFromPose(object.GetId(), fixture.Asset, fixture.NodeParents, identity,
+            std::vector<Math::Matrix4>(nodes, nodes + 4)), "BC-11 animated fixture registration");
+        physics.QueueBreak({ object.GetId(), 0, skeletal.GetRigGeneration(object.GetId()), 1 });
+        CheckComponent(physics.UpdateFrame(context, 0, 0) == 0 &&
+            skeletal.GetTopologyGeneration(object.GetId()) == 1, "BC-11 animated zero-step keeps break queued");
+
+        // 키 두 점의 기울기에서 이번 목표와 COM 속도를 직접 계산한다.
+        const float dt = float(PhysicsStepClock::FixedSeconds);
+        const double speed = (keys[3] - keys[0]) / model->m_Animations[0].duration;
+        const double targetX = keys[0] + speed * dt;
+        CheckComponent(physics.UpdateFrame(context, PhysicsStepClock::FixedSeconds, 0) == 1 &&
+            skeletal.GetTopologyGeneration(object.GetId()) == 2, "BC-11 animated queued break applied");
+        SkeletalBodyTarget target;
+        CheckComponent(skeletal.GetBodyTarget(object.GetId(), 1, target), "BC-11 animated target readable");
+        CheckComponent(std::abs(target.Frame.Position[0] - targetX) < 1e-6 &&
+            std::abs(target.Frame.Position[1] - 1.5) < 1e-6 &&
+            std::abs(target.Frame.Position[2]) < 1e-6, "BC-11 target equals independent animation sample");
+        CheckComponent(std::abs(target.Linear[0] - speed) < 1e-5 &&
+            std::abs(target.Linear[1]) < 1e-5 && std::abs(target.Linear[2]) < 1e-5 &&
+            std::abs(target.Angular[0]) + std::abs(target.Angular[1]) + std::abs(target.Angular[2]) < 1e-5,
+            "BC-11 break target carries animation velocity");
+
+        // 상속 속도로 한 step 더 이동한 pose를 검사하며 기본 damping 오차만 허용한다.
+        DirectX::XMFLOAT3 position;
+        DirectX::XMStoreFloat3(&position, Math::Vector3(instance->GetNodeTransforms()[1].GetW()));
+        CheckComponent(std::abs(position.x - (targetX + speed * dt)) < 2e-4 &&
+            std::abs(position.z) < 1e-6, "BC-11 detached pose advances with inherited velocity");
+        CheckComponent(std::abs(position.y - (1.5 - 9.8 * dt * dt)) < 1e-5,
+            "BC-11 detached pose includes world step gravity");
+        context.Flush(true);
+        physics.Clear();
+        CheckComponent(physics.GetReservedBodyCount() == 0, "BC-11 animated fixture cleanup");
+    }
+
+    // 공통 fixed step과 실제 모델의 animation·palette·GPU 준비 횟수를 검사한다.
+    inline void CheckFixedSimulationPoses(const Scene& source, GraphicsContext& context)
+    {
+        // 별도 장면과 world를 만들어 기존 화면의 모델과 물리 상태를 보존한다.
+        Scene fixed;
+        PhysicsSystem physics(fixed);
+        physics.Initialize(true, 64, true);
+        std::vector<std::unique_ptr<ModelInstance>> references;
+        for (const auto& object : source.GetObjects())
+        {
+            if (!object->GetModelInstance()) continue;
+            const auto model = object->GetModelInstance()->GetModel();
+            auto& copy = fixed.CreateObject(object->GetName(), model);
+            copy.SetTransform(object->GetTransform());
+            references.push_back(std::make_unique<ModelInstance>(model));
+            copy.LoopAllAnimations();
+            references.back()->LoopAllAnimations();
+            references.back()->Update(0.0f);
+        }
+
+        // 최초 zero-step은 dt=0으로 준비하며 catch-up도 동일한 고정 dt만 소비한다.
+        const double deltas[] = { 0.0, PhysicsStepClock::FixedSeconds, 1.0, 0.0 };
+        const unsigned expected[] = { 0, 1, 4, 0 };
+        uint64_t total = 0;
+        for (unsigned frame = 0; frame < 4; ++frame)
+        {
+            const auto gpu = fixed.GetMeshPreparationCount();
+            CheckComponent(physics.UpdateFrame(context, deltas[frame], 0.0f) == expected[frame], "BC-11 fixed step count");
+            total += expected[frame];
+            CheckComponent(physics.GetSimulationStepCount() == total, "BC-11 shared world total");
+            CheckComponent(fixed.GetMeshPreparationCount() == gpu + 1, "BC-11 shared frame prepares GPU once");
+            for (unsigned tick = 0; tick < expected[frame]; ++tick)
+                for (const auto& reference : references) reference->Update(float(PhysicsStepClock::FixedSeconds));
+            for (size_t i = 0; i < references.size(); ++i)
+                CheckComponent(CaptureComponentPose(*fixed.GetObjects()[i]->GetModelInstance()) ==
+                    CaptureComponentPose(*references[i]), "BC-11 fixed animation and palettes equal wrapper");
+        }
+
+        // 실제 Xbot의 section E에서 rig를 등록하고 다음 step 경계에서 동기 break를 처리한다.
+        for (const auto& object : fixed.GetObjects())
+        {
+            const auto* instance = object->GetModelInstance();
+            const auto& model = *instance->GetModel();
+            if (model.m_NumNodes != 70) continue;
+            std::vector<NodeId> parents;
+            CheckComponent(BuildPoseParents(model.m_SceneGraph.get(), model.m_NumNodes, parents), "BC-11 rig parents");
+            MiniPhysics::SkeletalPhysicsAsset asset;
+            CheckComponent(MiniPhysics::CreateXbotLeftArmAsset(parents, asset), "BC-11 Xbot asset");
+            const auto* nodes = instance->GetNodeTransforms();
+            const auto& mesh = *object->GetMeshComponents().front();
+            const auto& section = mesh.GetGeometry()->GetMesh(0);
+            const Math::Matrix4 e = Math::Matrix4(mesh.GetWorldTransform(object->GetTransform())) *
+                Math::Matrix4(Math::Invert(mesh.GetDeformBinding().SourceFrame.ToAffine())) * nodes[section.meshCBV];
+            auto& skeletal = physics.GetSkeletalPhysics();
+            CheckComponent(skeletal.RegisterFromPose(object->GetId(), asset, parents, e,
+                std::vector<Math::Matrix4>(nodes, nodes + model.m_NumNodes)), "BC-11 register actual pose");
+            physics.QueueBreak({ object->GetId(), 0, skeletal.GetRigGeneration(object->GetId()),
+                skeletal.GetTopologyGeneration(object->GetId()) });
+            CheckComponent(physics.AdvanceSimulation(0.0) == 0 && skeletal.GetTopologyGeneration(object->GetId()) == 1,
+                "BC-11 zero-step preserves queued break");
+            CheckComponent(physics.AdvanceSimulation(PhysicsStepClock::FixedSeconds) == 1 &&
+                skeletal.GetTopologyGeneration(object->GetId()) == 2, "BC-11 target then queued break then step");
+            std::vector<NodePhysicsPose> overrides;
+            CheckComponent(skeletal.CollectPoseOverrides(object->GetId(), e, overrides) && overrides.size() == 2,
+                "BC-11 detached nodes collected");
+            for (const auto& pose : overrides)
+            {
+                DirectX::XMFLOAT4X4 actual, wanted;
+                DirectX::XMStoreFloat4x4(&actual, instance->GetNodeTransforms()[pose.Node]);
+                DirectX::XMStoreFloat4x4(&wanted, pose.ModelPose);
+                CheckComponent(std::memcmp(&actual, &wanted, sizeof(actual)) == 0, "BC-11 writeback survives finalization");
+            }
+            const auto saved = CaptureComponentPose(*instance);
+            CheckComponent(physics.AdvanceSimulation(0.0) == 0 && saved == CaptureComponentPose(*instance),
+                "BC-11 zero-step preserves detached pose and palettes");
+            CheckComponent(physics.GetSimulationStepCount() == total + 1, "BC-11 skeletal shares same world step count");
+        }
+
+        // 임시 GPU 자원보다 먼저 명령을 완료하고 world의 관절·body를 정리한다.
+        context.Flush(true);
+        physics.Clear();
+        CheckComponent(physics.GetReservedBodyCount() == 0, "BC-11 shared world cleanup");
+        CheckAnimatedBreakOrder(context);
+    }
+
     // 같은 초기 상태의 기준 wrapper와 Scene 분리 경로의 전체 출력을 비교한다.
     inline void CheckScenePoseEquivalence(const Scene& source, GraphicsContext& context)
     {
@@ -455,6 +621,7 @@ namespace Viewer
     {
         // 초기 상태가 같은 별도 인스턴스로 시간 진행과 GPU 준비의 무변경을 검사한다.
         CheckScenePoseEquivalence(scene, context);
+        CheckFixedSimulationPoses(scene, context);
 
         // 모델 없는 객체와 삭제된 ID는 최종 pose 전달을 거절해야 한다.
         const ObjectId emptyId = scene.CreateObject("BC-03b empty").GetId();
