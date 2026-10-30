@@ -1,4 +1,4 @@
-상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 `84ecea1f`, BC-06 `f6a14195`, BC-07 구현·검증 완료(미커밋), BC-08a 이후 미착수 (2026-10-29)
+﻿상태: 진행 중 — BC-07 `8dc58b08` 이후 BC-08a-1/2·BC-08b 미커밋 변경 분류·재검증 완료, BC-10 초안은 분리 표시 (2026-10-30)
 
 # BreakConstraint 진행 기록
 
@@ -90,3 +90,65 @@ BC-06 커밋 칸을 `f6a14195`로 채웠다. `SkeletalPhysicsSystem`은 `Physics
 BC-07만 끝내고 중단한다. BC-08a 이후 미착수이며 git commit/merge/stash/reset/checkout·파일 삭제·junction 변경·.mini 수동 편집·BreakConstraintReport.md 편집은 하지 않았다.
 
 독립 리뷰 낮음 지적 수정: 한 줄 두 문장 주석 분리(PhysicsSystem.h `GetSkeletalPhysics`, SkeletalPhysicsSystem.h 클래스·`Unregister`·`Clear`·`DiagFailRegistrationStep`)와 SkeletalPhysicsSystem.cpp `Clear`·`GetRigGeneration`·`GetBodyHandle`·`GetConstraintHandle` 본문 단락 주석 추가. PhysicsSystem 경유 해제(`RemoveTarget`·`Clear`)는 Scene 의존으로 CPU 시험에 없으며 BC-12b/BC-13a 수명 회귀에서 실제 경로를 확인한다.
+
+### BC-08a-1 완료·미커밋 (2026-10-29, `8dc58b08` 기준)
+
+| 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-08a-1 | 미커밋 | MiniEngine/ModelViewer/Scene/SkeletalPhysicsFrames.h（신규）, tests/SkeletalFrameTests.cpp（신규）; ModelViewer.vcxproj, ModelViewer.vcxproj.filters; MiniEngine/Physics/CMakeLists.txt; Tools/BuildJolt.ps1; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/Current/CodeMap.md; Docs/README.md | 직접 cl CPU Debug 706/706 PASS 0.89초·Release 706/706 PASS 1.27초, 경고0·종료0; 전체 Debug 최종4.88초·Release 최종3.70초 PASS, 경고0·오류0·종료0(최초12.61/38.95초, Release 기존 C4819 19개), /restore 없음; CTest·viewer 미실행(런타임 미연결) | 자기 리뷰 affine exact 비교 문제1건 수정; 독립 리뷰 P3 1건 수정·재검증·재리뷰 잔여0건 |
+
+BC-07은 `8dc58b08`로 커밋 완료된 상태를 확인했다. BC-08a를 순수 좌표 수학과 rig 적용으로 나누었다. 이번 helper는 `E*Gnode`의 uniform scale 분리, 월드 m 단위 body offset의 정·역변환만 수행한다. Xbot s=0.0177327·회전 offset·임의 E·30종 회전/배율의 행렬 전체 왕복, 전단·반사·비균일·퇴화·비affine·NaN/inf 거절·1e30/1e-30/denorm_min 양수 uniform 허용과 실패 출력 보존을 확인했다. COM 보정/속도·등록 s 저장·scale 변경 거절·MoveKinematic·Dynamic 보존·section E 동일성/Nmesh 영향은 BC-08a-2 이후 연결 단계에 남아 있다.
+
+산출물·로그는 `$env:TEMP/BreakConstraintTests`의 `SkeletalFrameTestsDebug.exe`, `SkeletalFrameTestsRelease.exe`, `BC08a1-Debug-CPU.log`, `BC08a1-Release-CPU.log`, `BC08a1-Debug-build.log`, `BC08a1-Release-build.log`다. 새 시험은 Jolt/GPU 없이 실행한다. 코드·시험·프로젝트/target 등록은 신규 파일 포함 267줄 추가·1줄 삭제(합계 268줄)다. BC-08a-2 이후 구현, git 쓰기 명령, junction 변경, 기존 .mini·미추적 Report 수동 변경은 하지 않았다.
+
+2026-10-30 새 실행 재검증(BC-08a-1): 변경 분류는 루트 `bc08-split.txt`의 BC-08a/MIXED에 기록했다. 이 단계 파일은 SkeletalPhysicsFrames.h, tests/SkeletalFrameTests.cpp, ModelViewer.vcxproj/.filters의 새 등록, Physics/CMakeLists.txt의 FrameTests target, Tools/BuildJolt.ps1의 testTargets, Docs의 08a-1 설명이다. Report는 범위 밖이므로 기존 위 표의 파일 목록에서 제외했다. CPU Debug 706/706 PASS 2.98초, Release 706/706 PASS 3.12초, 경고0·종료0이다. 전체 빌드와 비물리 실행은 아래 08b의 공통 재검증 결과를 공유한다. 이번 실행에서 수정한 저장소 파일은 이 Progress와 bc08-split.txt뿐이며 코드는 수정하지 않았다.
+### BC-08a-2 완료·미커밋 (2026-10-29, `8dc58b08` 기준)
+
+| 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-08a-2 | 미커밋 | MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.h/.cpp, tests/SkeletalBreakTests.cpp; MiniEngine/Physics/PhysicsWorld.h, PhysicsWorldBodies.cpp, PhysicsWorldStep.cpp, CMakeLists.txt; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/Current/CodeMap.md; Docs/README.md | 직접 cl CPU Debug103/103 PASS19.84초·Release103/103 PASS22.59초, 경고0·종료0; 전체 Debug68.01초 PASS·오류0·C4819 20개; Release47.67초 PASS·오류0·C4819 20개·두 구성 종료0; CTest·viewer 미실행(프레임 연결 전) | 독립 읽기 전용 Codex 리뷰의 누적 scale 허용오차 1건 반영, 등록 s 고정 유지·추가 회귀 통과, 최신 source 대조 잔여0건 |
+
+RegisterFromPose는 E와 node pose에서 각 body의 강체 frame·등록 s를 계산한다. Rig는 자산·부모·목표·등록 E 배율을 소유한다. UpdateKinematicTargets는 모든 입력과 body motion·CanMoveKinematic 검증을 마친 뒤 Kinematic만 움직이며 Dynamic pose·속도는 보존한다. 각 목표에는 다음 body 원점 frame, 등록 s, Jolt가 구한 COM 선속도·월드 각속도를 보관한다. 등록 s와 E 배율은 갱신하지 않아 허용오차 누적을 막는다.
+
+새 CPU 검사는 실제 COM offset shape 회전 뒤 원점 목표 도달·COM 속도 차이, 초기 속도0·월드 m offset, 잘못된 마지막 목표·제거된 마지막 body의 선거절과 앞 body 속도 보존, owner scale·극소 dt·누적 scale 변경 거절, Dynamic pose/속도 불변을 확인한다. 코드·시험 변경은 227줄 추가·4줄 삭제(231줄), CMake 등록은 Core include1줄 추가다. 로그와 명령은 `$env:TEMP/BreakConstraintTests/BC08a2-{Debug,Release}-{CPU,build}.log`, `BC08a2-verify.ps1` 및 시험 머리말에 있다. section E 동일성·Nmesh 의존은 Scene 연결 단계, 본 writeback은 BC-08b에서 처리한다.
+
+사용자의 M1 끝까지 Codex 단독 진행 지시를 구현 인계 1절에 반영했다. 기존 BC-08a-1 변경·.mini 3개·Report는 보존했고 커밋·병합·junction 변경은 하지 않았다. 상위는 검증 결과를 확인한 후 다음 새 Codex 실행으로 이어간다.
+
+2026-10-30 새 실행 재검증(BC-08a-2): SkeletalPhysicsSystem.h/.cpp의 Register 메타데이터·RegisterFromPose·UpdateKinematicTargets·GetBodyTarget·Rig 저장 필드, SkeletalBreakTests.cpp의 CheckPoseTargets 및 호출, PhysicsWorld.h의 CanMoveKinematic/GetBodyMotion, PhysicsWorldBodies.cpp/.Step.cpp 구현, Physics/CMakeLists.txt의 Core include와 Docs의 08a-2 기록으로 분류했다. 같은 hunk의 08b 함수와 BC-10 선언은 bc08-split.txt에서 함수/선언 경계로 구분했다. 합쳐진 SkeletalBreakTests CPU Debug 227/227 PASS 32.71초·Release 227/227 PASS 39.25초(08a-2와08b 포함), PhysicsBodyTests 362/362 PASS 31.48/20.84초, PhysicsConstraintTests 286/286 PASS 28.92/27.54초, 모두 컴파일 경고0·종료0이다. 08a-2만 분리한 103건 시험은 다시 만들지 않았고 현재 전체 227건을 재검증했다. 전체 빌드·실행 결과는 아래 공통 기록을 공유한다.
+### BC-08b 완료·미커밋 (2026-10-29, `8dc58b08` 기준)
+
+| 단계 | 커밋 | 바뀐 파일 목록 | CPU 테스트·전체 빌드·실행 | 리뷰 |
+| --- | --- | --- | --- | --- |
+| BC-08b | 미커밋 | MiniEngine/ModelViewer/Scene/SkeletalPhysicsSystem.h/.cpp, tests/SkeletalBreakTests.cpp; Docs/Physics/BreakConstraintImplementation.md, BreakConstraintProgress.md; Docs/Current/CodeMap.md; Docs/README.md | 직접 cl CPU Debug227/227 PASS29.38초·Release227/227 PASS28.24초, 경고0·종료0; 전체 Debug67.80초·Release70.70초 PASS·오류0·각 C4819 21개·종료0, /restore 없음; CTest·viewer 미실행(프레임 연결 전) | 독립 읽기 전용 Codex 리뷰 지적0건; git diff --check PASS |
+
+CollectPoseOverrides는 모든 body handle과 운동 방식을 검증하고 Dynamic body만 world 원점 pose에서 등록 s·body offset을 복원한 NodePhysicsPose 배열로 수집한다. E 이동·회전은 허용하되 등록 E 배율은 유지하며 실패하면 기존 출력 배열을 보존한다. Kinematic 본은 기존 애니메이션 경로에 남는다. 기존 EvaluatePoseOverrides·ModelInstance::FinalizePose의 부모 우선 평가와 전체 palette 갱신은 변경하지 않았다.
+
+CPU 시험은 실제 Dynamic 두 body와 4-node graph로 owner 이동·회전 상쇄, 부모 애니메이션 유지, body 없는 tip의 local 애니메이션 상속, Xbot 등록 s 복원, 마지막 stale body·무효 E의 출력 보존을 확인한다. 로그와 재현 명령은 `$env:TEMP/BreakConstraintTests/BC08b-{Debug,Release}-{CPU,build}.log`, `BC08b-verify.ps1` 및 시험 머리말이다. 새 source/target 등록은 없으며 기존 .mini·Report·선행 변경과 junction을 보존하고 커밋·병합하지 않았다. BC-10 새 실행으로 계속 인계한다.
+
+2026-10-30 새 실행 재검증(BC-08b): SkeletalPhysicsSystem.h의 SkeletonPose include·CollectPoseOverrides 선언, .cpp의 CollectPoseOverrides, tests/SkeletalBreakTests.cpp의 CheckPoseMatrix·CheckPoseWriteback·호출 및 Docs의 08b 기록으로 분류했다. 합쳐진 CPU Debug/Release 각각227/227 PASS(32.71/39.25초), 경고0·종료0이다. 이번 실행은 분류를 위한 별도 diff 자기 검토를 했으며 BC-10 혼입(PhysicsWorldBreak.cpp 전체, PhysicsWorld.h와 SkeletalPhysicsSystem.h의 break 관련 선언)을 식별했다. 기존 08a-1 표에 들어간 범위 밖 Report 파일명 1건만 이 문서에서 정정했다. 새 독립 코드 리뷰는 수행하지 않았으며 기존 독립 리뷰 기록은 위에 보존한다.
+
+공통 빌드·실행 재검증: worktree 루트에서 msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Debug /p:Platform=Windows 및 Release, /restore 없이 실행했다. 최초 Debug는 C1041(컴파일러 vc143.pdb 열기 실패) 9개로 15.03초/종료1, Release는 그 최초 스크립트에서 미실행이다. 소스·프로젝트 변경 없이 자식 프로세스 환경 _CL_=/Z7로 재시도하여 Debug 증분8.53초·경고0/오류0, Release109.88초·기존 C4819 경고22개/오류0, 두 구성 종료0으로 통과했다. 이는 clean rebuild가 아니며 BC-10 초안 cpp는 CMake/vcxproj에 미등록이라 이 빌드와 CPU 검사의 검증 대상이 아니다.
+
+비물리 기존 진단: MiniEngine/ModelViewer에서 각 구성 exe에 -debug 1 -physics-sim 0 -component-checks 1 -physics-query-exit 6을 전달하고 Start-Process -WindowStyle Hidden -Wait로 종료를 기다렸다. Debug16.81초·Release 최종10.54초, 모두 종료0·새 MeshComponentChecks.log의 PASS GPU preparation 확인. 최초 Release 진단은 로그가 비어 스크립트 판정 실패였고, 직후 새 명령 생성도 디스크 공간 부족(os error112)으로 실패했다. 이번 실행이 TEMP에 만든 테스트 .obj 12개만 정리한 뒤 Release를 재실행하여 통과했다. 기존 소스·junction·모델·Report는 삭제/수정하지 않았다. .mini 3개와 Report의 SHA-256은 viewer 전후 모두 동일하다. DirectX debug layer 사용, GPU 기반 검증·GPU/driver 재측정·CTest 전체·새 skeletal viewer 진단은 미수행이다. BC-11 Scene 연결과 section E/Nmesh 검증, BC-10 구현은 이번 범위 밖으로 남긴다.
+
+산출물·로그: $env:TEMP/BreakConstraintTests/BC08-recheck-{SkeletalFrameTests,SkeletalBreakTests,PhysicsBodyTests,PhysicsConstraintTests}-{Debug,Release}.log, BC08-recheck-Debug-build.log(최초 실패), BC08-recheck-{Debug,Release}-build-Z7.log(최종 성공), BC08-recheck-{Debug,Release}-component-checks.log(최종 성공), BC08-recheck.ps1 및 build-Z7/viewer-release 재시도 스크립트. git diff --check PASS를 확인하며 git add/commit/stash/merge/push는 하지 않는다. 이번 재검증/분류는 미커밋이다.
+
+### BC-08a·BC-08b 격리 로그 최종 재검증 (2026-10-30, HEAD `8dc58b08`)
+
+공유 TEMP 스크립트·로그가 실행 도중 변경되고 Release 로그 열기가 파일 경합으로 실패하여, 아래 최종 검증은 고유 경로 `$env:TEMP/BreakConstraintTests/BC08-root-1203`에서 따로 수행했다. 앞의 공유 로그 기록은 보존하며 아래 수치는 고유 경로 결과만 사용한다. 소스 수정·git add/commit/stash/merge/push 없이 Progress와 루트 `bc08-split.txt`만 갱신했다.
+
+| 단계 | 변경 파일 분류 | 최종 CPU Debug / Release | 전체 빌드·물리 OFF 진단 |
+| --- | --- | --- | --- |
+| BC-08a-1 | Scene/SkeletalPhysicsFrames.h, tests/SkeletalFrameTests.cpp; ModelViewer.vcxproj/.filters; Physics/CMakeLists.txt; Tools/BuildJolt.ps1; Docs의 08a 설명 (모든 경로는 bc08-split.txt 참고) | SkeletalFrameTests 706/706 두 구성 PASS, 2.77 / 5.34초 | 아래 공통 최종 결과 공유 |
+| BC-08a-2 | Scene/SkeletalPhysicsSystem.h/.cpp의 등록·목표·저장 필드; tests/SkeletalBreakTests.cpp의 CheckPoseTargets; PhysicsWorld.h의 CanMoveKinematic/GetBodyMotion, PhysicsWorldBodies.cpp, PhysicsWorldStep.cpp; CMake Core include; Docs의 08a-2 설명 | 통합 SkeletalBreakTests 227/227 두 구성 PASS, 27.34 / 43.59초 (08b 포함; 08a만의 103건 분리 재구성은 안 함) | 아래 공통 최종 결과 공유 |
+| BC-08b | Scene/SkeletalPhysicsSystem.h/.cpp의 SkeletonPose include·CollectPoseOverrides; tests/SkeletalBreakTests.cpp의 CheckPoseMatrix/CheckPoseWriteback 및 호출; Docs의 08b 설명 | 통합 SkeletalBreakTests 227/227 두 구성 PASS, 27.34 / 43.59초 | 아래 공통 최종 결과 공유 |
+
+공통 Physics CPU 최종 결과: PhysicsBodyTests 362건 PASS(31.97 / 13.33초), PhysicsConstraintTests 286/286 PASS(27.99 / 10.26초), PhysicsStepTests 427건 PASS(19.02 / 10.23초). 모든 최종 CPU 컴파일 경고0·종료0이다. 산출물은 고유 경로의 테스트별 하위 폴더, 로그는 `{테스트명}-{Debug,Release}.log`, 측정 결과는 `results.txt`에 있다. 재현 스크립트는 TEMP/BreakConstraintTests/BC08-root-1203.ps1과 BC08-root-1203-retry.ps1이다.
+
+전체 ModelViewer msbuild는 지정 solution·Windows 플랫폼으로 /restore 없이 Debug 9.41초, Release 4.20초에 최종 증분 빌드 PASS했다. 모두 경고0·오류0·종료0이며 clean rebuild는 아니다. 고유 경로의 `build-Debug.log`, `build-Release.log`에 기록했다. 첫 공유 로그 실행의 Debug 빌드도 102.67초·기존 C4819 21개·오류0으로 통과했지만 최종 수치는 격리 재검증을 사용한다.
+
+물리 OFF 기존 진단은 두 구성 모두 `-debug 1 -physics-sim 0`으로 실행했다. `-component-checks 1 -physics-query-exit 6`: Debug 17.33초 / Release 7.48초, `PASS GPU preparation`. `-xbot-arm-checks 1 -physics-query-exit 6`: Debug 31.05초 / Release 9.28초, `BC-03a PASS`·`BC-00 PASS` 모두 확인했다. 네 실행 모두 종료0이며 시작 뒤 새 로그 갱신을 확인했다. Start-Process -WindowStyle Hidden -Wait 사용, 실행 폴더는 MiniEngine/ModelViewer다. 로그 사본은 고유 경로의 `viewer-{Debug,Release}-{MeshComponentChecks,XbotArmChecks}.log`, 측정은 `results-viewer.txt`다. DirectX debug layer 사용, adapter/driver 재측정·CTest 전체·새 skeletal break 화면 진단은 미수행이다.
+
+환경 실패도 남긴다: 공유 로그 경합으로 첫 Release CPU 명령의 로그 열기가 실패했다. 격리 재검증의 첫 Release SkeletalBreakTests 컴파일도 C1085(No space left on device)로 28.58초·종료1이었다. 이번 검증에서 생성한 TEMP 하위 객체 파일만 정리하고 Release 5종과 전체 빌드를 재실행하여 위 최종 결과를 얻었다. 소스·프로젝트 설정·junction은 바꾸지 않았다. `.mini` 3개와 Report의 SHA-256은 모든 viewer 실행 전후 동일하다.
+
+분류용 diff 자기 검토로 BC-10 혼입을 확인했으며 코드 수정과 새 독립 리뷰는 하지 않았다. BC-10은 PhysicsWorldBreak.cpp 전체와 PhysicsWorld.h·SkeletalPhysicsSystem.h의 break 자료형·선언·TopologyGeneration으로 분리 표시했다. 해당 cpp는 현재 CMake/vcxproj 미등록이므로 위 빌드·시험이 BC-10의 성공 증거는 아니다. BC-11 Scene 연결·section E/Nmesh 검증도 범위 밖이다. 커밋은 하지 않았고 BC-08a/08b hunk 분리는 `bc08-split.txt`에 정리했다.

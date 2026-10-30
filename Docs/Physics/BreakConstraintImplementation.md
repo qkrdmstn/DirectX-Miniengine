@@ -1,10 +1,10 @@
-상태: 진행 중 — BC-04a `8593a0be`, BC-04b `d31863a7`, BC-05 `84ecea1f`, BC-06 `f6a14195`, BC-07 구현·검증 완료(미커밋), BC-08a 이후 미착수 (2026-10-29)
+﻿상태: 진행 중 — BC-07 `8dc58b08` 이후 BC-08a-1/2·BC-08b 구현·검증 완료(미커밋), M1까지 Codex 단독 계속 진행 (2026-10-29)
 
 # BreakConstraint 구현 인계
 
 ## 1. 시작점과 완료 범위
 
-구현자는 BC-00 한 단계부터 시작한다. 약 300줄의 한 개념 변경 → 검증 → 문서 상태 갱신 → 사용자 검토·커밋을 위한 중단 순서를 지킨다. 전체를 한 번에 구현하지 않는다. Static 공통 기반(body prepare/commit, 고정 step, CutTransaction)은 `5f56b93d`까지 커밋됐다. 코드 작성 세션이 겹치면 시작하지 말고 사용자에게 인계 상태를 알린다.
+2026-10-29 사용자가 Claude 호출 없이 Codex만으로 M1(BC-13a) 끝까지 계속 진행하도록 명시했다. 약 300줄의 한 개념 변경 → 검증 → 독립 리뷰 → 문서 기록을 단계별로 유지하되 승인 대기 중단 없이 다음 새 Codex 실행으로 이어간다. 커밋·병합은 하지 않는다. Static 공통 기반(body prepare/commit, 고정 step, CutTransaction)은 `5f56b93d`까지 커밋됐다. 코드 작성 세션이 겹치면 시작하지 말고 사용자에게 인계 상태를 알린다.
 
 필요한 문서만 읽는다: [조사 근거](BreakConstraintDesign.md) 2절, [Scene](../Current/Scene.md) 소유권/변환 절, [Static 계획](StaticPiecePhysics.md) F의 공통 물리 선행 단계. GPU 연결을 시작할 때만 [GPU 설계](../GPU/GPUCuttingSystemDesign.md) 12~13절을 추가한다.
 
@@ -226,9 +226,10 @@ snapshot key는 ObjectId+MeshId+GeometryRevision+Geometry/EditGeneration+RigGene
 | BC-05 | 공통 body Kinematic·Dynamic·impulse API/시험 | 완료 `84ecea1f`: CPU 362/362 두 구성, Debug/Release 빌드·비물리 컴포넌트 PASS / 04b | B=40.82+136.18초, CPU=7.63+10.26초 |
 | BC-06a | constraint 수명/enable/motor API + 명시적 인접 pair 필터·body 정리 연결 (BC-06 API 부분) | 완료 `f6a14195`: 3 body·2 joints 생성/삭제, Kinematic disable / 05 | API 약 280줄 |
 | BC-06b | PhysicsConstraintTests·기존 body 회귀·빌드·자기 리뷰 (BC-06 검증 부분) | 완료 `f6a14195`: CPU 관절200/200·body362/362 두 구성, Debug/Release 빌드·비물리 진단 PASS / 06a | B=129.26+138.98초 |
-| BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 구현 완료(미커밋): CPU 64/64 두 구성, 주입 실패 7단계·용량 실패 역정리·해제/Clear/소멸 뒤 body·관절·pair·예약 0, Debug/Release 빌드·비물리 진단 PASS / 04~06 | B=52.13+43.36초, CPU=17.76+19.18초 |
-| BC-08a | rig frame·scale 분리·Kinematic target/속도 | body offset/COM 왕복, uniform scale 왕복, 비균일/shear 거절 / 07 | R+B+T |
-| BC-08b | physics pose→node→palette 반영 | parent 이동 상쇄·tip 상속·scale 복원 / 03b,08a | R+B+T |
+| BC-07 | SkeletalPhysicsSystem 등록/해제(PhysicsSystem 멤버) | 완료 `8dc58b08`: CPU 64/64 두 구성, 주입 실패 7단계·용량 실패 역정리·해제/Clear/소멸 뒤 body·관절·pair·예약 0, Debug/Release 빌드·비물리 진단 PASS / 04~06 | B=52.13+43.36초, CPU=17.76+19.18초 |
+| BC-08a-1 | 순수 rig frame·uniform scale 변환 helper·CPU 시험 | 완료(미커밋): CPU 두 구성 706/706, Debug/Release 빌드 PASS / 07 | R+B+CPU |
+| BC-08a-2 | 등록 scale 저장·frame 검증 적용·Kinematic target/COM 속도 | 완료(미커밋): CPU 두 구성 103/103·전체 Debug/Release PASS, COM offset 원점 도달·Dynamic 보존·등록 s 변경/누적드리프트 거절 / 08a-1 | R+B+T |
+| BC-08b | physics pose→node override 수집·기존 palette 경로 연결 준비 | CPU 두 구성227/227 PASS, parent 이동/회전 상쇄·tip local 상속·등록 s 복원·실패 출력 보존, 전체 Debug/Release 빌드 PASS / 03b,08a-2 | R+B+T |
 | BC-10 | 동기 BreakConstraint(검증+commit) | body수3 유지·unbroken 2→1·손목 유지·impulse 1회·AlreadyBroken 무추가 / 08b | R+B+T |
 | BC-11 | 공통 fixed step 연결(9절 순서로 프레임 재배치) | 전체 world step 횟수 일치·GPU 준비1회·비물리 모드 동등 / 10 | R+B+V |
 | BC-12a | fixture 진단 옵션·GizmoDraw overlay | 3 body/본/anchor 시각화·정지/분리 재현 / 11 | R+B+V |
@@ -348,3 +349,33 @@ Scene::EvaluateAnimations→FinalizePoses→PrepareMeshes로 분리했다. Final
 병합된 master의 ModelViewer::m_UsePhysicsSim 기본값은 1이다. 기존 계약의 비물리 회귀 명령은 반드시 -physics-sim 0을 명시한다. default 값을 변경하지 않는다. 처음 -component-checks 실행은 이를 빠뜨려 준비 이후 추가된 바닥의 메시 수가 기존 Two components per owner 조건과 달라 실패했다. 영속 MeshComponentChecks.log를 추가해 원인을 확인했다. 물리를 명시적으로 끈 재실행은 Debug 4.67초와 Release 4.66초/종료 코드0, PASS GPU preparation이다. Scene 분리 단계·owner override·무효 pose readiness·삭제 ID 검사를 포함한다.
 
 Debug 전체 빌드 PASS(첫136.80초, 로그 추가 후 최종 빌드도 종료0), Release 재실행 PASS(177.00초). 최초 Release 로그 경합은 명령이 실행되지 않았으므로 성공으로 계산하지 않았다. CPU SkeletonPose32/32·SceneMath495 checks 재실행 PASS. 별도 새 Codex 리뷰는 Scene·추가 진단 모두 지적0건. 진단의 반복 GPU 준비와 상세 flush는 옵션 실행에만 적용되며 프레임 성능 측정에는 사용하지 않는다. UI 도구로 찾을 오류 창은 없었으며 Windows ACL이나 앱 설정은 변경하지 않았다.
+
+### BC-08a 분할과 frame helper (2026-10-29, `8dc58b08` 기준)
+
+한 단계 약 300줄을 지키기 위해 BC-08a를 순수 좌표 수학(08a-1)과 rig 적용·Kinematic 구동(08a-2)으로 나눈다. 이번 실행은 08a-1만 구현한다. `SkeletalPhysicsFrames.h`의 `TrySplitUniformFrame`은 `E*Gnode`의 양수 uniform scale을 분리하고, `TryBuildBodyFrame`은 배율을 제거한 강체 본에 월드 m 단위 `BoneFromBody`를 곱한다. `TryRestoreNodePose`는 offset을 제거하고 저장 scale을 곱해 model 좌표로 왕복하는 순수 함수다. rig나 node/palette를 직접 변경하지 않는다. 모든 실패는 출력 frame·scale·행렬을 보존한다.
+
+축 길이 최대·최소 차이는 최대 길이의 1e-4 이하, 정규화 축 내적은 1e-5 이하, 오른손 determinant는 0.99999 이상을 요구한다. affine 마지막 행은 역행렬 반올림을 고려해 각 성분 1e-6 오차까지 허용한다. 모든 성분 finite와 양수·유한 축 길이를 검사해 반사·퇴화·전단·비균일·원근을 거절한다. 중립 frame의 회전 제곱 길이 오차는 자산 계약과 같은 1e-4이며 float로 변환할 수 없는 위치는 거절한다.
+
+이 helper는 입력 E를 받는다. skinned section 사이 E 동일성과 Nmesh의 물리 override 영향은 Scene 연결 단계에서 검사한다. 등록 s 저장·등록 후 배율 변경 거절은 BC-08a-2에서 적용했다. COM offset과 속도는 PhysicsWorld/MoveKinematic 책임이며 이번 순수 좌표 시험의 body-origin offset과 구분한다. BC-08b 이후 런타임 연결은 미착수다.
+
+### BC-08a-2 등록 pose·Kinematic 목표 (2026-10-29, `8dc58b08` 기준)
+
+`SkeletalPhysicsSystem::RegisterFromPose`는 E·NodeId별 pose에서 `TryBuildBodyFrame`을 호출하고 등록한 E 배율과 body별 s를 저장한다. 기존 `Register`는 초기 body frame 입력과 s=1을 유지하며 자산·부모·목표 메타데이터를 함께 저장한다. `UpdateKinematicTargets`는 전체 frame·배율·운동 방식·handle과 `CanMoveKinematic`의 속도 범위를 선검증한 다음 Kinematic만 구동한다. Dynamic은 pose/속도를 읽을 뿐 변경하지 않는다. 허용오차가 누적되지 않도록 등록한 s는 갱신하지 않는다. `GetBodyTarget`으로 다음 body 원점 pose·COM 선속도·월드 각속도·등록 s를 읽는다.
+
+공통 `PhysicsWorld::CanMoveKinematic`은 기존 MoveKinematic의 거절 조건을 읽기 전용으로 분리하여 여러 목표를 함께 검증한다. MoveKinematic 자체도 같은 검사를 재사용한다. `GetBodyMotion`은 world에 올라간 body의 중립 운동 방식만 반환하며 Jolt 타입은 노출하지 않는다. 이 API들은 같은 scene 스레드·Step 밖에서 호출한다.
+
+직접 CPU 시험은 `SkeletalBreakTests.cpp` 머리말 명령에 Core include를 추가한다. 초기 scale/offset/속도0, offset COM shape 회전 시 원점 목표 도달·COM 속도 차이, 무효 마지막 목표·배율·극소 dt·제거된 마지막 handle의 전체 거절, Dynamic pose/속도 보존과 scale 허용오차 누적 방지를 검사한다. 두 구성 각각 103/103 PASS, CPU 컴파일 경고0. 본 writeback 수집은 BC-08b에서 추가하며 Scene E 동일성·Nmesh 의존 검증은 후속 연결 단계다.
+
+검증: 직접 cl CPU Debug 706/706 PASS(0.89초), Release /O2 /DNDEBUG 706/706 PASS(1.27초), 컴파일 경고0·종료0. 30종 E 회전/배율 확장 시험에서 발견한 affine 마지막 행 exact 비교 문제를 1e-6 오차 검사로 수정했다. ModelViewer Debug/Release 전체 빌드(/restore 없음)는 최초12.61/38.95초·종료0·오류0이다. 최초 Release의 기존 C4819 19개 이후 최종 증분 빌드도4.88/3.70초·각 경고0·오류0·종료0으로 통과했다. 새 helper의 런타임 호출은 없어 viewer/화면·COM 속도 검사는 수행하지 않았다. CMake/BuildJolt 테스트 등록은 완료했고 CTest 경로 실행은 미수행이다. 별도 독립 리뷰 결과는 Progress에 기록한다.
+
+독립 리뷰 반영: float 길이 제곱 계산이 1e30 배율을 overflow로 거절해 불필요한 범위 제한이 생겼다. 축 길이와 정규화를 double로 계산하고 float로 표현 가능한 양수 길이만 저장하도록 수정했다. 1e30·1e-30·denorm_min의 양수 uniform split 허용을 CPU 두 구성에서 확인했다. offset과 월드 body 생성의 별도 물리 한계는 기존 PhysicsWorld가 검사한다.
+
+BC-08a-2 최종 검증: CPU Debug/Release 각각103/103 PASS(19.84/22.59초), 경고0·종료0. 전체 ModelViewer Debug68.01초·Release47.67초, /restore없이 빌드 PASS·오류0·각 C4819 20개·종료0. 기존 SkeletonPose/SkeletalPhysicsAsset 및 새 호출로 포함된 BC-08a-1 helper의 코드페이지 경고이며 CPU /utf-8 컴파일은 경고0이다. 독립 Codex 읽기 전용 리뷰에서 등록 s의 누적 허용오차를 지적했고 등록 s 불변·누적거절 시험으로 수정하여 최종 대조 잔여0건이다. CTest·viewer는 프레임 연결 전이라 미실행. 로그는 TEMP/BreakConstraintTests/BC08a2-{Debug,Release}-{CPU,build}.log다.
+
+### BC-08b 물리 본 override 수집 (2026-10-29, `8dc58b08` 기준)
+
+`SkeletalPhysicsSystem::CollectPoseOverrides(owner, E, output)`는 등록 당시 E 배율과 대조한 뒤 모든 body handle·운동 방식을 검사한다. Dynamic body만 현재 원점 world pose를 읽어 등록 s와 `BoneFromBody`를 복원한 `NodePhysicsPose`로 변환한다. Kinematic 본은 override하지 않으며 전부 Kinematic이면 빈 배열로 성공한다. owner 이동·회전은 허용하고 변경된 scale·무효 frame·stale body는 출력 배열을 보존한 채 거절한다.
+
+출력은 기존 `ModelInstance::FinalizePose`/`Scene::FinalizeObjectPose`에 전달할 수 있다. 부모 우선 `EvaluatePoseOverrides`와 전체 palette 갱신 구현은 변경하지 않는다. 이 단계 CPU는 실제 Jolt Dynamic body 두 개와 4-node graph를 이용해 owner 이동·회전 상쇄, root local 애니메이션 유지, body 없는 tip의 local 애니메이션 상속, Xbot 배율 복원, 마지막 stale body·무효 E의 출력 보존을 검사한다. 중복 palette 실제 ModelInstance 회귀는 BC-03a의 기존 검사와 후속 viewer 진단을 사용한다. fixed-step Scene 호출 연결과 section E/Nmesh 검증은 BC-11이다.
+
+BC-08b 검증: CPU Debug/Release 각각227/227 PASS(29.38/28.24초), 컴파일 경고0·종료0. 전체 ModelViewer Debug67.80초·Release70.70초, /restore없이 두 구성 PASS·오류0·각 C4819 21개·종료0. 기존 헤더의 코드페이지 경고이며 CPU /utf-8 컴파일은 경고0이다. 독립 Codex 읽기 전용 리뷰 지적0건, git diff --check PASS. CTest·viewer는 fixed-step 연결 전이라 미실행. 로그는 TEMP/BreakConstraintTests/BC08b-{Debug,Release}-{CPU,build}.log다.

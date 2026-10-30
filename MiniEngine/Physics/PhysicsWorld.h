@@ -47,6 +47,26 @@ namespace MiniPhysics
     // Static은 고정 지형 계층, Dynamic과 Kinematic은 simulation 계층에 들어간다.
     enum class BodyMotion { Static, Dynamic, Kinematic };
 
+    // Kinematic body를 동기화할 목표이며 이미 Dynamic이면 실제 pose와 속도를 유지한다.
+    struct BodyActivation
+    {
+        BodyHandle Body = InvalidBody;
+        SkeletalRigidFrame Target;
+        std::array<double, 3> Linear{}, Angular{};
+    };
+
+    // 하나의 연결 관절을 제거하고 분리 body 묶음을 물리로 전환하는 동기 요청이다.
+    struct ConstraintBreakDesc
+    {
+        ConstraintHandle Remove = InvalidConstraint;
+        std::vector<BodyActivation> Bodies;
+        std::vector<ConstraintHandle> Enable;
+        BodyHandle ImpulseBody = InvalidBody;
+        std::array<double, 3> Impulse{}, Point{};
+    };
+
+    enum class ConstraintBreakStatus { Applied, InvalidInput, NotReady, UnsupportedPose, UnsupportedTopology };
+
     // body 생성 요청이다. Geometry의 hull 정점은 컴포넌트 로컬 좌표(에셋 단위)이며 Scale이 정점에 곱해진다.
     // body pose는 Position/Rotation(xyzw 쿼터니언)만 담고 scale은 담지 않는다. Geometry는 PrepareBody 호출 중에만 참조한다.
     struct BodyDesc
@@ -136,6 +156,10 @@ namespace MiniPhysics
         bool SetBodyTransform(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation);
         // 등록된 Kinematic body의 원점 목표에 fixedDt 동안 도달할 COM 속도를 설정한다.
         bool MoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt);
+        // 여러 body 목표를 함께 적용하기 전에 MoveKinematic의 거절 조건을 변경 없이 검사한다.
+        bool CanMoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt) const;
+        // world에 올라간 body의 운동 방식을 읽으며 실패하면 출력을 보존한다.
+        bool GetBodyMotion(BodyHandle handle, BodyMotion& motion) const;
         // 등록된 비정적 body를 전환하며 handle·pose·속도를 보존하고 Dynamic endpoint가 없어진 관절은 끈다.
         bool SetBodyMotion(BodyHandle handle, BodyMotion motion);
         // 등록된 비정적 body의 COM 선속도와 월드 각속도를 Jolt 최대 속도로 제한해 설정한다.
@@ -157,6 +181,8 @@ namespace MiniPhysics
         bool SetConstraintEnabled(ConstraintHandle handle, bool enabled);
         // swing과 twist 모터를 모두 Off로 만든다.
         bool SetConstraintMotorsOff(ConstraintHandle handle);
+        // 모든 handle·목표·관절·impulse를 선검증하고 성공할 때만 관절 제거와 Dynamic 전환을 함께 적용한다.
+        ConstraintBreakStatus ApplyConstraintBreak(const ConstraintBreakDesc& desc);
         // 무효 handle이면 출력을 보존한다.
         bool GetConstraintState(ConstraintHandle handle, ConstraintState& state) const;
         // 논리 관절 수를 반환하며 disabled 관절도 포함한다.

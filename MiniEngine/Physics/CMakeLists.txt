@@ -109,5 +109,12 @@ add_test(NAME PhysicsConstraintTests COMMAND PhysicsConstraintTests)
 set(VIEWER_SCENE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ModelViewer/Scene")
 add_executable(SkeletalBreakTests "${VIEWER_SCENE_DIR}/tests/SkeletalBreakTests.cpp" "${VIEWER_SCENE_DIR}/SkeletalPhysicsSystem.cpp")
 target_link_libraries(SkeletalBreakTests PRIVATE MiniPhysics)
+target_include_directories(SkeletalBreakTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../Core")
 target_compile_options(SkeletalBreakTests PRIVATE /utf-8 /W4)
 add_test(NAME SkeletalBreakTests COMMAND SkeletalBreakTests)
+
+# Scene의 frame 변환은 Math와 중립 자산 자료형만 사용한다.
+add_executable(SkeletalFrameTests "${VIEWER_SCENE_DIR}/tests/SkeletalFrameTests.cpp" "${VIEWER_SCENE_DIR}/SkeletalPhysicsFrames.h")
+target_include_directories(SkeletalFrameTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../Core")
+target_compile_options(SkeletalFrameTests PRIVATE /utf-8 /W4)
+add_test(NAME SkeletalFrameTests COMMAND SkeletalFrameTests)

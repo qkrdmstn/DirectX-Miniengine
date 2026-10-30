@@ -424,8 +424,8 @@ namespace MiniPhysics
         return true;
     }
 
-    // 목표 원점 pose를 다음 고정 step의 COM 속도로 변환한다.
-    bool PhysicsWorld::MoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt)
+    // 목표 원점 pose가 COM 속도로 변환 가능한지 변경 없이 검사한다.
+    bool PhysicsWorld::CanMoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt) const
     {
         // 시간과 pose를 검사한 뒤 등록된 Kinematic body만 찾는다.
         if (!m_Impl || !std::isfinite(fixedDt) || fixedDt <= 0.0f) return false;
@@ -443,7 +443,18 @@ namespace MiniPhysics
         const JPH::RVec3 target{ float(position[0]), float(position[1]), float(position[2]) };
         const JPH::Vec3 delta = JPH::Vec3(target + q * bodies.GetShape(entry->second)->GetCenterOfMass() - bodies.GetCenterOfMassPosition(entry->second));
         if (double(delta.Length()) / fixedDt > 1.0e18 || 4.0 / fixedDt > 1.0e18) return false;
-        bodies.MoveKinematic(entry->second, target, q, fixedDt);
+        return true;
+    }
+
+    // 검증한 목표 원점 pose를 다음 고정 step의 COM 속도로 변환한다.
+    bool PhysicsWorld::MoveKinematic(BodyHandle handle, const std::array<double, 3>& position, const std::array<double, 4>& rotation, float fixedDt)
+    {
+        // 동일한 scene 스레드에서 선검증한 뒤 원점 목표를 적용한다.
+        if (!CanMoveKinematic(handle, position, rotation, fixedDt)) return false;
+        JPH::Quat q;
+        NormalizeRotation(rotation, q);
+        m_Impl->World.GetBodyInterface().MoveKinematic(m_Impl->SimBodies.at(handle),
+            JPH::RVec3(float(position[0]), float(position[1]), float(position[2])), q, fixedDt);
         return true;
     }
 

@@ -3,6 +3,23 @@
 
 namespace MiniPhysics
 {
+    // 올라간 body의 운동 방식을 읽고 Jolt 열거형은 외부로 전달하지 않는다.
+    bool PhysicsWorld::GetBodyMotion(BodyHandle handle, BodyMotion& motion) const
+    {
+        // 존재하며 broadphase에 올라간 body만 읽는다.
+        if (!m_Impl) return false;
+        const auto found = m_Impl->SimBodies.find(handle);
+        if (found == m_Impl->SimBodies.end()) return false;
+        const auto& bodies = m_Impl->World.GetBodyInterface();
+        if (!bodies.IsAdded(found->second)) return false;
+
+        // SDK 운동 방식을 중립 값으로 옮긴다.
+        const auto type = bodies.GetMotionType(found->second);
+        motion = type == JPH::EMotionType::Static ? BodyMotion::Static :
+            type == JPH::EMotionType::Kinematic ? BodyMotion::Kinematic : BodyMotion::Dynamic;
+        return true;
+    }
+
     // 잠긴 동적 body의 역질량을 실제 질량으로 변환한다.
     bool PhysicsWorld::GetBodyMass(BodyHandle handle, double& mass) const
     {

@@ -2,11 +2,35 @@
 
 #include "PickHit.h"
 #include "../../Physics/PhysicsWorld.h"
+#include "../../Model/SkeletonPose.h"
+#include "VectorMath.h"
 #include <map>
 #include <vector>
 
 namespace Viewer
 {
+    // 다음 step의 body 원점 목표와 COM 선속도·월드 각속도를 보관한다.
+    struct SkeletalBodyTarget
+    {
+        MiniPhysics::SkeletalRigidFrame Frame;
+        std::array<double, 3> Linear{}, Angular{};
+        float Scale = 1;
+    };
+
+    struct BreakRequest
+    {
+        ObjectId Owner = InvalidObjectId;
+        uint32_t JointId = MiniPhysics::InvalidSkeletalId;
+        uint64_t ExpectedRigGeneration = 0, ExpectedTopologyGeneration = 0;
+        std::array<float, 3> WorldImpulse{}, WorldPoint{};
+    };
+
+    enum class BreakStatus
+    {
+        Prepared, Applied, NotFound, AlreadyBroken, Stale,
+        UnsupportedTopology, UnsupportedFrame, UnsupportedPose, InvalidInput, NotReady
+    };
+
     // owner별 skeletal rig의 body·관절·인접 pair 수명을 관리한다.
     // world는 PhysicsSystem이 소유하고 여기서는 참조만 한다.
     class SkeletalPhysicsSystem
@@ -23,6 +47,23 @@ namespace Viewer
         bool Register(ObjectId owner, const MiniPhysics::SkeletalPhysicsAsset& asset,
             const std::vector<uint32_t>& nodeParents,
             const std::vector<MiniPhysics::SkeletalRigidFrame>& bodyWorldFrames);
+        // E와 본 pose에서 배율을 분리하고 Kinematic rig를 등록한다.
+        bool RegisterFromPose(ObjectId owner, const MiniPhysics::SkeletalPhysicsAsset& asset,
+            const std::vector<uint32_t>& nodeParents, const Math::Matrix4& modelToWorld,
+            const std::vector<Math::Matrix4>& nodePoses);
+        // 모든 frame·handle을 선검증하고 Kinematic 목표만 갱신한다.
+        bool UpdateKinematicTargets(ObjectId owner, const Math::Matrix4& modelToWorld,
+            const std::vector<Math::Matrix4>& nodePoses, float fixedDt);
+        // 저장한 목표와 COM 속도를 읽으며 실패하면 출력을 보존한다.
+        bool GetBodyTarget(ObjectId owner, uint32_t bodyId, SkeletalBodyTarget& target) const;
+        // 현재 Dynamic body만 등록 배율을 복원한 model node override로 수집한다.
+        // 실패하면 호출자의 override 배열을 보존한다.
+        bool CollectPoseOverrides(ObjectId owner, const Math::Matrix4& modelToWorld,
+            std::vector<NodePhysicsPose>& overrides) const;
+        // fixed substep 경계에서 선택 관절만 제거하고 연결된 자식 body들을 물리로 전환한다.
+        BreakStatus BreakConstraint(const BreakRequest& request);
+        // 성공한 break마다 증가한 topology 번호를 읽으며 미등록 owner이면 0이다.
+        uint64_t GetTopologyGeneration(ObjectId owner) const;
         // 관절을 먼저 제거하고 body를 파괴해 pair 제외까지 정리한다.
         // 미등록 owner는 false다.
         bool Unregister(ObjectId owner);
@@ -47,8 +88,14 @@ namespace Viewer
         struct Rig
         {
             uint64_t Generation = 0;
+            uint64_t TopologyGeneration = 1;
             std::vector<MiniPhysics::BodyHandle> Bodies;
             std::vector<MiniPhysics::ConstraintHandle> Joints;
+            MiniPhysics::SkeletalPhysicsAsset Asset;
+            std::vector<uint32_t> NodeParents;
+            std::vector<SkeletalBodyTarget> Targets;
+            Math::Matrix4 ModelToWorld{ Math::kIdentity };
+            float FrameScale = 1;
         };
         // 관절→body 역순으로 world 자원을 정리한다. body 파괴가 pair 제외도 지운다.
         void ReleaseRig(Rig& rig);

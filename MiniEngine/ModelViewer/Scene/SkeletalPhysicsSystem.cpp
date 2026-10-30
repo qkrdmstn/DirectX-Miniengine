@@ -1,5 +1,6 @@
 ﻿#include "SkeletalPhysicsSystem.h"
 #include "../../Physics/Collision/AggregateGeom.h"
+#include "SkeletalPhysicsFrames.h"
 #include "../../Physics/Collision/BodyMass.h"
 #include <cmath>
 #include <exception>
@@ -57,6 +58,10 @@ namespace Viewer
         auto inserted = m_Rigs.end();
         try
         {
+            rig.Asset = asset;
+            rig.NodeParents = nodeParents;
+            rig.Targets.resize(asset.Bodies.size());
+            for (size_t i = 0; i < bodyWorldFrames.size(); ++i) rig.Targets[i].Frame = bodyWorldFrames[i];
             rig.Bodies.reserve(asset.Bodies.size());
             rig.Joints.reserve(asset.Joints.size());
             inserted = m_Rigs.emplace(owner, Rig{}).first;
@@ -99,6 +104,123 @@ namespace Viewer
         // 모든 자원이 만들어진 뒤에만 새 세대와 함께 게시한다.
         rig.Generation = m_NextGeneration++;
         inserted->second = std::move(rig);
+        return true;
+    }
+
+    // 본 월드 frame의 배율을 분리한 초기 pose로 rig를 등록한다.
+    bool SkeletalPhysicsSystem::RegisterFromPose(ObjectId owner, const MiniPhysics::SkeletalPhysicsAsset& asset,
+        const std::vector<uint32_t>& nodeParents, const Math::Matrix4& modelToWorld,
+        const std::vector<Math::Matrix4>& nodePoses)
+    {
+        // 공통 frame과 본 배열을 검사한 뒤 모든 초기 목표를 임시 공간에 만든다.
+        MiniPhysics::SkeletalRigidFrame frame;
+        float frameScale = 0;
+        if (nodePoses.size() != nodeParents.size() ||
+            !SkeletalFrames::TrySplitUniformFrame(modelToWorld, frame, frameScale)) return false;
+        std::vector<SkeletalBodyTarget> targets(asset.Bodies.size());
+        std::vector<MiniPhysics::SkeletalRigidFrame> frames(asset.Bodies.size());
+        for (size_t i = 0; i < asset.Bodies.size(); ++i)
+        {
+            const auto& body = asset.Bodies[i];
+            if (body.Node >= nodePoses.size() || !SkeletalFrames::TryBuildBodyFrame(modelToWorld,
+                nodePoses[body.Node], body.BoneFromBody, frames[i], targets[i].Scale)) return false;
+            targets[i].Frame = frames[i];
+        }
+
+        // 성공한 등록에만 이미 확보한 목표와 배율을 게시한다.
+        if (!Register(owner, asset, nodeParents, frames)) return false;
+        auto& rig = m_Rigs.at(owner);
+        rig.Targets.swap(targets);
+        rig.ModelToWorld = modelToWorld;
+        rig.FrameScale = frameScale;
+        return true;
+    }
+
+    // 다음 step의 Kinematic 목표와 COM 속도를 갱신하고 Dynamic body는 보존한다.
+    bool SkeletalPhysicsSystem::UpdateKinematicTargets(ObjectId owner, const Math::Matrix4& modelToWorld,
+        const std::vector<Math::Matrix4>& nodePoses, float fixedDt)
+    {
+        // owner·고정 시간·공통 frame의 등록 배율을 먼저 검사한다.
+        const auto found = m_Rigs.find(owner);
+        if (found == m_Rigs.end() || !std::isfinite(fixedDt) || fixedDt < 4.0e-18f) return false;
+        auto& rig = found->second;
+        MiniPhysics::SkeletalRigidFrame frame;
+        float frameScale = 0;
+        if (nodePoses.size() != rig.NodeParents.size() ||
+            !SkeletalFrames::TrySplitUniformFrame(modelToWorld, frame, frameScale) ||
+            std::abs(frameScale - rig.FrameScale) > rig.FrameScale * 1e-4f) return false;
+
+        // 한 목표라도 틀리면 앞 body의 속도도 바꾸지 않도록 전체를 선검증한다.
+        auto targets = rig.Targets;
+        std::vector<MiniPhysics::BodyMotion> motions(rig.Bodies.size());
+        for (size_t i = 0; i < rig.Bodies.size(); ++i)
+        {
+            const auto& body = rig.Asset.Bodies[i];
+            float scale = 0;
+            if (!SkeletalFrames::TryBuildBodyFrame(modelToWorld, nodePoses[body.Node], body.BoneFromBody,
+                targets[i].Frame, scale) ||
+                std::abs(scale - rig.Targets[i].Scale) > rig.Targets[i].Scale * 1e-4f ||
+                !m_World.GetBodyMotion(rig.Bodies[i], motions[i]) || motions[i] == MiniPhysics::BodyMotion::Static) return false;
+            if (motions[i] == MiniPhysics::BodyMotion::Dynamic &&
+                (!m_World.GetBodyPose(rig.Bodies[i], targets[i].Frame.Position, targets[i].Frame.Rotation) ||
+                !m_World.GetBodyVelocity(rig.Bodies[i], targets[i].Linear, targets[i].Angular))) return false;
+            if (motions[i] == MiniPhysics::BodyMotion::Kinematic &&
+                !m_World.CanMoveKinematic(rig.Bodies[i], targets[i].Frame.Position, targets[i].Frame.Rotation, fixedDt)) return false;
+        }
+
+        // scene 스레드에서 선검증한 Kinematic만 적용하고 Jolt가 계산한 COM 속도를 저장한다.
+        for (size_t i = 0; i < rig.Bodies.size(); ++i)
+        {
+            if (motions[i] == MiniPhysics::BodyMotion::Dynamic) continue;
+            if (!m_World.MoveKinematic(rig.Bodies[i], targets[i].Frame.Position, targets[i].Frame.Rotation, fixedDt) ||
+                !m_World.GetBodyVelocity(rig.Bodies[i], targets[i].Linear, targets[i].Angular)) return false;
+        }
+        rig.Targets.swap(targets);
+        rig.ModelToWorld = modelToWorld;
+        return true;
+    }
+
+    // 저장한 body 목표와 COM 속도를 읽는다.
+    bool SkeletalPhysicsSystem::GetBodyTarget(ObjectId owner, uint32_t bodyId, SkeletalBodyTarget& target) const
+    {
+        // owner와 body ID가 유효할 때만 출력에 복사한다.
+        const auto found = m_Rigs.find(owner);
+        if (found == m_Rigs.end() || bodyId >= found->second.Targets.size()) return false;
+        target = found->second.Targets[bodyId];
+        return true;
+    }
+
+    // Dynamic body의 world pose에서 등록 배율과 body offset을 복원해 본 override를 만든다.
+    bool SkeletalPhysicsSystem::CollectPoseOverrides(ObjectId owner, const Math::Matrix4& modelToWorld,
+        std::vector<NodePhysicsPose>& overrides) const
+    {
+        // 등록된 owner와 변경되지 않은 E 배율을 먼저 확인한다.
+        const auto found = m_Rigs.find(owner);
+        if (found == m_Rigs.end()) return false;
+        const auto& rig = found->second;
+        MiniPhysics::SkeletalRigidFrame frame;
+        float frameScale = 0;
+        if (!SkeletalFrames::TrySplitUniformFrame(modelToWorld, frame, frameScale) ||
+            std::abs(frameScale - rig.FrameScale) > rig.FrameScale * 1e-4f) return false;
+
+        // 모든 body handle을 검사하고 물리가 제어하는 본만 임시 배열에 모은다.
+        std::vector<NodePhysicsPose> result;
+        result.reserve(rig.Bodies.size());
+        for (size_t i = 0; i < rig.Bodies.size(); ++i)
+        {
+            MiniPhysics::BodyMotion motion;
+            if (!m_World.GetBodyMotion(rig.Bodies[i], motion) || motion == MiniPhysics::BodyMotion::Static) return false;
+            if (motion != MiniPhysics::BodyMotion::Dynamic) continue;
+            MiniPhysics::SkeletalRigidFrame body;
+            Math::Matrix4 pose;
+            if (!m_World.GetBodyPose(rig.Bodies[i], body.Position, body.Rotation) ||
+                !SkeletalFrames::TryRestoreNodePose(modelToWorld, body, rig.Asset.Bodies[i].BoneFromBody,
+                    rig.Targets[i].Scale, pose)) return false;
+            result.push_back({ rig.Asset.Bodies[i].Node, pose });
+        }
+
+        // 전체 수집이 성공해야 빈 결과를 포함해 호출자 배열을 교체한다.
+        overrides.swap(result);
         return true;
     }
 
