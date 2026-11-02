@@ -463,4 +463,10 @@
     <ClCompile Include="Scene\CutTransaction.cpp" />
     <ClInclude Include="Scene\CutTransaction.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Scene\SkeletalPatchCopy.cpp" />
+    <ClInclude Include="Scene\SkeletalPatchCopy.h" />
+    <FxCompile Include="Scene\Shaders\PatchJointVoteCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\PatchJointSelectCS.hlsl" />
+  </ItemGroup>
 </Project>

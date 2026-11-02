@@ -1,4 +1,4 @@
-상태: 진행 중 — `ea6ea51f` 기준, SP-1(CesiumMan 배치·CPU 기준 함수·테스트) 완료, SP-2~SP-5 구현 전 (2026-11-02)
+상태: 진행 중 — `7fe9aa0b` 기준, SP-1 완료, SP-2 셰이더·Job 구현(연결·진단 미완료), SP-3~SP-5 구현 전 (2026-11-02)
 
 # Skeletal 패치 복사 절단 (첫 단계)
 
@@ -82,4 +82,4 @@ Shader: `Scene/Shaders/PatchJointVoteCS.hlsl`(D6 ①), `PatchJointSelectCS.hlsl`
 
 ## 6. 하지 않는 것
 
-원본 패치 숨김, 원본 A/B 배정(K/D subtree), 본 추종 애니메이션·교점 Blend 출처, BreakConstraint 연결, 복사본 재절단 보장.
+원본 패치 숨김(다음 단계는 NDC 슬라이드대로 버텍스 컬러 마스크 + discard를 기준으로 설계), 원본 A/B 배정(K/D subtree), 본 추종 애니메이션·교점 Blend 출처, BreakConstraint 연결, 복사본 재절단 보장.

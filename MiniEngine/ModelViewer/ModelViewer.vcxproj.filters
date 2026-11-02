@@ -310,4 +310,10 @@
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
     <ClInclude Include="Scene\tests\RetiredResourceChecks.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Scene\SkeletalPatchCopy.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="Scene\SkeletalPatchCopy.h"><Filter>Header Files</Filter></ClInclude>
+    <FxCompile Include="Scene\Shaders\PatchJointVoteCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\PatchJointSelectCS.hlsl" />
+  </ItemGroup>
 </Project>
