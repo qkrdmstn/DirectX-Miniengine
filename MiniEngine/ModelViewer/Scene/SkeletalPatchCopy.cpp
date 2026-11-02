@@ -1,5 +1,6 @@
 ﻿#include "SkeletalPatchCopy.h"
 #include "CommandListManager.h"
+#include "ObjectSelection.h"
 #include "Renderer.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
@@ -27,10 +28,11 @@ namespace Viewer
         {
             Math::Vector4 Plane;
             Math::Matrix4 LocalToRectangle;
+            Math::Matrix4 LocalToWorld;
             float Epsilon, HalfWidth, HalfHeight;
             uint32_t Triangles, Draws, DepthOffset, IndexOffset, Mode;
         };
-        static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 112, "Patch shader layout");
+        static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 176, "Patch shader layout");
         static_assert(sizeof(SkeletalPatchResult) == 12, "Patch counts readback layout");
 
         // GPU AABB의 정렬 가능한 정수 비트를 원래 float 좌표로 복원한다.
@@ -115,11 +117,11 @@ namespace Viewer
     }
 
     // 유한 평면 사각형에 닿는 가장 가까운 skin 대상을 선택하고 추출한다.
-    void RequestSkeletalPatch(const Scene& scene, const MeshCutting::CutPlaneData& plane,
-        SkeletalPatchJob& job, bool diagnostic)
+    void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic)
     {
         // 새 C는 대상 유무와 관계없이 이전 결과를 무효화한다.
-        job.Cancel();
+        m_Job.Cancel();
+        m_Name.clear();
 
         // 평면 로컬에서 가장 가까운 사각형 점을 월드로 돌려 경계 구와 비교한다.
         using namespace Math;
@@ -187,8 +189,60 @@ namespace Viewer
         auto local = plane;
         local.WorldPlane = Transpose(world) * plane.WorldPlane;
         local.WorldToPlane = plane.WorldToPlane * world;
-        if (!job.Submit(*mesh, local, selected.PaletteMasks, selected.NodeId, diagnostic) && diagnostic)
+        // 제출 시점 component world를 고정하고 폭은 GPU의 posed 월드 X 경계로 받는다.
+        if (!SceneTransform::TryFromAffine(mesh->GetWorldTransform(target->GetTransform()), m_World))
+            throw std::runtime_error("Skeletal patch source world is not TRS");
+        m_Name = target->GetName() + "_SkeletalPatch";
+        m_Diagnostic = diagnostic;
+        if (!m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic) && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
+    }
+
+    // 다음 Static 후보 조회 전에 작업 무효화와 owner 삭제를 완료한다.
+    void SkeletalPatchCopy::Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting)
+    {
+        // 추출 완료를 기다려 임시 자원을 해제하고 미게시 배치 snapshot도 버린다.
+        m_Job.Cancel();
+        m_Name.clear();
+
+        // 사용자 owner 삭제와 같은 절단 취소·물리 매핑 제거 경로를 사용한다.
+        if (scene.FindObject(m_CopyOwner)
+            && !DeleteEditTarget(scene, &physics, &cutting, EditTarget::MakeOwner(m_CopyOwner)))
+            throw std::runtime_error("Skeletal patch owner deletion failed");
+        m_CopyOwner = 0;
+    }
+
+    // 비동기 카운터 수집 후 packed GPU geometry를 기존 baked 렌더 경로에 게시한다.
+    bool SkeletalPatchCopy::Update(Scene& scene, SkeletalPatchResult& result)
+    {
+        // 빈 패치는 owner를 만들지 않고 원인을 기록한다.
+        std::shared_ptr<SkeletalPatchBuffers> patch;
+        if (!m_Job.Poll(result, patch)) return false;
+        if (!result.PatchTriangles)
+        {
+            PatchLog("Skeletal patch publish skipped: no influenced triangles\n");
+            if (m_Diagnostic) throw std::runtime_error("Skeletal patch diagnostic empty publication");
+            return true;
+        }
+
+        // 같은 원본 재질을 쓰는 자동 생성 컴포넌트의 geometry만 교체한다.
+        m_Offset = patch->SourceWorldWidth + 0.5f;
+        m_World.SetTranslation(m_World.GetTranslation() + Math::Vector3(m_Offset, 0, 0));
+        auto revision = GeometryRevision::FromGenerated(patch->Geometry);
+        auto& owner = scene.CreateObject(m_Name, revision->GetSource());
+        m_CopyOwner = owner.GetId();
+        if (!owner.GetMeshComponents().front()->SetGeometry(std::move(revision)) || !owner.SetTransform(m_World))
+            throw std::runtime_error("Skeletal patch publication failed");
+        owner.SetNotCuttable(true);
+
+        // Static batch·벤치마크·자동 재절단과 격리된 owner가 정확히 하나인지 검사한다.
+        size_t copies = 0;
+        for (const auto& object : scene.GetObjects())
+            if (object->GetName().find("_SkeletalPatch") != std::string::npos) ++copies;
+        PatchLog("Skeletal patch published owner=%s triangles=%u worldOffset=(%.6f,0,0) copies=%zu %s\n",
+            owner.GetName().c_str(), result.PatchTriangles, m_Offset, copies, copies == 1 ? "PASS" : "FAIL");
+        if (copies != 1) throw std::runtime_error("Skeletal patch copy isolation failed");
+        return true;
     }
 
     // 변환기의 DFS NodeId로 현재 위팔·허벅지 segment와 손 말단의 평면을 만든다.
@@ -236,7 +290,7 @@ namespace Viewer
 
     // 원본 GPU 입력에서 분류·prefix sum·packed 출력을 순서대로 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
-        const std::vector<std::vector<uint32_t>>& mask, uint32_t node, bool diagnostic)
+        const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world, uint32_t node, bool diagnostic)
     {
         // 준비되지 않았거나 생성된 입력은 이 단계의 skeletal 추출 대상이 아니다.
         Cancel();
@@ -270,6 +324,7 @@ namespace Viewer
         // 대상 전체 삼각형 수를 상한으로 잡아 compaction 출력 overflow를 없앤다.
         m_Input = source.GetGeometry();
         m_Plane = plane; m_Node = node; m_Diagnostic = diagnostic;
+        m_SourceWorld = world;
         m_Output = std::make_shared<SkeletalPatchBuffers>();
         m_Output->Geometry = std::make_shared<GeometryBuffers>();
         auto& geometry = *m_Output->Geometry;
@@ -277,6 +332,7 @@ namespace Viewer
         const uint32_t vertices = uint32_t(triangles) * 3;
         Parameters c{};
         c.Plane = plane.WorldPlane; c.LocalToRectangle = plane.WorldToPlane;
+        c.LocalToWorld = world;
         c.Epsilon = 1e-5f; c.HalfWidth = plane.HalfWidth; c.HalfHeight = plane.HalfHeight;
         c.Triangles = uint32_t(triangles); c.Draws = uint32_t(draws.size());
         c.DepthOffset = vertices * 28; c.IndexOffset = vertices * 44;
@@ -292,14 +348,14 @@ namespace Viewer
         mesh.pso = Renderer::GetPSO(mesh.psoFlags);
         mesh.draw[0] = { 0, 0, 0 };
         geometry.Meshes.push_back(mesh);
-        const uint32_t metadata[] = { 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, 0, 0, 0 };
-        m_Output->LocalBounds.Create(L"Patch counts and local bounds", 9, 4, metadata);
+        const uint32_t metadata[] = { 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, 0, 0, 0, UINT32_MAX, 0 };
+        m_Output->LocalBounds.Create(L"Patch counts and local bounds", 11, 4, metadata);
         m_Output->TriangleSources.Create(L"Patch triangle sources", uint32_t(triangles), 12);
         m_Scan.Create(L"Patch inclusive prefix", uint32_t(triangles), 8);
         m_Descriptors.Create(L"Patch draw inputs", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
         if (masks.empty()) masks.push_back(0);
         m_Masks.Create(L"Patch palette mask", uint32_t(masks.size()), 4, masks.data());
-        m_Readback.Create(L"Patch counts and bounds readback", 9, 4);
+        m_Readback.Create(L"Patch counts and bounds readback", 11, 4);
 
         // 같은 graphics queue에서 pose 준비 뒤 추출하고 패스 사이 UAV 의존성을 보장한다.
         auto& graphics = GraphicsContext::Begin(L"Extract skeletal patch");
@@ -332,7 +388,7 @@ namespace Viewer
             }
         }
         graphics.TransitionResource(m_Output->LocalBounds, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        graphics.CopyBufferRegion(m_Readback, 0, m_Output->LocalBounds, 0, 36);
+        graphics.CopyBufferRegion(m_Readback, 0, m_Output->LocalBounds, 0, 44);
 
         // 진단에서만 동일 제출 시점의 VB/IB·pose·출처를 저장한다.
         if (diagnostic)
@@ -343,6 +399,8 @@ namespace Viewer
             graphics.CopyBuffer(m_SourceReadback, inputData);
             graphics.CopyBuffer(m_PoseReadback, inputPose);
             graphics.CopyBuffer(m_OriginsReadback, m_Output->TriangleSources);
+            m_OutputReadback.Create(L"Patch diagnostic packed vertices", vertices * 48, 1);
+            graphics.CopyBuffer(m_OutputReadback, geometry.Data);
         }
         graphics.TransitionResource(inputData, D3D12_RESOURCE_STATE_GENERIC_READ);
         graphics.TransitionResource(inputPose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -361,11 +419,15 @@ namespace Viewer
         if (!m_Fence || !Graphics::g_CommandManager.IsFenceComplete(m_Fence))
             return false;
 
-        // 기본 경로는 정점 대신 세 카운터와 여섯 경계 좌표만 읽는다.
-        uint32_t metadata[9];
+        // 기본 경로는 정점 대신 세 카운터와 로컬 경계·원본 월드 X 경계만 읽는다.
+        uint32_t metadata[11];
         std::memcpy(metadata, m_Readback.Map(), sizeof(metadata));
         std::memcpy(&result, metadata, sizeof(result));
         m_Readback.Unmap();
+        m_Output->SourceWorldWidth = BoundsCoordinate(metadata[10]) - BoundsCoordinate(metadata[9]);
+        PatchLog("Skeletal patch source posed world X=[%.6f,%.6f] width=%.6f offset=%.6f\n",
+            BoundsCoordinate(metadata[9]), BoundsCoordinate(metadata[10]), m_Output->SourceWorldWidth,
+            m_Output->SourceWorldWidth + 0.5f);
         PatchLog("Skeletal patch GPU patch=%u crossing=%u uncovered=%u\n", result.PatchTriangles,
             result.CrossingTriangles, result.UncoveredCrossing);
         if (m_Diagnostic) Validate(result);
@@ -441,9 +503,62 @@ namespace Viewer
 
         // CPU 기준의 원본 순서와 GPU compact source list를 항목별로 대조한다.
         const auto expected = ExtractPatchReference(input, m_Node);
+
+        // 원본 pose와 실제 packed VB를 게시 TRS로 변환해 오프셋 제거 후 월드 경계를 대조한다.
+        const auto* packed = static_cast<const uint8_t*>(m_OutputReadback.Map());
+        Math::Vector3 sourceMin(FLT_MAX), sourceMax(-FLT_MAX), copyMin(FLT_MAX), copyMax(-FLT_MAX);
+        SceneTransform copyWorld;
+        if (!SceneTransform::TryFromAffine(Math::AffineTransform(m_SourceWorld), copyWorld))
+            throw std::runtime_error("Skeletal patch diagnostic world is not TRS");
+        const Math::Vector3 offset(m_Output->SourceWorldWidth + 0.5f, 0, 0);
+        copyWorld.SetTranslation(copyWorld.GetTranslation() + offset);
+        float maxError = 0;
+        for (uint32_t t = 0; t < expected.size() && t < result.PatchTriangles; ++t)
+        {
+            const auto& origin = expected[t];
+            const auto& section = input.Sections[origin.SectionId];
+            const auto indices = TriangleIndices(section, section.Draws[origin.DrawId], origin.TriangleId);
+            for (uint32_t corner = 0; corner < 3; ++corner)
+            {
+                float position[3];
+                std::memcpy(position, packed + (t * 3 + corner) * 28, 12);
+                const Math::Vector3 source = Math::Vector3(m_SourceWorld
+                    * Math::Vector4(section.Vertices[indices[corner]].Position, 1));
+                const Math::Vector3 copy = copyWorld.ToAffine()
+                    * Math::Vector3(position[0], position[1], position[2]) - offset;
+                sourceMin = Math::Min(sourceMin, source); sourceMax = Math::Max(sourceMax, source);
+                copyMin = Math::Min(copyMin, copy); copyMax = Math::Max(copyMax, copy);
+                maxError = std::max(maxError, float(Math::Length(source - copy)));
+            }
+        }
+        m_OutputReadback.Unmap();
+
+        // 진단 입력의 전체 draw에서 구한 월드 X 폭과 GPU의 두 스칼라 집계를 비교한다.
+        float sourceXMin = FLT_MAX, sourceXMax = -FLT_MAX;
+        for (const auto& section : input.Sections)
+            for (const auto& draw : section.Draws)
+                for (uint32_t t = 0; t < draw.IndexCount / 3; ++t)
+                    for (uint32_t i : TriangleIndices(section, draw, t))
+                    {
+                        const float x = float((m_SourceWorld * Math::Vector4(section.Vertices[i].Position, 1)).GetX());
+                        sourceXMin = std::min(sourceXMin, x); sourceXMax = std::max(sourceXMax, x);
+                    }
+        const float widthError = std::abs(sourceXMax - sourceXMin - m_Output->SourceWorldWidth);
+        PatchLog("Skeletal patch source world X CPU=[%.6f,%.6f] widthError=%.9f %s\n",
+            sourceXMin, sourceXMax, widthError, widthError < 1e-4f ? "PASS" : "FAIL");
+
+        // 손을 포함한 선택 부위의 월드 AABB와 정점별 오차를 남긴다.
+        PatchLog("Skeletal patch source region world min=(%.6f,%.6f,%.6f) max=(%.6f,%.6f,%.6f)\n",
+            float(sourceMin.GetX()), float(sourceMin.GetY()), float(sourceMin.GetZ()),
+            float(sourceMax.GetX()), float(sourceMax.GetY()), float(sourceMax.GetZ()));
+        PatchLog("Skeletal patch copy minus offset min=(%.6f,%.6f,%.6f) max=(%.6f,%.6f,%.6f) maxVertexError=%.9f %s\n",
+            float(copyMin.GetX()), float(copyMin.GetY()), float(copyMin.GetZ()),
+            float(copyMax.GetX()), float(copyMax.GetY()), float(copyMax.GetZ()), maxError, maxError < 1e-4f ? "PASS" : "FAIL");
+
+        // CPU 기준의 개수와 출처 및 게시 위치를 모두 성공 조건에 포함한다.
         uint32_t crossing = 0, uncovered = 0, infiniteCrossing = 0;
         const auto* origins = static_cast<const uint32_t*>(m_OriginsReadback.Map());
-        bool pass = expected.size() == result.PatchTriangles;
+        bool pass = expected.size() == result.PatchTriangles && maxError < 1e-4f && widthError < 1e-4f;
         for (uint32_t i = 0; i < expected.size() && i < result.PatchTriangles; ++i)
             pass &= origins[i * 3] == expected[i].SectionId && origins[i * 3 + 1] == expected[i].DrawId
                 && origins[i * 3 + 2] == expected[i].TriangleId;

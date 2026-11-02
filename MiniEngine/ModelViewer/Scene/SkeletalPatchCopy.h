@@ -9,10 +9,6 @@ namespace Viewer
     // 모델 pose와 컴포넌트 section을 순수 선택 함수의 입력으로 바꾼다.
     SegmentJointSelection SelectSegmentJoint(const ModelInstance& pose, const MeshComponent& component,
         const SceneTransform& owner, const MeshCutting::CutPlaneData& plane);
-    class SkeletalPatchJob;
-    // skin 대상과 본을 선택하고 현재 프레임의 추출 작업을 제출한다.
-    void RequestSkeletalPatch(const Scene& scene, const MeshCutting::CutPlaneData& plane,
-        SkeletalPatchJob& job, bool diagnostic);
     // CesiumMan의 위팔·허벅지·손에 현재 pose 기준 진단 평면을 배치한다.
     bool BuildSkeletalPatchDiagnosticPlane(const Scene& scene, uint32_t index, MeshCutting::CutPlaneData& plane);
 
@@ -27,7 +23,8 @@ namespace Viewer
     {
         std::shared_ptr<GeometryBuffers> Geometry;
         ByteAddressBuffer TriangleSources; // section, draw, triangle; 12 bytes per triangle
-        ByteAddressBuffer LocalBounds; // counts 0..8, ordered-float AABB min 12..20 / max 24..32
+        ByteAddressBuffer LocalBounds; // counts 0..8, local AABB 12..32, source world X min/max 36..40
+        float SourceWorldWidth = 0;
     };
 
     // 단일 제출 작업이다. 호출자는 UpdateFrame/Finish 후 component-local 평면을 전달한다.
@@ -38,7 +35,8 @@ namespace Viewer
         ~SkeletalPatchJob();
         // component-local 평면과 section별 팔레트 마스크로 GPU 추출을 제출한다.
         bool Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
-            const std::vector<std::vector<uint32_t>>& mask, uint32_t node = UINT32_MAX, bool diagnostic = false);
+            const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
+            uint32_t node = UINT32_MAX, bool diagnostic = false);
         // fence 완료 후 카운터·로컬 경계와 GPU 출력을 수집하고 진단 모드에서 CPU 기준과 비교한다.
         bool Poll(SkeletalPatchResult& result, std::shared_ptr<SkeletalPatchBuffers>& patch);
         // 이전 작업을 무효화하고 제출 자원의 GPU 사용 완료를 보장한다.
@@ -50,6 +48,8 @@ namespace Viewer
         void Validate(const SkeletalPatchResult& result);
         ReadbackBuffer m_Readback;
         ReadbackBuffer m_SourceReadback, m_PoseReadback, m_OriginsReadback;
+        ReadbackBuffer m_OutputReadback;
+        Math::Matrix4 m_SourceWorld;
         StructuredBuffer m_Descriptors, m_Masks;
         ByteAddressBuffer m_Scan;
         std::shared_ptr<SkeletalPatchBuffers> m_Output;
@@ -59,5 +59,31 @@ namespace Viewer
         uint32_t m_Node = UINT32_MAX;
         bool m_Diagnostic = false;
         uint64_t m_Fence = 0;
+    };
+    class PhysicsSystem;
+    class CuttingSystem;
+    // 추출 요청의 배치 snapshot과 단 하나의 게시 owner를 소유한다.
+    class SkeletalPatchCopy
+    {
+    public:
+        // 새 C의 Static 후보 조회 전에 이전 작업과 owner를 공통 삭제 경로로 정리한다.
+        void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
+        // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
+        void Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic);
+        // GPU 준비 전에 완료 결과를 정적 owner로 게시하고 진단 카운터를 반환한다.
+        bool Update(Scene& scene, SkeletalPatchResult& result);
+        // 진단의 중복 제출을 막기 위해 현재 요청 상태를 읽는다.
+        bool IsPending() const
+        {
+            // 완료 전인 GPU 추출 요청만 pending으로 취급한다.
+            return m_Job.IsPending();
+        }
+    private:
+        SkeletalPatchJob m_Job;
+        ObjectId m_CopyOwner = 0;
+        SceneTransform m_World;
+        std::string m_Name;
+        float m_Offset = 0;
+        bool m_Diagnostic = false;
     };
 }

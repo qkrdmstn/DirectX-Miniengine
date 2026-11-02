@@ -2,6 +2,7 @@ cbuffer Parameters : register(b0)
 {
     float4 Plane;
     float4x4 LocalToRectangle;
+    float4x4 LocalToWorld;
     float Epsilon, HalfWidth, HalfHeight;
     uint Triangles;
     uint Draws, DepthOffset, IndexOffset, Mode;
@@ -20,7 +21,7 @@ StructuredBuffer<uint> Mask : register(t3);
 RWByteAddressBuffer Data : register(u0);
 RWByteAddressBuffer Pose : register(u1);
 RWByteAddressBuffer Sources : register(u2);
-RWByteAddressBuffer Meta : register(u3); // counts 0..8, ordered local AABB 12..32
+RWByteAddressBuffer Meta : register(u3); // counts 0..8, local AABB 12..32, source world X 36..40
 RWByteAddressBuffer Scan : register(u4); // inclusive prefix, crossing flag
 
 // 원본 draw의 R16/R32 인덱스와 baseVertex를 해석한다.
@@ -134,6 +135,15 @@ void main(uint3 id : SV_DispatchThreadID)
     uint3 indices=uint3(Index(s,triangleId*3),Index(s,triangleId*3+1),Index(s,triangleId*3+2));
     if(Mode==0)
     {
+        // 선택 여부와 무관하게 원본 전체 posed 정점의 월드 X 폭을 집계한다.
+        [unroll] for(uint corner=0;corner<3;corner++)
+        {
+            float3 p=asfloat(SourcePose.Load3(s.PoseOffset+indices[corner]*40));
+            uint x=Ordered(mul(LocalToWorld,float4(p,1)).x),ignored;
+            Meta.InterlockedMin(36,x,ignored); Meta.InterlockedMax(40,x,ignored);
+        }
+
+        // 기존 선택 본 기여와 유한 평면 교차 규칙을 유지한다.
         bool selected=Selected(s,indices.x)||Selected(s,indices.y)||Selected(s,indices.z);
         bool crossing=Crossing(asfloat(SourcePose.Load3(s.PoseOffset+indices.x*40)),
             asfloat(SourcePose.Load3(s.PoseOffset+indices.y*40)),asfloat(SourcePose.Load3(s.PoseOffset+indices.z*40)));

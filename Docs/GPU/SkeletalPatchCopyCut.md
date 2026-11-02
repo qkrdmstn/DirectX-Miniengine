@@ -1,4 +1,4 @@
-상태: 진행 중 — `8c82a84b` 기준 미커밋, SP-3 리뷰 수정 완료: 본 좌표계 보정 후 GPU/CPU 패치·교차·미포함 위팔 328/20/5·허벅지 352/12/0·손 222/17/0 및 출처 순서 일치, 3지역 PASS·D3D12 ERROR 0; SP-4·SP-5 구현 전 (2026-11-02)
+상태: 진행 중 — `9f26d066` 기준 미커밋, SP-4 구현·리뷰 완료: GPU 패치 정적 owner 게시·새 C 공통 삭제·Static 집계 격리, posed 월드 X 폭 기반 오프셋 수정·복사 정점 위치 수치 검증, 위팔 2회(328)·허벅지(352)·손(222) 모두 복사본 1개 PASS, Debug/Release·CPU 테스트·Static cube 회귀 통과·D3D12 ERROR 0; SP-5 구현 전 (2026-11-02)
 
 # Skeletal 패치 복사 절단 (첫 단계)
 
@@ -67,12 +67,14 @@ public:
 | SP-2a | (완료 `8af35400`, 규칙 변경으로 셰이더는 대체) 투표 셰이더 2개 + `SkeletalPatchJob` 제출/Poll 골격 | Debug/Release 빌드 | — |
 | SP-2b | 투표 셰이더·`SelectJointReference` 제거, CPU `SelectSegmentJoint`(D6: segment·말단·palette 마스크) + CPU 테스트 + C 입력 연결(D3, D4) + 로그(선택 본·segment/말단·교차점). Job 제출은 SP-3에서. 화면 변화 없음 | CesiumMan 위팔·허벅지·손 절단 시 기대 joint 로그, CPU 테스트 PASS | 구현 + R + B + V |
 | SP-3 | 패치 추출 Compute(D7): 누적합 압축, 정적 생성 형식·출처·bounds, 용량 상한, 교차·미포함 교차 카운트. 로그(패치 수·교차 수·미포함 교차 수) | 진단 옵션에서 패치 수·출처 목록·카운트가 CPU 기준과 일치, D3D12 ERROR 0 | 구현 + R + B + V |
-| SP-4 | 복사본 owner 게시(D8) + 이전 복사본 정리·격리(D11) | 원본 옆에 같은 pose의 패치 복사본이 보임(캡처), C 반복 시 하나만 유지 | 구현 + R + B + V |
+| SP-4 | 복사본 owner 게시(D8) + 이전 복사본 정리·격리(D11) | 완료(미커밋): 캡처·위팔 재요청 포함 복사본 1개, 원본 posed 월드 X 폭 + 0.5 m, GPU packed VB와 원본 pose의 월드 위치 대조 PASS | 구현 + R + B + V |
 | SP-5 | pose 준비·batch 대기·오프셋 평면 절단 요청(D9) + 결과/실패 로그(D10) | 복사본이 A/B로 잘림(캡처) 또는 실패 이유 로그, 기존 Static C 절단 불변, D3D12 ERROR 0 | 구현 + R + B + V |
 
 한 단계가 300줄을 넘으면 shader와 C++ 연결을 나눈다.
 
 SP-3 리뷰 근거: `skeletonRoot`에서 부모 공간이 끊긴 본 원점에 `JointFrameToWorld`가 렌더와 같은 `component world × inverse(SourceFrame) × mesh node`를 적용한다. 진단 평면도 같은 좌표로 만들며, 추출 RAW40·packed VB는 component-local을 유지하고 `RequestSkeletalPatch`에서 cutter와 같은 방식으로 평면을 변환한다. 보정 전 무한 평면 교차 198/0/187은 보정 후 47/108/69이며, 위팔의 미포함 교차 5는 거절 조건으로 쓰지 않는다. 비단위 평면의 eps 투영과 현재 패치 bounds도 보정했다. Debug/Release 빌드·CPU 테스트(SkeletalPatchTests 45개)·정적 cube 회귀가 통과했고, 회전·비균일 scale·SourceFrame 추가 진단도 3지역 GPU/CPU PASS다.
+
+SP-4 리뷰 근거: 기존 약 6.874 m 오프셋은 `MeshComponent::GetBoundingSphere`의 느슨한 구 지름 + 0.5 m였다. `SkeletalPatchJob::Submit`의 추출 패스에서 선택과 무관하게 원본 전체 draw의 posed 정점을 component world로 옮겨 X 최소·최대를 집계하도록 수정했다. 일반 경로는 두 스칼라만 추가 readback하며 정점 readback은 진단 전용이다. `SkeletalPatchJob::Validate`는 원본 pose와 실제 GPU packed VB를 게시 TRS로 변환하여 오프셋 제거 후 비교한다. 진단 입력의 X 경계는 [11.696115, 13.003948] m, 폭 1.307833 m, 오프셋 1.807833 m다. 손 영역의 원본/복사본(오프셋 제거) AABB는 모두 min=(11.696115, -0.327247, -1.023413), max=(12.165718, 0.520666, -0.291195) m이고 정점별 최대 오차는 0 m다. 이는 제출 pose의 비교이며 이후 원본 애니메이션을 따라가는 복사본은 아니다. 리뷰 빌드·실행 로그는 `%TEMP%/step7-SP4-review-final-{Debug,Release}.log`, `%TEMP%/step7-Release-SP4-review-patch-final.log`, `%TEMP%/step7-Release-SP4-review-static.log`, CPU 산출물은 `%TEMP%/sp4-review-tests/`, 캡처는 `%TEMP%/SP4-review-copy.png`다. SP-5의 복사본 절단과 A/B 결과 완료 조건은 아직 적용 전이다.
 
 ## 5. 완료 조건
 
