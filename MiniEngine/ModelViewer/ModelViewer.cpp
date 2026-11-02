@@ -373,15 +373,38 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetFloat(L"demo-cut-sec", m_DemoCutSeconds);
     m_DemoTower = std::min(m_DemoTower, 16u);
 
+    // 진단·자동 절단 옵션은 뒤에서 해석하더라도 추가 모델 로딩 전에 격리한다.
+    bool diagnosticScene = false;
+    std::wstring diagnosticValue;
+    for (const wchar_t* option : { L"edit-target-checks", L"edit-apply-checks", L"edit-delete-checks",
+        L"physics-sim-checks", L"skeletal-break-checks", L"skeletal-break-xbot", L"xbot-arm-checks",
+        L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
+        L"physics-query-exit", L"view",
+        L"capture", L"capture-frame", L"animation-step-ms",
+        L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out",
+        L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
+        L"cut-step-y", L"cut-gap", L"cut-expect-publications", L"physics-cut-checks",
+        L"physics-cut-scenario", L"cut-transform-checks", L"cut-validate", L"cut-expect-loops", L"cap-mode" })
+        diagnosticScene |= CommandLineArgs::GetString(option, diagnosticValue);
+    const bool defaultScene = !m_DemoTower && !CommandLineArgs::GetString(L"model", gltfFileName);
+
     if (m_DemoTower)
         CreateDemoTower(m_Scene, Renderer::LoadModel(L"Models/cube.glb", forceRebuild), m_DemoTower);
-    else if (CommandLineArgs::GetString(L"model", gltfFileName) == false)
+    else if (defaultScene)
     {
         // 기본 장면에 정적 대형 Dragon 모델을 포함해 여러 절단 후보를 함께 확인한다.
         m_Scene.CreateObject("Cube", Renderer::LoadModel(L"Models/cube.glb", forceRebuild));
         m_Scene.CreateObject("Bunny", Renderer::LoadModel(L"Models/bunny.glb", forceRebuild));
         m_Scene.CreateObject("Dragon", Renderer::LoadModel(L"Models/dragon.glb", forceRebuild));
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
+
+        // 기존 네 모델 뒤에 연속 피부 검증 모델을 추가하고 첫 클립을 반복한다.
+        if (!diagnosticScene)
+        {
+            const auto model = Renderer::LoadModel(L"Models/CesiumMan.glb", forceRebuild);
+            m_Scene.CreateObject("CesiumMan", model).PlayAnimation(0);
+            Utility::Printf("CesiumMan loaded: meshes=%u animations=%u\n", model->m_NumMeshes, model->m_NumAnimations);
+        }
     }
     else
     {
@@ -398,6 +421,8 @@ void ModelViewer::Startup( void )
                 const uint16_t flags=component->GetGeometry()->GetMesh(section).psoFlags;
                 if (!(flags&PSOFlags::kHasSkin)) Renderer::GetPSO(uint16_t(flags|PSOFlags::kHasUV0));
             }
+
+    // 기본 장면 중심은 객체 수 대신 기존 네 모델의 고정 배치를 기준으로 정한다.
     size_t index = 0;
     for (const auto& object : m_Scene.GetObjects())
     {
@@ -405,7 +430,7 @@ void ModelViewer::Startup( void )
         if (m_DemoTower || !model || float(model->GetModel()->m_BoundingSphere.GetRadius()) <= 0.0f)
             continue;
         const float scale = 2.0f / float(model->GetModel()->m_BoundingSphere.GetRadius());
-        const float x = (float(index++) - 0.5f * float(m_Scene.GetObjects().size() - 1)) * 5.0f;
+        const float x = defaultScene ? -7.5f + float(index++) * 5.0f : 0.0f;
         object->SetTransform(UniformTransform(Quaternion(kIdentity), scale,
             Vector3(x, 0.0f, 0.0f) - model->GetModel()->m_BoundingSphere.GetCenter() * scale));
     }

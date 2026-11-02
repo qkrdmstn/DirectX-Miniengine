@@ -98,6 +98,7 @@
     <ClInclude Include="Scene\tests\XbotArmChecks.h" />
     <ClInclude Include="Scene\tests\PhysicsQueryChecks.h" />
     <ClInclude Include="Scene\tests\RetiredResourceChecks.h" />
+    <ClInclude Include="Scene\tests\SkeletalPatchReference.h" />
     <ClInclude Include="Scene\ComponentId.h" />
     <ClInclude Include="Scene\MeshComponent.h" />
     <ClInclude Include="Scene\tests\MeshComponentChecks.h" />
@@ -435,6 +436,7 @@
     <None Include="Scene\tests\PhysicsStepClockTests.cpp" />
     <None Include="Scene\tests\SkeletalBreakTests.cpp" />
     <None Include="Scene\tests\SkeletalFrameTests.cpp" />
+    <None Include="Scene\tests\SkeletalPatchTests.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)', 'vcpkg.json'))\vcpkg\DirectX.vcpkg.targets" />
