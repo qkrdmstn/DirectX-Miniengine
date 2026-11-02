@@ -8,6 +8,8 @@ groupshared float Orientation;
 groupshared uint Cached,Mapped,MapBase,LoopLeader,AllPoints,LoopLength,Rotation;
 groupshared float2 CachedPoints[1024];
 groupshared uint CachedNext[1024],CachedPrev[1024],CachedFlags[1024],CachedSlot[1024];
+groupshared uint TestList[1024];
+groupshared uint TestCount;
 groupshared uint WaveCount,ZeroSlot,ScanTotal,WarpTotal[CAP_THREADS/4];
 cbuffer EarMode : register(b1) { uint SerialMode; };
 // 모든 스레드가 참여하여 경계 순서의 배타적 누적합과 전체 합을 구한다.
@@ -108,7 +110,7 @@ bool InTriangle(float2 p,float2 a,float2 b,float2 c,float sign)
     return Cross2(b-a,p-a)*sign>=-Epsilon*Epsilon && Cross2(c-b,p-b)*sign>=-Epsilon*Epsilon
         && Cross2(a-c,p-c)*sign>=-Epsilon*Epsilon;
 }
-// 캐시 후보를 경계 순서로 교대 표시하고 통과 순위로 잔여 정점을 보호한다.
+// 캐시 후보를 검사 목록으로 판정하고 경계 순서의 통과 순위로 잔여 정점을 보호한다.
 uint SelectCached(uint waveSlot,uint round,uint zeroRounds,out uint marked)
 {
     // 연속 k개 위치를 소유하고 내부 점 검사 없이 후보 종류만 먼저 구한다.
@@ -150,14 +152,16 @@ uint SelectCached(uint waveSlot,uint round,uint zeroRounds,out uint marked)
             if(mark)
             {
                 uint a=Prv(v),c=Nxt(v);
-                if(kind==1)for(uint test=0;test<LoopLength;test++)
-                    if(test!=a && test!=v && test!=c && Active(test)!=0
-                        && (AllPoints!=0 || (CachedFlags[test]&16)!=0)
+                if(kind==1)for(uint t=0;t<TestCount;t++)
+                {
+                    uint test=TestList[t];
+                    if(test!=a && test!=v && test!=c
                         && InTriangle(P2(test),P2(a),P2(v),P2(c),Orientation))
                     {
                         mark=false;
                         break;
                     }
+                }
             }
             CachedFlags[v]=(CachedFlags[v]&~8u)|(mark?8u:0u);
             passes+=mark?1:0;
@@ -258,7 +262,7 @@ uint SelectMapped(uint waveSlot,uint round,uint zeroRounds,out uint marked)
     }
     return 0;
 }
-// 캐시 시작점을 위치 키로 고정하고 그룹 내부에서 귀 검사와 안전한 다중 제거를 병렬 수행한다.
+// 캐시 검사 목록을 라운드마다 만들고 그룹 내부에서 귀 검사와 안전한 동시 제거를 수행한다.
 [numthreads(CAP_THREADS,1,1)]
 void main(uint3 group:SV_GroupID,uint tid:SV_GroupIndex)
 {
@@ -387,13 +391,29 @@ void main(uint3 group:SV_GroupID,uint tid:SV_GroupIndex)
     for(uint round=0;round<roundLimit && Remaining>3;round++)
     {
         // 검사점은 reflex/collinear 정점이다. 캐시는 bit4, 큰 loop는 별도 word에 보관한다.
+        uint myTestCount=0;
         for(uint reflex=tid;reflex<size;reflex+=CAP_THREADS)
         {
             if(Active(reflex)==0)continue;
             float turn=Cross2(P2(reflex)-P2(Prv(reflex)),P2(Nxt(reflex))-P2(reflex))*Orientation;
             uint flag=turn<=0?1:0;
-            if(Cached!=0)CachedFlags[reflex]=(CachedFlags[reflex]&~16u)|(flag<<4);
+            if(Cached!=0)
+            {
+                CachedFlags[reflex]=(CachedFlags[reflex]&~16u)|(flag<<4);
+                myTestCount+=AllPoints!=0 || flag!=0?1:0;
+            }
             else Ring.Store(Slot(reflex)*128+92,flag);
+        }
+
+        // 캐시 경로의 모든 스레드가 검사 집합을 scan하고 각자 맡은 점을 목록에 쓴다.
+        if(Cached!=0)
+        {
+            uint total;
+            uint offset=BlockExclusiveSum(myTestCount,waveSlot,total);
+            if(waveSlot==ZeroSlot)TestCount=total;
+            for(uint test=tid;test<size;test+=CAP_THREADS)
+                if(Active(test)!=0 && (AllPoints!=0 || (CachedFlags[test]&16)!=0))
+                    TestList[offset++]=test;
         }
         AllMemoryBarrierWithGroupSync();
 
