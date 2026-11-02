@@ -1,74 +1,120 @@
+# DirectX MiniEngine — GPU Mesh Cutting
 
-# DirectX-Graphics-Samples
-This repo contains the DirectX 12 Graphics samples that demonstrate how to build graphics intensive applications for Windows 10.
+DirectX 12 MiniEngine 위에서 **메시를 실시간으로 자르는 기능**을 직접 구현한 프로젝트입니다.
+정점 데이터는 GPU 메모리에서만 절단하고, 단면(cap)도 GPU 컴퓨트 셰이더에서 채웁니다.
+절단 조각에는 Jolt 물리를 붙이고, 스켈레탈 메시는 관절 단위로 떼어 ragdoll로 넘기는 것이 목표입니다.
 
-We invite you to join us at our [discord server](http://discord.gg/directx). See our [YouTube channel](https://www.youtube.com/MicrosoftDirectX12andGraphicsEducation) for tutorials, our [spec repo](https://microsoft.github.io/DirectX-Specs/) for engineering specs of our features and [devblogs](https://devblogs.microsoft.com/directx/) for blog posts. Follow us on Twitter [@DirectX12](https://twitter.com/directx12) for the latest! See the [related links](#related-links) section for our full list of DX12-related links.
+📑 **발표 자료:** [Canva 슬라이드](https://canva.link/ycxk54ec6bttauh)
 
-Finally, make sure that you visit the [DirectX Landing Page](https://devblogs.microsoft.com/directx/landing-page/) for more resources for DirectX developers.
+## 주요 기능
 
-## API Samples
-In the Samples directory, you will find samples that attempt to break off specific features and specific usage scenarios into bite-sized chunks. For example, the ExecuteIndirect sample will show you just enough about execute indirect to get started with that feature without diving too deep into multiengine whereas the nBodyGravity sample will delve into multiengine without touching on the execute indirect feature etc. By doing this, we hope to make it easier to get started with DirectX 12.
+| 기능 | 상태 | 설명 |
+| --- | --- | --- |
+| Static 메시 GPU 절단 | 완료 | 유한 평면으로 메시를 자르고, 단면을 채우고, 잘린 조각을 다시 자를 수 있다 |
+| 단면(cap) 병렬 삼각분할 | 완료 | 경계를 GPU에서 이어 붙이고, 귀 자르기(ear clipping)를 라운드 단위로 병렬 처리한다 |
+| 절단 조각 물리 | 진행 중 | Jolt v5.6.0으로 평면 후보를 조회하고, 조각마다 rigid body를 만든다 |
+| 관절 해제 (BreakConstraint) | 완료 (M1) | 스켈레탈 rig의 관절을 끊고 떨어진 부분을 Dynamic body로 전환한다 |
+| Skeletal 메시 절단 | 진행 중 | 평면이 지나는 뼈의 joint를 고르고, 영향 범위 패치를 복사·절단해 붙인다 |
 
-### DirectX 12 Ultimate samples
-1. [D3D12 Mesh Shaders](Samples/Desktop/D3D12MeshShaders/readme.md): This sample demonstrates how Mesh shaders can be used to increase the flexibility and performance of the geometry pipeline.
-    
-    <img src="Samples/Desktop/D3D12MeshShaders/src/MeshletRender/Screenshot_DX12U.png" alt="D3D12 Meshlet Render preview" height="200">
+## Static 절단 파이프라인
 
-1. [D3D12 Variable Rate Shading](Samples/Desktop/D3D12VariableRateShading/readme.md): This sample demonstrates how shading rate can be reduced with little or no reduction in visual quality, leading to “free” performance.
-    
-    <img src="Samples/Desktop/D3D12VariableRateShading/src/Screenshot_DX12U.png" alt="D3D12 Variable Rate Shading GUI" height="200">
+`.glb`의 정점은 삼각형마다 따로 저장되어 있어, 같은 위치라도 렌더링 정보(uv 등)에 따라 다른 정점입니다.
+절단에는 미리 만든 인접 정보가 필요 없습니다. 삼각형은 각자 자르고, 생긴 경계 끝점만 위치로 이어 붙입니다.
 
-1. [D3D12 Raytracing](Samples/Desktop/D3D12Raytracing/readme.md): This sample demonstrates how DirectX Raytracing (DXR) brings a new level of graphics realism to video games, previously only achievable in the movie industry.
-    
-    <img src="Samples/Desktop/D3D12Raytracing/src/D3D12RaytracingRealTimeDenoisedAmbientOcclusion/Screenshot_DX12U.png" alt="D3D12 Raytracing Real-Time Denoised Ambient Occlusion preview" height="200">
+| 순서 | 셰이더 | 하는 일 |
+| --- | --- | --- |
+| 1 | `ClipTrianglesCS` | 삼각형마다 정점 3개만 보고 자른다. 교차점 2개가 절단 선분 1개가 된다 |
+| 2 | `BoundaryKeysCS` | 선분 끝점을 평면 위 2D 좌표의 공간 해시(셀 크기 = `Epsilon`)에 넣는다 |
+| 3 | `LinkBoundaryCS` | 주변 9셀에서 같은 위치의 끝점을 찾아 선분을 연결한다 |
+| 4 | `RankBoundaryCS` | 연결된 선분마다 루프의 대표와 순서를 전파한다 (pointer jumping) |
+| 5 | `CapEarsCS` | 루프를 귀 자르기로 채운다 (아래 참고) |
+| 6 | `FinalizeCutCS` | 양쪽에 실제 표면이 있는 분할에서 성공한 루프만 cap으로 출력한다 |
+| 7 | `CutBoundsCS` | 조각 정점의 18-DOP 경계를 계산한다 (선택·충돌용) |
 
-### Guides
-1. [D3D12 Advanced Shader Delivery](Samples/Desktop/D3D12AdvancedShaderDelivery/readme.md): This guide walks through integrating Advanced Shader Delivery (ASD), which reduces shader compilation times, power consumption, and disruptive stuttering by precompiling your title's shaders and delivering them to the player's device. It covers creating a State Object Database (SODB), testing the resulting Precompiled Shader Database (PSDB), and deploying to a storefront.
+CPU 쪽에서는 섹션 경계 구가 평면 한쪽에만 있으면 교차 검사 없이 그 섹션을 통째로 한쪽에 배정합니다.
 
-## MiniEngine: A DirectX 12 Engine Starter Kit
-In addition to the samples, we are announcing the first DirectX 12 preview release of the MiniEngine.
+셰이더는 [MiniEngine/MeshCutting/Shaders](MiniEngine/MeshCutting/Shaders)에 있습니다.
 
-It came from a desire to quickly dive into graphics and performance experiments.  We knew we would need some basic building blocks whenever starting a new 3D app, and we had already written these things at countless previous gigs.  We got tired of reinventing the wheel, so we established our own core library of helper classes and platform abstractions.  We wanted to be able to create a new app by writing just the Init(), Update(), and Render() functions and leveraging as much reusable code as possible.  Today our core library has been redesigned for DirectX 12 and aims to serve as an example of efficient API usage.  It is obviously not exhaustive of what a game engine needs, but it can serve as the cornerstone of something new.  You can also borrow whatever useful code you find.
+### 단면 채우기의 병렬화 (`CapEarsCS`)
 
-### Some features of MiniEngine
-* High-quality anti-aliased text rendering
-* Real-time CPU and GPU profiling
-* User-controlled variables
-* Game controller, mouse, and keyboard input
-* A friendly DirectXMath wrapper
-* Perspective camera supporting traditional and reversed Z matrices
-* Asynchronous DDS texture loading and ZLib decompression
-* Large library of shaders
-* Easy shader embedding via a compile-to-header system
-* Easy render target, depth target, and unordered access view creation
-* A thread-safe GPU command context system (WIP)
-* Easy-to-use dynamic constant buffers and descriptor tables
+한 루프 안에서 여러 귀를 동시에 자르려면, 이웃한 귀가 같은 라운드에 함께 잘리면 안 됩니다.
 
-## Requirements
-Some samples require support for DirectX 12 Ultimate, see [this](http://aka.ms/DirectX12UltimateDev) post for details.
-### Master branch
-This branch is intended for the latest [released](https://docs.microsoft.com/en-us/windows/release-information/) Windows 10 version.
-* Windows 10 version 2004 (no new features were added in version 20H2)
-* [Visual Studio 2019](https://www.visualstudio.com/) with the [Windows 10 SDK version 2004(19041)](https://developer.microsoft.com/en-US/windows/downloads/windows-10-sdk)
-### Develop branch
-This branch is intended for features available in the latest Windows Insider Preview
-* [Windows 10 Insider Preview builds](https://docs.microsoft.com/en-us/windows-insider/developers/get-started) ([Dev Channel](https://docs.microsoft.com/en-us/windows-insider/flighting))
-* [Visual Studio 2019](https://www.visualstudio.com/) with the [Windows 10 Insider Preview SDK](https://www.microsoft.com/en-us/software-download/windowsinsiderpreviewSDK)
+1. **볼록 후보 표시:** 각 경계 정점이 볼록인지 0/1로 표시한다.
+2. **Exclusive Scan:** 표시를 누적합해 후보마다 순번을 매긴다.
+3. **교대 선택:** 라운드마다 홀수 순번 또는 짝수 순번 후보만 고른다. 이웃한 후보는 함께 선택되지 않는다.
+4. **InTriangle 검사:** 후보마다 스레드 하나가 귀 삼각형 안에 다른 경계 점이 있는지 확인한다. 검사할 점은 라운드 시작 때 목록(`TestList`)으로 압축한다.
+5. **동시 제거:** 통과한 귀를 한 번에 잘라 내고 다음 라운드로 넘어간다.
 
-## Contributing
-We're always looking for your help to fix bugs and improve the samples.  File those pull requests and we'll be happy to take a look.
+## 성능
 
-Troubleshooting information for this repository can be found in the site [Wiki](https://github.com/Microsoft/DirectX-Graphics-Samples/wiki).
+Bunny 모델(30,338 삼각형), y=0 평면, Release 빌드의 Static 절단 GPU 시간(중앙값)입니다.
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+| 환경 | 코드 기준 | 전체 GPU | cap 단계 |
+| --- | --- | --- | --- |
+| RTX 5060 Ti | `master` (`9f5e93c7`) | 1.71 ms | 1.01 ms |
+| RTX 5060 Ti | `cap-active-list` (`a2633711`, 미병합) | 1.12 ms | 0.51 ms |
 
-## Related links
-* [DirectX Developer Blog](https://devblogs.microsoft.com/directx)
-* [DirectX API documentation](https://docs.microsoft.com/en-us/windows/win32/directx)
-* [PIX on Windows](https://devblogs.microsoft.com/pix/documentation/)
-* [D3DX12 (the D3D12 Helper Library)](https://github.com/Microsoft/DirectX-Graphics-Samples/tree/master/Libraries/D3DX12)
-* [D3D12 Raytracing Fallback Layer](https://github.com/Microsoft/DirectX-Graphics-Samples/tree/master/Libraries/D3D12RaytracingFallback)
-* [D3D12 Residency Starter Library](https://github.com/Microsoft/DirectX-Graphics-Samples/tree/master/Libraries/D3DX12Residency)
-* [D3D12 MultiGPU Starter Library](https://github.com/Microsoft/DirectX-Graphics-Samples/tree/master/Libraries/D3DX12AffinityLayer)
-* [DirectX Tool Kit](https://github.com/Microsoft/DirectXTK12)
-* [D3DDred debugger extension](https://github.com/Microsoft/DirectX-Debugging-Tools)
+- GPU 병렬화 이전 CPU 구현은 i5-1135G7에서 Bunny 절단에 88.6 / 94.6 ms가 걸렸다. 측정 구간이 GPU와 달라 참고값이다.
+- 측정 조건과 원본 기록은 [CutPerformanceComparison.md](Docs/GPU/CutPerformanceComparison.md), [CapScanMarking.md](Docs/GPU/CapScanMarking.md)에 있다. 1.12 ms 측정은 `cap-active-list` 브랜치의 `Docs/GPU/CapActiveTestList.md`에 기록되어 있다.
+
+## 빌드와 실행
+
+Visual Studio Developer PowerShell(C++ 도구, Windows SDK, v143 toolset)에서 저장소 루트 기준으로 실행합니다.
+
+```powershell
+msbuild MiniEngine/ModelViewer/ModelViewer.slnx /restore /m /p:Configuration=Debug /p:Platform=Windows
+msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Release /p:Platform=Windows
+```
+
+```powershell
+Set-Location MiniEngine/ModelViewer
+../Build/x64/Debug/Output/ModelViewer/ModelViewer.exe
+```
+
+Visual Studio에서는 `ModelViewer.slnx`를 열고 ModelViewer를 시작 프로젝트로 지정한 뒤 **F5**로 실행합니다.
+모델은 `MiniEngine/ModelViewer/Models`의 `cube`, `bunny`, `dragon`, `Xbot`, `CesiumMan`을 `-model Models/bunny.glb`처럼 지정합니다.
+
+절단 벤치마크는 아래 스크립트로 Release 빌드 후 3회 실행하고, 결과를 `%TEMP%/cut-benchmark/summary.txt`에 모읍니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Tools/RunCutBenchmark.ps1
+```
+
+### 조작
+
+| 입력 | 동작 |
+| --- | --- |
+| 왼쪽 클릭 | 객체 또는 조각 선택 |
+| `Q` / `W` / `E` / `R` | 보기 / 이동 / 회전 / 크기 기즈모 |
+| `L` | World / Local 축 전환 |
+| `V` | Solid → Wireframe → Vertices 표시 모드 순환 |
+| `C` | 현재 절단 평면으로 자르기 |
+| `P` | 물리 실행 / 일시정지 |
+| `H` | 충돌 hull과 바닥 표시 |
+| `Delete` | 선택한 대상 삭제 |
+| `Ctrl+Z` | 마지막 드래그 취소 |
+| 오른쪽 버튼 + 마우스 / `WASD` `QE` | 카메라 회전 / 이동 |
+
+전체 조작 계약은 [Scene.md](Docs/Current/Scene.md)에 있습니다.
+
+## 저장소 구조
+
+| 경로 | 내용 |
+| --- | --- |
+| [MiniEngine/MeshCutting](MiniEngine/MeshCutting) | 절단 평면 기하(`Geometry/`), GPU 절단 작업(`GPU/`), 컴퓨트 셰이더(`Shaders/`), CPU 테스트(`tests/`) |
+| [MiniEngine/ModelViewer](MiniEngine/ModelViewer) | 데모 앱. Scene·GameObject·기즈모·절단·물리 시스템(`Scene/`) |
+| [MiniEngine/Physics](MiniEngine/Physics) | Jolt 연결, 물리 world, 관절 해제 |
+| [Docs](Docs) | 설계·구현·측정 문서. 목차는 [Docs/README.md](Docs/README.md), 코드 지도는 [CodeMap.md](Docs/Current/CodeMap.md) |
+| [Tools](Tools) | Jolt 빌드, 절단 벤치마크 스크립트 |
+
+## 참고
+
+- NDC 2025 메시 절단 기법 — 근거 정리: [NDC25Reference.md](Docs/NDC/NDC25Reference.md)
+- Unreal Engine `ProceduralMeshComponent` · `SliceProceduralMesh` · `BreakConstraint` 소스 비교: [UnrealSourceComparison.md](Docs/Unreal/UnrealSourceComparison.md)
+- Eder, Held, Palfrader (2018) — 병렬 귀 자르기 아이디어: [참고자료.md](Docs/GPU/참고자료.md)
+- [Jolt Physics](https://github.com/jrouwe/JoltPhysics) v5.6.0
+
+## 기반 프로젝트와 라이선스
+
+이 저장소는 Microsoft [DirectX-Graphics-Samples](https://github.com/microsoft/DirectX-Graphics-Samples)의 MiniEngine을 기반으로 합니다.
+원본 샘플(`Samples/`, `TechniqueDemos/`, `Libraries/`)과 라이선스는 그대로 두었습니다. 라이선스는 [LICENSE](LICENSE)를 따릅니다.
