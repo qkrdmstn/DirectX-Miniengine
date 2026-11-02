@@ -78,6 +78,7 @@ S1은 구조만 바꾸고 결과는 그대로 두어 배치 변경의 회귀를 
 - S2: 기존 기하 검증 통과, 반복 3회 checksum 동일, CAP_THREADS 64/256/512에서 checksum 동일, 라운드 수 기록. 성능은 MX450 Release Bunny 벤치를 1b와 교차 순서로 각 3회 재고 범위가 겹치면 개선으로 판정하지 않는다.
 - S3: S2와 checksum 동일, 성능 기록.
 - 최종 목표(5060 Ti `medianGpuMs` ≤ 2 ms) 판정은 사용자 측정으로 한다.
+- 측정 명령: 저장소 루트에서 `powershell -ExecutionPolicy Bypass -File Tools/RunCutBenchmark.ps1`. Release 빌드 후 위 Bunny 벤치 인수로 3회 실행하고, 각 실행은 `-cut-benchmark-out`으로 결과 세 줄(전체·단계 중앙값·GPU)을 쓰고 스스로 종료한다. 커밋과 결과는 `%TEMP%/cut-benchmark/summary.txt`에 모인다.
 
 ## 7. 위험과 미확인
 

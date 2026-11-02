@@ -77,6 +77,10 @@ public:
         if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done)
             return true;
 
+        // 벤치마크 결과 파일을 쓴 뒤에는 남은 GPU 절단이 끝나면 종료한다.
+        if (m_BenchmarkWritten && !m_Cutting.IsBusy())
+            return true;
+
         // 기존 GPU 작업 완료와 사용자 종료 요청을 확인한다.
         return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished() && m_EditApplyChecks.Finished() && m_EditDeleteChecks.Finished())
             || (!m_EscapeConsumed && IGameApp::IsDone());
@@ -119,6 +123,8 @@ private:
     std::array<std::vector<double>, 4> m_CutStageSamples;
     char m_BenchmarkText[160] = {};
     char m_BenchmarkStageText[160] = {};
+    std::wstring m_BenchmarkOutPath;
+    bool m_BenchmarkWritten = false;
     std::string m_GpuName;
     Math::Vector3 m_LastCutNormal{Math::kYUnitVector};
     bool m_CaptureComplete = false;
@@ -427,6 +433,7 @@ void ModelViewer::Startup( void )
     m_ActiveCutPlane = m_CutPlanes.CreatePlane({4.0f, 4.0f}, Viewer::SceneTransform(kIdentity));
     CommandLineArgs::GetInteger(L"cut", m_AutoCuts);
     CommandLineArgs::GetInteger(L"cut-benchmark", m_BenchmarkRemaining);
+    CommandLineArgs::GetString(L"cut-benchmark-out", m_BenchmarkOutPath);
     CommandLineArgs::GetFloat(L"cut-y", m_AutoCutY);
     CommandLineArgs::GetFloat(L"cut-width",m_AutoCutWidth);
     CommandLineArgs::GetInteger(L"cut-repeat-plane",m_RepeatCutPlane);
@@ -622,6 +629,16 @@ void ModelViewer::Update( float deltaT )
                 snprintf(m_BenchmarkStageText, sizeof(m_BenchmarkStageText),
                     "Cut stages median ms: clip=%.4f boundary=%.4f cap=%.4f finalize=%.4f",
                     stageMedian[0], stageMedian[1], stageMedian[2], stageMedian[3]);
+
+                // -cut-benchmark-out을 주면 화면과 같은 세 줄을 파일에 쓰고 종료를 요청한다.
+                if (!m_BenchmarkOutPath.empty())
+                {
+                    std::ofstream out(m_BenchmarkOutPath, std::ios::trunc);
+                    out << m_BenchmarkText << "\n" << m_BenchmarkStageText << "\nGPU: " << m_GpuName << "\n";
+                    if (!out)
+                        throw std::runtime_error("Failed to write cut benchmark output");
+                    m_BenchmarkWritten = true;
+                }
             }
         }
         // 기본은 위치 보존이며, 명시한 진단 간격만 새 B의 실제 Transform에 적용한다.
