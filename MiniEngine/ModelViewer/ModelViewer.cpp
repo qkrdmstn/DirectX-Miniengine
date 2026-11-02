@@ -75,7 +75,7 @@ public:
     virtual bool IsDone() override
     {
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
-        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 4 && (m_CapturePath.empty() || m_CaptureComplete)))
+        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 5 && (m_CapturePath.empty() || m_CaptureComplete)))
             return true;
 
         // 벤치마크 결과 파일을 쓴 뒤에는 남은 GPU 절단이 끝나면 종료한다.
@@ -630,10 +630,29 @@ void ModelViewer::Update( float deltaT )
         m_QuerySelfTest = 0;
     }
     const bool wasCuttingBusy = m_Cutting.IsBusy();
+    const bool wasPatchCutting = m_SkeletalPatchCopy.IsCutInFlight();
     const bool wasBenchmarkAtUpdateStart = m_BenchmarkRemaining != 0;
-    m_Cutting.Update();
+    // 새 C는 이전 복사본 절단 결과 게시 전에 공통 삭제 경로로 무효화한다.
+    const bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
+    if (cutKey) m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
+
+    // 열린 패치에는 Static 전용 cap 최소 개수 검증을 적용하지 않고 설정은 보존한다.
+    const uint32_t staticMinimumLoops = m_Cutting.ExpectedMinimumLoops;
+    if (wasPatchCutting) m_Cutting.ExpectedMinimumLoops = 0;
+    try
+    {
+        m_Cutting.Update();
+    }
+    catch (...)
+    {
+        m_Cutting.ExpectedMinimumLoops = staticMinimumLoops;
+        throw;
+    }
+    m_Cutting.ExpectedMinimumLoops = staticMinimumLoops;
     for (const Viewer::CutResultEntry& cutResult : m_Cutting.DrainResults())
     {
+        // 패치 결과는 Static publication·벤치마크·자동 재절단에서 제외한다.
+        if (m_SkeletalPatchCopy.OnCutResult(m_Scene, m_Cutting, cutResult)) continue;
         m_CutScenario.OnResult(m_Scene, m_Physics, cutResult, m_Publications);
         if (m_BenchmarkRemaining)
         {
@@ -709,21 +728,6 @@ void ModelViewer::Update( float deltaT )
             }
         }
     }
-    const bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
-
-    // 새 C는 완료 결과 게시보다 먼저 이전 요청을 무효화한다.
-    if (cutKey) m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
-    Viewer::SkeletalPatchResult patchResult;
-    if (!cutKey && m_SkeletalPatchCopy.Update(m_Scene, patchResult) && m_SkeletalPatchChecks)
-    {
-        // 위팔은 같은 C 경로를 두 번 실행하여 owner 교체도 검증한다.
-        if (m_SkeletalPatchCheckIndex < 3 && patchResult.CrossingTriangles == 0)
-            throw std::runtime_error("Skeletal patch diagnostic segment has no surface crossing");
-        ++m_SkeletalPatchCheckIndex;
-    }
-    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 4 && !m_SkeletalPatchCopy.IsPending();
-    if (patchDiagnostic) m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
-
     // 키보드와 디버그 UI는 같은 실행 플래그를 사용하며 world를 재생성하지 않는다.
     if (GameInput::IsFirstPressed(GameInput::kKey_p)) g_PhysicsRunning = !bool(g_PhysicsRunning);
     const int scenarioRunState = m_CutScenario.WantedRunState(m_Physics, m_CutOwner, m_CutMesh);
@@ -792,14 +796,30 @@ void ModelViewer::Update( float deltaT )
     m_Physics.SyncColliders();
     m_Cutting.SubmitPending();
     // active 완료와 마지막 pending 거절을 포함해 batch busy→idle 전환당 자동 요청 하나를 소비한다.
-    if (wasCuttingBusy && !m_Cutting.IsBusy() && m_AutoCuts && !wasBenchmarkAtUpdateStart)
+    if (wasCuttingBusy && !wasPatchCutting && !m_Cutting.IsBusy() && m_AutoCuts && !wasBenchmarkAtUpdateStart)
     {
         --m_AutoCuts;
         ++m_AutoCutIndex;
     }
+
+    // Static batch 완료 집계를 마친 뒤에만 pending 패치가 단독 절단을 제출한다.
+    Viewer::SkeletalPatchResult patchResult;
+    if (!cutKey && m_SkeletalPatchCopy.Update(m_Scene, m_Cutting, patchResult) && m_SkeletalPatchChecks)
+    {
+        // 위팔은 같은 C 경로를 두 번 실행하여 owner 교체도 검증한다.
+        if (m_SkeletalPatchCheckIndex < 3 && patchResult.CrossingTriangles == 0)
+            throw std::runtime_error("Skeletal patch diagnostic segment has no surface crossing");
+        if (m_SkeletalPatchCheckIndex == 3 && (!patchResult.PatchTriangles || patchResult.CrossingTriangles))
+            throw std::runtime_error("Skeletal patch zero crossing diagnostic failed");
+        ++m_SkeletalPatchCheckIndex;
+    }
+    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 5 && !m_SkeletalPatchCopy.IsPending();
+    if (patchDiagnostic) m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
+
     // 자동 진단도 C와 같은 Static 요청·skin 선택 경로를 한 프레임에 한 번 실행한다.
     MeshCutting::CutPlaneData diagnosticPlane;
-    if (patchDiagnostic && !Viewer::BuildSkeletalPatchDiagnosticPlane(m_Scene, m_SkeletalPatchCheckIndex == 0 ? 0 : m_SkeletalPatchCheckIndex - 1, diagnosticPlane))
+    const uint32_t patchRegion = m_SkeletalPatchCheckIndex < 2 ? 0 : m_SkeletalPatchCheckIndex == 2 ? 1 : m_SkeletalPatchCheckIndex == 3 ? 3 : 2;
+    if (patchDiagnostic && !Viewer::BuildSkeletalPatchDiagnosticPlane(m_Scene, patchRegion, diagnosticPlane))
         throw std::runtime_error("Skeletal patch diagnostic plane failed");
     if (cutKey || patchDiagnostic)
     {
@@ -894,8 +914,9 @@ void ModelViewer::Update( float deltaT )
         (!m_EditTargetChecks.Finished() || !m_EditApplyChecks.Finished() || !m_EditDeleteChecks.Finished()))
         throw std::runtime_error("Edit target checks did not finish");
 
-    // GPU 작업이 없었던 후보 없음·제출 거절도 최종 게시 수 검증을 거친다.
-    if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_ExpectedPublications != ~0u)
+    // 패치 결과 격리까지 끝난 뒤 후보 없음·제출 거절도 최종 Static 게시 수를 검증한다.
+    if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && !m_SkeletalPatchCopy.IsPending()
+        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 5) && m_ExpectedPublications != ~0u)
     {
         if (m_Publications != m_ExpectedPublications)
             throw std::runtime_error("Unexpected number of cut publications");
@@ -1047,7 +1068,7 @@ void ModelViewer::RenderScene( void )
 
     const bool capture = !m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= m_CaptureTargetFrame
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
-        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 4);
+        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 5);
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
     {

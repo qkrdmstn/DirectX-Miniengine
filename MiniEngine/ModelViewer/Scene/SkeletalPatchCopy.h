@@ -62,6 +62,7 @@ namespace Viewer
     };
     class PhysicsSystem;
     class CuttingSystem;
+    struct CutResultEntry;
     // 추출 요청의 배치 snapshot과 단 하나의 게시 owner를 소유한다.
     class SkeletalPatchCopy
     {
@@ -70,16 +71,30 @@ namespace Viewer
         void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
         void Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic);
-        // GPU 준비 전에 완료 결과를 정적 owner로 게시하고 진단 카운터를 반환한다.
-        bool Update(Scene& scene, SkeletalPatchResult& result);
+        // 복사본을 준비하고 Static batch 뒤 절단하여 최종 완료를 반환한다.
+        bool Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result);
+        // 복사본 결과를 소비하여 Static 집계와 격리한다.
+        bool OnCutResult(const Scene& scene, const CuttingSystem& cutting, const CutResultEntry& result);
         // 진단의 중복 제출을 막기 위해 현재 요청 상태를 읽는다.
         bool IsPending() const
         {
-            // 완료 전인 GPU 추출 요청만 pending으로 취급한다.
-            return m_Job.IsPending();
+            // 추출부터 절단 결과 소비까지 같은 요청으로 취급한다.
+            return m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed;
+        }
+        // 자동 Static batch 완료 집계에서 직접 절단 작업을 구별한다.
+        bool IsCutInFlight() const
+        {
+            // 결과를 소비하기 전까지 복사본의 단독 작업이다.
+            return m_CutInFlight || !m_RetiredOwners.empty();
         }
     private:
+        // 최종 컴포넌트 수와 cap 진단을 기록한다.
+        void LogCutResult(const Scene& scene, const char* reason, uint32_t caps, uint32_t uncapped, uint32_t error);
         SkeletalPatchJob m_Job;
+        MeshCutting::CutPlaneData m_Plane;
+        SkeletalPatchResult m_Result;
+        std::vector<ObjectId> m_RetiredOwners;
+        bool m_CutPending = false, m_CutInFlight = false, m_Completed = false;
         ObjectId m_CopyOwner = 0;
         SceneTransform m_World;
         std::string m_Name;

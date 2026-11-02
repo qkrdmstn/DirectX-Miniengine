@@ -1,6 +1,7 @@
 ﻿#include "SkeletalPatchCopy.h"
 #include "CommandListManager.h"
 #include "ObjectSelection.h"
+#include "CuttingSystem.h"
 #include "Renderer.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
@@ -194,6 +195,7 @@ namespace Viewer
             throw std::runtime_error("Skeletal patch source world is not TRS");
         m_Name = target->GetName() + "_SkeletalPatch";
         m_Diagnostic = diagnostic;
+        m_Plane = plane;
         if (!m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic) && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
     }
@@ -206,26 +208,68 @@ namespace Viewer
         m_Name.clear();
 
         // 사용자 owner 삭제와 같은 절단 취소·물리 매핑 제거 경로를 사용한다.
+        if (m_CutInFlight) m_RetiredOwners.push_back(m_CopyOwner);
+        m_CutPending = m_CutInFlight = m_Completed = false;
         if (scene.FindObject(m_CopyOwner)
             && !DeleteEditTarget(scene, &physics, &cutting, EditTarget::MakeOwner(m_CopyOwner)))
             throw std::runtime_error("Skeletal patch owner deletion failed");
         m_CopyOwner = 0;
     }
 
-    // 비동기 카운터 수집 후 packed GPU geometry를 기존 baked 렌더 경로에 게시한다.
-    bool SkeletalPatchCopy::Update(Scene& scene, SkeletalPatchResult& result)
+    // 복사본을 준비하고 Static batch가 비면 저장한 평면으로 절단한다.
+    bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
+        // 최종 결과를 한 번만 반환하고 다음 진단 지역 진행을 허용한다.
+        if (m_Completed)
+        {
+            result = m_Result;
+            m_Completed = false;
+            return true;
+        }
+
+        // Static batch 완료 전에는 직접 요청하지 않아 Busy 거절을 피한다.
+        if (m_CutPending && !cutting.IsBusy())
+        {
+            m_CutPending = false;
+            auto* owner = scene.FindObject(m_CopyOwner);
+            auto* component = owner && !owner->GetMeshComponents().empty() ? owner->GetMeshComponents().front().get() : nullptr;
+            if (!component)
+            {
+                LogCutResult(scene, "copy target deleted", 0, 0, 0);
+                return false;
+            }
+
+            // 직접 요청 동안만 허용하고 Static 후보 제외 플래그를 즉시 복원한다.
+            owner->SetNotCuttable(false);
+            try
+            {
+                m_CutInFlight = cutting.Request(m_CopyOwner, component->GetId(), m_Plane);
+            }
+            catch (...)
+            {
+                owner->SetNotCuttable(true);
+                throw;
+            }
+            owner->SetNotCuttable(true);
+            PatchLog("Skeletal patch cut submitted=%u owner=%llu\n", m_CutInFlight ? 1u : 0u,
+                static_cast<unsigned long long>(m_CopyOwner));
+            if (!m_CutInFlight) LogCutResult(scene, cutting.GetStatusText(), 0, 0, 0);
+        }
+
         // 빈 패치는 owner를 만들지 않고 원인을 기록한다.
         std::shared_ptr<SkeletalPatchBuffers> patch;
         if (!m_Job.Poll(result, patch)) return false;
-        if (!result.PatchTriangles)
+        if (!result.PatchTriangles || !result.CrossingTriangles)
         {
-            PatchLog("Skeletal patch publish skipped: no influenced triangles\n");
-            if (m_Diagnostic) throw std::runtime_error("Skeletal patch diagnostic empty publication");
+            PatchLog("Skeletal patch publish skipped: %s; no copy or cut requested\n",
+                !result.PatchTriangles ? "no influenced triangles" : "no crossing triangles");
+            if (m_Diagnostic && scene.FindObject(m_CopyOwner))
+                throw std::runtime_error("Skeletal patch zero crossing created a copy");
             return true;
         }
 
         // 같은 원본 재질을 쓰는 자동 생성 컴포넌트의 geometry만 교체한다.
+        m_Result = result;
         m_Offset = patch->SourceWorldWidth + 0.5f;
         m_World.SetTranslation(m_World.GetTranslation() + Math::Vector3(m_Offset, 0, 0));
         auto revision = GeometryRevision::FromGenerated(patch->Geometry);
@@ -235,6 +279,40 @@ namespace Viewer
             throw std::runtime_error("Skeletal patch publication failed");
         owner.SetNotCuttable(true);
 
+        // C 시점 평면 변환을 복사본과 같은 거리로 옮겨 모든 평면 정보를 재구축한다.
+        const auto sourcePlane = m_Plane;
+        Math::AffineTransform planeWorld(Invert(m_Plane.WorldToPlane));
+        planeWorld.SetTranslation(planeWorld.GetTranslation() + Math::Vector3(m_Offset, 0, 0));
+        if (!MeshCutting::TryBuildCutPlaneData({ m_Plane.HalfWidth * 2, m_Plane.HalfHeight * 2 }, planeWorld, m_Plane))
+            throw std::runtime_error("Skeletal patch offset plane invalid");
+
+        // 진단에서 평면 식·역변환·모서리가 복사본과 같은 이동인지 대조한다.
+        if (m_Diagnostic)
+        {
+            float frameError = 0, cornerError = 0, equationError = 0;
+            for (uint32_t i = 0; i < 4; ++i)
+            {
+                const Math::Vector3 shifted = sourcePlane.WorldCorners[i] + Math::Vector3(m_Offset, 0, 0);
+                cornerError = std::max(cornerError, float(Math::Length(shifted - m_Plane.WorldCorners[i])));
+                frameError = std::max(frameError, float(Math::Length(Math::Vector3(
+                    m_Plane.WorldToPlane * Math::Vector4(shifted, 1) - sourcePlane.WorldToPlane * Math::Vector4(sourcePlane.WorldCorners[i], 1)))));
+                equationError = std::max(equationError, std::abs(float(Math::Dot(m_Plane.WorldPlane, Math::Vector4(shifted, 1)))));
+            }
+            PatchLog("Skeletal patch offset plane delta=(%.6f,0,0) rectangle=(%.6f,%.6f) cornerError=%.9f frameError=%.9f equationError=%.9f\n",
+                m_Offset, m_Plane.HalfWidth * 2, m_Plane.HalfHeight * 2, cornerError, frameError, equationError);
+            if (std::max({ cornerError, frameError, equationError }) > 1e-4f)
+                throw std::runtime_error("Skeletal patch offset plane mismatch");
+        }
+
+        // 생성 geometry의 pose와 bounds를 준비한 뒤 다음 프레임의 절단 요청을 허용한다.
+        scene.InitializePoses();
+        if (!scene.FinalizeObjectPose(m_CopyOwner, nullptr, 0))
+            throw std::runtime_error("Skeletal patch copy pose invalid");
+        auto& context = GraphicsContext::Begin(L"Prepare skeletal patch copy");
+        owner.GetMeshComponents().front()->Update(context, *owner.GetModelInstance(), owner.GetTransform());
+        context.Finish();
+        m_CutPending = true;
+
         // Static batch·벤치마크·자동 재절단과 격리된 owner가 정확히 하나인지 검사한다.
         size_t copies = 0;
         for (const auto& object : scene.GetObjects())
@@ -242,7 +320,42 @@ namespace Viewer
         PatchLog("Skeletal patch published owner=%s triangles=%u worldOffset=(%.6f,0,0) copies=%zu %s\n",
             owner.GetName().c_str(), result.PatchTriangles, m_Offset, copies, copies == 1 ? "PASS" : "FAIL");
         if (copies != 1) throw std::runtime_error("Skeletal patch copy isolation failed");
+        return false;
+    }
+
+    // 복사본 결과를 먼저 소비하여 기존 Static 진단과 발행 집계에서 제외한다.
+    bool SkeletalPatchCopy::OnCutResult(const Scene& scene, const CuttingSystem& cutting, const CutResultEntry& result)
+    {
+        // 새 C로 삭제한 이전 복사본의 늦은 결과도 격리한다.
+        for (auto it = m_RetiredOwners.begin(); it != m_RetiredOwners.end(); ++it)
+            if (result.Owner == *it)
+            {
+                m_RetiredOwners.erase(it);
+                return true;
+            }
+        if (!m_CopyOwner || result.Owner != m_CopyOwner) return false;
+        if (!m_CutInFlight) return true;
+
+        // batch가 비었을 때 단독 제출했으므로 Last 진단은 이 결과에 대응한다.
+        m_CutInFlight = false;
+        const char* reason = result.Status == CutResultStatus::Published ? "published A/B" :
+            result.Reason ? result.Reason : result.Error & 1 ? "finite rectangle endpoints outside" :
+            result.Error ? "cutter fatal error; original copy kept" : "no split; original copy kept";
+        LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
         return true;
+    }
+
+    // 열린 패치의 surface 게시 또는 거절을 컴포넌트 수와 함께 기록한다.
+    void SkeletalPatchCopy::LogCutResult(const Scene& scene, const char* reason, uint32_t caps, uint32_t uncapped, uint32_t error)
+    {
+        // cap 수를 강제하지 않고 성공과 명시적 거절을 모두 최종 결과로 남긴다.
+        const auto* owner = scene.FindObject(m_CopyOwner);
+        const size_t components = owner ? owner->GetMeshComponents().size() : 0;
+        PatchLog("Skeletal patch cut result: %s components=%zu caps=%u uncapped=%u error=%u\n",
+            reason, components, caps, uncapped, error);
+        m_Completed = true;
+        if (m_Diagnostic && components != 2 && (!reason || !*reason))
+            throw std::runtime_error("Skeletal patch cut diagnostic missing rejection reason");
     }
 
     // 변환기의 DFS NodeId로 현재 위팔·허벅지 segment와 손 말단의 평면을 만든다.
@@ -250,10 +363,10 @@ namespace Viewer
     {
         // CesiumMan.glb의 오른쪽 위팔(10→11), 허벅지(17→18), 손(12)을 사용한다.
         using namespace Math;
-        const uint32_t nodes[] = { 10, 17, 12 };
+        const uint32_t nodes[] = { 10, 17, 12, 10 };
         for (const auto& object : scene.GetObjects())
         {
-            if (object->GetName() != "CesiumMan" || index >= 3)
+            if (object->GetName() != "CesiumMan" || index >= 4)
                 continue;
             const auto& pose = *object->GetModelInstance();
             if (!pose.HasValidPose() || pose.GetModel()->m_NumNodes <= 18)
@@ -264,8 +377,11 @@ namespace Viewer
             const Vector3 normal = Normalize(a - b);
             const Vector3 x = Normalize(Cross(normal, std::abs(float(normal.GetY())) < 0.9f ? Vector3(kYUnitVector) : Vector3(kXUnitVector)));
             const Vector3 origin = index == 2 ? a + (a - b) * 0.2f : (a + b) * 0.5f;
-            PatchLog("Skeletal patch diagnostic %s\n", index == 0 ? "upper arm" : index == 1 ? "thigh" : "hand");
-            return MeshCutting::TryBuildCutPlaneData({ 0.3f, 0.3f }, AffineTransform(Matrix3(x, normal, Cross(x, normal)), origin), plane);
+            PatchLog("Skeletal patch diagnostic %s\n", index == 0 ? "upper arm" : index == 1 ? "thigh" : index == 2 ? "hand" : "zero crossing");
+
+            // 본 내부의 작은 사각형은 선택·추출을 유지하면서 표면 교차 0의 게시 생략을 검증한다.
+            const float size = index == 3 ? 0.001f : 0.3f;
+            return MeshCutting::TryBuildCutPlaneData({ size, size }, AffineTransform(Matrix3(x, normal, Cross(x, normal)), origin), plane);
         }
         return false;
     }
@@ -554,6 +670,58 @@ namespace Viewer
         PatchLog("Skeletal patch copy minus offset min=(%.6f,%.6f,%.6f) max=(%.6f,%.6f,%.6f) maxVertexError=%.9f %s\n",
             float(copyMin.GetX()), float(copyMin.GetY()), float(copyMin.GetZ()),
             float(copyMax.GetX()), float(copyMax.GetY()), float(copyMax.GetZ()), maxError, maxError < 1e-4f ? "PASS" : "FAIL");
+
+        // 선택 패치의 무한 평면 교차와 사각형 밖 끝점을 진단에서만 측정한다.
+        uint32_t patchInfinite = 0, patchFinite = 0, outsideTriangles = 0;
+        Math::Vector3 crossMin(FLT_MAX), crossMax(-FLT_MAX);
+        for (const auto& origin : expected)
+        {
+            const auto& section = input.Sections[origin.SectionId];
+            const auto indices = TriangleIndices(section, section.Draws[origin.DrawId], origin.TriangleId);
+            Math::Vector3 points[3];
+            float distances[3];
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                points[i] = section.Vertices[indices[i]].Position;
+                distances[i] = float(Math::Dot(Math::Vector4(points[i], 1), input.Plane.WorldPlane));
+            }
+            if (*std::min_element(distances, distances + 3) >= -input.Epsilon
+                || *std::max_element(distances, distances + 3) <= input.Epsilon) continue;
+            ++patchInfinite;
+            patchFinite += CrossesRectangle(input, section, indices) ? 1u : 0u;
+            bool outside = false;
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                const uint32_t j = (i + 1) % 3;
+                if (distances[i] * distances[j] >= 0) continue;
+                const auto hit = points[i] + (points[j] - points[i]) * (distances[i] / (distances[i] - distances[j]));
+                const Math::Vector3 rectangle(input.Plane.WorldToPlane * Math::Vector4(hit, 1));
+                crossMin = Math::Min(crossMin, rectangle); crossMax = Math::Max(crossMax, rectangle);
+                const float dx = std::max(0.0f, std::abs(float(rectangle.GetX())) - input.Plane.HalfWidth);
+                const float dz = std::max(0.0f, std::abs(float(rectangle.GetZ())) - input.Plane.HalfHeight);
+                if (std::max(dx, dz) <= input.Epsilon) continue;
+                outside = true;
+                const Math::Vector3 worldHit(m_SourceWorld * Math::Vector4(hit, 1));
+                PatchLog("Skeletal patch outside section=%u draw=%u triangle=%u world=(%.6f,%.6f,%.6f) rectangleXZ=(%.6f,%.6f) excessXZ=(%.6f,%.6f)\n",
+                    origin.SectionId, origin.DrawId, origin.TriangleId, float(worldHit.GetX()), float(worldHit.GetY()), float(worldHit.GetZ()),
+                    float(rectangle.GetX()), float(rectangle.GetZ()), dx, dz);
+            }
+            if (outside)
+            {
+                ++outsideTriangles;
+                for (uint32_t index : indices)
+                {
+                    const auto& vertex = section.Vertices[index];
+                    PatchLog("Skeletal patch outside weights triangle=%u nodes=(%u,%u,%u,%u) weights=(%u,%u,%u,%u)\n", origin.TriangleId,
+                        input.JointNodes[section.StartJoint + vertex.Palette[0]], input.JointNodes[section.StartJoint + vertex.Palette[1]],
+                        input.JointNodes[section.StartJoint + vertex.Palette[2]], input.JointNodes[section.StartJoint + vertex.Palette[3]],
+                        vertex.Weights[0], vertex.Weights[1], vertex.Weights[2], vertex.Weights[3]);
+                }
+            }
+        }
+        PatchLog("Skeletal patch cross-section infinite=%u finite=%u outsideTriangles=%u rectangle=(%.6f,%.6f) rangeXZ=[%.6f,%.6f]x[%.6f,%.6f]\n",
+            patchInfinite, patchFinite, outsideTriangles, input.Plane.HalfWidth * 2, input.Plane.HalfHeight * 2,
+            float(crossMin.GetX()), float(crossMax.GetX()), float(crossMin.GetZ()), float(crossMax.GetZ()));
 
         // CPU 기준의 개수와 출처 및 게시 위치를 모두 성공 조건에 포함한다.
         uint32_t crossing = 0, uncovered = 0, infiniteCrossing = 0;

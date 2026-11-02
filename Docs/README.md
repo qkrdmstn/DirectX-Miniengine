@@ -28,7 +28,7 @@
 | [CapParallelOptimization.md](GPU/CapParallelOptimization.md) | cap 그룹 크기·결정성·MX450 비교 측정 | 진행 중 — 단계 1·1b `6f328257`; 단계 3(CapScanMarking)으로 5060 Ti 1.70 ms, 목표 달성; 1c 미착수 |
 | [CapScanMarking.md](GPU/CapScanMarking.md) | cap 선택을 누적합 기반 교대 표시로 교체 | 진행 중 — S2 `1a7d77ed` 이후 전체 지원 loop MC 통일·해시 귀 선택 제거·D/R 검증 완료 `0553410b`; 5060 Ti Bunny 재측정 1.71 ms(회귀 없음); 기존 미캡핑 진단 잔존 |
 | [ConcurrentCutJobs.md](GPU/ConcurrentCutJobs.md) | 여러 Static CutJob 제출·작업별 snapshot·완료 게시 | 완료 — `f2138029` 기준 1단계, Debug/Release·20회 실행 검증 `1532fc60` |
-| [SkeletalPatchCopyCut.md](GPU/SkeletalPatchCopyCut.md) | C 입력으로 평면이 지나는 본 선택→영향 패치 GPU 복사→원본 옆 복사본 절단 | 진행 중 — SP-4 구현·리뷰 완료(`9f26d066` 기준 미커밋), 정적 owner 게시·새 C 삭제·Static 집계 격리, posed 월드 X 폭 오프셋 수정·위치 수치 검증·복사본 1개 PASS·캡처·Debug/Release·CPU·cube 회귀 통과·D3D12 ERROR 0, SP-5 구현 전 (2026-11-02) |
+| [SkeletalPatchCopyCut.md](GPU/SkeletalPatchCopyCut.md) | C 입력으로 평면이 지나는 본 선택→영향 패치 GPU 복사→원본 옆 복사본 절단 | 진행 중 — SP-1~SP-5a 커밋(손 A/B, 위팔·허벅지 유한 사각형 거절), SP-5b·SP-6 구현 전 (2026-11-02) |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
