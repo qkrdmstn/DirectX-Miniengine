@@ -26,8 +26,11 @@ NDC25 방식(영향 영역 복사→복사본 절단→원본 숨김)의 앞 두
 | D7a | 추출 규칙의 기준 구현은 CPU 순수 함수(`ExtractPatchReference`)로 테스트 코드에만 둔다. segment 선택은 런타임 CPU 함수 자체를 테스트한다. 진단 옵션에서 GPU 결과(교차 수·미포함 교차 수·패치 수·출처 목록)를 같은 입력의 CPU 기준과 비교한다. 기본 실행 경로에는 CPU 계산이 없다. | GPU 결과의 정답을 사람이 읽을 수 있는 코드로 고정한다. |
 | D8 | 복사본 게시. `Scene::CreateObject(name, sourceModel)`로 owner를 만든다. 자동 생성된 컴포넌트에 D7 버퍼를 `GeometryRevision::FromGenerated`로 감싸 `MeshComponent::SetGeometry`로 넣는다(skin 없음, `meshCBV=0`, 원본 material, static PSO). world = 원본 world + X 오프셋(원본 bounds 폭 + 0.5 m). 삼각형 수는 비동기 readback으로 받은 뒤 게시한다(`CutJob::Poll` 방식). | 원본과 겹치지 않게 비교한다. 기존 생성 geometry 렌더 경로(`UpdateBaked`)를 재사용한다. 렌더(`Mesh::Draw`)와 절단기 dispatch가 CPU의 index 수를 쓰므로 개수만 읽는다(기존 Static `CutJob::Poll`과 같다). readback을 없애는 indirect draw·dispatch는 후속이다. 별도 GameObject는 오프셋 진단용 예외다. 원본 숨김 단계에서는 원칙(13.1절)대로 패치 A/B를 원본 GameObject의 MeshComponent로 옮긴다. |
 | D9 | 절단 요청. 게시 후 `MeshComponent::Update`/`PosedGeometry::UpdateBaked`로 bounds·pose를 명시적으로 준비한다. Static batch가 끝날 때까지 요청을 pending으로 둔다(`Request` busy 거절 회피). 그다음 오프셋 평면으로 `CuttingSystem::Request(copyObject, copyComponent, plane)`를 부른다. 오프셋 평면은 평면 변환을 Δ만큼 옮겨 `TryBuildCutPlaneData`로 다시 만든다(`WorldPlane`·`WorldToPlane`·`WorldCorners`가 함께 맞도록). | 새 절단 코드를 만들지 않고 검증된 절단기를 쓴다. 결과 A/B는 기존 규칙(같은 owner, A 교체 + B 추가)을 따른다. |
-| D10 | 패치는 열린 경계를 가진다. cap 실패는 기존 정책대로 surface만 게시한다. 교차선 끝점이 유한 사각형 밖이라 절단기가 fatal로 거절하면 복사본은 자르지 않은 채 두고 이유를 로그로 남긴다. `LastCaps/LastUncapped/LastError`를 기록하고, `ExpectedMinimumLoops`는 쓰지 않는다. | 본을 골랐다고 절단 성공이 보장되지는 않는다. 실패를 명시적 결과로 허용한다. |
+| D10 | (SP-5b에서 변경) 복사본 절단은 무한 평면으로 한다. 유한 사각형은 대상 선택(D3)과 본 선택(D6)에만 쓴다. 복사본 절단용 오프셋 평면은 같은 중심·법선·회전에 사각형 크기만 복사본 world bounds를 덮도록 키워 `TryBuildCutPlaneData`로 만든다. 절단기 규칙은 바꾸지 않는다. 패치는 열린 경계라 cap 실패는 기존 정책대로 surface만 게시한다. 그래도 거절되면 복사본을 그대로 두고 이유를 로그로 남긴다. `LastCaps/LastUncapped/LastError`를 기록하고 `ExpectedMinimumLoops`는 쓰지 않는다. | SP-5a에서 위팔·허벅지가 "교차선 끝점이 사각형 밖"으로 거절됐다. 원인은 선택 본 weight가 조금 있는 몸통·반대쪽 다리 삼각형이 사각형 밖에서 교차한 것이다(아래 SP-5a 근거). Unreal `SliceProceduralMesh`도 무한 평면으로 자른다. 사용자 요구는 "평면을 옮겨 C를 누르면 잘린 결과가 옆에 보인다"이다. |
 | D11 | 수명과 격리. 새 C는 진행 중인 SkeletalPatchJob과 pending 요청을 무효화하고, `RequestAll` 전에 이전 복사본 owner를 `DeleteEditTarget`의 owner 삭제 경로로 지운다(`CancelTarget`·`PhysicsSystem::RemoveTarget` 포함). 대상이 없어도 이전 복사본은 지운다. 복사본 owner는 Static publication 수·벤치마크·자동 재절단 집계에서 뺀다. | 복사본은 정적이라 다음 C의 Static 후보가 될 수 있다. 진단 화면이 쌓이지 않게 하고, 기존 측정을 바꾸지 않는다. |
+| D12 | (SP-6) 본 선택 모드 두 가지. Parent는 D6 그대로다. Influence는 유한 사각형 교차 삼각형(D7과 같은 판정)의 꼭짓점 정규화 weight를 NodeId별로 합해 최대 joint를 고른다(동점은 작은 NodeId). Influence는 GPU 합산·선택 패스가 고른 결과를 GPU 버퍼로 추출 패스에 바로 넘기고, CPU는 로그용 NodeId 4바이트만 기존 readback에 붙여 읽는다. 교차 삼각형이 없으면 기존처럼 거절 로그를 남긴다. 실행 옵션 `-skeletal-joint-mode parent\|influence`(기본 parent)와 빈 키 하나로 전환하고 전환 시 로그를 남긴다. `-skeletal-patch-checks`는 부위마다 두 모드를 차례로 돌려 joint·패치·교차·미포함·절단 결과를 나란히 로그로 남긴다. Influence 선택은 CPU 기준 함수(테스트 전용)와 비교한다. | 사용자가 두 기준의 결과를 화면과 수치로 비교한 뒤 BreakConstraint 단계의 기준을 정한다. SP-2a 투표 셰이더(`8af35400`)를 고쳐 재사용한다. |
+| D13 | (SP-5b) 절단 결과를 보이게 한다. 복사본 절단 A/B가 게시되면 B 컴포넌트를 평면 법선 방향으로 A에서 멀어지게 0.1 m(world) 옮겨 렌더링한다. | A/B가 붙어 있으면 잘렸는지 보이지 않는다(사용자 결정). |
+| D14 | (SP-5b) 스켈레탈 메시 일반화. 선택·추출·게시·절단은 모델 이름·노드 이름·좌표 상수 없이 동작한다. 한 Model 안의 여러 내부 Mesh(예: Xbot의 Surface·Joints)는 각 `mesh.startJoint`로 palette→NodeId를 풀고, 선택 본 영향 삼각형을 모든 Mesh에서 함께 복사한다. `-skeletal-patch-checks`는 CesiumMan과 Xbot을 모두 올리고, 각 모델의 골격 구조에서 결정적으로 고른 segment 2개 이상과 말단 1개로 평면을 만든다(중심 = segment 중점, 법선 = segment 방향, 하드코딩 이름 없음). | CesiumMan 전용 구현이 되지 않게 한다(사용자 요구). |
 
 ## 3. 인터페이스 골격 (이름은 구현 시 주변 코드에 맞춘다)
 
@@ -67,8 +70,11 @@ public:
 | SP-2a | (완료 `8af35400`, 규칙 변경으로 셰이더는 대체) 투표 셰이더 2개 + `SkeletalPatchJob` 제출/Poll 골격 | Debug/Release 빌드 | — |
 | SP-2b | 투표 셰이더·`SelectJointReference` 제거, CPU `SelectSegmentJoint`(D6: segment·말단·palette 마스크) + CPU 테스트 + C 입력 연결(D3, D4) + 로그(선택 본·segment/말단·교차점). Job 제출은 SP-3에서. 화면 변화 없음 | CesiumMan 위팔·허벅지·손 절단 시 기대 joint 로그, CPU 테스트 PASS | 구현 + R + B + V |
 | SP-3 | 패치 추출 Compute(D7): 누적합 압축, 정적 생성 형식·출처·bounds, 용량 상한, 교차·미포함 교차 카운트. 로그(패치 수·교차 수·미포함 교차 수) | 진단 옵션에서 패치 수·출처 목록·카운트가 CPU 기준과 일치, D3D12 ERROR 0 | 구현 + R + B + V |
-| SP-4 | 복사본 owner 게시(D8) + 이전 복사본 정리·격리(D11) | 완료(미커밋): 캡처·위팔 재요청 포함 복사본 1개, 원본 posed 월드 X 폭 + 0.5 m, GPU packed VB와 원본 pose의 월드 위치 대조 PASS | 구현 + R + B + V |
-| SP-5 | pose 준비·batch 대기·오프셋 평면 절단 요청(D9) + 결과/실패 로그(D10) | 완료(미커밋): 위팔·허벅지 D10 거절, 손 A/B 캡처, 교차 0 게시 생략, Static 회귀·집계 격리, D3D12 ERROR 0 | 구현 + R + B + V |
+| SP-4 | 복사본 owner 게시(D8) + 이전 복사본 정리·격리(D11) | 완료 `9bf4ec77`: 캡처·위팔 재요청 포함 복사본 1개, 원본 posed 월드 X 폭 + 0.5 m, GPU packed VB와 원본 pose의 월드 위치 대조 PASS | 구현 + R + B + V |
+| SP-5a | pose 준비·batch 대기·오프셋 평면 절단 요청(D9) + 결과/실패 로그(당시 D10) | 완료 `17cdbdbe`: 위팔·허벅지 유한 사각형 거절, 손 A/B 캡처, 교차 0 게시 생략, Static 회귀·집계 격리, D3D12 ERROR 0 | — |
+| SP-5b | 복사본 무한 평면 절단(D10) + B 분리 0.1 m(D13) + 일반화·Xbot 진단(D14) | CesiumMan·Xbot 각각 segment 2개 이상·말단 1개에서 A/B가 원본 옆에 벌어져 보임(캡처), GPU/CPU 추출 일치, Static 회귀 불변, D3D12 ERROR 0 | 구현 + R + B + V |
+| SP-6 | 본 선택 모드 Parent/Influence 전환·비교 진단(D12) | 두 모델·부위별 두 모드 비교 로그와 캡처, Influence GPU==CPU, D3D12 ERROR 0. 끝나면 멈추고 사용자에게 비교 결과를 보고한다 | 구현 + R + B + V |
+| SP-7 | (사용자가 SP-6 결과를 본 뒤 설계) 선택 joint에 BreakConstraint 적용 | — | — |
 
 한 단계가 300줄을 넘으면 shader와 C++ 연결을 나눈다.
 
@@ -76,7 +82,7 @@ SP-3 리뷰 근거: `skeletonRoot`에서 부모 공간이 끊긴 본 원점에 `
 
 SP-4 리뷰 근거: 기존 약 6.874 m 오프셋은 `MeshComponent::GetBoundingSphere`의 느슨한 구 지름 + 0.5 m였다. `SkeletalPatchJob::Submit`의 추출 패스에서 선택과 무관하게 원본 전체 draw의 posed 정점을 component world로 옮겨 X 최소·최대를 집계하도록 수정했다. 일반 경로는 두 스칼라만 추가 readback하며 정점 readback은 진단 전용이다. `SkeletalPatchJob::Validate`는 원본 pose와 실제 GPU packed VB를 게시 TRS로 변환하여 오프셋 제거 후 비교한다. 진단 입력의 X 경계는 [11.696115, 13.003948] m, 폭 1.307833 m, 오프셋 1.807833 m다. 손 영역의 원본/복사본(오프셋 제거) AABB는 모두 min=(11.696115, -0.327247, -1.023413), max=(12.165718, 0.520666, -0.291195) m이고 정점별 최대 오차는 0 m다. 이는 제출 pose의 비교이며 이후 원본 애니메이션을 따라가는 복사본은 아니다. 리뷰 빌드·실행 로그는 `%TEMP%/step7-SP4-review-final-{Debug,Release}.log`, `%TEMP%/step7-Release-SP4-review-patch-final.log`, `%TEMP%/step7-Release-SP4-review-static.log`, CPU 산출물은 `%TEMP%/sp4-review-tests/`, 캡처는 `%TEMP%/SP4-review-copy.png`다. SP-5의 복사본 절단과 A/B 결과 완료 조건은 아직 적용 전이다.
 
-SP-5 독립 리뷰 근거(2026-11-02):
+SP-5a 독립 리뷰 근거(2026-11-02, 당시 D10 기준):
 
 - `SkeletalPatchCopy::Update`는 `CrossingTriangles==0`이면 owner 생성과 cut 요청을 모두 생략한다. GPU 진단의 1mm 사각형은 patch=328/crossing=0이며 생략 로그와 owner 부재 검사를 통과했다.
 - C 시점 평면을 복사본과 같은 X=1.807833m 옮겨 `TryBuildCutPlaneData`로 재구축했다. 모서리/역변환/평면 식 최대 오차는 각각 0.000001909/0.000002865/0.000001431이다. 원본 pose와 복사 정점의 이동 제거 후 최대 오차는 0m이다.
@@ -92,7 +98,9 @@ SP-5 독립 리뷰 근거(2026-11-02):
 ## 5. 완료 조건
 
 - C를 누르면 평면이 지나는 segment의 부모 본(segment가 없으면 가장 가까운 말단 joint)이 선택되고, 그 본의 영향 삼각형만 원본 옆에 같은 pose로 보인다.
-- 복사본이 오프셋 평면으로 잘려 A/B 두 컴포넌트가 되거나, 절단기 거절 이유가 로그에 남는다. cap 결과를 로그로 보고한다.
+- 평면을 옮겨 C를 누르면 복사본이 오프셋 평면(무한)으로 잘려 A/B가 되고, B가 법선 방향으로 벌어져 원본 옆에 보인다. 그래도 절단기가 거절하면 이유가 로그에 남는다. cap 결과를 로그로 보고한다.
+- CesiumMan과 Xbot에서 같은 코드로 동작한다(모델별 상수 없음).
+- (SP-6) Parent/Influence 모드를 바꿔 같은 평면의 결과를 비교할 수 있다.
 - 기존 Static C 절단(Cube·Bunny·Dragon)의 동작·배치·진단·벤치마크 결과가 바뀌지 않는다. 원본 skin 메시는 바뀌지 않는다.
 - 평면이 skin 메시와 겹치지 않거나 교차 삼각형이 없거나 Compute Pose가 꺼져 있으면 아무것도 만들지 않고 이유를 로그로 남긴다.
 - 기본 실행 경로에서 정점 데이터의 CPU readback·CPU 추출이 없다(결과 몇 바이트만 비동기). 본 선택만 CPU 본 행렬로 한다.
@@ -101,4 +109,4 @@ SP-5 독립 리뷰 근거(2026-11-02):
 
 ## 6. 하지 않는 것
 
-원본 패치 숨김(다음 단계는 NDC 슬라이드대로 버텍스 컬러 마스크 + discard를 기준으로 설계), 원본 A/B 배정(K/D subtree), 본 추종 애니메이션·교점 Blend 출처, BreakConstraint 연결, 복사본 재절단 보장.
+원본 패치 숨김(다음 단계는 NDC 슬라이드대로 버텍스 컬러 마스크 + discard를 기준으로 설계), 원본 A/B 배정(K/D subtree), 본 추종 애니메이션·교점 Blend 출처, BreakConstraint 연결(SP-7, SP-6 결과 확인 후), 복사본 재절단 보장.
