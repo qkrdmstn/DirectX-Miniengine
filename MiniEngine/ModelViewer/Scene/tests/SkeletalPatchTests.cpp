@@ -71,6 +71,11 @@ int main()
         vertices[2].Position = Vector3(4, input.Epsilon * 0.5f, 0);
         Check(CrossesRectangle(input, input.Sections[0], indices), "outside endpoints and epsilon-zero projection");
 
+        // 비균일 월드 변환 뒤 길이가 달라진 평면 법선으로도 정확히 투영한다.
+        input.Plane.WorldPlane *= 2.0f;
+        vertices[2].Position = Vector3(4, input.Epsilon * 0.4f, 0);
+        Check(CrossesRectangle(input, input.Sections[0], indices), "non-unit local plane projection");
+
         // 양수 baseVertex 구간의 원본 꼭짓점 번호도 보존한다.
         input.Sections[0].Draws = { {1, 3, 0} };
         input.Sections[0].Vertices.insert(input.Sections[0].Vertices.begin(), section.Vertices[0]);

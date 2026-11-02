@@ -1,4 +1,4 @@
-상태: 진행 중 — `8af35400` 기준 미커밋, SP-1·SP-2a·SP-2b 완료(CPU segment 부모 선택·C 연결 검증), SP-3~SP-5 구현 전 (2026-11-02)
+상태: 진행 중 — `8c82a84b` 기준 미커밋, SP-3 리뷰 수정 완료: 본 좌표계 보정 후 GPU/CPU 패치·교차·미포함 위팔 328/20/5·허벅지 352/12/0·손 222/17/0 및 출처 순서 일치, 3지역 PASS·D3D12 ERROR 0; SP-4·SP-5 구현 전 (2026-11-02)
 
 # Skeletal 패치 복사 절단 (첫 단계)
 
@@ -71,6 +71,8 @@ public:
 | SP-5 | pose 준비·batch 대기·오프셋 평면 절단 요청(D9) + 결과/실패 로그(D10) | 복사본이 A/B로 잘림(캡처) 또는 실패 이유 로그, 기존 Static C 절단 불변, D3D12 ERROR 0 | 구현 + R + B + V |
 
 한 단계가 300줄을 넘으면 shader와 C++ 연결을 나눈다.
+
+SP-3 리뷰 근거: `skeletonRoot`에서 부모 공간이 끊긴 본 원점에 `JointFrameToWorld`가 렌더와 같은 `component world × inverse(SourceFrame) × mesh node`를 적용한다. 진단 평면도 같은 좌표로 만들며, 추출 RAW40·packed VB는 component-local을 유지하고 `RequestSkeletalPatch`에서 cutter와 같은 방식으로 평면을 변환한다. 보정 전 무한 평면 교차 198/0/187은 보정 후 47/108/69이며, 위팔의 미포함 교차 5는 거절 조건으로 쓰지 않는다. 비단위 평면의 eps 투영과 현재 패치 bounds도 보정했다. Debug/Release 빌드·CPU 테스트(SkeletalPatchTests 45개)·정적 cube 회귀가 통과했고, 회전·비균일 scale·SourceFrame 추가 진단도 3지역 GPU/CPU PASS다.
 
 ## 5. 완료 조건
 

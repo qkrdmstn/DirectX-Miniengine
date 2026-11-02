@@ -116,6 +116,9 @@
     <ClInclude Include="Scene\CutPlaneRenderer.h" />
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
     <FxCompile Include="Scene\Shaders\GizmoVS.hlsl">
       <ShaderType>Vertex</ShaderType>
     </FxCompile>
@@ -464,7 +467,10 @@
     <ClInclude Include="Scene\CutTransaction.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Scene\SkeletalPatchCopy.cpp" />
+    <ClCompile Include="Scene\SkeletalPatchCopy.cpp">
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClInclude Include="Scene\SegmentJointSelection.h" />
     <ClInclude Include="Scene\SkeletalPatchCopy.h" />
   </ItemGroup>

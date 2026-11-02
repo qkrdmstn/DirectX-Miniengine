@@ -315,4 +315,7 @@
     <ClInclude Include="Scene\SegmentJointSelection.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\SkeletalPatchCopy.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl" />
+  </ItemGroup>
 </Project>

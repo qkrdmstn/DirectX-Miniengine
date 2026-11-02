@@ -62,7 +62,11 @@ namespace Viewer::PatchReference
             points[i] = section.Vertices.at(indices[i]).Position;
             const float distance = float(Math::Dot(Math::Vector4(points[i], 1), input.Plane.WorldPlane));
             distances[i] = std::abs(distance) <= input.Epsilon ? 0.0f : distance;
-            if (distances[i] == 0) points[i] -= Math::Vector3(input.Plane.WorldPlane) * distance;
+            if (distances[i] == 0)
+            {
+                const Math::Vector3 normal(input.Plane.WorldPlane);
+                points[i] -= normal * (distance / float(Math::Dot(normal, normal)));
+            }
         }
         if (*std::min_element(distances, distances + 3) >= -input.Epsilon
             || *std::max_element(distances, distances + 3) <= input.Epsilon) return false;

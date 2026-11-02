@@ -90,6 +90,8 @@ public:
 private:
 
     uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0;
+    Viewer::SkeletalPatchJob m_SkeletalPatchJob;
+    std::shared_ptr<Viewer::SkeletalPatchBuffers> m_SkeletalPatchBuffers;
     Camera m_Camera;
     unique_ptr<CameraController> m_CameraController;
 
@@ -585,6 +587,10 @@ void ModelViewer::Startup( void )
 // GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.
 void ModelViewer::Cleanup( void )
 {
+    // 미게시 패치 작업과 출력 자원도 renderer 종료 전에 정리한다.
+    m_SkeletalPatchJob.Cancel();
+    m_SkeletalPatchBuffers.reset();
+
     m_Cutting.Clear();
     m_CutScenario.Shutdown();
     m_CollisionDraw.PrintSummary();
@@ -771,7 +777,15 @@ void ModelViewer::Update( float deltaT )
     }
     // 자동 진단도 C와 같은 Static 요청·skin 선택 경로를 한 프레임에 한 번 실행한다.
     MeshCutting::CutPlaneData diagnosticPlane;
-    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 3;
+    Viewer::SkeletalPatchResult patchResult;
+    if (m_SkeletalPatchJob.Poll(patchResult, m_SkeletalPatchBuffers) && m_SkeletalPatchChecks)
+    {
+        // 피부를 관통하도록 만든 두 segment 평면은 실제 교차가 있어야 한다.
+        if (m_SkeletalPatchCheckIndex < 2 && patchResult.CrossingTriangles == 0)
+            throw std::runtime_error("Skeletal patch diagnostic segment has no surface crossing");
+        ++m_SkeletalPatchCheckIndex;
+    }
+    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 3 && !m_SkeletalPatchJob.IsPending();
     if (patchDiagnostic && !Viewer::BuildSkeletalPatchDiagnosticPlane(m_Scene, m_SkeletalPatchCheckIndex, diagnosticPlane))
         throw std::runtime_error("Skeletal patch diagnostic plane failed");
     if (cutKey || patchDiagnostic)
@@ -783,9 +797,8 @@ void ModelViewer::Update( float deltaT )
             if (patchDiagnostic)
                 plane = diagnosticPlane;
             if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
-            Viewer::LogSkeletalPatchSelection(m_Scene, plane);
-            if (patchDiagnostic)
-                ++m_SkeletalPatchCheckIndex;
+            m_SkeletalPatchBuffers.reset();
+            Viewer::RequestSkeletalPatch(m_Scene, plane, m_SkeletalPatchJob, patchDiagnostic);
         }
     }
 
