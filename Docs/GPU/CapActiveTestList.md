@@ -1,4 +1,4 @@
-상태: 진행 중 — AL-1 `74f4940d` (base `7fe9aa0b`), AL-0·AL-1 구현·검증 기록 (2026-11-02)
+상태: 진행 중 — AL-1 `74f4940d` (base `7fe9aa0b`), AL-0·AL-1 구현·검증, 5060 Ti cap 1.01→0.51 ms (2026-11-02)
 
 # cap 내부 점 검사 대상 목록 압축
 
@@ -110,4 +110,5 @@ AL-1은 변경 약 300줄 이내로 하고, 끝나면 이 문서 상태 줄과 R
 - cap 중앙값(ms): before 2.4305/1.9067/2.1258, after 1.1023/0.7451/1.2728. 범위 비중첩으로 개선; 세 중앙값의 중앙값은 2.1258→1.1023 ms(약 48.15% 감소).
 - 구현 대화를 공유하지 않은 별도 Codex 정적 리뷰 PASS, 보고할 결함 0건. 최종 셰이더 diff는 +26/-6줄이다.
 - 로그·DXIL·백업·해시·집계는 `%TEMP%/cap-al-wt/`의 `evidence.json`, `verify-*.json`, `cross-results.json`, `bench-*/`에 있다. 임시 편집마다 복원 해시를 확인했다.
-- 미검증: attempt=1, 5060 Ti, 앱 정상 종료(helper는 게시 marker 뒤 종료). 기존 Bunny uncappedSegments 207/49와 badBoundaryMask는 유지된다.
+- 5060 Ti(사용자 측정, `a2633711` Release, `RunCutBenchmark.ps1` 기본 Bunny y=0) 3회: medianGpuMs 1.155/1.101/1.118, p95 1.310/1.502/1.411, cap 0.5089/0.5089/0.5086 ms. 변경 전(`9f5e93c7`, 같은 인수) medianGpuMs 1.685~1.721·cap 1.0103~1.0105 ms 대비 cap 약 50%, 전체 약 34% 감소다. 교차 순서가 아닌 별도 시점 측정이지만 3회 범위가 크게 떨어져 개선으로 본다. clip 0.092·boundary 0.139 ms는 그대로이고 finalize 0.362~0.416 ms가 다음으로 큰 단계다.
+- 미검증: attempt=1, 앱 정상 종료(helper는 게시 marker 뒤 종료). 기존 Bunny uncappedSegments 207/49와 badBoundaryMask는 유지된다.
