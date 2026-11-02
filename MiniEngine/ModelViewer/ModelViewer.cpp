@@ -38,6 +38,7 @@
 #include "Scene/CutPlaneSystem.h"
 #include "Scene/CutPlaneRenderer.h"
 #include "Scene/CuttingSystem.h"
+#include "Scene/SkeletalPatchCopy.h"
 #include "Scene/CollisionDebugDraw.h"
 #include <algorithm>
 #include "Scene/tests/MeshComponentChecks.h"
@@ -74,7 +75,7 @@ public:
     virtual bool IsDone() override
     {
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
-        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done)
+        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 3))
             return true;
 
         // 벤치마크 결과 파일을 쓴 뒤에는 남은 GPU 절단이 끝나면 종료한다.
@@ -88,6 +89,7 @@ public:
 
 private:
 
+    uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0;
     Camera m_Camera;
     unique_ptr<CameraController> m_CameraController;
 
@@ -374,6 +376,7 @@ void ModelViewer::Startup( void )
     m_DemoTower = std::min(m_DemoTower, 16u);
 
     // 진단·자동 절단 옵션은 뒤에서 해석하더라도 추가 모델 로딩 전에 격리한다.
+    CommandLineArgs::GetInteger(L"skeletal-patch-checks", m_SkeletalPatchChecks);
     bool diagnosticScene = false;
     std::wstring diagnosticValue;
     for (const wchar_t* option : { L"edit-target-checks", L"edit-apply-checks", L"edit-delete-checks",
@@ -399,7 +402,7 @@ void ModelViewer::Startup( void )
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
 
         // 기존 네 모델 뒤에 연속 피부 검증 모델을 추가하고 첫 클립을 반복한다.
-        if (!diagnosticScene)
+        if (!diagnosticScene || m_SkeletalPatchChecks)
         {
             const auto model = Renderer::LoadModel(L"Models/CesiumMan.glb", forceRebuild);
             m_Scene.CreateObject("CesiumMan", model).PlayAnimation(0);
@@ -766,12 +769,23 @@ void ModelViewer::Update( float deltaT )
         --m_AutoCuts;
         ++m_AutoCutIndex;
     }
-    if (cutKey)
+    // 자동 진단도 C와 같은 Static 요청·skin 선택 경로를 한 프레임에 한 번 실행한다.
+    MeshCutting::CutPlaneData diagnosticPlane;
+    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 3;
+    if (patchDiagnostic && !Viewer::BuildSkeletalPatchDiagnosticPlane(m_Scene, m_SkeletalPatchCheckIndex, diagnosticPlane))
+        throw std::runtime_error("Skeletal patch diagnostic plane failed");
+    if (cutKey || patchDiagnostic)
     {
         MeshCutting::CutPlaneData plane;
-        if (m_CutPlanes.BuildData(m_ActiveCutPlane,plane))
+        if (patchDiagnostic || m_CutPlanes.BuildData(m_ActiveCutPlane,plane))
         {
+            // 현재 프레임 pose가 준비된 뒤 기존 Static 요청과 CPU 본 선택을 실행한다.
+            if (patchDiagnostic)
+                plane = diagnosticPlane;
             if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
+            Viewer::LogSkeletalPatchSelection(m_Scene, plane);
+            if (patchDiagnostic)
+                ++m_SkeletalPatchCheckIndex;
         }
     }
 

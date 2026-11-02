@@ -4,13 +4,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <map>
 #include <vector>
 
 namespace Viewer::PatchReference
 {
     constexpr uint32_t InvalidNode = UINT32_MAX;
-    constexpr uint32_t WeightScale = 65535; // 정규화 weight를 가장 가까운 UNORM16 정수로 투표한다.
     struct Vertex
     {
         Math::Vector3 Position;
@@ -33,7 +31,6 @@ namespace Viewer::PatchReference
         MeshCutting::CutPlaneData Plane; // World 필드 이름과 무관하게 모두 component-local이다.
         float Epsilon = 1e-5f;
     };
-    struct Selection { uint32_t NodeId = InvalidNode, CrossingTriangles = 0; };
     struct Triangle
     {
         uint32_t SectionId, DrawId, TriangleId;
@@ -81,42 +78,6 @@ namespace Viewer::PatchReference
         }
         float t0, t1;
         return count == 2 && MeshCutting::ClipCoplanarSegmentToCutPlaneRectangle(input.Plane, hits[0], hits[1], t0, t1);
-    }
-
-    // 교차 삼각형의 정규화 weight를 NodeId별 고정소수 정수로 합산한다.
-    inline Selection SelectJointReference(const Input& input)
-    {
-        // section과 draw 순서로 순회하며 동일 NodeId의 중복 palette도 합친다.
-        Selection result;
-        std::map<uint32_t, uint64_t> votes;
-        for (const auto& section : input.Sections)
-            for (const auto& draw : section.Draws)
-                for (uint32_t triangle = 0; triangle < draw.IndexCount / 3; ++triangle)
-                {
-                    const auto indices = TriangleIndices(section, draw, triangle);
-                    if (!CrossesRectangle(input, section, indices)) continue;
-                    ++result.CrossingTriangles;
-                    for (uint32_t index : indices)
-                    {
-                        const auto& vertex = section.Vertices.at(index);
-                        float sum = 0;
-                        for (uint16_t weight : vertex.Weights) sum += weight;
-                        for (uint32_t slot = 0; slot < 4; ++slot)
-                            if (vertex.Weights[slot] > 0)
-                                votes[input.JointNodes.at(section.StartJoint + vertex.Palette[slot])] +=
-                                    uint32_t(std::floor(vertex.Weights[slot] / (std::max)(sum, 1.0f) * WeightScale + 0.5f));
-                    }
-                }
-
-        // 정렬된 NodeId를 먼저 방문하므로 동점에는 작은 NodeId를 유지한다.
-        uint64_t best = 0;
-        for (const auto& vote : votes)
-            if (vote.second > best)
-            {
-                best = vote.second;
-                result.NodeId = vote.first;
-            }
-        return result;
     }
 
     // 선택 본에 양수 weight가 있는 삼각형 전체를 원본 순서로 추출한다.

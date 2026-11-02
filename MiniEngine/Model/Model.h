@@ -157,6 +157,12 @@ public:
     const std::shared_ptr<const Model>& GetModel() const { return m_Model; }
     // 이 프레임에 평가된 node pose를 읽는다.
     const Math::Matrix4* GetNodeTransforms() const { return m_ModelSpaceTransforms.get(); }
+    // 최종 pose와 같은 NodeId 기준의 유효 부모를 읽는다.
+    const std::vector<NodeId>& GetPoseParents() const
+    {
+        // 생성 시 BuildPoseParents로 검증한 부모 배열을 공유한다.
+        return m_PoseParents;
+    }
     // 컴포넌트들이 읽기 전용으로 공유하는 본 팔레트를 읽는다.
     const Joint* GetJoints() const { return m_Skeleton.get(); }
     // 잘못된 node 그래프의 이전 pose를 렌더에 사용하지 않도록 검사한다.
