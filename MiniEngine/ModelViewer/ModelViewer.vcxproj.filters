@@ -318,4 +318,9 @@
   <ItemGroup>
     <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Scene\SkeletalAutoRig.cpp" />
+    <ClInclude Include="Scene\SkeletalAutoRig.h" />
+    <None Include="Scene\tests\SkeletalAutoRigTests.cpp" />
+  </ItemGroup>
 </Project>

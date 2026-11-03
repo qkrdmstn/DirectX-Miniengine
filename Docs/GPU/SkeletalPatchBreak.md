@@ -1,4 +1,4 @@
-상태: 설계안 — SP-7 결정 문서, base `9ce43f96`, Codex 리뷰 반영, 구현 전 (2026-11-03)
+상태: 진행 중 — SP-7a 진단 구현·검증(미커밋, base `2e8dcdff`), D2 정점 bounds 미충족; SP-7b~e 미구현 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -35,6 +35,7 @@ C를 누르면 평면이 지나는 skin GameObject에 대해 다음을 처리한
     - 축: 그 선분 방향
     - 크기: 그 joint에 weight가 있는 정점 bounds(body frame 기준)
     - 말단: P와 weight 정점 bounds만으로 정한다.
+    - SP-7a 구현 편차: CPU 정점 미보존으로 크기는 segment 기반 근사이며 leaf 축·길이는 incoming segment를 쓴다. 아래 검증 기록의 fallback은 진단용이고 위 정점 bounds·leaf 규칙의 완료 근거가 아니다. SP-7b 등록 전에 bounds 구현 또는 사용자와의 설계 결정을 확정해야 한다.
     - 질량: 고정 밀도 × box 부피
     - 저장: 미터 단위 `BoneFromBody`로 둔다.
   - **joint:** 각 body를 가장 가까운 body 조상과 SwingTwist로 잇는다.
@@ -145,3 +146,15 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - 애니메이션에 이동이나 scale 키가 있으면 내부 anchor 오차가 0.1 mm를 넘을 수 있다. 그 경우 break가 UnsupportedPose가 된다. 7a 로그로 먼저 확인한다.
 - `mixedOutsideTriangles`(선택 joint 없이 자손과 바깥에 걸친 삼각형)는 숨기지 않으므로 늘어난다.
 - 강체 부착 오차가 크면 정점 기여 교체(NDC 7:27~8:14)를 후속 단계로 올린다.
+
+## SP-7a 구현·검증 (2026-11-03, base `2e8dcdff`, 미커밋)
+- `BuildSkeletalPhysicsAsset`는 section E·palette와 최종 node pose를 받아 영향 NodeId를 병합한다. CPU geometry는 `ModelLoader`의 업로드 후 소멸하므로 정점 bounds 대신 segment 길이의 15% 반경을 사용한다. leaf는 들어오는 segment 길이, 고립·영길이 본은 0.05 m, 최소 반경/반길이는 0.005 m다. 밀도는 1000 kg/m³, swing 2.5 rad, twist ±3 rad다.
+- `SkeletalPoseSnapshot::Sections`는 모델의 skin mesh 순서이며 E는 호출자가 렌더 경로와 동일하게 제공한다. 모델 overload는 실제 palette·영향 플래그를 사용한다. 등록·break·렌더·C 입력 변경은 없다.
+- CPU Debug/Release 각 21검사 PASS. ModelViewer Debug/Release 빌드 PASS(151/201초, TEMP 출력, 변경 없는 MiniPhysics/Jolt 재사용). `-skeletal-auto-rig-checks 1`은 0/0.125/0.25/0.375/0.5초의 독립 pose를 검사한다.
+- Xbot 52 body/51 joint, CesiumMan 19/18, 양쪽 Validate PASS. Debug 최대 anchor 오차 Xbot 2.88117e-6 m/CesiumMan 5.72810e-6 m, Release 2.88117e-6/4.77079e-6 m. 등록 시 anchor는 같은 위치에서 유도되며 float 왕복 잔차는 약 3e-6 m다.
+- Release Static 게시 1회·GPU 검증 PASS, SP-6 20회 GPU==CPU PASS, 모든 실행 D3D12 ERROR/CORRUPTION 0. 실제 C 키 수동 입력은 미검증. 독립 리뷰 결과는 아래에 기록한다. GPU NVIDIA GeForce MX450; 드라이버 버전 조회 불가. 로그·산출물은 `%TEMP%/SP7a`, 원본 자동 rig 로그는 `%TEMP%/SkeletalAutoRigChecks.log`다.
+### SP-7a 독립 리뷰·재검증 (2026-11-03)
+- 진단에서 frame 변환 실패 후 미초기화 행렬 사용과 대상 모델 누락의 정상 종료를 수정했다. 매 표본 pose 유효성도 확인한다. 가장 먼 영향 자식·leaf 원점과 fallback 길이 검사를 추가했다.
+- CPU Debug/Release 각각 AutoRig 28검사와 SkeletalPatch 59검사 PASS. VS 개발 환경 ModelViewer Debug 95초/Release 178초 빌드 PASS. 변경 없는 MiniPhysics/Jolt는 기존 라이브러리를 재사용했다. 로그·빌드 산출물은 `%TEMP%/SP7a-review`다.
+- 두 구성 모두 `-debug 1 -skeletal-auto-rig-checks 1` 종료 0, D3D12 ERROR/CORRUPTION 0, 모델별 5표본·등록 0. Xbot 52/51과 CesiumMan 19/18, Validate PASS. 최대 anchor 오차는 Debug 0.002881/0.005728 mm, Release 0.002881/0.004771 mm다. GPU는 NVIDIA GeForce MX450이며 드라이버 버전은 조회하지 못했다.
+- E*Gnode 배율 제거·미터 offset·anchor/limit 계약·NodeId 병합·단일 root/E/비균일 scale 거절을 확인했다. C/Static/등록 경로 변경은 없다. 한글 함수·단락 주석과 프로젝트 등록을 확인했다. 신규 C++는 334줄로 약 300줄 권고를 초과한다. D2 bounds·leaf 규칙은 미충족이며 설계 결정 없이 완료로 간주하지 않는다. 실제 C/Static GPU 재실행 및 Jolt `SupportsJointPose`를 통한 break는 이번 리뷰에서 미검증이다.

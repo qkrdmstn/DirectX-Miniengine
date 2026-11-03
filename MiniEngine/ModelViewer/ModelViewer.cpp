@@ -47,6 +47,7 @@
 #include "Scene/tests/EditTargetChecks.h"
 #include "Scene/tests/XbotArmChecks.h"
 #include "Scene/tests/SkeletalPhysicsChecks.h"
+#include "Scene/SkeletalAutoRig.h"
 #include "Scene/tests/EditApplyChecks.h"
 #include "Scene/tests/EditDeleteChecks.h"
 #include "Scene/tests/RetiredResourceChecks.h"
@@ -280,6 +281,9 @@ static std::string GetDeviceGpuName()
 // 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
+    // 자동 rig 진단 옵션을 읽고 기존 종료 프레임 경로를 사용한다.
+    uint32_t autoRigChecks = 0;
+    CommandLineArgs::GetInteger(L"skeletal-auto-rig-checks", autoRigChecks);
     uint32_t physicsQueryChecks = 0;
 
     // 편집 대상 pick 진단 옵션을 읽는다.
@@ -413,7 +417,7 @@ void ModelViewer::Startup( void )
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
 
         // 기존 네 모델 뒤에 연속 피부 검증 모델을 추가하고 첫 클립을 반복한다.
-        if (!diagnosticScene || m_SkeletalPatchChecks)
+        if (!diagnosticScene || m_SkeletalPatchChecks || autoRigChecks)
         {
             const auto model = Renderer::LoadModel(L"Models/CesiumMan.glb", forceRebuild);
             m_Scene.CreateObject("CesiumMan", model).PlayAnimation(0);
@@ -594,6 +598,12 @@ void ModelViewer::Startup( void )
                 float(patchFloorCenter[1] + patchFloorHalf[1]), lift, object->GetName().c_str());
         }
 
+    // 자동 rig 검사는 독립 pose만 평가하며 등록과 C 입력 경로는 사용하지 않는다.
+    if (autoRigChecks)
+    {
+        Viewer::RunSkeletalAutoRigChecks(m_Scene);
+        m_QueryExitFrame = 1;
+    }
     // 진단 fixture는 기존 모델의 정규화와 물리 초기화가 끝난 뒤 추가한다.
     m_SkeletalChecks.Start(m_Scene, m_Physics);
     if (m_SkeletalChecks.Enabled) g_PhysicsRunning = true;

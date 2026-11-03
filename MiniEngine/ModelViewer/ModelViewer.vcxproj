@@ -474,4 +474,9 @@
     <ClInclude Include="Scene\SegmentJointSelection.h" />
     <ClInclude Include="Scene\SkeletalPatchCopy.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Scene\SkeletalAutoRig.cpp"><LanguageStandard>stdcpp17</LanguageStandard><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
+    <ClInclude Include="Scene\SkeletalAutoRig.h" />
+    <None Include="Scene\tests\SkeletalAutoRigTests.cpp" />
+  </ItemGroup>
 </Project>
