@@ -52,6 +52,8 @@ namespace Viewer
         uint64_t QueueBreak(const BreakRequest& request, bool keepResult = false);
         // 완료된 요청 결과를 한 번 소비하며 실제 substep 전에는 false를 반환한다.
         bool TryGetBreakResult(uint64_t requestId, BreakStatus& status);
+        // 아직 실행하지 않은 요청과 보관 결과를 폐기한다. 적용된 break는 되돌리지 않는다.
+        void CancelBreak(uint64_t requestId);
         // 큐에서 실제 처리한 요청과 그중 NotFound 결과의 누적 수다. Clear 뒤에도 보존한다.
         struct QueuedBreakDiagnostics
         {

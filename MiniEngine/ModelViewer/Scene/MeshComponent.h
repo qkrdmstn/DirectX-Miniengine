@@ -46,6 +46,13 @@ namespace Viewer
         std::vector<uint32_t> Pending;
     };
 
+    struct NodeAttachment
+    {
+        uint32_t NodeId;
+        ComponentId SourceMesh;
+        Math::Matrix4 NodeWorldAtCut, PieceWorldAtCut;
+    };
+
     // 세대 증가 규칙 (R6)
     //  EditGeneration: SetGeometry, SetDeformBinding(source frame), SetTransform(배치·teleport·scale 포함),
     //                  SetPlacement(위 둘의 합)에서 증가한다.
@@ -56,6 +63,8 @@ namespace Viewer
     class MeshComponent
     {
     public:
+        bool PublishVisible = true; // 미게시 절단 준비물은 모든 pass에서 숨긴다.
+        std::unique_ptr<NodeAttachment> Attachment;
         // 공유 원본 revision을 사용하되 GPU pose·렌더 상수는 새로 만든다.
         MeshComponent(ComponentId id, std::shared_ptr<const GeometryRevision> geometry);
         // 이전 프레임의 GPU 사용이 끝난 뒤 렌더 자원을 해제한다.

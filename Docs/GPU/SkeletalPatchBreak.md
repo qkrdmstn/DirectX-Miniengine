@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7c `f83ecf1e` 완료; SP-7d D3 제거 제외·D6 인접 진단 독립 리뷰·D/R 재검증 완료(미커밋, base `f83ecf1e`); SP-7e 미구현 (2026-11-03)
+상태: 진행 중 — SP-7e 게시·부착 구현(미커밋, base `9400691f`); 경계 오차·강제 Stale·캡처 확장 진단 미완료 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -132,7 +132,7 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 | SP-7b | C 시점 지연 등록 + `FindIncomingJoint` + RequestId `QueueBreak`/결과 표. 이 단계만 숨김·부착 없이 원본에 바로 break(늘어남 정상), 오프셋 복사본 유지 | Xbot 팔·다리, CesiumMan 팔: 기대 JointId·subtree 낙하, root·AlreadyBroken·physics off 거절, pause 대기 | 구현 + R + B + V |
 | SP-7c | D3 상태 버퍼·퇴화 치환 IB·`RenderMeshes` IB 분리 + 진단 옵션(지정 joint 범위 숨김 fixture) | D/R IB·color/depth/shadow readback·독립 컴포넌트 보존·복원 PASS, D3D12 ERROR 0; Wire/Vertices 픽셀 미검증 | 구현 + R + B + V |
 | SP-7d | D3 추출 제거 조건(GPU·CPU) + D6 `adjacentPatch` 로그 | 완료(미커밋): Xbot P=6→Q=12, 934−799=135, 인접 id=1 64개, GPU==CPU·D/R 검증 PASS | 구현 + R + B + T + V |
-| SP-7e | D4 부착·물리 제외 + D5 break 성공 뒤 게시로 7b 경로 교체 + 오프셋 복사본 진단 옵션화 | 두 모델에서 게시 프레임 경계 오차 ≤ 1 mm, 이후 프레임 오차 보고, 강제 Stale 시 원본 불변, 캡처 | 구현 + R + B + V |
+| SP-7e | D4 부착·물리 제외 + D5 break 성공 뒤 게시로 7b 경로 교체 + 오프셋 복사본 진단 옵션화 | 게시·부착 구현(미커밋), 확장 진단 후속: 두 모델에서 게시 프레임 경계 오차 ≤ 1 mm, 이후 프레임 오차 보고, 강제 Stale 시 원본 불변, 캡처 | 구현 + R + B + V |
 
 각 단계는 약 300줄 이내다. 진행은 Codex 구현 → 별도 Codex 리뷰 → 로컬 커밋 순서다. 300줄을 넘으면 셰이더와 C++ 연결을 나눈다.
 
@@ -221,3 +221,14 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - D/R 빌드(53.3/50.7초)·AutoRig 55·SkeletalPatch 63·SkeletalBreak 915·CutPlaneTests·TriangleMask 26표본/3,328 DWORD·마스크·SP-6 20행 기존 로그 일치·patch-break·Static PASS, D3D12 ERROR 0(MX450, 32.0.15.9186, `-debug 1`). 산출물은 `%TEMP%/SP7b`; 대형 입력 인접 집계 성능·실제 C 게시(SP-7e)는 미검증이다.
 - 독립 리뷰: 제거 삼각형이 교차·미포함 카운터에 남는 GPU/CPU 누락과 0 버퍼 업로드의 16바이트 올림 범위 초과 읽기를 수정했다. 기존 metadata/selectedNode 정렬·패딩 변경도 `InitializeBuffer`의 SIMD 복사 계약상 필요하다. 실제 교차 평면으로 진단을 보강해 전체 제거 시 교차 373→0, 출력/교차/미포함 0/0/0을 확인했다.
 - 재검증: D/R 빌드 39.9/30.8초(기존 MiniPhysics/Jolt 재사용), CPU 55/65/915·CutPlaneTests 및 TriangleMask 각 26표본/3,328 DWORD PASS. 마스크·SP-6·patch-break·Static 8실행 exit 0, SP-6 각 20행 불변, 934−799=135·인접 64·바이트 불변 유지. D3D12 ERROR/CORRUPTION·바인딩 경고 0; 기존 Release PSO 출력 #974·중복 barrier #1008 및 Debug live-resource 경고는 남는다. 근거: `%TEMP%/SP7b/Independent-*`, `Runtime-*-SP7d*.log`.
+
+## SP-7e 게시·부착 단계 (2026-11-03, base `9400691f`, 미커밋)
+- `SkeletalPatchCopy::Request`는 C의 geometry·mask revision과 두 node snapshot을 보관하고 Segment/Leaf 쪽을 결정한다.
+- `SkeletalPatchCopy::OnCutResult`는 숨긴 준비 owner의 A/B가 갖춰진 뒤 break를 요청한다.
+- `SkeletalPatchCopy::Update`는 Applied와 revision 일치 후 원본 mask를 갱신하고 원래 owner에 A/B를 게시하며 실패 준비물은 버린다.
+- `Scene::PrepareMeshes`는 최종 pose 뒤 node 부착식을 적용한다. `PhysicsSystem::IsEligible`·`SyncBodies`는 조각을 제외하고 `ResolveEditTarget`은 owner를 고른다.
+- `-skeletal-patch-offset-copy 1`에서만 기존 offset·B 간격을 유지한다. `RunBreakChecks`는 제거 범위·원래 owner·hull/body 제외를 확인한다.
+- 독립 리뷰 수정: Leaf의 기준 조상이 평면에서 1 mm 이내면 단독으로 거절한다. C snapshot·매 프레임 갱신은 첫 skin section의 공통 E를 사용해 앞쪽 Static section을 제외한다. `Reset`은 `PhysicsSystem::CancelBreak`로 미실행 요청을 취소하고, 절단 제출 거절도 숨긴 준비 owner를 즉시 버린다. 이미 게시된 부착 조각·mask는 D6의 연속 절단을 위해 새 C에서 유지하며 owner 삭제 때 함께 해제한다.
+- 약 300줄 단위의 게시·부착 단계로 분리한다. 경계 오차(게시/이후 N 프레임)·강제 Stale·모델별 캡처는 후속이며 §5 미충족으로 SP-7 완료가 아니다.
+- 검증: D/R 최종 빌드 50.5/46.4초, CPU 55/65/915·CutPlane 및 TriangleMask 26표본/3,328 DWORD PASS. C·mask·offset SP-6 20행 불변·Static과 최종 C 재검증 모두 PASS, D3D12 ERROR 0. 근거는 `%TEMP%/SP7b/SP7e-Result.json`이며 Wireframe 픽셀·Leaf/거절 통합 검증도 후속이다.
+- 리뷰 최종 소스 재검증 범위: D/R 빌드·CPU, Debug 게시·mask·offset SP-6(20행 동일)·Static, Release 게시까지 PASS. Release mask·offset SP-6·Static 재실행은 Codex 사용 한도로 미완료다.

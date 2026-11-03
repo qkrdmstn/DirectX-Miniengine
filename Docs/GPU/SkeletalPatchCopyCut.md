@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-1~SP-6 완료 `aa718787`(Parent 확정 `9ce43f96`); SP-7 설계안 [SkeletalPatchBreak.md](SkeletalPatchBreak.md), 구현 전 (2026-11-03)
+상태: 진행 중 — SP-7e 게시·부착 구현(미커밋, base `9400691f`); 경계 오차·강제 Stale·캡처 확장 진단 미완료 (2026-11-03)
 
 # Skeletal 패치 복사 절단 (첫 단계)
 
@@ -74,7 +74,7 @@ public:
 | SP-5a | pose 준비·batch 대기·오프셋 평면 절단 요청(D9) + 결과/실패 로그(당시 D10) | 완료 `17cdbdbe`: 위팔·허벅지 유한 사각형 거절, 손 A/B 캡처, 교차 0 게시 생략, Static 회귀·집계 격리, D3D12 ERROR 0 | — |
 | SP-5b | 복사본 무한 평면 절단(D10) + B 분리 0.1 m(D13) + 일반화·Xbot 진단(D14) | 독립 리뷰·수정 완료(미커밋): 영향 joint 캐시·비균일 평면 scale 보정, 두 모델 각 3 A/B·GPU==CPU·B 0.1 m, 물리 ON 캡처와 Static 격리/회귀·D/R·CPU PASS, D3D12 ERROR 0. 아래 근거 참조 | 구현 + R + B + V |
 | SP-6 | 본 선택 모드 Parent/Influence 전환·비교 진단(D12) | 독립 리뷰·수정 완료(미커밋, base `329aec7b`): 20/20 추출·A/B, Influence NodeId 10/10 GPU==CPU, D3D12 ERROR 0. 기존 Parent 6행 동일. 차이 2/10: Xbot leaf 63→62, 사선 60→21(patch 2118→604, caps 1→0, uncapped 0→100); CesiumMan 5/5 동일. 이름 없는 90%·45도 진단, 모드별 캡처·D/R·CPU·Static PASS. 아래 비교표 참조 | 구현 + R + B + V |
-| SP-7 | 설계안 [SkeletalPatchBreak.md](SkeletalPatchBreak.md)(SP-7a~7e): P의 incoming constraint break, C 시점 자동 box rig, MeshComponent 상태 버퍼+퇴화 치환 IB 숨김, A/B node 부착, break 성공 뒤 게시. 본 선택 기준은 **Parent**로 확정(사용자 결정 2026-11-03): SP-6 비교 10건 중 Influence는 혼합 구간(Xbot 말단)에서 덮개가 넓었지만, 사각형 안에 다른 부위가 섞인 Xbot 45° 사례에서 허벅지 대신 손가락(LeftHandIndex2)을 골랐다. Parent는 골격 선분 기준이라 물리 body와 대응이 명확하다. Influence 모드는 비교 진단용으로 남긴다 | — | — |
+| SP-7 | [SkeletalPatchBreak.md](SkeletalPatchBreak.md): 지연 rig·incoming break·삼각형 mask·제거 제외 완료. SP-7e 원래 owner 게시·node 부착 구현(미커밋, base `9400691f`), 경계 오차·강제 Stale·캡처 진단 후속 | 진행 중 | 게시·부착 단계 분리 |
 
 한 단계가 300줄을 넘으면 shader와 C++ 연결을 나눈다.
 

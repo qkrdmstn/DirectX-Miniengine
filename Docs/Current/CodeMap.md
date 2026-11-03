@@ -1,8 +1,8 @@
-상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); SP-5b 진단 복사본 절단 미커밋 동기화(2026-11-03); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료); SP-6 Parent/Influence 독립 리뷰·blend-zone 포함 20회 진단 완료(미커밋, base `329aec7b`); SP-7a `731c7005` + SP-7a2 CPU 정점 보존·D2 bounds 구현·D/R 진단 검증(미커밋, base `731c7005`); SP-7b 지연 등록·incoming·요청별 break 결과 D/R 검증 완료(미커밋, base `18848ec0`); SP-7c 컴포넌트 마스크·렌더 연결 D/R 검증 완료(미커밋, base `d10077bd`); SP-7d D3 제거 제외·D6 인접 진단 D/R 검증 완료(미커밋, base `f83ecf1e`)
+상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); SP-5b 진단 복사본 절단 미커밋 동기화(2026-11-03); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료); SP-6 Parent/Influence 독립 리뷰·blend-zone 포함 20회 진단 완료(미커밋, base `329aec7b`); SP-7a `731c7005` + SP-7a2 CPU 정점 보존·D2 bounds 구현·D/R 진단 검증(미커밋, base `731c7005`); SP-7b 지연 등록·incoming·요청별 break 결과 D/R 검증 완료(미커밋, base `18848ec0`); SP-7c 컴포넌트 마스크·렌더 연결 D/R 검증 완료(미커밋, base `d10077bd`); SP-7d D3 제거 제외·D6 인접 진단 D/R 검증 완료(미커밋, base `f83ecf1e`); SP-7e 게시·부착 구현(미커밋, base `9400691f`), 확장 진단 후속
 
 # 현재 Scene과 유한 평면 코드 지도
 
-현재 구현은 객체 선택·TRS 편집, 유한 평면의 기하·격자 표시와 Static GPU 절단·cap·재절단을 포함한다. 유한 영역을 넘는 교차는 후보 전체를 거절한다. 원본 Skeletal 절단과 교차 미리보기는 미구현이다. SP-5b(미커밋)는 영향 패치의 정적 복사본만 무한 평면으로 절단하고 B를 월드 0.1 m 분리한다([설계·검증](../GPU/SkeletalPatchCopyCut.md)). 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.
+현재 구현은 객체 선택·TRS 편집, 유한 평면의 기하·격자 표시와 Static GPU 절단·cap·재절단을 포함한다. 유한 영역을 넘는 교차는 후보 전체를 거절한다. 원본 Skeletal 절단은 SP-7e 게시·부착 단계이며 경계 확장 진단과 교차 미리보기는 미완료다. SP-5b(미커밋)는 영향 패치의 정적 복사본만 무한 평면으로 절단하고 B를 월드 0.1 m 분리한다([설계·검증](../GPU/SkeletalPatchCopyCut.md)). 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.
 
 ## 실행 흐름
 
@@ -32,7 +32,7 @@
 | `ModelViewer/Scene/TransformGizmo.*`, `SceneTransform.h` | 객체 TRS 편집과 입력 처리를 담당한다. 조작·Undo 계약은 [Scene.md](Scene.md)를 따른다. |
 | `ModelViewer/Scene/CutPlaneSystem.*` | Scene을 참조하고 ObjectId별 `CutPlaneDesc`를 소유한다. 별도 평면 TRS를 보관하지 않는다. `Find`는 삭제된 객체를 거절한다. |
 | `Model/ModelLoader.cpp`의 `BuildInfluencingJoints`, `Model::m_InfluencingJoints`, `Model::m_SkinCpuSections`, `Model/SkinCpuData.h` | 로드 시 양수 weight 여부를 NodeId별로 캐시하고 skin section만 위치·joint·weight를 정점당 28 B로 보존한다. Static CPU 정점 복사본은 없다. |
-| `ModelViewer/Scene/SegmentJointSelection.h`, `SkeletalPatchCopy.*` | Parent의 영향 skin joint segment 부모·말단 선택과 Influence의 GPU 고정소수 투표·선택, GPU 패치 복사, 정적 owner 게시·격리, 무한 평면 재구축과 B 분리를 담당한다. |
+| `ModelViewer/Scene/SegmentJointSelection.h`, `SkeletalPatchCopy.*` | Parent의 영향 skin joint segment 부모·말단 선택과 Influence의 GPU 고정소수 투표·선택, GPU 패치 복사, 숨긴 A/B 준비·성공 후 원래 owner 게시, 본 부착 snapshot과 선택적 offset 진단을 담당한다. |
 | `ModelViewer/Scene/CuttingSystem.*` | 작업별 대상 snapshot과 `CutJob`을 보관하고 후보를 기본 2개까지 제출한다. 완료는 제출 순서대로 프레임당 하나씩 게시한다. [검증과 제한](../GPU/ConcurrentCutJobs.md) 참조. |
 | `MeshCutting/Geometry/CutPlane.*`의 `CutPlaneDesc` | 로컬 XZ, y=0 직사각형의 `Width`와 `Height`를 정의한다. |
 | `CutPlaneData` | `WorldPlane`은 정규화된 `Vector4(n, d)`이며 식은 n·x+d=0이다. `WorldToPlane`은 affine 역변환, `HalfWidth`·`HalfHeight`는 로컬 반크기, `WorldCorners`는 네 월드 모서리다. |
@@ -59,8 +59,10 @@ BC-10: SkeletalPhysicsSystem::BreakConstraint는 broken 경계를 제외한 subt
 
 SP-7a/7a2: `SkeletalAutoRig.*`의 `BuildSkeletalPhysicsAsset`는 영향 palette 병합·E/배율/root 검증·등록 pose 정점 bounds box·anchor를 생성한다. leaf는 본 원점을 bounds에 포함하고 정점 없는 본만 segment fallback을 사용한다. `RunSkeletalAutoRigChecks`는 두 모델의 독립 애니메이션 5시점 anchor 오차·extent 범위·fallback 수·CPU 보관 비용을 TEMP에 남긴다. [결과](../GPU/SkeletalPatchBreak.md).
 
-SP-7b: `SkeletalPatchCopy::Request`는 미등록 owner를 최종 pose로 지연 등록하고 `FindIncomingJoint`와 세대를 저장한다. A/B 준비 뒤 `QueueBreak`의 RequestId로 `TryGetBreakResult`를 소비하며 offset 복사본을 유지한다. 원본 숨김·node 부착은 아직 없다.
+SP-7b: `SkeletalPatchCopy::Request`는 미등록 owner를 최종 pose로 지연 등록하고 `FindIncomingJoint`와 세대를 저장한다. A/B 준비 뒤 `QueueBreak`의 RequestId로 `TryGetBreakResult`를 소비한다. 원본 숨김·node 부착은 아래 SP-7e 게시 단계로 이어진다.
 
 SP-7c: `Scene/Shaders/TriangleMaskCS.hlsl`의 `main`·`Replacement`는 누적 `FirstTriangle` State와 원본 IB에서 R16/R32 퇴화 인덱스를 재구성한다. `tests/TriangleMaskShaderTests.cpp`의 `main`은 두 R16 draw의 공유 DWORD·혼합 R32·마스크 해제를 독립 GPU readback으로 검증한다. `MeshComponent::SetTriangleMask`·`UpdateTriangleMask`·`ClearTriangleMask`는 원본 revision의 상태와 IB 구간을 컴포넌트별로 소유한다. `MeshSorter::AddMesh`·`RenderMeshes`는 VB와 IB 주소를 분리한다. `Scene/SkeletalMaskChecks.cpp`의 `RunSkeletalMaskChecks`는 두 모델의 joint weight 선택·치환 IB·공유 원본 불변·색상/깊이/그림자 ROI 소실·다른 컴포넌트 보존·상태 갱신/해제 복원을 검사한다.
 
 SP-7d: `PatchExtractCS::main`·`ExtractPatchReference`는 전역 State의 제거 비트를 선택 조건에 반영하며 교차·미포함 카운터도 제거 삼각형을 제외한다. `SkeletalPatchJob::Submit`·`Poll`은 공유 정점 번호를 기준으로 인접 제거 삼각형을 소유 패치별로 집계·기록하며 `Validate`가 독립 CPU 집계와 비교한다. `CheckMaskedPatch`는 `RunSkeletalMaskChecks`에서 Xbot 부모 제거 후 자식 추출과 없음/0/해제 출력 바이트 불변·전체 제거의 빈 카운터를 검증한다.
+
+SP-7e: `SkeletalPatchCopy::Request`는 C snapshot·side를 보관하고 `OnCutResult`는 숨긴 A/B 준비 뒤 break를 요청한다. `Update`는 Applied·revision 일치 후 원본 mask와 원래 owner의 A/B를 함께 게시한다. `Reset`은 `PhysicsSystem::CancelBreak`로 미실행 요청도 취소한다. `Scene::PrepareMeshes`는 최종 node pose로 부착을 갱신한다. `PhysicsSystem::IsEligible`·`SyncBodies`는 부착 조각을 제외한다. `ResolveEditTarget`은 owner 선택을 유지한다. offset·B 간격은 `-skeletal-patch-offset-copy 1` 전용이다. 경계 오차·강제 Stale·캡처 진단은 미완료다.

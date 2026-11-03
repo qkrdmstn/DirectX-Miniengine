@@ -616,7 +616,8 @@ namespace Viewer
     // 같은 revision의 버퍼·재질·출처를 사용하고 section마다 보수적 구 컬링을 수행한다.
     void MeshComponent::Render(Renderer::MeshSorter& sorter) const
     {
-        if (!m_Ready)
+        // break 성공 전의 준비물은 렌더 목록에 넣지 않는다.
+        if (!m_Ready || !PublishVisible)
             return;
         const auto& sections = m_Geometry->GetSections();
         const Matrix4& viewMatrix = sorter.GetViewMatrix();

@@ -61,7 +61,7 @@ namespace Viewer
         {
             auto* object = m_Scene.FindObject(it->first.first);
             auto* mesh = object ? object->FindMeshComponent(it->first.second) : nullptr;
-            const bool current = mesh && mesh->GetGeometry() == it->second.Geometry &&
+            const bool current = mesh && !mesh->Attachment && mesh->GetGeometry() == it->second.Geometry &&
                 mesh->GetEditGeneration() == it->second.EditGeneration;
             if (current) { ++it; continue; }
             m_World.DestroyBody(it->second.Handle);
@@ -85,7 +85,7 @@ namespace Viewer
             for (const auto& mesh : object->GetMeshComponents())
             {
                 if (object->GetId() == m_FloorOwner) continue;
-                if (mesh->GetCollision().ConvexElems.empty()) continue;
+                if (mesh->Attachment || !mesh->PublishVisible || mesh->GetCollision().ConvexElems.empty()) continue;
                 const Key key(object->GetId(), mesh->GetId());
                 const Math::Matrix4 matrix(mesh->GetWorldTransform(object->GetTransform()));
                 const auto previous = m_Bodies.find(key);
@@ -176,6 +176,17 @@ namespace Viewer
         status = found->second;
         m_BreakResults.erase(found);
         return true;
+    }
+
+    // 새 C로 폐기한 준비물의 대기 요청과 미소비 결과를 함께 제거한다.
+    void PhysicsSystem::CancelBreak(uint64_t requestId)
+    {
+        // 결과를 보관하는 요청 번호만 취소하며 일반 무번호 요청은 유지한다.
+        if (!requestId) return;
+        for (auto it = m_PendingBreaks.begin(); it != m_PendingBreaks.end();)
+            if (it->first == requestId) it = m_PendingBreaks.erase(it);
+            else ++it;
+        m_BreakResults.erase(requestId);
     }
 
     // 실제 렌더 section에서 공통 E를 구하고 물리 본에 종속된 Nmesh는 거절한다.

@@ -45,6 +45,8 @@ namespace Viewer
     // 기존 Static 절단과 동일한 입력 지원 범위를 검사한다.
     bool PhysicsSystem::IsEligible(const MeshComponent& mesh)
     {
+        // 본 부착 조각과 미게시 준비물에는 조회 body를 만들지 않는다.
+        if (mesh.Attachment || !mesh.PublishVisible) return false;
         if (!mesh.HasPoseBounds() || !mesh.GetPosedGeometry().IsReady()) return false;
         const auto& geometry = mesh.GetGeometry();
         if (geometry->GetSections().empty()) return false;

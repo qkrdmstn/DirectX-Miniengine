@@ -56,7 +56,7 @@ namespace Viewer
     }
 
     // 원본 검증, ID 발급, 컴포넌트 생성, 삽입 자리 예약을 owner 변경 없이 수행한다.
-    std::unique_ptr<MeshComponent> GameObject::PrepareMeshComponent(std::shared_ptr<const GeometryRevision> geometry)
+    std::unique_ptr<MeshComponent> GameObject::PrepareMeshComponent(std::shared_ptr<const GeometryRevision> geometry, size_t slots)
     {
         // 원본 pose 소유자와 같은 Model인지 검증한다.
         if (!m_ModelInstance || !geometry || geometry->GetSource() != m_ModelInstance->GetModel())
@@ -66,8 +66,8 @@ namespace Viewer
         auto component = std::make_unique<MeshComponent>(AllocateComponentId(), std::move(geometry));
         component->LogCollision(static_cast<uint32_t>(m_Id));
 
-        // commit이 할당하지 않도록 한 칸을 미리 확보한다.
-        m_MeshComponents.reserve(m_MeshComponents.size() + 1);
+        // 여러 조각의 commit이 할당하지 않도록 필요한 칸을 미리 확보한다.
+        m_MeshComponents.reserve(m_MeshComponents.size() + slots);
         return component;
     }
 
@@ -257,7 +257,32 @@ namespace Viewer
             if (!object->m_ModelInstance)
                 continue;
             for (const auto& mesh : object->m_MeshComponents)
+            {
+                // 확정된 원본 pose에서 Wc*E*Gnode를 구해 C snapshot의 상대 배치를 유지한다.
+                if (mesh->Attachment)
+                {
+                    const auto& attachment = *mesh->Attachment;
+                    const auto* source = object->FindMeshComponent(attachment.SourceMesh);
+                    if (!source || !object->m_ModelInstance->HasValidPose()) continue;
+                    const auto* nodes = object->m_ModelInstance->GetNodeTransforms();
+
+                    // C snapshot과 같은 첫 skin section의 E를 사용한다.
+                    size_t section = 0;
+                    const auto& geometry = *source->GetGeometry();
+                    while (section < geometry.GetSections().size() && !geometry.GetMesh(section).numJoints) ++section;
+                    if (section == geometry.GetSections().size()) continue;
+                    const Math::Matrix4 nodeWorld = Math::Matrix4(source->GetWorldTransform(object->m_Transform))
+                        * Invert(Math::Matrix4(source->GetDeformBinding().SourceFrame.ToAffine()))
+                        * nodes[geometry.GetMesh(section).meshCBV] * nodes[attachment.NodeId];
+                    SceneTransform world;
+                    if (!SceneTransform::TryFromAffine(Math::AffineTransform(nodeWorld
+                        * Invert(attachment.NodeWorldAtCut) * attachment.PieceWorldAtCut), world)) continue;
+                    mesh->SetTransform(world, MeshTransformMode::WorldIndependent);
+                }
+
+                // 부착 갱신 뒤 같은 프레임의 렌더 상수를 준비한다.
                 mesh->Update(context, *object->m_ModelInstance, object->m_Transform);
+            }
         }
     }
 

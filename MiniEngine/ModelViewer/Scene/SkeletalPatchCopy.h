@@ -27,6 +27,7 @@ namespace Viewer
         ByteAddressBuffer TriangleSources; // section, draw, triangle; 12 bytes per triangle
         ByteAddressBuffer LocalBounds; // counts 0..8, local AABB 12..32, source world X min/max 36..40
         float SourceWorldWidth = 0;
+        std::vector<uint32_t> Triangles;
     };
 
     // 단일 제출 작업이다. 호출자는 UpdateFrame/Finish 후 component-local 평면을 전달한다.
@@ -108,6 +109,12 @@ namespace Viewer
         void LogCutResult(const Scene& scene, const char* reason, uint32_t caps, uint32_t uncapped, uint32_t error);
         SkeletalPatchJob m_Job;
         PhysicsSystem* m_Physics = nullptr;
+        std::shared_ptr<const GeometryRevision> m_SourceRevision;
+        ComponentId m_SourceMesh = 0;
+        uint32_t m_MaskRevision = 0;
+        std::vector<uint32_t> m_Removal;
+        NodeAttachment m_AttachA{}, m_AttachB{};
+        bool m_PositiveA = true, m_OffsetCopy = false;
         BreakRequest m_Break;
         BreakStatus m_LastBreakStatus = BreakStatus::NotReady;
         IncomingJointResult m_Incoming;

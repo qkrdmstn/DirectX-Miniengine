@@ -3,6 +3,7 @@
 #include "ObjectSelection.h"
 #include "CuttingSystem.h"
 #include "SkeletalAutoRig.h"
+#include "Util/CommandLineArg.h"
 #include "Renderer.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
@@ -173,6 +174,10 @@ namespace Viewer
             BreakStatus status;
             if (physics.TryGetBreakResult(m_RequestId, status)) throw std::runtime_error("SP7b pause consumed request");
             PatchLog("SP7b pause waiting PASS\n");
+
+            // 취소한 별도 요청은 이후 substep의 처리 수와 결과에 남지 않아야 한다.
+            const auto cancelled = physics.QueueBreak(m_Break, true);
+            physics.CancelBreak(cancelled);
             physics.SetSimulationRunning(true);
         }
         if (IsPending() || cutting.IsBusy()) return false;
@@ -222,13 +227,38 @@ namespace Viewer
             PatchLog("SP7b subtree/root/AlreadyBroken %s\n", pass ? "PASS" : "FAIL");
             if (!pass) throw std::runtime_error("SP7b break diagnostic mismatch");
 
+            // 실제 C 게시의 제거 범위와 owner 소유·충돌 제외를 함께 확인한다.
+            if (!m_OffsetCopy)
+            {
+                const auto* source = object->FindMeshComponent(m_SourceMesh);
+                const auto* mask = source ? source->GetTriangleMask() : nullptr;
+                unsigned attached = 0;
+                bool hidden = mask && mask->Pending == m_Removal && mask->AppliedRevision == mask->Revision;
+                for (const auto& piece : object->GetMeshComponents())
+                    if (piece->Attachment)
+                    {
+                        ++attached;
+                        hidden &= !piece->IsSimulating() && piece->GetCollision().ConvexElems.empty();
+                    }
+                hidden &= attached == (m_BreakCheck == 2 ? 4u : 2u);
+                PatchLog("SP7e case=%u hiddenRange=%s attached=%u noHullBody=%s\n", m_BreakCheck,
+                    hidden ? "PASS" : "FAIL", attached, hidden ? "PASS" : "FAIL");
+                if (!hidden) throw std::runtime_error("SP7e publish mismatch");
+            }
+
             // 현재 segment에 수직인 평면으로 같은 C의 재절단 거절을 확인한다.
             Request(scene, buildPlane(*object, m_BreakCheck - 1), false, SkeletalJointMode::Parent, UINT32_MAX, &physics);
             if (IsPending() || m_Incoming.Status != IncomingJointStatus::AlreadyBroken) throw std::runtime_error("SP7b second C submitted");
             PatchLog("SP7b second C AlreadyBroken PASS\n");
             m_CheckAwaiting = false;
         }
-        if (m_BreakCheck == 3) return true;
+        if (m_BreakCheck == 3)
+        {
+            // 실제 세 C만 처리되어 취소 요청이 관절을 추가로 건드리지 않았음을 확인한다.
+            if (physics.GetQueuedBreakDiagnostics().Processed != 3) throw std::runtime_error("SP7e cancelled break processed");
+            PatchLog("SP7e cancelled break PASS: processed=3\n");
+            return true;
+        }
 
         // 모델별 지정 segment 중점에서 실제 Parent 선택과 GPU A/B 절단을 요청한다.
         Reset(scene, physics, cutting);
@@ -263,6 +293,11 @@ namespace Viewer
         m_Name.clear();
         m_Physics = physics;
         m_BreakReady = false;
+
+        // 기존 offset 복사본은 명시적 진단 옵션에서만 허용한다.
+        uint32_t offsetCopy = 0;
+        CommandLineArgs::GetInteger(L"skeletal-patch-offset-copy", offsetCopy);
+        m_OffsetCopy = offsetCopy != 0;
 
         // 평면 로컬에서 가장 가까운 사각형 점을 월드로 돌려 경계 구와 비교한다.
         using namespace Math;
@@ -361,6 +396,51 @@ namespace Viewer
             }
         }
 
+        // 실제 절단은 등록 실패 시 원본과 화면을 그대로 보존한다.
+        if (!m_OffsetCopy && !m_BreakReady)
+        {
+            PatchLog("SP7e rejected: no break target\n");
+            return;
+        }
+        if (m_BreakReady && !m_OffsetCopy)
+        {
+            // D2가 보장하는 공통 skin frame을 사용하고 앞쪽 Static section은 건너뛴다.
+            const auto& instance = *target->GetModelInstance();
+            const auto& parents = instance.GetPoseParents();
+            size_t section = 0;
+            while (!mesh->GetGeometry()->GetMesh(section).numJoints) ++section;
+            const auto frame = JointFrameToWorld(instance, *mesh, target->GetTransform(), section);
+            uint32_t sideNode = selected.NodeId;
+            if (selected.Kind == SegmentJointKind::Leaf)
+            {
+                sideNode = parents[sideNode];
+                while (sideNode != UINT32_MAX && !instance.GetModel()->m_InfluencingJoints[sideNode])
+                    sideNode = parents[sideNode];
+            }
+            if (sideNode == UINT32_MAX || parents[selected.NodeId] == UINT32_MAX)
+            {
+                PatchLog("SP7e rejected: no influencing ancestor\n");
+                return;
+            }
+            const float side = Math::Dot(frame * instance.GetNodeTransforms()[sideNode].GetW(), plane.WorldPlane);
+            const uint32_t other = selected.Kind == SegmentJointKind::Segment ? selected.ChildNodeId : selected.NodeId;
+            const float opposite = Math::Dot(frame * instance.GetNodeTransforms()[other].GetW(), plane.WorldPlane);
+            if (selected.Kind == SegmentJointKind::Leaf ? std::abs(side) <= 0.001f
+                : std::abs(side) <= 0.001f && std::abs(opposite) <= 0.001f)
+            {
+                PatchLog("SP7e rejected: ambiguous side within 1mm\n");
+                return;
+            }
+            m_PositiveA = side >= 0;
+            m_SourceMesh = mesh->GetId();
+            m_SourceRevision = mesh->GetGeometry();
+            m_MaskRevision = mesh->GetTriangleMask() ? mesh->GetTriangleMask()->Revision : 0;
+            m_AttachA = { parents[selected.NodeId], m_SourceMesh,
+                frame * instance.GetNodeTransforms()[parents[selected.NodeId]], Math::Matrix4(mesh->GetWorldTransform(target->GetTransform())) };
+            m_AttachB = { selected.NodeId, m_SourceMesh,
+                frame * instance.GetNodeTransforms()[selected.NodeId], m_AttachA.PieceWorldAtCut };
+        }
+
         // 현재 GPU 입력과 일치하는 유효 선택만 segment 또는 말단으로 기록한다.
         if (!influence) PatchLog("Skeletal patch target=%s NodeId=%u kind=%s child=%u intersection=(%.6f, %.6f, %.6f)\n",
             target->GetName().c_str(), selected.NodeId, selected.Kind == SegmentJointKind::Segment ? "segment" : "leaf",
@@ -394,6 +474,11 @@ namespace Viewer
         m_Job.Cancel();
         m_Name.clear();
 
+        // 준비물을 버릴 때 아직 실행하지 않은 break도 취소한다.
+        physics.CancelBreak(m_RequestId);
+        m_RequestId = 0;
+        m_BreakReady = false;
+
         // 사용자 owner 삭제와 같은 절단 취소·물리 매핑 제거 경로를 사용한다.
         if (m_CutInFlight) m_RetiredOwners.push_back(m_CopyOwner);
         m_CutPending = m_CutInFlight = m_Completed = false;
@@ -420,6 +505,43 @@ namespace Viewer
                 dynamic >= m_DynamicBefore ? dynamic - m_DynamicBefore : 0);
             m_LastBreakStatus = status;
             m_RequestId = 0;
+
+            // 성공과 C snapshot 일치 여부를 확인한 뒤 원본 숨김과 원래 owner의 조각을 함께 게시한다.
+            if (!m_OffsetCopy)
+            {
+                auto* owner = scene.FindObject(m_Break.Owner);
+                auto* source = owner ? owner->FindMeshComponent(m_SourceMesh) : nullptr;
+                auto* staging = scene.FindObject(m_CopyOwner);
+                const bool current = source && source->GetGeometry() == m_SourceRevision
+                    && (source->GetTriangleMask() ? source->GetTriangleMask()->Revision : 0) == m_MaskRevision;
+                if (status == BreakStatus::Applied && current && staging && staging->GetMeshComponents().size() == 2)
+                {
+                    // 준비된 두 geometry의 원래 배치와 본 snapshot을 게시 전에 구성한다.
+                    std::vector<std::unique_ptr<MeshComponent>> pieces;
+                    for (size_t i = 0; i < 2; ++i)
+                    {
+                        const size_t index = m_PositiveA ? i : 1 - i;
+                        auto piece = owner->PrepareMeshComponent(staging->GetMeshComponents()[index]->GetGeometry(), 2);
+                        if (!piece->SetTransform(m_World, MeshTransformMode::WorldIndependent))
+                            throw std::runtime_error("SP7e invalid piece world");
+                        piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
+                        piece->Attachment = std::make_unique<NodeAttachment>(i == 0 ? m_AttachA : m_AttachB);
+                        pieces.push_back(std::move(piece));
+                    }
+                    if (!source->SetTriangleMask(m_Removal)) throw std::runtime_error("SP7e invalid removal mask");
+                    for (auto& piece : pieces) owner->CommitMeshComponent(std::move(piece));
+                    PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=1 nodes=%u/%u\n",
+                        m_Break.Owner, m_Result.PatchTriangles, m_AttachA.NodeId, m_AttachB.NodeId);
+
+                    // 같은 프레임에 치환 IB와 새 조각의 렌더 상수 준비를 끝낸다.
+                    auto& context = GraphicsContext::Begin(L"Publish attached skeletal pieces");
+                    scene.PrepareMeshes(context);
+                    context.Finish();
+                }
+                else PatchLog("SP7e discarded BreakStatus=%u revisionMatch=%u originalUntouched=1\n", unsigned(status), current);
+                if (staging) scene.DeleteObject(m_CopyOwner);
+                m_CopyOwner = 0;
+            }
         }
 
         // 물리 프레임 뒤에도 진단 복사본은 강체 없이 고정된 월드 배치를 유지해야 한다.
@@ -436,10 +558,10 @@ namespace Viewer
                 }
 
         // 최종 결과를 한 번만 반환하고 다음 진단 지역 진행을 허용한다.
-        if (m_Completed)
+        if (m_Completed && !m_RequestId)
         {
             // 게시 후 검사 성공도 결과와 함께 남긴다.
-            if (m_Diagnostic) PatchLog("Skeletal patch static placement PASS: no dynamic bodies, offset and gap preserved\n");
+            if (m_Diagnostic && m_OffsetCopy) PatchLog("Skeletal patch static placement PASS: no dynamic bodies, offset and gap preserved\n");
             result = m_Result;
             m_Completed = false;
             return true;
@@ -471,7 +593,17 @@ namespace Viewer
             owner->SetNotCuttable(true);
             PatchLog("Skeletal patch cut submitted=%u owner=%llu\n", m_CutInFlight ? 1u : 0u,
                 static_cast<unsigned long long>(m_CopyOwner));
-            if (!m_CutInFlight) LogCutResult(scene, cutting.GetStatusText(), 0, 0, 0);
+            if (!m_CutInFlight)
+            {
+                // 제출 거절도 완료 실패로 처리하고 숨긴 준비물을 즉시 해제한다.
+                LogCutResult(scene, cutting.GetStatusText(), 0, 0, 0);
+                if (!m_OffsetCopy)
+                {
+                    scene.DeleteObject(m_CopyOwner);
+                    m_CopyOwner = 0;
+                    m_BreakReady = false;
+                }
+            }
         }
 
         // 영향 삼각형이 없는 패치만 생략하며 유한 영역 교차 수는 무한 절단을 막지 않는다.
@@ -491,7 +623,32 @@ namespace Viewer
 
         // 같은 원본 재질을 쓰는 자동 생성 컴포넌트의 geometry만 교체한다.
         m_Result = result;
-        m_Offset = patch->SourceWorldWidth + 0.5f;
+
+        // 원본 전역 삼각형 번호로 기존 마스크를 보존하며 새 패치 id를 배정한다.
+        if (!m_OffsetCopy)
+        {
+            const auto* original = scene.FindObject(m_Break.Owner);
+            const auto* source = original ? original->FindMeshComponent(m_SourceMesh) : nullptr;
+            if (!source || source->GetGeometry() != m_SourceRevision
+                || (source->GetTriangleMask() ? source->GetTriangleMask()->Revision : 0) != m_MaskRevision)
+            {
+                PatchLog("SP7e discarded before break: revision mismatch\n");
+                return true;
+            }
+            uint32_t count = 0, patchId = 0;
+            for (size_t s = 0; s < m_SourceRevision->GetSections().size(); ++s)
+                for (uint32_t d = 0; d < m_SourceRevision->GetMesh(s).numDraws; ++d)
+                    count += m_SourceRevision->GetMesh(s).draw[d].primCount / 3;
+            m_Removal = source->GetTriangleMask() ? source->GetTriangleMask()->Pending : std::vector<uint32_t>(count);
+            for (uint32_t value : m_Removal) patchId = std::max(patchId, value & 65535u);
+            if (++patchId > 65535u)
+            {
+                PatchLog("SP7e rejected: patch id exhausted\n");
+                return true;
+            }
+            for (uint32_t triangle : patch->Triangles) m_Removal.at(triangle) = 0x80000000u | patchId;
+        }
+        m_Offset = m_OffsetCopy ? patch->SourceWorldWidth + 0.5f : 0;
         m_World.SetTranslation(m_World.GetTranslation() + Math::Vector3(m_Offset, 0, 0));
         auto revision = GeometryRevision::FromGenerated(patch->Geometry);
         auto& owner = scene.CreateObject(m_Name, revision->GetSource());
@@ -499,6 +656,7 @@ namespace Viewer
         if (!owner.GetMeshComponents().front()->SetGeometry(std::move(revision)) || !owner.SetTransform(m_World))
             throw std::runtime_error("Skeletal patch publication failed");
         owner.SetNotCuttable(true);
+        owner.GetMeshComponents().front()->PublishVisible = m_OffsetCopy;
 
         // C 시점 평면 변환을 복사본과 같은 거리로 옮겨 모든 평면 정보를 재구축한다.
         Math::AffineTransform planeWorld(Invert(m_Plane.WorldToPlane));
@@ -563,6 +721,10 @@ namespace Viewer
         // A는 양의 반공간이므로 B를 음의 법선으로 0.1 m 이동해 간격을 만든다.
         if (result.Status == CutResultStatus::Published)
         {
+            // 원본 게시 전 준비 owner의 두 조각은 모든 pass에서 계속 숨긴다.
+            if (!m_OffsetCopy)
+                for (const auto& piece : scene.FindObject(m_CopyOwner)->GetMeshComponents()) piece->PublishVisible = false;
+
             // A/B 준비 성공 뒤에만 저장된 C 세대로 무충격 break를 요청한다.
             if (m_BreakReady)
             {
@@ -576,6 +738,11 @@ namespace Viewer
                 m_BreakReady = false;
             }
 
+            if (!m_OffsetCopy)
+            {
+                LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
+                return true;
+            }
             auto* owner = scene.FindObject(m_CopyOwner);
             auto* piece = owner ? owner->FindMeshComponent(result.Other) : nullptr;
             SceneTransform world;
@@ -596,6 +763,14 @@ namespace Viewer
         }
         else PatchLog("Skeletal patch B gap not applied: %s\n", reason);
         LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
+
+        // 절단 자체가 실패하면 숨긴 준비물도 즉시 버린다.
+        if (!m_OffsetCopy && result.Status != CutResultStatus::Published)
+        {
+            scene.DeleteObject(m_CopyOwner);
+            m_CopyOwner = 0;
+            m_BreakReady = false;
+        }
         return true;
     }
 
@@ -870,15 +1045,17 @@ namespace Viewer
         graphics.TransitionResource(m_Selected, D3D12_RESOURCE_STATE_COPY_SOURCE);
         graphics.CopyBufferRegion(m_Readback, 44, m_Selected, 0, 4);
 
-        // 진단에서만 동일 제출 시점의 VB/IB·pose·출처를 저장한다.
+        // 원본 숨김에 필요한 compact 출처는 모든 제출에서 보관한다.
+        m_OriginsReadback.Create(L"Patch sources", uint32_t(triangles), 12);
+        graphics.CopyBuffer(m_OriginsReadback, m_Output->TriangleSources);
+
+        // 진단에서만 동일 제출 시점의 VB/IB·pose를 저장한다.
         if (diagnostic)
         {
             m_SourceReadback.Create(L"Patch diagnostic source", uint32_t(input.GetDataBuffer().GetBufferSize()), 1);
             m_PoseReadback.Create(L"Patch diagnostic pose", uint32_t(posed.GetBuffer().GetBufferSize()), 1);
-            m_OriginsReadback.Create(L"Patch diagnostic sources", uint32_t(triangles), 12);
             graphics.CopyBuffer(m_SourceReadback, inputData);
             graphics.CopyBuffer(m_PoseReadback, inputPose);
-            graphics.CopyBuffer(m_OriginsReadback, m_Output->TriangleSources);
             m_OutputReadback.Create(L"Patch diagnostic packed vertices", vertices * 48, 1);
             graphics.CopyBuffer(m_OutputReadback, geometry.Data);
         }
@@ -920,6 +1097,17 @@ namespace Viewer
                 if (adjacent[id]) PatchLog("adjacentPatch id=%u removedNeighbors=%u separatePatch=1\n", id, adjacent[id]);
             m_AdjacentReadback.Unmap();
         }
+        // section과 draw 출처를 원본 mask의 누적 삼각형 번호로 변환한다.
+        const auto* origins = static_cast<const uint32_t*>(m_OriginsReadback.Map());
+        for (uint32_t t = 0; t < result.PatchTriangles; ++t)
+        {
+            uint32_t first = 0;
+            for (uint32_t s = 0; s <= origins[t * 3]; ++s)
+                for (uint32_t d = 0; d < m_Input->GetMesh(s).numDraws; ++d)
+                    if (s < origins[t * 3] || d < origins[t * 3 + 1]) first += m_Input->GetMesh(s).draw[d].primCount / 3;
+            m_Output->Triangles.push_back(first + origins[t * 3 + 2]);
+        }
+        m_OriginsReadback.Unmap();
         if (m_Diagnostic) Validate(result);
         auto& mesh = m_Output->Geometry->Meshes[0];
 

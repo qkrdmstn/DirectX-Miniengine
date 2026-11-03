@@ -80,7 +80,7 @@ namespace Viewer
             // 준비된 메시 경계를 기존 ray와 대조한다.
             for (const auto& mesh : object->GetMeshComponents())
             {
-                if (mesh->GetGeometry()->GetSections().empty() || !mesh->HasPoseBounds())
+                if (!mesh->PublishVisible || mesh->GetGeometry()->GetSections().empty() || !mesh->HasPoseBounds())
                     continue;
                 const BoundingSphere bounds = mesh->GetBoundingSphere(object->GetTransform());
                 const Vector3 offset = ray.Origin - bounds.GetCenter();
@@ -132,7 +132,7 @@ namespace Viewer
         // 컴포넌트를 찾아 월드 독립 여부를 읽는다.
         const GameObject* object = scene.FindObject(hit.Id);
         const MeshComponent* mesh = object ? object->FindMeshComponent(hit.MeshId) : nullptr;
-        const bool worldIndependent = mesh && mesh->GetTransformMode() == MeshTransformMode::WorldIndependent;
+        const bool worldIndependent = mesh && !mesh->Attachment && mesh->GetTransformMode() == MeshTransformMode::WorldIndependent;
 
         // 순수 규칙으로 대상을 정한다.
         return EditTarget::FromPick(hit, worldIndependent);
