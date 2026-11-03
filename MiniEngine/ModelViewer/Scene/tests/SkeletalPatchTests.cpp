@@ -102,7 +102,7 @@ int main()
     for (uint32_t i = 0; i < 3; ++i)
     {
         Check(MeshCutting::TryBuildCutPlaneData({2, 2}, AffineTransform(Matrix3(kIdentity), Vector3(0, float(i * 2) - 1, 0)), plane), "segment plane");
-        const auto selected = Viewer::SelectSegmentJoint(parents, positions, palettes, plane);
+        const auto selected = Viewer::SelectSegmentJoint(parents, positions, palettes, plane, std::vector<uint8_t>(3, 1));
         Check(selected.NodeId == i, "chain segment parent or terminal leaf");
         Check(selected.Kind == (i < 2 ? Viewer::SegmentJointKind::Segment : Viewer::SegmentJointKind::Leaf), "selection kind");
         Check(selected.ChildNodeId == (i < 2 ? i + 1 : UINT32_MAX), "segment child");
@@ -113,19 +113,35 @@ int main()
 
     // 비본 노드는 건너뛰며 사각형 밖 교점은 segment 후보에서 제외한다.
     Check(MeshCutting::TryBuildCutPlaneData({2, 2}, AffineTransform(kIdentity), plane), "origin plane");
-    Check(Viewer::SelectSegmentJoint(parents, {Vector3(0, -2, 0), Vector3(0, -1, 0), Vector3(0, 2, 0)}, {{0, 2}}, plane).NodeId == 0, "skip non-joint ancestor");
-    const auto outside = Viewer::SelectSegmentJoint({UINT32_MAX, 0}, {Vector3(3, -1, 0), Vector3(3, 1, 0)}, {{0, 1}}, plane);
+    Check(Viewer::SelectSegmentJoint(parents, {Vector3(0, -2, 0), Vector3(0, -1, 0), Vector3(0, 2, 0)}, {{0, 2}}, plane, std::vector<uint8_t>(3, 1)).NodeId == 0, "skip non-joint ancestor");
+    const auto outside = Viewer::SelectSegmentJoint({UINT32_MAX, 0}, {Vector3(3, -1, 0), Vector3(3, 1, 0)}, {{0, 1}}, plane, std::vector<uint8_t>(2, 1));
     Check(outside.NodeId == 1 && outside.Kind == Viewer::SegmentJointKind::Leaf, "finite rectangle excludes crossing");
+
+    // 말단 평면의 월드 반올림 오차를 허용하되 실제로 내부를 지나는 segment는 유지한다.
+    const auto terminal = Viewer::SelectSegmentJoint({UINT32_MAX, 0},
+        {Vector3(0, -1, 0), Vector3(0, 5e-7f, 0)}, {{0, 1}}, plane, std::vector<uint8_t>(2, 1));
+    Check(terminal.NodeId == 1 && terminal.Kind == Viewer::SegmentJointKind::Leaf, "terminal world epsilon");
+    const auto interior = Viewer::SelectSegmentJoint({UINT32_MAX, 0},
+        {Vector3(0, -1, 0), Vector3(0, 1e-4f, 0)}, {{0, 1}}, plane, std::vector<uint8_t>(2, 1));
+    Check(interior.NodeId == 0 && interior.Kind == Viewer::SegmentJointKind::Segment, "interior beyond world epsilon");
 
     // 두 교차 segment 중 평면 중심에 가까운 교점을 가진 부모만 고른다.
     const auto closest = Viewer::SelectSegmentJoint({UINT32_MAX, 0, UINT32_MAX, 2},
-        {Vector3(0.8f, -1, 0), Vector3(0.8f, 1, 0), Vector3(0.2f, -1, 0), Vector3(0.2f, 1, 0)}, {{0, 1, 2, 3}}, plane);
+        {Vector3(0.8f, -1, 0), Vector3(0.8f, 1, 0), Vector3(0.2f, -1, 0), Vector3(0.2f, 1, 0)}, {{0, 1, 2, 3}}, plane, std::vector<uint8_t>(4, 1));
     Check(closest.NodeId == 2 && closest.ChildNodeId == 3, "nearest intersection wins");
 
     // 별도 skeleton root는 앞선 skin joint와 segment를 만들지 않는다.
     const auto root = Viewer::SelectSegmentJoint({UINT32_MAX, UINT32_MAX, 1},
-        {Vector3(0, -1, 0), Vector3(0, 1, 0), Vector3(0, 2, 0)}, {{0, 1, 2}}, plane);
+        {Vector3(0, -1, 0), Vector3(0, 1, 0), Vector3(0, 2, 0)}, {{0, 1, 2}}, plane, std::vector<uint8_t>(3, 1));
     Check(root.NodeId == 0 && root.Kind == Viewer::SegmentJointKind::Leaf, "skeleton root breaks ancestry");
+
+    // 영향 없는 End 본은 말단이 아니며 중간의 무영향 본도 segment 조상에서 건너뛴다.
+    const auto end = Viewer::SelectSegmentJoint(parents, positions, palettes, plane, {1, 1, 0});
+    Check(end.NodeId == 1 && end.Kind == Viewer::SegmentJointKind::Leaf, "uninfluencing End excluded from leaf and segment");
+    const auto skipped = Viewer::SelectSegmentJoint(parents, positions, palettes, plane, {1, 0, 1});
+    Check(skipped.NodeId == 0 && skipped.ChildNodeId == 2, "nearest influencing ancestor across uninfluencing joint");
+    Check(Viewer::SelectSegmentJoint(parents, positions, palettes, plane, {0, 0, 0}).NodeId == UINT32_MAX,
+        "no influencing joints rejects selection");
 
     // 모든 검사를 통과한 경우만 정상 종료한다.
     std::printf("SkeletalPatchTests PASS: %u checks\n", Checks);

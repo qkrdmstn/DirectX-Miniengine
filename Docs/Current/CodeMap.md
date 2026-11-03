@@ -1,8 +1,8 @@
-상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료)
+상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); SP-5b 진단 복사본 절단 미커밋 동기화(2026-11-03); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료)
 
 # 현재 Scene과 유한 평면 코드 지도
 
-현재 구현은 객체 선택·TRS 편집, 유한 평면의 기하·격자 표시와 Static GPU 절단·cap·재절단을 포함한다. 유한 영역을 넘는 교차는 후보 전체를 거절한다. Skeletal 절단과 교차 미리보기는 미구현이다. 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.
+현재 구현은 객체 선택·TRS 편집, 유한 평면의 기하·격자 표시와 Static GPU 절단·cap·재절단을 포함한다. 유한 영역을 넘는 교차는 후보 전체를 거절한다. 원본 Skeletal 절단과 교차 미리보기는 미구현이다. SP-5b(미커밋)는 영향 패치의 정적 복사본만 무한 평면으로 절단하고 B를 월드 0.1 m 분리한다([설계·검증](../GPU/SkeletalPatchCopyCut.md)). 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.
 
 ## 실행 흐름
 
@@ -30,6 +30,8 @@
 | `ModelViewer/Scene/ObjectSelection.*`, `PickHit.h` | 원본 경계 구·생성 조각 hull 선택, 조각 중심 피벗, 객체/조각 ID와 월드 거리 비교를 제공한다. |
 | `ModelViewer/Scene/TransformGizmo.*`, `SceneTransform.h` | 객체 TRS 편집과 입력 처리를 담당한다. 조작·Undo 계약은 [Scene.md](Scene.md)를 따른다. |
 | `ModelViewer/Scene/CutPlaneSystem.*` | Scene을 참조하고 ObjectId별 `CutPlaneDesc`를 소유한다. 별도 평면 TRS를 보관하지 않는다. `Find`는 삭제된 객체를 거절한다. |
+| `Model/ModelLoader.cpp`의 `BuildInfluencingJoints`, `Model::m_InfluencingJoints` | 모델 로드 시 원본 CPU 정점의 양수 정규화 weight를 NodeId별로 캐시한다. C 경로에서는 이 캐시만 읽는다. |
+| `ModelViewer/Scene/SegmentJointSelection.h`, `SkeletalPatchCopy.*` | 영향 skin joint의 segment 부모·말단 선택, GPU 패치 복사, 정적 owner 게시·격리, 무한 평면 재구축과 B 분리를 담당한다. |
 | `ModelViewer/Scene/CuttingSystem.*` | 작업별 대상 snapshot과 `CutJob`을 보관하고 후보를 기본 2개까지 제출한다. 완료는 제출 순서대로 프레임당 하나씩 게시한다. [검증과 제한](../GPU/ConcurrentCutJobs.md) 참조. |
 | `MeshCutting/Geometry/CutPlane.*`의 `CutPlaneDesc` | 로컬 XZ, y=0 직사각형의 `Width`와 `Height`를 정의한다. |
 | `CutPlaneData` | `WorldPlane`은 정규화된 `Vector4(n, d)`이며 식은 n·x+d=0이다. `WorldToPlane`은 affine 역변환, `HalfWidth`·`HalfHeight`는 로컬 반크기, `WorldCorners`는 네 월드 모서리다. |

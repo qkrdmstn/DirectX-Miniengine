@@ -75,7 +75,7 @@ public:
     virtual bool IsDone() override
     {
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
-        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 5 && (m_CapturePath.empty() || m_CaptureComplete)))
+        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 6 && (m_CapturePath.empty() || m_CaptureComplete)))
             return true;
 
         // 벤치마크 결과 파일을 쓴 뒤에는 남은 GPU 절단이 끝나면 종료한다.
@@ -89,7 +89,7 @@ public:
 
 private:
 
-    uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0;
+    uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0, m_SkeletalPatchCaptured = 0;
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
     Camera m_Camera;
     unique_ptr<CameraController> m_CameraController;
@@ -144,7 +144,7 @@ private:
     bool m_EscapeConsumed = false;
     Renderer::RenderMode m_RenderMode = Renderer::RenderMode::Solid;
     bool m_ViewDiagnosticPending = false;
-    std::wstring m_CapturePath;
+    std::wstring m_CapturePath, m_ActiveCapturePath;
     uint32_t m_CaptureFrame = 0;
     uint32_t m_CaptureTargetFrame = 60;
     uint32_t m_AnimationStepMs = 0;
@@ -531,17 +531,6 @@ void ModelViewer::Startup( void )
                 break;
             }
 
-    // 패치 진단 캡처에는 CesiumMan과 X 방향 복사본을 함께 담는다.
-    if (m_SkeletalPatchChecks)
-        for (const auto& object : m_Scene.GetObjects())
-            if (object->GetName() == "CesiumMan")
-            {
-                const Vector3 center = object->GetTransform().ToAffine()
-                    * object->GetModelInstance()->GetModel()->m_BoundingSphere.GetCenter();
-                const Vector3 target = center + Vector3(3.5f, 0.0f, 0.0f);
-                m_Camera.SetEyeAtUp(target + Vector3(0.0f, 3.0f, 12.0f), target, Vector3(kYUnitVector));
-            }
-
     // 확정된 시작 시점으로 이동 제어기를 초기화한다.
     m_Camera.SetZRange(0.1f, 1000.0f);
     auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
@@ -574,6 +563,26 @@ void ModelViewer::Startup( void )
         m_Physics.SyncBodies();
         m_BodiesBeforeCuts = m_Physics.GetSimulationBodyCount();
     }
+
+    // 패치 진단 원본은 보수적인 모델 경계까지 바닥 위에 두어 정적 복사본을 가리지 않게 한다.
+    std::array<double, 3> patchFloorCenter{}, patchFloorHalf{};
+    if (m_SkeletalPatchChecks && m_Physics.GetFloorBox(patchFloorCenter, patchFloorHalf))
+        for (const auto& object : m_Scene.GetObjects())
+        {
+            const auto* pose = object->GetModelInstance();
+            if (!pose || !pose->GetModel()->m_NumJoints) continue;
+            const auto& model = *pose->GetModel();
+            auto transform = object->GetTransform();
+            const Vector3 scale = transform.GetScale();
+            const float radius = float(model.m_BoundingSphere.GetRadius())
+                * std::max({ float(scale.GetX()), float(scale.GetY()), float(scale.GetZ()) });
+            const Vector3 center = transform.ToAffine() * model.m_BoundingSphere.GetCenter();
+            const float lift = std::max(0.0f, float(patchFloorCenter[1] + patchFloorHalf[1]) + radius + 0.1f - float(center.GetY()));
+            transform.SetTranslation(transform.GetTranslation() + Vector3(0, lift, 0));
+            if (!object->SetTransform(transform)) throw std::runtime_error("Skeletal patch diagnostic placement failed");
+            Utility::Printf("Skeletal patch diagnostic floor top=%.6f lift=%.6f model=%s\n",
+                float(patchFloorCenter[1] + patchFloorHalf[1]), lift, object->GetName().c_str());
+        }
 
     // 진단 fixture는 기존 모델의 정규화와 물리 초기화가 끝난 뒤 추가한다.
     m_SkeletalChecks.Start(m_Scene, m_Physics);
@@ -806,21 +815,35 @@ void ModelViewer::Update( float deltaT )
     Viewer::SkeletalPatchResult patchResult;
     if (!cutKey && m_SkeletalPatchCopy.Update(m_Scene, m_Cutting, patchResult) && m_SkeletalPatchChecks)
     {
-        // 위팔은 같은 C 경로를 두 번 실행하여 owner 교체도 검증한다.
-        if (m_SkeletalPatchCheckIndex < 3 && patchResult.CrossingTriangles == 0)
-            throw std::runtime_error("Skeletal patch diagnostic segment has no surface crossing");
-        if (m_SkeletalPatchCheckIndex == 3 && (!patchResult.PatchTriangles || patchResult.CrossingTriangles))
-            throw std::runtime_error("Skeletal patch zero crossing diagnostic failed");
+        // 모델별 두 segment와 말단을 같은 C 경로로 차례로 검사한다.
         ++m_SkeletalPatchCheckIndex;
+        // 새 geometry가 일반 프레임 준비 경로를 지난 뒤 캡처한다.
+        m_CaptureFrame = 0;
     }
-    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 5 && !m_SkeletalPatchCopy.IsPending();
+    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 6 && !m_SkeletalPatchCopy.IsPending()
+        && (m_CapturePath.empty() || m_SkeletalPatchCheckIndex % 3 != 1 || m_SkeletalPatchCaptured > m_SkeletalPatchCheckIndex / 3);
     if (patchDiagnostic) m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
 
     // 자동 진단도 C와 같은 Static 요청·skin 선택 경로를 한 프레임에 한 번 실행한다.
     MeshCutting::CutPlaneData diagnosticPlane;
-    const uint32_t patchRegion = m_SkeletalPatchCheckIndex < 2 ? 0 : m_SkeletalPatchCheckIndex == 2 ? 1 : m_SkeletalPatchCheckIndex == 3 ? 3 : 2;
+    const uint32_t patchRegion = m_SkeletalPatchCheckIndex;
     if (patchDiagnostic && !Viewer::BuildSkeletalPatchDiagnosticPlane(m_Scene, patchRegion, diagnosticPlane))
         throw std::runtime_error("Skeletal patch diagnostic plane failed");
+
+    // 첫 case에서 모델별 진단 중심을 향해 카메라와 이동 제어기를 함께 맞춘다.
+    if (patchDiagnostic && m_SkeletalPatchCheckIndex % 3 == 0)
+    {
+        const Vector3 center = (diagnosticPlane.WorldCorners[0] + diagnosticPlane.WorldCorners[2]) * 0.5f;
+        const Vector3 target = center + Vector3(1.0f, 0, 0);
+        m_Camera.SetEyeAtUp(target + Vector3(0, 1, 4), target, Vector3(kYUnitVector));
+        auto controller = std::make_unique<FlyingFPSCamera>(m_Camera, Vector3(kYUnitVector));
+        controller->EnableMomentum(false);
+        controller->SetMoveSpeed(5.0f);
+        const Vector3 forward = m_Camera.GetForwardVec();
+        controller->SetHeadingPitchAndPosition(std::atan2(-float(forward.GetX()), -float(forward.GetZ())),
+            std::asin(float(forward.GetY())), m_Camera.GetPosition());
+        m_CameraController = std::move(controller);
+    }
     if (cutKey || patchDiagnostic)
     {
         MeshCutting::CutPlaneData plane;
@@ -916,7 +939,7 @@ void ModelViewer::Update( float deltaT )
 
     // 패치 결과 격리까지 끝난 뒤 후보 없음·제출 거절도 최종 Static 게시 수를 검증한다.
     if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && !m_SkeletalPatchCopy.IsPending()
-        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 5) && m_ExpectedPublications != ~0u)
+        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 6) && m_ExpectedPublications != ~0u)
     {
         if (m_Publications != m_ExpectedPublications)
             throw std::runtime_error("Unexpected number of cut publications");
@@ -1066,14 +1089,17 @@ void ModelViewer::RenderScene( void )
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    const bool capture = !m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= m_CaptureTargetFrame
+    const bool capture = !m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
-        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 5);
+        && (!m_SkeletalPatchChecks || (m_SkeletalPatchCheckIndex == m_SkeletalPatchCaptured * 3 + 1 && !m_SkeletalPatchCopy.IsPending()));
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
     {
-        m_CaptureComplete = true;
-        g_SceneColorBuffer.ExportToFile(m_CapturePath + L"-hdr.raw");
+        // 패치 진단은 첫 segment의 A/B 간격을 모델별 파일에 저장한다.
+        m_ActiveCapturePath = m_CapturePath;
+        if (m_SkeletalPatchChecks) m_ActiveCapturePath += L"-model" + std::to_wstring(++m_SkeletalPatchCaptured);
+        m_CaptureComplete = !m_SkeletalPatchChecks || m_SkeletalPatchCaptured == 2;
+        g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-hdr.raw");
         auto& restore = GraphicsContext::Begin(L"Restore capture state");
         restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         restore.Finish(true);
@@ -1091,7 +1117,7 @@ void ModelViewer::RenderUI(GraphicsContext& context)
 {
     if (m_CapturePostPending)
     {
-        g_SceneColorBuffer.ExportToFile(m_CapturePath + L"-post.raw");
+        g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-post.raw");
         auto& restore = GraphicsContext::Begin(L"Restore capture state");
         restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         restore.Finish(true);

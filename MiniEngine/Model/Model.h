@@ -122,6 +122,7 @@ public:
     std::unique_ptr<uint8_t[]> m_KeyFrameData;
     std::unique_ptr<AnimationCurve[]> m_CurveData;
     std::unique_ptr<AnimationSet[]> m_Animations;
+    std::vector<uint8_t> m_InfluencingJoints; // 로드 시 계산한 NodeId별 양수 정규화 weight 존재 여부
     std::unique_ptr<uint16_t[]> m_JointIndices;
     std::unique_ptr<Math::Matrix4[]> m_JointIBMs;
     std::vector<MiniCollision::AggregateGeom> m_MeshCollision;   // m_MeshData 순서의 model-local 충돌(생성되지 않은 메시는 비어 있음)

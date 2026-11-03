@@ -9,7 +9,7 @@ namespace Viewer
     // 모델 pose와 컴포넌트 section을 순수 선택 함수의 입력으로 바꾼다.
     SegmentJointSelection SelectSegmentJoint(const ModelInstance& pose, const MeshComponent& component,
         const SceneTransform& owner, const MeshCutting::CutPlaneData& plane);
-    // CesiumMan의 위팔·허벅지·손에 현재 pose 기준 진단 평면을 배치한다.
+    // 각 skin 모델의 골격에서 두 segment와 말단의 진단 평면을 배치한다.
     bool BuildSkeletalPatchDiagnosticPlane(const Scene& scene, uint32_t index, MeshCutting::CutPlaneData& plane);
 
     struct SkeletalPatchResult
@@ -74,7 +74,7 @@ namespace Viewer
         // 복사본을 준비하고 Static batch 뒤 절단하여 최종 완료를 반환한다.
         bool Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result);
         // 복사본 결과를 소비하여 Static 집계와 격리한다.
-        bool OnCutResult(const Scene& scene, const CuttingSystem& cutting, const CutResultEntry& result);
+        bool OnCutResult(Scene& scene, const CuttingSystem& cutting, const CutResultEntry& result);
         // 진단의 중복 제출을 막기 위해 현재 요청 상태를 읽는다.
         bool IsPending() const
         {

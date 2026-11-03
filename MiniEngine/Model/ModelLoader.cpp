@@ -290,7 +290,36 @@ static void BuildMeshCollision(Model& model, const std::vector<uint8_t>& geometr
     }
 }
 
-// .mini를 읽어 Model을 만든다. geometry는 CPU에 보관해 메시별 충돌을 계산한 뒤 GPU로 업로드한다.
+// 원본 CPU 정점의 양수 weight를 메시별 팔레트로 변환해 모델당 한 번 캐시한다.
+static void BuildInfluencingJoints(Model& model, const std::vector<uint8_t>& geometry)
+{
+    // skin 정점의 마지막 16바이트는 uint16 joint 네 개와 unorm16 weight 네 개다.
+    model.m_InfluencingJoints.assign(model.m_NumNodes, 0);
+    const uint8_t* meshPtr = model.m_MeshData.get();
+    for (uint32_t i = 0; i < model.m_NumMeshes; ++i)
+    {
+        const Mesh& mesh = *reinterpret_cast<const Mesh*>(meshPtr);
+        meshPtr += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
+        if (!mesh.numJoints || mesh.vbStride < 16 || uint64_t(mesh.vbOffset) + mesh.vbSize > geometry.size())
+            continue;
+
+        // 양수 합으로 나눈 weight의 양수 여부는 저장된 정수 weight의 양수 여부와 같다.
+        for (uint32_t v = 0; v < mesh.vbSize / mesh.vbStride; ++v)
+        {
+            uint16_t skin[8];
+            std::memcpy(skin, geometry.data() + mesh.vbOffset + size_t(v + 1) * mesh.vbStride - 16, sizeof(skin));
+            for (uint32_t j = 0; j < 4; ++j)
+                if (skin[4 + j] > 0 && skin[j] < mesh.numJoints)
+                {
+                    const uint32_t palette = mesh.startJoint + skin[j];
+                    if (palette < model.m_NumJoints && model.m_JointIndices[palette] < model.m_NumNodes)
+                        model.m_InfluencingJoints[model.m_JointIndices[palette]] = 1;
+                }
+        }
+    }
+}
+
+// .mini를 읽고 로드 시 충돌과 영향 joint 캐시를 만든 뒤 GPU에 업로드한다.
 std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool forceRebuild)
 {
     const std::wstring miniFileName = Utility::RemoveExtension(filePath) + L".mini";
@@ -449,6 +478,9 @@ std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool fo
         model->m_JointIBMs.reset(new Matrix4[header.numJoints]);
         inFile.read((char*)model->m_JointIBMs.get(), header.numJoints * sizeof(Matrix4));
     }
+
+    // C 경로에서 정점을 읽지 않도록 모델 로드 시 영향 joint를 확정한다.
+    BuildInfluencingJoints(*model, geometryBytes);
 
     // 파일을 모두 읽은 뒤 업로드 전에 메시별 충돌을 CPU에서 계산한다.
     BuildMeshCollision(*model, geometryBytes, model->m_CurveData ? header.numAnimationCurves : 0);

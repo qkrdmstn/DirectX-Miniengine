@@ -21,12 +21,12 @@ namespace Viewer
     // 현재 월드 위치와 유효 부모에서 유한 평면을 지나는 segment의 부모 본을 고른다.
     inline SegmentJointSelection SelectSegmentJoint(const std::vector<uint32_t>& parents,
         const std::vector<Math::Vector3>& positions, const std::vector<std::vector<uint32_t>>& palettes,
-        const MeshCutting::CutPlaneData& plane)
+        const MeshCutting::CutPlaneData& plane, const std::vector<uint8_t>& influencing)
     {
-        // 팔레트 중복을 제거한 skin 집합과 가장 가까운 skin 조상을 준비한다.
+        // 영향 없는 본과 팔레트 중복을 제외하고 가장 가까운 영향 skin 조상을 준비한다.
         using namespace Math;
         SegmentJointSelection result;
-        if (positions.size() != parents.size())
+        if (positions.size() != parents.size() || influencing.size() != parents.size())
             return result;
         std::vector<bool> skin(parents.size(), false), hasChild(parents.size(), false);
         std::vector<uint32_t> skinParents(parents.size(), UINT32_MAX);
@@ -35,7 +35,7 @@ namespace Viewer
             {
                 if (node >= parents.size())
                     return result;
-                skin[node] = true;
+                skin[node] = influencing[node] != 0;
             }
         for (uint32_t node = 0; node < parents.size(); ++node)
         {
@@ -61,8 +61,11 @@ namespace Viewer
             const uint32_t parent = skinParents[child];
             if (parent == UINT32_MAX)
                 continue;
-            const float a = Dot(Vector4(positions[parent], 1), plane.WorldPlane);
-            const float b = Dot(Vector4(positions[child], 1), plane.WorldPlane);
+            float a = Dot(Vector4(positions[parent], 1), plane.WorldPlane);
+            float b = Dot(Vector4(positions[child], 1), plane.WorldPlane);
+            // 월드 거리의 반올림 오차는 평면 위로 맞춰 말단이 segment로 바뀌지 않게 한다.
+            if (std::abs(a) <= 1e-6f) a = 0;
+            if (std::abs(b) <= 1e-6f) b = 0;
             if (!((a < 0 && b > 0) || (a > 0 && b < 0)))
                 continue;
             const Vector3 hit = positions[parent] + (positions[child] - positions[parent]) * (a / (a - b));
