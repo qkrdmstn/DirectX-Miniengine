@@ -30,7 +30,7 @@
 | [CapActiveTestList.md](GPU/CapActiveTestList.md) | cap 내부 점 검사(InTriangle) 대상을 라운드별 목록으로 압축 | 진행 중 — AL-1 `74f4940d`, AL-0·AL-1 각 41회 회귀 통과·대조 불일치 0; 5060 Ti cap 1.01→0.51 ms; attempt=1 미검증 (2026-11-02) |
 | [ConcurrentCutJobs.md](GPU/ConcurrentCutJobs.md) | 여러 Static CutJob 제출·작업별 snapshot·완료 게시 | 완료 — `f2138029` 기준 1단계, Debug/Release·20회 실행 검증 `1532fc60` |
 | [SkeletalPatchCopyCut.md](GPU/SkeletalPatchCopyCut.md) | C 입력으로 영향 본 선택→패치 GPU 복사→정적 복사본 무한 절단 | 진행 중 — SP-1~SP-6 완료 `aa718787`, Parent 확정 `9ce43f96`; SP-7a `731c7005` + SP-7a2 CPU 보존·D2 bounds 구현(미커밋), 후속 단계는 아래 문서 (2026-11-03) |
-| [SkeletalPatchBreak.md](GPU/SkeletalPatchBreak.md) | SP-7: 선택 joint BreakConstraint, 자동 rig, 원본 숨김(상태 버퍼+치환 IB), A/B node 부착 | 진행 중 — SP-7a3 `18848ec0`; SP-7b 지연 등록·요청별 break 결과·D/R CPU/빌드/진단/회귀·결과 수명 독립 리뷰 PASS(미커밋, base `18848ec0`); SP-7c~e 미구현 (2026-11-03) |
+| [SkeletalPatchBreak.md](GPU/SkeletalPatchBreak.md) | SP-7: 선택 joint BreakConstraint, 자동 rig, 원본 숨김(상태 버퍼+치환 IB), A/B node 부착 | 진행 중 — SP-7b D/R 검증·독립 리뷰 PASS; SP-7c 셰이더·독립 GPU D/R 검증·경계 테스트 보강 리뷰 완료, C++·모델 진단 연결 미구현(미커밋, base `94f2bf24`); SP-7d~e 미구현 (2026-11-03) |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계

@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7a3 `18848ec0`; SP-7b 지연 등록·incoming 조회·요청별 break 결과·D/R 독립 리뷰 검증 완료(미커밋, base `18848ec0`); SP-7c~e 미구현 (2026-11-03)
+상태: 진행 중 — SP-7a3 `18848ec0`; SP-7b 지연 등록·incoming 조회·요청별 break 결과·D/R 독립 리뷰 검증 완료; SP-7c 셰이더·독립 GPU 검증·경계 테스트 보강 리뷰 완료, C++ 연결 미구현(미커밋, base `94f2bf24`); SP-7d~e 미구현 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -195,3 +195,13 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - 산출물·로그는 `%TEMP%/SP7b`를 재사용한다. offset 복사본·0.1 m 간격은 유지한다. 수동 C·지원 거절 모델의 통합 fallback은 미검증이다.
 
 - 독립 리뷰: 미조회 break 결과의 누적을 막도록 결과 보관을 명시적 선택으로 바꿨다. JointId 7/43/5와 subtree 17/4/2개는 원본 GLB weight·DFS로 재확인했다. D/R CPU 55/59/915 checks, 결과 분리·한 번 소비·Clear 통합 검증 PASS. 로그는 `%TEMP%/SP7b/*Review*.log`에 보관한다.
+
+## SP-7c 셰이더 단계 (2026-11-03, base `94f2bf24`, 미커밋)
+- 약 300줄 제한에 따라 셰이더·프로젝트 등록·독립 GPU 테스트에서 분할한다. 컴포넌트 소유권·렌더 IB 분리·모델 진단 연결은 다음 단계다.
+- `TriangleMaskCS::main`은 DWORD 단위로 원본 IB를 재구성한다. `Replacement`는 누적 `FirstTriangle`의 bit31만 판정하고 원본 첫 인덱스를 반환하며 baseVertex는 바꾸지 않는다.
+- 입력 draw 배치는 `PatchExtractCS`와 같다. root는 b0의 `FirstWord/WordCount/Draws/Padding`, t0 원본, t1 draw, t2 State, u0 별도 출력이다. 원본과 출력 바이트 오프셋을 맞춘다.
+- `TriangleMaskShaderTests::main` D/R 각각 13표본·1,664 DWORD 비교, 불일치 0·D3D12 ERROR 0(MX450). R16 공유 DWORD·홀수 StartIndex·R32·빈 영역·소유권만 설정·개별/전체 제거·해제 복원을 검사한다.
+- ModelViewer D/R 빌드 PASS. CPU AutoRig 55·SkeletalPatch 59·SkeletalBreak 915 checks씩 PASS. Static·SP-6·기존 break 진단 D/R 10실행 ERROR 0, SP-6 각 20행 기준 로그 차이 0. 출력·로그는 `%TEMP%/SP7b`만 사용한다.
+- 미구현·미검증: `TriangleMask` 자원/Revision/수명, `MeshSorter::AddMesh`·`RenderMeshes` 연결, `-skeletal-mask-checks`, Xbot/CesiumMan 패스별 숨김·다른 인스턴스 보존·복원. C 입력은 변경하지 않았다.
+- 독립 리뷰: 기존 초과 dispatch는 자원 밖 쓰기를 놓칠 수 있어 `TriangleMaskShaderTests::main`에 원본과 다른 양끝 sentinel을 추가했다. `FirstWord=1`, `WordCount=126`, 192스레드로 시작 오프셋·종료 경계와 이전 출력 복원을 검사한다. D/R 각각 13표본·1,664 DWORD(경계 sentinel 26개 포함), 불일치 0·D3D12 ERROR 0(MX450).
+- 리뷰 재검증: ModelViewer D/R 증분 빌드 exit 0(37.3/34.6초, 기존 MiniPhysics/Jolt 의존성 재사용), `CutPlaneTests` D/R PASS, `git diff --check` PASS. 요청된 `PlaneSlicerTests.cpp`는 현재 저장소에 없어 현행 `MeshCutting/tests/CutPlaneTests.cpp`의 헤더 명령으로 실행했다. 대형 IB의 2차원 dispatch·GPU 드라이버 버전·기존 모델 진단은 이번 리뷰에서 재검증하지 않았다. 로그는 `%TEMP%/SP7b/{Build-*,MaskTests-*,CutPlaneReview-*}`에 둔다.
