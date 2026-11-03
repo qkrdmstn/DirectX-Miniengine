@@ -13,7 +13,7 @@ static void Check(bool value)
     if (!value) throw std::runtime_error("auto rig check failed");
 }
 
-// 팔레트 병합과 거절 조건 및 배율을 제거한 frame과 anchor를 검사한다.
+// 팔레트·거절·frame·anchor와 pose 변형 후의 정점 bounds 및 fallback을 검사한다.
 int main()
 {
     // 회전·이동·균일 배율과 body 없는 중간 본 및 영향 없는 팔레트를 구성한다.
@@ -75,5 +75,43 @@ int main()
     Check(std::abs(asset.Bodies[2].HalfExtentMeters[0] - 2) < 1e-6);
     for (const auto& body : asset.Bodies)
         if (body.Node) Check(body.BoneFromBody.Position == std::array<double, 3>{});
-    std::printf("SP-7a PASS checks=%u\n", g_Checks);
+
+    // 비정규화 혼합 weight와 inverse bind를 적용한 segment 및 leaf bounds를 검증한다.
+    pose.Parents = { UINT32_MAX, 0 };
+    pose.Influencing = { 1, 1 };
+    pose.Nodes = { Matrix4(kIdentity), Matrix4(Matrix3(kIdentity), Vector3(4, 0, 0)) };
+    SkinCpuSection vertices = {
+        { { 0, -2, -1 }, { 0, 1, 0, 0 }, { 10, 30, 0, 0 } },
+        { { 2, 2, 3 }, { 0, 1, 0, 0 }, { 30, 10, 0, 0 } },
+        { { 999, 999, 999 }, {}, {} } };
+    pose.Sections = { { e, { 0, 1 }, &vertices,
+        { Matrix4(kIdentity), Matrix4(Matrix3(kIdentity), Vector3(-2, 0, 0)) } } };
+    unsigned fallbacks = 99;
+    Check(BuildSkeletalPhysicsAsset(pose, asset, &fallbacks) && fallbacks == 0);
+    Check(MiniPhysics::ValidateSkeletalPhysicsAsset(asset, pose.Parents));
+    const auto& segment = asset.Bodies[0];
+    Check(std::abs(segment.HalfExtentMeters[0] - 1) < 2e-5);
+    Check(std::abs(segment.HalfExtentMeters[1] - 4) < 2e-5);
+    Check(std::abs(segment.HalfExtentMeters[2] - 6) < 2e-5);
+    const auto& leafBody = asset.Bodies[1];
+    Check(std::abs(leafBody.HalfExtentMeters[0] - 2.5) < 2e-5);
+    Check(std::abs(leafBody.HalfExtentMeters[1] - 4) < 2e-5);
+    Check(std::abs(leafBody.HalfExtentMeters[2] - 4) < 2e-5);
+    Check(std::abs(leafBody.BoneFromBody.Position[0] + 2.5) < 2e-5);
+    Check(std::abs(leafBody.BoneFromBody.Position[2] - 2) < 2e-5);
+
+    // 다른 section의 같은 NodeId도 합치고 정점 없는 본의 fallback 수를 확인한다.
+    SkinCpuSection extra = { { { 0, 8, 0 }, {}, { 1, 0, 0, 0 } } };
+    pose.Sections.push_back({ e, { 0 }, &extra, { Matrix4(kIdentity) } });
+    Check(BuildSkeletalPhysicsAsset(pose, asset, &fallbacks) && fallbacks == 0);
+    Check(std::abs(asset.Bodies[0].HalfExtentMeters[1] - 16) < 2e-5);
+    pose.Sections.resize(1);
+    for (auto& vertex : vertices) vertex.Weights[1] = 0;
+    Check(BuildSkeletalPhysicsAsset(pose, asset, &fallbacks) && fallbacks == 1);
+    bad = pose;
+    bad.Sections[0].InverseBind.clear();
+    Check(!BuildSkeletalPhysicsAsset(bad, asset));
+    vertices[0].Joints[0] = 2;
+    Check(!BuildSkeletalPhysicsAsset(pose, asset));
+    std::printf("SP-7a2 PASS checks=%u\n", g_Checks);
 }

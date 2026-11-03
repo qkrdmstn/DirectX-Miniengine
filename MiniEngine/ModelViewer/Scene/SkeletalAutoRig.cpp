@@ -6,9 +6,9 @@
 
 namespace Viewer
 {
-    // 호출자가 제공한 section E와 모델의 실제 팔레트·영향 플래그를 결합한다.
+    // section E와 모델의 CPU 정점·inverse bind·팔레트·영향 플래그를 결합한다.
     bool BuildSkeletalPhysicsAsset(const Model& model, const SkeletalPoseSnapshot& pose,
-        MiniPhysics::SkeletalPhysicsAsset& outAsset)
+        MiniPhysics::SkeletalPhysicsAsset& outAsset, unsigned* fallbackCount)
     {
         // 모델과 snapshot의 node 및 section 순서가 일치해야 한다.
         if (pose.Nodes.size() != model.m_NumNodes) return RejectAutoRig("model node count");
@@ -20,18 +20,23 @@ namespace Viewer
         {
             if (mesh->numJoints)
             {
-                if (section >= input.Sections.size() || uint32_t(mesh->startJoint) + mesh->numJoints > model.m_NumJoints)
+                if (section >= input.Sections.size() || section >= model.m_SkinCpuSections.size() ||
+                    uint32_t(mesh->startJoint) + mesh->numJoints > model.m_NumJoints)
                     return RejectAutoRig("model section/palette count");
-                input.Sections[section++].Palette.assign(model.m_JointIndices.get() + mesh->startJoint,
+                auto& skin = input.Sections[section];
+                skin.Vertices = &model.m_SkinCpuSections[section++];
+                skin.InverseBind.assign(model.m_JointIBMs.get() + mesh->startJoint,
+                    model.m_JointIBMs.get() + mesh->startJoint + mesh->numJoints);
+                skin.Palette.assign(model.m_JointIndices.get() + mesh->startJoint,
                     model.m_JointIndices.get() + mesh->startJoint + mesh->numJoints);
             }
             mesh = reinterpret_cast<const Mesh*>(&mesh->draw[mesh->numDraws]);
         }
         if (section != input.Sections.size()) return RejectAutoRig("extra sections");
-        return BuildSkeletalPhysicsAsset(input, outAsset);
+        return BuildSkeletalPhysicsAsset(input, outAsset, fallbackCount);
     }
 
-    // 독립 애니메이션 pose에서 자동 rig를 만들고 등록 없이 anchor 오차를 기록한다.
+    // 독립 pose의 자동 rig를 만들고 anchor 오차·크기·CPU 메모리·fallback을 기록한다.
     void RunSkeletalAutoRigChecks(const Scene& scene)
     {
         // 로그는 TEMP에만 기록하고 장면의 pose와 물리 등록 상태는 건드리지 않는다.
@@ -49,6 +54,7 @@ namespace Viewer
             animation.PlayAnimation(0, true);
             MiniPhysics::SkeletalPhysicsAsset asset;
             double maximum = 0;
+            unsigned fallbacks = 0;
             bool passed = true;
             for (unsigned sample = 0; sample < 5; ++sample)
             {
@@ -66,7 +72,7 @@ namespace Viewer
                         if (mesh.numJoints) pose.Sections.push_back({ Matrix4(component->GetWorldTransform(object->GetTransform())) *
                             Matrix4(Invert(component->GetDeformBinding().SourceFrame.ToAffine())) * pose.Nodes[mesh.meshCBV], {} });
                     }
-                if (!sample) passed = animation.HasValidPose() && BuildSkeletalPhysicsAsset(*model, pose, asset);
+                if (!sample) passed = animation.HasValidPose() && BuildSkeletalPhysicsAsset(*model, pose, asset, &fallbacks);
                 if (!passed) break;
 
                 // 최초 자산의 offset을 유지하고 표본 pose의 body frame만 다시 평가한다.
@@ -91,7 +97,23 @@ namespace Viewer
                 }
                 log << object->GetName() << " sample=" << sample << " maxAnchorErrorMeters=" << maximum << '\n';
             }
-            log << object->GetName() << " bodies=" << asset.Bodies.size() << " joints=" << asset.Joints.size()
+            // 영구 CPU 복사본의 실제 capacity와 모든 축의 half extent 범위를 기록한다.
+            size_t vertices = 0, bytes = model->m_SkinCpuSections.capacity() * sizeof(SkinCpuSection);
+            for (const auto& section : model->m_SkinCpuSections)
+            {
+                vertices += section.size();
+                bytes += section.capacity() * sizeof(SkinCpuVertex);
+            }
+            double minimumExtent = DBL_MAX, maximumExtent = 0;
+            for (const auto& body : asset.Bodies)
+                for (double extent : body.HalfExtentMeters)
+                {
+                    minimumExtent = (std::min)(minimumExtent, extent);
+                    maximumExtent = (std::max)(maximumExtent, extent);
+                }
+            log << object->GetName() << " cpuVertices=" << vertices << " cpuBytes=" << bytes
+                << " minHalfExtentMeters=" << minimumExtent << " maxHalfExtentMeters=" << maximumExtent
+                << " fallbackJoints=" << fallbacks << " bodies=" << asset.Bodies.size() << " joints=" << asset.Joints.size()
                 << " Validate=" << (passed && MiniPhysics::ValidateSkeletalPhysicsAsset(asset, animation.GetPoseParents()) ? "PASS" : "FAIL")
                 << " samples=5 maxAnchorErrorMeters=" << maximum << " registered=0\n";
             if (!passed) throw std::runtime_error("auto rig asset validation failed");

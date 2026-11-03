@@ -89,6 +89,7 @@
     <ClInclude Include="TransformBounds.h" />
     <ClInclude Include="ModelPose.h" />
     <ClInclude Include="SkeletonPose.h" />
+    <ClInclude Include="SkinCpuData.h" />
     <ClInclude Include="ModelLoader.h" />
     <ClInclude Include="ModelH3D.h" />
     <ClInclude Include="ParticleEffects.h" />

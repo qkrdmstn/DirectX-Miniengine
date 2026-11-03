@@ -1,5 +1,6 @@
 #pragma once
 #include "SkeletalPhysicsFrames.h"
+#include "../../Model/SkinCpuData.h"
 #include <cstdio>
 
 class Model;
@@ -12,6 +13,8 @@ namespace Viewer
     {
         Math::Matrix4 E{ Math::kIdentity };
         std::vector<uint32_t> Palette;
+        const SkinCpuSection* Vertices = nullptr;
+        std::vector<Math::Matrix4> InverseBind;
     };
     struct SkeletalPoseSnapshot
     {
@@ -29,9 +32,9 @@ namespace Viewer
         return false;
     }
 
-    // CPU 정점이 없는 모델의 영향 본을 segment 기반 box와 SwingTwist 관절로 만든다.
+    // 등록 pose로 변형한 양수 weight 정점의 bounds를 box와 SwingTwist 관절로 만든다.
     inline bool BuildSkeletalPhysicsAsset(const SkeletalPoseSnapshot& pose,
-        MiniPhysics::SkeletalPhysicsAsset& outAsset)
+        MiniPhysics::SkeletalPhysicsAsset& outAsset, unsigned* fallbackCount = nullptr)
     {
         // 크기와 전체 부모 그래프를 먼저 검증한다.
         using namespace Math;
@@ -84,7 +87,35 @@ namespace Viewer
         }
         if (roots != 1) return RejectAutoRig("multiple/no influencing roots");
 
-        // 가장 먼 영향 자식 방향을 X축으로 쓰고 말단은 들어오는 segment 길이를 사용한다.
+        // GPU와 같은 정규화 weight와 inverse bind로 정점을 등록 공간에 한 번 변형한다.
+        std::vector<std::vector<Vector3>> weighted(count);
+        for (const auto& section : pose.Sections)
+        {
+            if (!section.Vertices) continue;
+            if (section.InverseBind.size() != section.Palette.size()) return RejectAutoRig("inverse bind count");
+            for (const auto& vertex : *section.Vertices)
+            {
+                Vector3 point(kZero);
+                unsigned sum = 0;
+                for (auto weight : vertex.Weights) sum += weight;
+                if (!sum) continue;
+                for (unsigned j = 0; j < 4; ++j)
+                {
+                    if (!vertex.Weights[j]) continue;
+                    const unsigned slot = vertex.Joints[j];
+                    if (slot >= section.Palette.size()) return RejectAutoRig("vertex joint range");
+                    const Matrix4 skin = section.E * pose.Nodes[section.Palette[slot]] * section.InverseBind[slot];
+                    point += Vector3(skin * Vector3(vertex.Position[0], vertex.Position[1], vertex.Position[2])) *
+                        (float(vertex.Weights[j]) / sum);
+                }
+                if (!std::isfinite(float(Length(point)))) return RejectAutoRig("non-finite skinned vertex");
+                for (unsigned j = 0; j < 4; ++j)
+                    if (vertex.Weights[j]) weighted[section.Palette[vertex.Joints[j]]].push_back(point);
+            }
+        }
+
+        // segment 중심과 축을 유지하며 말단의 중심은 본 원점을 포함한 정점 bounds로 정한다.
+        unsigned fallbacks = 0;
         for (uint32_t node = 0; node < count; ++node)
         {
             if (ids[node] == UINT32_MAX) continue;
@@ -112,17 +143,41 @@ namespace Viewer
                 direction = Vector3(kXUnitVector);
                 length = 0.05f;
             }
+            if (leaf && !weighted[node].empty()) direction = Vector3(bones[node].GetX());
             const Vector3 x = Normalize(direction);
             const Vector3 reference = std::abs(float(x.GetY())) < 0.9f ? Vector3(kYUnitVector) : Vector3(kZUnitVector);
             const Vector3 z = Normalize(Cross(x, reference)), y = Cross(z, x);
             bodies[node] = Matrix4(Matrix3(x, y, z), leaf ? origin : origin + x * (length * 0.5f));
+
+            // body 좌표의 bounds로 크기를 정하고 정점이 없는 본만 기존 근사를 사용한다.
+            Vector3 low(kZero), high(kZero);
+            const Matrix4 inverseBody = Invert(bodies[node]);
+            for (const auto& point : weighted[node])
+            {
+                const Vector3 local(inverseBody * point);
+                low = Min(low, local);
+                high = Max(high, local);
+            }
+            if (leaf && !weighted[node].empty())
+                bodies[node] = Matrix4(Matrix3(x, y, z), Vector3(bodies[node] * ((low + high) * 0.5f)));
             BodyDefinition body;
             body.Node = node;
             if (!SkeletalFrames::TrySplitUniformFrame(Invert(bones[node]) * bodies[node], body.BoneFromBody, scale))
                 return RejectAutoRig("invalid body offset");
             const double radius = (std::max)(0.005, double(length) * 0.15);
             body.HalfExtentMeters = { (std::max)(0.005, double(length) * 0.5), radius, radius };
-            body.MassKg = 1000 * 8 * body.HalfExtentMeters[0] * radius * radius;
+            if (weighted[node].empty())
+            {
+                ++fallbacks;
+                std::fprintf(stderr, "SP-7a2 fallback node=%u: no weighted vertices\n", node);
+            }
+            else
+            {
+                const Vector3 extent = leaf ? (high - low) * 0.5f : Max(Abs(low), Abs(high));
+                body.HalfExtentMeters = { (std::max)(0.005, double(extent.GetX())),
+                    (std::max)(0.005, double(extent.GetY())), (std::max)(0.005, double(extent.GetZ())) };
+            }
+            body.MassKg = 1000 * 8 * body.HalfExtentMeters[0] * body.HalfExtentMeters[1] * body.HalfExtentMeters[2];
             ids[node] = uint32_t(asset.Bodies.size());
             asset.Bodies.push_back(body);
         }
@@ -144,11 +199,12 @@ namespace Viewer
             asset.Joints.push_back(joint);
         }
         if (!ValidateSkeletalPhysicsAsset(asset, pose.Parents)) return RejectAutoRig("asset validation");
+        if (fallbackCount) *fallbackCount = fallbacks;
         outAsset = std::move(asset);
         return true;
     }
 
     // 모델의 실제 skin 메타데이터와 등록 pose로 자동 물리 자산을 생성한다.
     bool BuildSkeletalPhysicsAsset(const Model& model, const SkeletalPoseSnapshot& pose,
-        MiniPhysics::SkeletalPhysicsAsset& outAsset);
+        MiniPhysics::SkeletalPhysicsAsset& outAsset, unsigned* fallbackCount = nullptr);
 }

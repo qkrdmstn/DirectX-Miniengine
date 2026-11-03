@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7a 진단 구현·검증(미커밋, base `2e8dcdff`), D2 정점 bounds 미충족; SP-7b~e 미구현 (2026-11-03)
+상태: 진행 중 — SP-7a `731c7005` + SP-7a2 D2 CPU 정점 보존·bounds 구현(미커밋, base `731c7005`); SP-7b~e 미구현 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -35,7 +35,10 @@ C를 누르면 평면이 지나는 skin GameObject에 대해 다음을 처리한
     - 축: 그 선분 방향
     - 크기: 그 joint에 weight가 있는 정점 bounds(body frame 기준)
     - 말단: P와 weight 정점 bounds만으로 정한다.
-    - SP-7a 구현 편차: CPU 정점 미보존으로 크기는 segment 기반 근사이며 leaf 축·길이는 incoming segment를 쓴다. 아래 검증 기록의 fallback은 진단용이고 위 정점 bounds·leaf 규칙의 완료 근거가 아니다. SP-7b 등록 전에 bounds 구현 또는 사용자와의 설계 결정을 확정해야 한다.
+    - 사용자 결정(2026-11-03, SP-7a2): Model이 skin section별 CPU 위치·joint·weight를 보존한다. `BuildInfluencingJoints`가 GPU 업로드 전 mesh-local 위치 float 3개와 uint16 joint/weight 각 4개(정점당 28 B)를 저장한다. Static 정점 복사와 index/draw 복사는 없다.
+    - `BuildSkeletalPhysicsAsset`는 GPU와 같은 양수 합 정규화 weight로 `E * Gjoint * inverseBind`를 합성한다. 양수 weight가 있는 모든 NodeId의 body bounds에 변형 정점을 넣는다. segment는 기존 중심·축에 대한 대칭 half extent를 쓰고, leaf는 본 원점을 포함한 bounds의 중심·크기를 쓰며 축은 본 X축에서 구한다. 최소 half extent 0.005 m는 유지한다.
+    - 정점이 없는 본만 기존 segment 근사로 대체하고 NodeId와 이유를 stderr에 기록한다. `RunSkeletalAutoRigChecks`는 모델별 fallback 수와 half extent 최솟값·최댓값을 기록한다.
+    - CPU 보관 비용 실측: Xbot 28,374정점, Debug 794,536 B / Release 794,520 B(약 776 KiB); CesiumMan 3,273정점, 91,676 / 91,668 B(약 90 KiB). `m_SkinCpuSections`의 정점·section capacity 기준이며 allocator와 Model 내부의 빈 vector 객체 비용은 제외한다. inverse bind는 기존 Model 데이터를 재사용한다.
     - 질량: 고정 밀도 × box 부피
     - 저장: 미터 단위 `BoneFromBody`로 둔다.
   - **joint:** 각 body를 가장 가까운 body 조상과 SwingTwist로 잇는다.
@@ -123,6 +126,7 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 | 단계 | 내용 | 완료 증거 | 예상 비용 |
 | --- | --- | --- | --- |
 | SP-7a | D2 `BuildSkeletalPhysicsAsset` + CPU 테스트(palette 병합, 다중 root·E 불일치 거절, frame·anchor) + 진단 로그(등록 없음) | Xbot·CesiumMan body/joint 수, Validate PASS, 표본 프레임 최대 anchor 오차 로그, CPU 테스트 PASS | 구현 + R 2~5분 + B 약 2분 + T |
+| SP-7a2 | Model의 최소 skin CPU 복사본과 등록 pose 정점 bounds, leaf bounds, fallback·메모리·extent 진단 | D/R CPU 43 checks, 두 모델 fallback 0, 메모리·bounds 실측, Static·SP-6 회귀 | D/R 빌드 실측 75/77초 + 실행 진단 |
 | SP-7b | C 시점 지연 등록 + `FindIncomingJoint` + RequestId `QueueBreak`/결과 표. 이 단계만 숨김·부착 없이 원본에 바로 break(늘어남 정상), 오프셋 복사본 유지 | Xbot 팔·다리, CesiumMan 팔: 기대 JointId·subtree 낙하, root·AlreadyBroken·physics off 거절, pause 대기 | 구현 + R + B + V |
 | SP-7c | D3 상태 버퍼·퇴화 치환 IB·`RenderMeshes` IB 분리 + 진단 옵션(지정 joint 범위 숨김 fixture) | 지정 범위가 color/depth/shadow/Wire에서 사라짐, 같은 Model의 다른 인스턴스 불변, D3D12 ERROR 0 | 구현 + R + B + V |
 | SP-7d | D3 추출 제거 조건(GPU·CPU) + D6 `adjacentPatch` 로그 | P 절단 뒤 인접 자식 Q 절단 시 복사 수 = Q 범위 − 이미 제거된 수, GPU==CPU | 구현 + R + B + T + V |
@@ -158,3 +162,14 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - CPU Debug/Release 각각 AutoRig 28검사와 SkeletalPatch 59검사 PASS. VS 개발 환경 ModelViewer Debug 95초/Release 178초 빌드 PASS. 변경 없는 MiniPhysics/Jolt는 기존 라이브러리를 재사용했다. 로그·빌드 산출물은 `%TEMP%/SP7a-review`다.
 - 두 구성 모두 `-debug 1 -skeletal-auto-rig-checks 1` 종료 0, D3D12 ERROR/CORRUPTION 0, 모델별 5표본·등록 0. Xbot 52/51과 CesiumMan 19/18, Validate PASS. 최대 anchor 오차는 Debug 0.002881/0.005728 mm, Release 0.002881/0.004771 mm다. GPU는 NVIDIA GeForce MX450이며 드라이버 버전은 조회하지 못했다.
 - E*Gnode 배율 제거·미터 offset·anchor/limit 계약·NodeId 병합·단일 root/E/비균일 scale 거절을 확인했다. C/Static/등록 경로 변경은 없다. 한글 함수·단락 주석과 프로젝트 등록을 확인했다. 신규 C++는 334줄로 약 300줄 권고를 초과한다. D2 bounds·leaf 규칙은 미충족이며 설계 결정 없이 완료로 간주하지 않는다. 실제 C/Static GPU 재실행 및 Jolt `SupportsJointPose`를 통한 break는 이번 리뷰에서 미검증이다.
+
+## SP-7a2 구현·검증 (2026-11-03, base `731c7005`, 미커밋)
+- `BuildInfluencingJoints`가 skin section CPU 정점을 Model에 보존하고 `BuildSkeletalPhysicsAsset`가 등록 pose의 정점 bounds를 사용한다. leaf는 본 원점과 정점만으로 정하며, 양수 weight 정점이 없는 본만 segment fallback을 기록한다. GPU 버퍼·셰이더·Static·C 등록 경로는 변경하지 않았다.
+- `SkeletalAutoRigTests` Debug/Release 각 43 checks PASS. 혼합·비정규화 weight, inverse bind, 회전·이동·균일 배율, segment/leaf bounds, section 간 NodeId 병합, zero weight 제외, fallback 수와 잘못된 joint/inverse bind 거절을 확인했다. 기존 `SkeletalPatchTests`도 각 59 checks PASS.
+- VS 개발 환경 v143/SDK 10.0.26100.0, `ModelViewer.slnx` Debug/Release `Windows` 빌드 exit 0(최종 75.25/76.77초). 출력은 `%TEMP%/SP7a2`, 변경 없는 MiniPhysics/Jolt는 기존 prebuilt를 재사용했다. 신규 `SkinCpuData.h`는 Model 프로젝트와 filters에 등록했다.
+- `-debug 1 -skeletal-auto-rig-checks 1`: D/R exit 0(23/22초), 각 모델 5표본, 등록 0. Xbot 52 body/51 joint, CesiumMan 19/18, Validate 모두 PASS, fallback 모두 0. Xbot half extent 0.01332747936~0.5971588492 m, CesiumMan 0.1145477295~1.059964776 m(D/R 동일).
+- 최대 anchor 오차: Xbot D/R 3.414378853e-6 m, CesiumMan Debug 5.728101314e-6 / Release 4.770792202e-6 m. CPU 복사본 메모리 실측은 D2에 기록했다. 로그는 `AutoRig-Debug.log`, `AutoRig-Release.log`다.
+- `-debug 1 -skeletal-patch-checks 1`: D/R exit 0(106/46초), 각 20/20 GPU==CPU PASS. 이번 실행의 `SP6 comparison` 20행과 기존 `%TEMP%/SP6-review-comparison-exact.log` 비교 차이는 각 0행이다. Debug 누적 로그는 마지막 20행을 비교했고 Release는 로그를 비운 뒤 실행했다.
+- Static 재현 옵션: `-debug 1 -model Models/cube.glb -cut 1 -cut-angle 30 -cut-validate 1 -cut-expect-loops 1 -cut-expect-publications 1 -physics-query-exit 90`. D/R exit 0(24/21초), 게시 1건, 양쪽 16삼각형·cap 2삼각형, 면적 약 6.158399·부피 각 약 4, 부모 보존·DOP·hull containment PASS. 기존 Static 진단 계약을 유지한다.
+- 자동 rig·SP-6·Static 총 6실행 모두 D3D12 ERROR/CORRUPTION 0. 활성 GPU NVIDIA GeForce MX450, 드라이버 32.0.15.9186(레지스트리 확인). 기존 Live-resource WARNING·DXGI 하이브리드 출력 ERROR #80·ShadowPlay 87은 별개로 남는다. 런타임 로그는 `%TEMP%/SP7a2/Runtime-{Debug,Release}-{AutoRig,SP6,Static}.log`다.
+- 편차: 기존 최소 half extent 0.005 m 유지, index/draw CPU 복사 불필요. 수동 C 입력·실제 물리 등록/break와 별도 세션 독립 리뷰는 이번 단계에서 검증하지 않았다. SP-7b~e는 미구현이며 branch 변경·commit·push는 하지 않았다.

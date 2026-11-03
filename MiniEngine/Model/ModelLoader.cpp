@@ -290,7 +290,7 @@ static void BuildMeshCollision(Model& model, const std::vector<uint8_t>& geometr
     }
 }
 
-// 원본 CPU 정점의 양수 weight를 메시별 팔레트로 변환해 모델당 한 번 캐시한다.
+// skin 정점의 최소 CPU 복사본과 NodeId별 양수 weight 여부를 모델에 보관한다.
 static void BuildInfluencingJoints(Model& model, const std::vector<uint8_t>& geometry)
 {
     // skin 정점의 마지막 16바이트는 uint16 joint 네 개와 unorm16 weight 네 개다.
@@ -300,18 +300,25 @@ static void BuildInfluencingJoints(Model& model, const std::vector<uint8_t>& geo
     {
         const Mesh& mesh = *reinterpret_cast<const Mesh*>(meshPtr);
         meshPtr += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
-        if (!mesh.numJoints || mesh.vbStride < 16 || uint64_t(mesh.vbOffset) + mesh.vbSize > geometry.size())
+        if (!mesh.numJoints) continue;
+        model.m_SkinCpuSections.emplace_back();
+        auto& vertices = model.m_SkinCpuSections.back();
+        if (mesh.vbStride < 28 || mesh.vbSize % mesh.vbStride || uint64_t(mesh.vbOffset) + mesh.vbSize > geometry.size())
             continue;
+        vertices.resize(mesh.vbSize / mesh.vbStride);
 
         // 양수 합으로 나눈 weight의 양수 여부는 저장된 정수 weight의 양수 여부와 같다.
         for (uint32_t v = 0; v < mesh.vbSize / mesh.vbStride; ++v)
         {
-            uint16_t skin[8];
-            std::memcpy(skin, geometry.data() + mesh.vbOffset + size_t(v + 1) * mesh.vbStride - 16, sizeof(skin));
+            auto& vertex = vertices[v];
+            const auto* source = geometry.data() + mesh.vbOffset + size_t(v) * mesh.vbStride;
+            std::memcpy(vertex.Position, source, sizeof(vertex.Position));
+            std::memcpy(vertex.Joints, source + mesh.vbStride - 16, sizeof(vertex.Joints));
+            std::memcpy(vertex.Weights, source + mesh.vbStride - 8, sizeof(vertex.Weights));
             for (uint32_t j = 0; j < 4; ++j)
-                if (skin[4 + j] > 0 && skin[j] < mesh.numJoints)
+                if (vertex.Weights[j] > 0 && vertex.Joints[j] < mesh.numJoints)
                 {
-                    const uint32_t palette = mesh.startJoint + skin[j];
+                    const uint32_t palette = mesh.startJoint + vertex.Joints[j];
                     if (palette < model.m_NumJoints && model.m_JointIndices[palette] < model.m_NumNodes)
                         model.m_InfluencingJoints[model.m_JointIndices[palette]] = 1;
                 }
