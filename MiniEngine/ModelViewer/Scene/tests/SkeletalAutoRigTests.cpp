@@ -13,7 +13,7 @@ static void Check(bool value)
     if (!value) throw std::runtime_error("auto rig check failed");
 }
 
-// 팔레트·거절·frame·anchor와 pose 변형 후의 정점 bounds 및 fallback을 검사한다.
+// dominant 배정·동률·중심 bounds와 anchor 불변 및 fallback을 검사한다.
 int main()
 {
     // 회전·이동·균일 배율과 body 없는 중간 본 및 영향 없는 팔레트를 구성한다.
@@ -76,42 +76,74 @@ int main()
     for (const auto& body : asset.Bodies)
         if (body.Node) Check(body.BoneFromBody.Position == std::array<double, 3>{});
 
-    // 비정규화 혼합 weight와 inverse bind를 적용한 segment 및 leaf bounds를 검증한다.
+    // 비정규화 혼합 weight와 역순 팔레트 동률을 적용한 중심 bounds를 검증한다.
     pose.Parents = { UINT32_MAX, 0 };
     pose.Influencing = { 1, 1 };
     pose.Nodes = { Matrix4(kIdentity), Matrix4(Matrix3(kIdentity), Vector3(4, 0, 0)) };
     SkinCpuSection vertices = {
         { { 0, -2, -1 }, { 0, 1, 0, 0 }, { 10, 30, 0, 0 } },
         { { 2, 2, 3 }, { 0, 1, 0, 0 }, { 30, 10, 0, 0 } },
+        { { 6, 4, 5 }, { 1, 0, 0, 0 }, { 10, 10, 0, 0 } },
+        { { -1, -4, -3 }, { 1, 0, 0, 0 }, { 40, 0, 0, 0 } },
         { { 999, 999, 999 }, {}, {} } };
     pose.Sections = { { e, { 0, 1 }, &vertices,
         { Matrix4(kIdentity), Matrix4(Matrix3(kIdentity), Vector3(-2, 0, 0)) } } };
     unsigned fallbacks = 99;
     Check(BuildSkeletalPhysicsAsset(pose, asset, &fallbacks) && fallbacks == 0);
     Check(MiniPhysics::ValidateSkeletalPhysicsAsset(asset, pose.Parents));
-    const auto& segment = asset.Bodies[0];
-    Check(std::abs(segment.HalfExtentMeters[0] - 1) < 2e-5);
-    Check(std::abs(segment.HalfExtentMeters[1] - 4) < 2e-5);
-    Check(std::abs(segment.HalfExtentMeters[2] - 6) < 2e-5);
-    const auto& leafBody = asset.Bodies[1];
-    Check(std::abs(leafBody.HalfExtentMeters[0] - 2.5) < 2e-5);
-    Check(std::abs(leafBody.HalfExtentMeters[1] - 4) < 2e-5);
-    Check(std::abs(leafBody.HalfExtentMeters[2] - 4) < 2e-5);
-    Check(std::abs(leafBody.BoneFromBody.Position[0] + 2.5) < 2e-5);
-    Check(std::abs(leafBody.BoneFromBody.Position[2] - 2) < 2e-5);
+    Check(std::abs(asset.Bodies[0].HalfExtentMeters[0] - 4.5) < 2e-5);
+    Check(std::abs(asset.Bodies[0].HalfExtentMeters[1] - 2) < 2e-5);
+    Check(std::abs(asset.Bodies[0].HalfExtentMeters[2] - 2) < 2e-5);
+    Check(std::abs(asset.Bodies[1].HalfExtentMeters[0] - 0.5) < 2e-5);
+    Check(std::abs(asset.Bodies[1].HalfExtentMeters[1] - 2) < 2e-5);
+    Check(std::abs(asset.Bodies[1].HalfExtentMeters[2] - 2) < 2e-5);
+
+    // 두 박스 중심을 직접 확인하고 이동 후에도 anchor가 자식 본 원점인지 검사한다.
+    bodies.clear();
+    for (const auto& body : asset.Bodies)
+    {
+        MiniPhysics::SkeletalRigidFrame frame;
+        Matrix4 matrix;
+        float scale = 0;
+        Check(SkeletalFrames::TryBuildBodyFrame(e, pose.Nodes[body.Node], body.BoneFromBody, frame, scale));
+        Check(SkeletalFrames::TryRigidMatrix(frame, matrix));
+        const Vector3 center = body.Node ? Vector3(1.25f, -3, -2) : Vector3(4.75f, 3, 4);
+        Check(float(Length(Vector3(matrix.GetW()) - Vector3(e * center))) < 2e-5f);
+        bodies.push_back(matrix);
+    }
+    Matrix4 a, b;
+    const auto& joint = asset.Joints[0];
+    Check(SkeletalFrames::TryRigidMatrix(joint.ParentBodyFromJoint, a));
+    Check(SkeletalFrames::TryRigidMatrix(joint.ChildBodyFromJoint, b));
+    const Vector3 anchor((e * pose.Nodes[1]).GetW());
+    Check(float(Length(Vector3((bodies[0] * a).GetW()) - anchor)) < 2e-5f);
+    Check(float(Length(Vector3((bodies[1] * b).GetW()) - anchor)) < 2e-5f);
 
     // 다른 section의 같은 NodeId도 합치고 정점 없는 본의 fallback 수를 확인한다.
     SkinCpuSection extra = { { { 0, 8, 0 }, {}, { 1, 0, 0, 0 } } };
     pose.Sections.push_back({ e, { 0 }, &extra, { Matrix4(kIdentity) } });
     Check(BuildSkeletalPhysicsAsset(pose, asset, &fallbacks) && fallbacks == 0);
-    Check(std::abs(asset.Bodies[0].HalfExtentMeters[1] - 16) < 2e-5);
+    Check(std::abs(asset.Bodies[0].HalfExtentMeters[1] - 6) < 2e-5);
     pose.Sections.resize(1);
-    for (auto& vertex : vertices) vertex.Weights[1] = 0;
+    for (auto& vertex : vertices)
+    {
+        vertex.Joints[0] = 0;
+        vertex.Weights[1] = 0;
+    }
     Check(BuildSkeletalPhysicsAsset(pose, asset, &fallbacks) && fallbacks == 1);
+
+    // 단일 dominant 정점도 본 원점을 포함하지 않고 최소 half extent만 적용한다.
+    const auto saved = vertices;
+    vertices.resize(1);
+    Check(BuildSkeletalPhysicsAsset(pose, asset, &fallbacks) && fallbacks == 1);
+    for (double extent : asset.Bodies[0].HalfExtentMeters) Check(extent == 0.005);
+    vertices = saved;
+
+    // 잘못된 inverse bind와 팔레트 참조는 기존 자산을 보존하며 거절한다.
     bad = pose;
     bad.Sections[0].InverseBind.clear();
     Check(!BuildSkeletalPhysicsAsset(bad, asset));
     vertices[0].Joints[0] = 2;
     Check(!BuildSkeletalPhysicsAsset(pose, asset));
-    std::printf("SP-7a2 PASS checks=%u\n", g_Checks);
+    std::printf("SP-7a3 PASS checks=%u\n", g_Checks);
 }

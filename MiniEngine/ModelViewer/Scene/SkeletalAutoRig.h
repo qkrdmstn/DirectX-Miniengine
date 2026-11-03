@@ -2,6 +2,7 @@
 #include "SkeletalPhysicsFrames.h"
 #include "../../Model/SkinCpuData.h"
 #include <cstdio>
+#include <cfloat>
 
 class Model;
 namespace Viewer
@@ -32,7 +33,7 @@ namespace Viewer
         return false;
     }
 
-    // 등록 pose로 변형한 양수 weight 정점의 bounds를 box와 SwingTwist 관절로 만든다.
+    // 등록 pose의 dominant 정점 bounds를 중심으로 box와 SwingTwist 관절을 만든다.
     inline bool BuildSkeletalPhysicsAsset(const SkeletalPoseSnapshot& pose,
         MiniPhysics::SkeletalPhysicsAsset& outAsset, unsigned* fallbackCount = nullptr)
     {
@@ -87,8 +88,8 @@ namespace Viewer
         }
         if (roots != 1) return RejectAutoRig("multiple/no influencing roots");
 
-        // GPU와 같은 정규화 weight와 inverse bind로 정점을 등록 공간에 한 번 변형한다.
-        std::vector<std::vector<Vector3>> weighted(count);
+        // GPU처럼 정점을 변형하고 공통 정규화 분모를 생략한 최대 weight로 소유 본을 고른다.
+        std::vector<std::vector<Vector3>> dominant(count);
         for (const auto& section : pose.Sections)
         {
             if (!section.Vertices) continue;
@@ -96,7 +97,8 @@ namespace Viewer
             for (const auto& vertex : *section.Vertices)
             {
                 Vector3 point(kZero);
-                unsigned sum = 0;
+                unsigned sum = 0, largest = 0;
+                uint32_t owner = UINT32_MAX;
                 for (auto weight : vertex.Weights) sum += weight;
                 if (!sum) continue;
                 for (unsigned j = 0; j < 4; ++j)
@@ -104,17 +106,22 @@ namespace Viewer
                     if (!vertex.Weights[j]) continue;
                     const unsigned slot = vertex.Joints[j];
                     if (slot >= section.Palette.size()) return RejectAutoRig("vertex joint range");
+                    const uint32_t node = section.Palette[slot];
+                    if (vertex.Weights[j] > largest || (vertex.Weights[j] == largest && node < owner))
+                    {
+                        largest = vertex.Weights[j];
+                        owner = node;
+                    }
                     const Matrix4 skin = section.E * pose.Nodes[section.Palette[slot]] * section.InverseBind[slot];
                     point += Vector3(skin * Vector3(vertex.Position[0], vertex.Position[1], vertex.Position[2])) *
                         (float(vertex.Weights[j]) / sum);
                 }
                 if (!std::isfinite(float(Length(point)))) return RejectAutoRig("non-finite skinned vertex");
-                for (unsigned j = 0; j < 4; ++j)
-                    if (vertex.Weights[j]) weighted[section.Palette[vertex.Joints[j]]].push_back(point);
+                dominant[owner].push_back(point);
             }
         }
 
-        // segment 중심과 축을 유지하며 말단의 중심은 본 원점을 포함한 정점 bounds로 정한다.
+        // 기존 회전을 유지하고 dominant 정점 bounds의 중심으로 body 원점을 옮긴다.
         unsigned fallbacks = 0;
         for (uint32_t node = 0; node < count; ++node)
         {
@@ -143,22 +150,22 @@ namespace Viewer
                 direction = Vector3(kXUnitVector);
                 length = 0.05f;
             }
-            if (leaf && !weighted[node].empty()) direction = Vector3(bones[node].GetX());
+            if (leaf && !dominant[node].empty()) direction = Vector3(bones[node].GetX());
             const Vector3 x = Normalize(direction);
             const Vector3 reference = std::abs(float(x.GetY())) < 0.9f ? Vector3(kYUnitVector) : Vector3(kZUnitVector);
             const Vector3 z = Normalize(Cross(x, reference)), y = Cross(z, x);
             bodies[node] = Matrix4(Matrix3(x, y, z), leaf ? origin : origin + x * (length * 0.5f));
 
             // body 좌표의 bounds로 크기를 정하고 정점이 없는 본만 기존 근사를 사용한다.
-            Vector3 low(kZero), high(kZero);
+            Vector3 low(FLT_MAX), high(-FLT_MAX);
             const Matrix4 inverseBody = Invert(bodies[node]);
-            for (const auto& point : weighted[node])
+            for (const auto& point : dominant[node])
             {
                 const Vector3 local(inverseBody * point);
                 low = Min(low, local);
                 high = Max(high, local);
             }
-            if (leaf && !weighted[node].empty())
+            if (!dominant[node].empty())
                 bodies[node] = Matrix4(Matrix3(x, y, z), Vector3(bodies[node] * ((low + high) * 0.5f)));
             BodyDefinition body;
             body.Node = node;
@@ -166,14 +173,14 @@ namespace Viewer
                 return RejectAutoRig("invalid body offset");
             const double radius = (std::max)(0.005, double(length) * 0.15);
             body.HalfExtentMeters = { (std::max)(0.005, double(length) * 0.5), radius, radius };
-            if (weighted[node].empty())
+            if (dominant[node].empty())
             {
                 ++fallbacks;
-                std::fprintf(stderr, "SP-7a2 fallback node=%u: no weighted vertices\n", node);
+                std::fprintf(stderr, "SP-7a3 fallback node=%u: no dominant vertices\n", node);
             }
             else
             {
-                const Vector3 extent = leaf ? (high - low) * 0.5f : Max(Abs(low), Abs(high));
+                const Vector3 extent = (high - low) * 0.5f;
                 body.HalfExtentMeters = { (std::max)(0.005, double(extent.GetX())),
                     (std::max)(0.005, double(extent.GetY())), (std::max)(0.005, double(extent.GetZ())) };
             }

@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7a `731c7005` + SP-7a2 D2 CPU 정점 보존·bounds 구현(미커밋, base `731c7005`); SP-7b~e 미구현 (2026-11-03)
+상태: 진행 중 — SP-7a3 dominant weight·bounds 중심 box·D/R 검증 PASS(미커밋, base `7090421e`); SP-7b~e 미구현 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -31,13 +31,14 @@ C를 누르면 평면이 지나는 skin GameObject에 대해 다음을 처리한
 - 신규 `BuildSkeletalPhysicsAsset(model, pose)` 규칙
   - **body:** 모든 skin section의 palette를 NodeId로 합쳐 중복을 없앤다. 그 영향 joint마다 body 하나를 둔다. `SelectSegmentJoint`가 후보로 삼는 집합과 같다.
   - **body frame:** `TryBuildBodyFrame`과 같은 `E*Gnode` 공간에서 정한다.
-    - 원점: P와 영향 있는 자식(여럿이면 가장 먼 것) 사이 선분의 중점
-    - 축: 그 선분 방향
-    - 크기: 그 joint에 weight가 있는 정점 bounds(body frame 기준)
-    - 말단: P와 weight 정점 bounds만으로 정한다.
+    - 원점: dominant 정점의 body frame bounds 중심. 정점이 없으면 기존 선분 중점 fallback
+    - 축: P와 가장 먼 영향 자식의 선분 방향을 유지한다. 정점이 있는 말단은 기존 본 X축을 유지한다
+    - 크기: 그 joint가 dominant인 정점만의 bounds half size(body frame 기준), 각 축 최소 0.005 m
+    - 말단: 본 원점을 강제로 포함하지 않고 dominant 정점 bounds만으로 중심·크기를 정한다.
     - 사용자 결정(2026-11-03, SP-7a2): Model이 skin section별 CPU 위치·joint·weight를 보존한다. `BuildInfluencingJoints`가 GPU 업로드 전 mesh-local 위치 float 3개와 uint16 joint/weight 각 4개(정점당 28 B)를 저장한다. Static 정점 복사와 index/draw 복사는 없다.
-    - `BuildSkeletalPhysicsAsset`는 GPU와 같은 양수 합 정규화 weight로 `E * Gjoint * inverseBind`를 합성한다. 양수 weight가 있는 모든 NodeId의 body bounds에 변형 정점을 넣는다. segment는 기존 중심·축에 대한 대칭 half extent를 쓰고, leaf는 본 원점을 포함한 bounds의 중심·크기를 쓰며 축은 본 X축에서 구한다. 최소 half extent 0.005 m는 유지한다.
-    - 정점이 없는 본만 기존 segment 근사로 대체하고 NodeId와 이유를 stderr에 기록한다. `RunSkeletalAutoRigChecks`는 모델별 fallback 수와 half extent 최솟값·최댓값을 기록한다.
+    - `BuildSkeletalPhysicsAsset`는 GPU와 같은 양수 합 정규화 weight로 `E * Gjoint * inverseBind`를 합성한다. SP-7a3 결정은 Unreal Physics Asset 생성의 Dominant Weight 방식에 맞춰 정점마다 최대 정규화 weight의 NodeId 하나에만 배정한다. 정규화 분모가 같으므로 원래 uint16 weight를 비교하며 동률은 낮은 NodeId가 이긴다. 기존 회전에서 bounds 중심을 body 원점으로 옮기고 `BoneFromBody`를 다시 구한다. anchor는 자식 본 원점을 양쪽 body frame으로 표현하므로 그대로 일치한다.
+    - dominant 정점이 없는 본만 기존 segment 근사로 대체하고 NodeId와 이유를 stderr에 기록한다. `RunSkeletalAutoRigChecks`는 모델별 fallback 수와 half extent 최솟값·최댓값·최대 joint 이름을 기록하며 `%TEMP%/SP7a3/BodyExtents.csv`에 모든 body 크기를 쓴다.
+    - 변경 이유: 모든 양수 weight를 포함한 SP-7a2는 CesiumMan `leg_joint_L_2`에 1.1% weight 정점 때문에 half extent 1.06 m, Xbot `LeftUpLeg`에 0.597 m의 거대 box를 만들었다. 5% 임계값만 적용해도 CesiumMan은 0.74 m가 남아 dominant 배정과 중심 보정을 함께 선택했다.
     - CPU 보관 비용 실측: Xbot 28,374정점, Debug 794,536 B / Release 794,520 B(약 776 KiB); CesiumMan 3,273정점, 91,676 / 91,668 B(약 90 KiB). `m_SkinCpuSections`의 정점·section capacity 기준이며 allocator와 Model 내부의 빈 vector 객체 비용은 제외한다. inverse bind는 기존 Model 데이터를 재사용한다.
     - 질량: 고정 밀도 × box 부피
     - 저장: 미터 단위 `BoneFromBody`로 둔다.
@@ -127,6 +128,7 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 | --- | --- | --- | --- |
 | SP-7a | D2 `BuildSkeletalPhysicsAsset` + CPU 테스트(palette 병합, 다중 root·E 불일치 거절, frame·anchor) + 진단 로그(등록 없음) | Xbot·CesiumMan body/joint 수, Validate PASS, 표본 프레임 최대 anchor 오차 로그, CPU 테스트 PASS | 구현 + R 2~5분 + B 약 2분 + T |
 | SP-7a2 | Model의 최소 skin CPU 복사본과 등록 pose 정점 bounds, leaf bounds, fallback·메모리·extent 진단 | D/R CPU 43 checks, 두 모델 fallback 0, 메모리·bounds 실측, Static·SP-6 회귀 | D/R 빌드 실측 75/77초 + 실행 진단 |
+| SP-7a3 | dominant 배정·낮은 NodeId 동률·bounds 중심 box·이름별 CSV | D/R AutoRig·SkeletalPatch CPU, D/R 빌드·두 모델 크기/anchor·D3D12 진단 | 직전 빌드 실측 75/77초 + R 2~5분 |
 | SP-7b | C 시점 지연 등록 + `FindIncomingJoint` + RequestId `QueueBreak`/결과 표. 이 단계만 숨김·부착 없이 원본에 바로 break(늘어남 정상), 오프셋 복사본 유지 | Xbot 팔·다리, CesiumMan 팔: 기대 JointId·subtree 낙하, root·AlreadyBroken·physics off 거절, pause 대기 | 구현 + R + B + V |
 | SP-7c | D3 상태 버퍼·퇴화 치환 IB·`RenderMeshes` IB 분리 + 진단 옵션(지정 joint 범위 숨김 fixture) | 지정 범위가 color/depth/shadow/Wire에서 사라짐, 같은 Model의 다른 인스턴스 불변, D3D12 ERROR 0 | 구현 + R + B + V |
 | SP-7d | D3 추출 제거 조건(GPU·CPU) + D6 `adjacentPatch` 로그 | P 절단 뒤 인접 자식 Q 절단 시 복사 수 = Q 범위 − 이미 제거된 수, GPU==CPU | 구현 + R + B + T + V |
@@ -173,3 +175,13 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - Static 재현 옵션: `-debug 1 -model Models/cube.glb -cut 1 -cut-angle 30 -cut-validate 1 -cut-expect-loops 1 -cut-expect-publications 1 -physics-query-exit 90`. D/R exit 0(24/21초), 게시 1건, 양쪽 16삼각형·cap 2삼각형, 면적 약 6.158399·부피 각 약 4, 부모 보존·DOP·hull containment PASS. 기존 Static 진단 계약을 유지한다.
 - 자동 rig·SP-6·Static 총 6실행 모두 D3D12 ERROR/CORRUPTION 0. 활성 GPU NVIDIA GeForce MX450, 드라이버 32.0.15.9186(레지스트리 확인). 기존 Live-resource WARNING·DXGI 하이브리드 출력 ERROR #80·ShadowPlay 87은 별개로 남는다. 런타임 로그는 `%TEMP%/SP7a2/Runtime-{Debug,Release}-{AutoRig,SP6,Static}.log`다.
 - 편차: 기존 최소 half extent 0.005 m 유지, index/draw CPU 복사 불필요. 수동 C 입력·실제 물리 등록/break와 별도 세션 독립 리뷰는 이번 단계에서 검증하지 않았다. SP-7b~e는 미구현이며 branch 변경·commit·push는 하지 않았다.
+## SP-7a3 구현·검증 (2026-11-03, base `7090421e`, 미커밋)
+- `BuildSkeletalPhysicsAsset`는 최대 정규화 weight의 본 하나에 정점을 배정하고 동률은 낮은 NodeId로 정한다. segment 회전과 leaf의 기존 회전을 유지한 채 순수 dominant bounds 중심·half size를 사용한다. `BoneFromBody`와 양쪽 joint frame을 새 중심에서 구하며, dominant 정점이 없으면 기존 segment fallback을 기록한다.
+- `SkeletalAutoRigTests` Debug/Release 각 55 checks PASS. 역순 동률·비정규화 혼합 weight·inverse bind·회전/균일 배율·segment/leaf 중심·anchor의 자식 본 원점 일치·section 병합·zero weight 제외·fallback·단일 정점의 0.005 m 하한·잘못된 입력 거절을 확인했다. `SkeletalPatchTests`도 각 59 checks PASS.
+- VS 2022 개발 환경 v143, SDK 10.0.26100.0, `ModelViewer.slnx` Debug/Release `Windows` 빌드 exit 0. TEMP 신규 출력의 첫 빌드는 156.40/178.57초, 최종 헤더 반영 확인은 38.07/30.30초였다. 변경 없는 MiniPhysics/Jolt는 기존 prebuilt를 재사용했다. 출력과 로그는 `%TEMP%/SP7a3`에 보관한다.
+- `-debug 1 -skeletal-auto-rig-checks 1`: Debug/Release exit 0(26/25초), 모델별 5표본·실제 등록 0. Xbot 52 body/51 joint, CesiumMan 19/18, Validate 모두 PASS, fallback 각각 0. 양쪽 D3D12 ERROR/CORRUPTION 0. NVIDIA GeForce MX450, 드라이버 32.0.15.9186; 기존 DXGI 하이브리드 출력·ShadowPlay 진단은 별도로 남는다.
+- 두 구성의 최소/최대 half extent는 Xbot 0.01332747936/0.4745310843 m(`mixamorig:RightUpLeg`, NodeId 65), CesiumMan 0.0873504281/0.4399961829 m(`Skeleton_torso_joint_1`, NodeId 2)다. 문제였던 Xbot `mixamorig:LeftUpLeg`는 0.4725240469 m, CesiumMan `leg_joint_L_2`는 0.3736785650 m로 줄었다.
+- 비율 해석: `ModelViewer::Startup`의 `2 / boundingSphere.radius` 배율과 MINI 헤더 bounds로 구한 장면 높이는 Xbot 약 3.208 m, CesiumMan 약 3.900 m다. Xbot 허벅지 box 전체 길이 약 0.949 m(높이의 29.6%), CesiumMan 몸통 약 0.880 m(22.6%)는 대략적인 인체 box로 타당해 보인다. 시각적 밀착도나 충돌 품질을 검증한 판단은 아니다. 계산 근거는 `ModelBounds.txt`다.
+- 등록 pose(sample 0)의 최대 anchor 오차는 Xbot 3.159522748e-6 m, CesiumMan 3.144542234e-6 m다. 5표본 최대는 각각 3.372932952e-6/3.966760687e-6 m이며 D/R 동일하다. body 중심을 옮겨도 자식 본 원점 anchor 계약이 유지된다.
+- `RunSkeletalAutoRigChecks`와 `ReadDiagnosticNodeNames`는 원본 GLB의 기본 scene을 `ModelConvert::WalkGraph`와 같은 깊이 우선 순서로 읽어 이름을 붙인다. `%TEMP%/SP7a3/BodyExtents.csv`는 71 body의 세 축 half extent(m)를 담는다. 구성별 보존본은 `BodyExtents-Debug.csv`, `BodyExtents-Release.csv`, 진단 요약은 `AutoRig-{Debug,Release}.log`, D3D12 로그는 `Runtime-{Debug,Release}-AutoRig.log`다.
+- 미검증: 수동 C 입력·실제 물리 등록/break·충돌 box overlay 시각 확인·별도 새 세션 독립 리뷰. SP-7b~e는 미구현이다. branch 변경·commit·push 없이 이 단계에서 멈춘다.- 독립 리뷰: Codex 리뷰는 용량 한도로 중간 종료됐다. 중간 결론은 dominant 배정·동률·미터 offset/anchor 일관, 결함 없음이다. 남은 CSV 판단은 Opus가 확인했다: 71 body 중 0.005 m 클램프 0개, 좌우 대칭 본의 크기 차이 1% 이내, 최대 box는 허벅지·몸통·머리다. 본-box 공간 겹침 계측은 미검증이다.
