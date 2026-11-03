@@ -445,7 +445,10 @@ namespace Viewer
         const Math::Matrix4 identity(Math::kIdentity);
         CheckComponent(skeletal.RegisterFromPose(object.GetId(), fixture.Asset, fixture.NodeParents, identity,
             std::vector<Math::Matrix4>(nodes, nodes + 4)), "BC-11 animated fixture registration");
-        physics.QueueBreak({ object.GetId(), 0, skeletal.GetRigGeneration(object.GetId()), 1 });
+        const BreakRequest request{ object.GetId(), 0, skeletal.GetRigGeneration(object.GetId()), 1 };
+        const auto first = physics.QueueBreak(request, true), second = physics.QueueBreak(request, true);
+        BreakStatus status;
+        CheckComponent(first != second && !physics.TryGetBreakResult(first, status), "SP7b IDs unique and pending");
         CheckComponent(physics.UpdateFrame(context, 0, 0) == 0 &&
             skeletal.GetTopologyGeneration(object.GetId()) == 1, "BC-11 animated zero-step keeps break queued");
 
@@ -455,6 +458,10 @@ namespace Viewer
         const double targetX = keys[0] + speed * dt;
         CheckComponent(physics.UpdateFrame(context, PhysicsStepClock::FixedSeconds, 0) == 1 &&
             skeletal.GetTopologyGeneration(object.GetId()) == 2, "BC-11 animated queued break applied");
+        CheckComponent(physics.TryGetBreakResult(second, status) && status == BreakStatus::AlreadyBroken &&
+            !physics.TryGetBreakResult(second, status), "SP7b second result consumed once");
+        CheckComponent(physics.TryGetBreakResult(first, status) && status == BreakStatus::Applied,
+            "SP7b first result preserved");
         SkeletalBodyTarget target;
         CheckComponent(skeletal.GetBodyTarget(object.GetId(), 1, target), "BC-11 animated target readable");
         CheckComponent(std::abs(target.Frame.Position[0] - targetX) < 1e-6 &&
@@ -556,14 +563,24 @@ namespace Viewer
                 CheckComponent(next > owner, "BC-13a deleted owner ID never reused");
                 scene.Clear();
             }
+            // 기존 호출은 결과를 남기지 않고 추적 요청은 Clear까지 보관한다.
+            CheckComponent(physics.m_BreakResults.empty(), "SP7b legacy requests retain no results");
             physics.Clear();
             CheckEmpty(physics);
+            physics.Initialize(true, 16, true);
+            const auto cleared = physics.QueueBreak({}, true);
+            BreakStatus status;
+            physics.AdvanceSimulation(PhysicsStepClock::FixedSeconds);
+            CheckComponent(physics.m_BreakResults.size() == 1, "SP7b completed result retained");
+            physics.Clear();
+            CheckComponent(!physics.TryGetBreakResult(cleared, status), "SP7b clear discards results");
+            scene.Clear();
 
-            // 세 삭제 경로에서 소비한 여섯 요청의 결과를 합산한 뒤에만 PASS를 출력한다.
+            // 세 삭제 경로와 결과 수명 검사에서 처리한 요청 수를 함께 확인한다.
             const auto results = physics.GetQueuedBreakDiagnostics();
-            CheckComponent(results.Processed == 6 && results.NotFound == 6,
-                "BC-13a all six consumed queued breaks NotFound");
-            Utility::Printf("BC-13a PASS: scene lifetime resources=0 consumed=6 NotFound=6 fixedDt=1/60\n");
+            CheckComponent(results.Processed == 7 && results.NotFound == 7,
+                "BC-13a all seven consumed queued breaks NotFound");
+            Utility::Printf("BC-13a PASS: scene lifetime resources=0 consumed=7 NotFound=7 fixedDt=1/60; SP7b result lifetime PASS\n");
         }
 
     private:

@@ -53,6 +53,13 @@ namespace Viewer
         UnsupportedTopology, UnsupportedFrame, UnsupportedPose, InvalidInput, NotReady
     };
 
+    enum class IncomingJointStatus { Ok, NoBody, RigRoot, AlreadyBroken, NotRegistered };
+    struct IncomingJointResult
+    {
+        IncomingJointStatus Status = IncomingJointStatus::NotRegistered;
+        uint32_t JointId = UINT32_MAX, ChildBody = UINT32_MAX, ParentBody = UINT32_MAX, ParentNode = UINT32_MAX;
+    };
+
     // owner별 skeletal rig의 body·관절·인접 pair 수명을 관리한다.
     // world는 PhysicsSystem이 소유하고 여기서는 참조만 한다.
     class SkeletalPhysicsSystem
@@ -86,6 +93,8 @@ namespace Viewer
             std::vector<NodePhysicsPose>& overrides) const;
         // fixed substep 경계에서 선택 관절만 제거하고 연결된 자식 body들을 물리로 전환한다.
         BreakStatus BreakConstraint(const BreakRequest& request);
+        // 선택 본의 body와 가장 가까운 body 조상을 연결하는 incoming 관절을 조회한다.
+        IncomingJointResult FindIncomingJoint(ObjectId owner, uint32_t nodeId) const;
         // 성공한 break마다 증가한 topology 번호를 읽으며 미등록 owner이면 0이다.
         uint64_t GetTopologyGeneration(ObjectId owner) const;
         // 관절을 먼저 제거하고 body를 파괴해 pair 제외까지 정리한다.

@@ -7,6 +7,33 @@
 
 namespace Viewer
 {
+    // 선택 본에 body가 없으면 대체하지 않고 incoming 관절의 상태를 반환한다.
+    IncomingJointResult SkeletalPhysicsSystem::FindIncomingJoint(ObjectId owner, uint32_t nodeId) const
+    {
+        // 미등록과 body 없는 본을 구분한다.
+        const auto found = m_Rigs.find(owner);
+        if (found == m_Rigs.end()) return {};
+        const auto& rig = found->second;
+        IncomingJointResult result;
+        result.Status = IncomingJointStatus::NoBody;
+        for (uint32_t b = 0; b < rig.Asset.Bodies.size(); ++b)
+            if (rig.Asset.Bodies[b].Node == nodeId) result.ChildBody = b;
+        if (result.ChildBody == UINT32_MAX) return result;
+
+        // 자식 body가 일치하는 관절만 반환하며 root에는 incoming이 없다.
+        result.Status = IncomingJointStatus::RigRoot;
+        for (uint32_t j = 0; j < rig.Asset.Joints.size(); ++j)
+            if (rig.Asset.Joints[j].ChildBody == result.ChildBody)
+            {
+                result.JointId = j;
+                result.ParentBody = rig.Asset.Joints[j].ParentBody;
+                result.ParentNode = rig.Asset.Bodies[result.ParentBody].Node;
+                result.Status = rig.Joints[j] == MiniPhysics::InvalidConstraint
+                    ? IncomingJointStatus::AlreadyBroken : IncomingJointStatus::Ok;
+                break;
+            }
+        return result;
+    }
     uint32_t SkeletalPhysicsSystem::DiagFailRegistrationStep = 0;
 
     namespace

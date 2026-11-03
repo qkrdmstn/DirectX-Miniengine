@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "Scene.h"
 #include "SegmentJointSelection.h"
+#include "SkeletalPhysicsSystem.h"
 #include "ReadbackBuffer.h"
 #include "../../MeshCutting/Geometry/CutPlane.h"
 
@@ -79,7 +80,10 @@ namespace Viewer
         void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
         void Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
-            SkeletalJointMode mode = SkeletalJointMode::Parent, uint32_t diagnosticCase = UINT32_MAX);
+            SkeletalJointMode mode = SkeletalJointMode::Parent, uint32_t diagnosticCase = UINT32_MAX,
+            PhysicsSystem* physics = nullptr);
+        // 실제 C 경로로 두 모델의 break와 거절 조건을 순서대로 검증한다.
+        bool RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // 복사본을 준비하고 Static batch 뒤 절단하여 최종 완료를 반환한다.
         bool Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result);
         // 복사본 결과를 소비하여 Static 집계와 격리한다.
@@ -88,7 +92,7 @@ namespace Viewer
         bool IsPending() const
         {
             // 추출부터 절단 결과 소비까지 같은 요청으로 취급한다.
-            return m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed;
+            return m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed || m_RequestId;
         }
         // 자동 Static batch 완료 집계에서 직접 절단 작업을 구별한다.
         bool IsCutInFlight() const
@@ -100,6 +104,14 @@ namespace Viewer
         // 최종 컴포넌트 수와 cap 진단을 기록한다.
         void LogCutResult(const Scene& scene, const char* reason, uint32_t caps, uint32_t uncapped, uint32_t error);
         SkeletalPatchJob m_Job;
+        PhysicsSystem* m_Physics = nullptr;
+        BreakRequest m_Break;
+        BreakStatus m_LastBreakStatus = BreakStatus::NotReady;
+        IncomingJointResult m_Incoming;
+        uint64_t m_RequestId = 0;
+        unsigned m_DynamicBefore = 0;
+        uint32_t m_BreakCheck = 0;
+        bool m_BreakReady = false, m_CheckAwaiting = false;
         MeshCutting::CutPlaneData m_Plane;
         SkeletalPatchResult m_Result;
         std::vector<ObjectId> m_RetiredOwners;

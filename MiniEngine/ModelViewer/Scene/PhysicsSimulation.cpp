@@ -158,11 +158,24 @@ namespace Viewer
         Utility::Printf("Physics simulation: %s\n", running ? "running" : "paused");
     }
 
-    // 요청을 보관하고 다음 실제 substep에서 최신 목표를 반영한 뒤 처리한다.
-    void PhysicsSystem::QueueBreak(const BreakRequest& request)
+    // 요청을 보관하고 결과 보관 여부를 지정해 다음 실제 substep에서 처리한다.
+    uint64_t PhysicsSystem::QueueBreak(const BreakRequest& request, bool keepResult)
     {
         // zero-step과 pause 프레임에서는 요청을 소비하지 않는다.
-        m_PendingBreaks.push_back(request);
+        const uint64_t id = m_NextBreakRequest++;
+        m_PendingBreaks.emplace_back(keepResult ? id : 0, request);
+        return id;
+    }
+
+    // 완료된 break 결과를 호출자에게 전달하고 보관 항목을 제거한다.
+    bool PhysicsSystem::TryGetBreakResult(uint64_t requestId, BreakStatus& status)
+    {
+        // 실제 substep 전에는 결과를 만들지 않는다.
+        const auto found = m_BreakResults.find(requestId);
+        if (found == m_BreakResults.end()) return false;
+        status = found->second;
+        m_BreakResults.erase(found);
+        return true;
     }
 
     // 실제 렌더 section에서 공통 E를 구하고 물리 본에 종속된 Nmesh는 거절한다.
@@ -274,10 +287,12 @@ namespace Viewer
                 }
 
             // 최신 목표를 사용해 대기 중인 break를 소비한다.
-            for (const auto& request : m_PendingBreaks)
+            for (const auto& pending : m_PendingBreaks)
             {
                 // 실제 반환값으로 처리 수와 NotFound 수를 함께 기록한다.
+                const auto& request = pending.second;
                 const auto status = m_Skeletal.BreakConstraint(request);
+                if (pending.first) m_BreakResults.emplace(pending.first, status);
                 ++m_QueuedBreakDiagnostics.Processed;
                 if (status == BreakStatus::NotFound)
                     ++m_QueuedBreakDiagnostics.NotFound;

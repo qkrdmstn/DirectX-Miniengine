@@ -2,6 +2,7 @@
 #include "CommandListManager.h"
 #include "ObjectSelection.h"
 #include "CuttingSystem.h"
+#include "SkeletalAutoRig.h"
 #include "Renderer.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
@@ -159,16 +160,105 @@ namespace Viewer
         return SelectSegmentJoint(pose.GetPoseParents(), positions, palettes, plane, model.m_InfluencingJoints);
     }
 
+    // 실제 C 경로를 스크립트로 실행하고 독립 ancestry 기준으로 Dynamic 집합을 비교한다.
+    bool SkeletalPatchCopy::RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting)
+    {
+        // 첫 요청을 pause 상태로 제출해 결과가 실제 step까지 대기하는지 확인한다.
+        if (m_RequestId && !physics.IsSimulationRunning())
+        {
+            BreakStatus status;
+            if (physics.TryGetBreakResult(m_RequestId, status)) throw std::runtime_error("SP7b pause consumed request");
+            PatchLog("SP7b pause waiting PASS\n");
+            physics.SetSimulationRunning(true);
+        }
+        if (IsPending() || cutting.IsBusy()) return false;
+        auto& skeletal = physics.GetSkeletalPhysics();
+        const uint32_t nodes[] = { 14, 60, 8 }, children[] = { 15, 61, 9 }, joints[] = { 7, 43, 5 };
+
+        // 지정 segment의 현재 중점에서 실제 C 입력용 평면을 만든다.
+        const auto buildPlane = [&](const GameObject& object, uint32_t index)
+        {
+            // 최종 본 pose를 월드로 옮겨 segment에 수직인 축을 구성한다.
+            const auto& instance = *object.GetModelInstance();
+            const auto frame = JointFrameToWorld(instance, *object.GetMeshComponents().front(), object.GetTransform(), 0);
+            const Math::Vector3 a(frame * instance.GetNodeTransforms()[nodes[index]].GetW());
+            const Math::Vector3 b(frame * instance.GetNodeTransforms()[children[index]].GetW());
+            const auto normal = Math::Normalize(b - a);
+            const auto x = Math::Normalize(Math::Cross(normal, std::abs(float(normal.GetY())) < 0.9f
+                ? Math::Vector3(Math::kYUnitVector) : Math::Vector3(Math::kXUnitVector)));
+            MeshCutting::CutPlaneData plane;
+            if (!MeshCutting::TryBuildCutPlaneData({ 0.3f, 0.3f },
+                Math::AffineTransform(Math::Matrix3(x, normal, Math::Cross(x, normal)), (a + b) * 0.5f), plane))
+                throw std::runtime_error("SP7b invalid diagnostic plane");
+            return plane;
+        };
+
+        // JointId는 독립 GLB palette 조사값을 쓰고 subtree는 pose ancestry에서 계산한다.
+        if (m_CheckAwaiting)
+        {
+            SkeletalRigState state;
+            const auto* object = scene.FindObject(m_Break.Owner);
+            if (!object || !skeletal.ReadDiagnosticState(m_Break.Owner, state)) throw std::runtime_error("SP7b missing rig");
+            const auto& parents = object->GetModelInstance()->GetPoseParents();
+            const unsigned expectedJoint = joints[m_BreakCheck - 1];
+            bool pass = m_Break.JointId == expectedJoint && m_LastBreakStatus == BreakStatus::Applied;
+            PatchLog("SP7b case=%u expectedJoint=%u actualJoint=%u subtree expected/actual:\n", m_BreakCheck, expectedJoint, m_Break.JointId);
+            for (const auto& body : state.Bodies)
+            {
+                bool expected = false;
+                for (uint32_t p = body.Node; p != UINT32_MAX; p = parents[p])
+                    expected |= p == nodes[m_BreakCheck - 1] || (m_BreakCheck == 2 && p == nodes[0]);
+                const bool actual = body.Motion == MiniPhysics::BodyMotion::Dynamic;
+                pass &= expected == actual;
+                if (expected || actual) PatchLog("SP7b NodeId=%u expected=%u actual=%u\n", body.Node, expected, actual);
+            }
+            uint32_t root = state.Bodies.front().Node;
+            pass &= skeletal.FindIncomingJoint(m_Break.Owner, root).Status == IncomingJointStatus::RigRoot;
+            pass &= skeletal.FindIncomingJoint(m_Break.Owner, nodes[m_BreakCheck - 1]).Status == IncomingJointStatus::AlreadyBroken;
+            PatchLog("SP7b subtree/root/AlreadyBroken %s\n", pass ? "PASS" : "FAIL");
+            if (!pass) throw std::runtime_error("SP7b break diagnostic mismatch");
+
+            // 현재 segment에 수직인 평면으로 같은 C의 재절단 거절을 확인한다.
+            Request(scene, buildPlane(*object, m_BreakCheck - 1), false, SkeletalJointMode::Parent, UINT32_MAX, &physics);
+            if (IsPending() || m_Incoming.Status != IncomingJointStatus::AlreadyBroken) throw std::runtime_error("SP7b second C submitted");
+            PatchLog("SP7b second C AlreadyBroken PASS\n");
+            m_CheckAwaiting = false;
+        }
+        if (m_BreakCheck == 3) return true;
+
+        // 모델별 지정 segment 중점에서 실제 Parent 선택과 GPU A/B 절단을 요청한다.
+        Reset(scene, physics, cutting);
+        for (const auto& object : scene.GetObjects())
+        {
+            if (object->GetName() != (m_BreakCheck < 2 ? "Xbot" : "CesiumMan")) continue;
+            const auto plane = buildPlane(*object, m_BreakCheck);
+            PhysicsSystem off(scene);
+            Request(scene, plane, false, SkeletalJointMode::Parent, UINT32_MAX, &off);
+            if (IsPending()) throw std::runtime_error("SP7b physics off submitted cut");
+            PatchLog("SP7b physics off PASS\n");
+            if (!m_BreakCheck) physics.SetSimulationRunning(false);
+            Request(scene, plane, true, SkeletalJointMode::Parent, UINT32_MAX, &physics);
+            if (!m_BreakReady || m_Incoming.Status != IncomingJointStatus::Ok) throw std::runtime_error("SP7b C rejected");
+            ++m_BreakCheck;
+            m_CheckAwaiting = true;
+            return false;
+        }
+        throw std::runtime_error("SP7b missing diagnostic model");
+    }
+
     // 유한 평면 사각형에 닿는 가장 가까운 skin 대상을 선택하고 추출한다.
     void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
-        SkeletalJointMode mode, uint32_t diagnosticCase)
+        SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics)
     {
         // 새 C의 모드를 기록하고 대상 유무와 관계없이 이전 결과를 무효화한다.
+        if (m_RequestId) { PatchLog("SP7b C waiting RequestId=%llu\n", m_RequestId); return; }
         m_Mode = mode;
         m_DiagnosticCase = diagnosticCase;
         PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
         m_Job.Cancel();
         m_Name.clear();
+        m_Physics = physics;
+        m_BreakReady = false;
 
         // 평면 로컬에서 가장 가까운 사각형 점을 월드로 돌려 경계 구와 비교한다.
         using namespace Math;
@@ -216,6 +306,57 @@ namespace Viewer
             return;
         }
 
+        // Parent C는 현재 최종 pose로 최초 등록하고 incoming과 세대를 고정한다.
+        if (physics && !influence)
+        {
+            if (!physics->IsSimulationEnabled()) { PatchLog("SP7b rejected: physics off\n"); return; }
+            auto& skeletal = physics->GetSkeletalPhysics();
+            if (!skeletal.IsRegistered(target->GetId()))
+            {
+                // 미등록 owner만 현재 최종 pose와 section frame으로 asset을 만든다.
+                const auto& instance = *target->GetModelInstance();
+                const auto& model = *instance.GetModel();
+                SkeletalPoseSnapshot pose;
+                pose.Parents = instance.GetPoseParents();
+                pose.Nodes.assign(instance.GetNodeTransforms(), instance.GetNodeTransforms() + model.m_NumNodes);
+                for (const auto& component : target->GetMeshComponents())
+                    for (size_t s = 0; s < component->GetGeometry()->GetSections().size(); ++s)
+                        if (component->GetGeometry()->GetMesh(s).numJoints)
+                            pose.Sections.push_back({ JointFrameToWorld(instance, *component, target->GetTransform(), s), {} });
+                MiniPhysics::SkeletalPhysicsAsset asset;
+                bool supportedMeshFrame = true;
+                if (!BuildSkeletalPhysicsAsset(model, pose, asset))
+                    PatchLog("SP7b rejected: auto asset; SP6 only (reason on stderr)\n");
+                else
+                {
+                    // 물리 본에 종속된 mesh frame은 다음 writeback에서 지원하지 않는다.
+                    for (const auto& component : target->GetMeshComponents())
+                        for (size_t s = 0; s < component->GetGeometry()->GetSections().size(); ++s)
+                            if (component->GetGeometry()->GetMesh(s).numJoints)
+                                for (uint32_t node = component->GetGeometry()->GetMesh(s).meshCBV;
+                                    node != UINT32_MAX; node = pose.Parents[node])
+                                    for (const auto& body : asset.Bodies) supportedMeshFrame &= body.Node != node;
+                    if (!supportedMeshFrame || pose.Sections.empty() || !skeletal.RegisterFromPose(target->GetId(), asset,
+                        pose.Parents, pose.Sections.front().E, pose.Nodes))
+                        PatchLog("SP7b rejected: unsupported mesh frame/pose or registration resource failure; SP6 only\n");
+                }
+            }
+
+            // 등록된 rig의 incoming 관절과 C 시점 세대를 저장한다.
+            if (skeletal.IsRegistered(target->GetId()))
+            {
+                m_Incoming = skeletal.FindIncomingJoint(target->GetId(), selected.NodeId);
+                if (m_Incoming.Status != IncomingJointStatus::Ok)
+                {
+                    PatchLog("SP7b rejected: incoming=%u (NoBody=1 RigRoot=2 AlreadyBroken=3 NotRegistered=4)\n", unsigned(m_Incoming.Status));
+                    return;
+                }
+                m_Break = { target->GetId(), m_Incoming.JointId, skeletal.GetRigGeneration(target->GetId()),
+                    skeletal.GetTopologyGeneration(target->GetId()) };
+                m_BreakReady = true;
+            }
+        }
+
         // 현재 GPU 입력과 일치하는 유효 선택만 segment 또는 말단으로 기록한다.
         if (!influence) PatchLog("Skeletal patch target=%s NodeId=%u kind=%s child=%u intersection=(%.6f, %.6f, %.6f)\n",
             target->GetName().c_str(), selected.NodeId, selected.Kind == SegmentJointKind::Segment ? "segment" : "leaf",
@@ -261,6 +402,22 @@ namespace Viewer
     // 복사본을 준비하고 Static batch가 비면 저장한 평면으로 절단한다.
     bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
+        // substep이 결과를 만들 때까지 다음 C 진단을 대기시킨다.
+        if (m_RequestId)
+        {
+            BreakStatus status;
+            if (!m_Physics->TryGetBreakResult(m_RequestId, status)) return false;
+            SkeletalRigState state;
+            m_Physics->GetSkeletalPhysics().ReadDiagnosticState(m_Break.Owner, state);
+            unsigned dynamic = 0;
+            for (const auto& body : state.Bodies) dynamic += body.Motion == MiniPhysics::BodyMotion::Dynamic;
+            PatchLog("SP7b RequestId=%llu BreakStatus=%u JointId=%u ParentNode=%u Dynamic=%u\n",
+                m_RequestId, unsigned(status), m_Break.JointId, m_Incoming.ParentNode,
+                dynamic >= m_DynamicBefore ? dynamic - m_DynamicBefore : 0);
+            m_LastBreakStatus = status;
+            m_RequestId = 0;
+        }
+
         // 물리 프레임 뒤에도 진단 복사본은 강체 없이 고정된 월드 배치를 유지해야 한다.
         if (m_Diagnostic)
             if (const auto* owner = scene.FindObject(m_CopyOwner))
@@ -402,6 +559,19 @@ namespace Viewer
         // A는 양의 반공간이므로 B를 음의 법선으로 0.1 m 이동해 간격을 만든다.
         if (result.Status == CutResultStatus::Published)
         {
+            // A/B 준비 성공 뒤에만 저장된 C 세대로 무충격 break를 요청한다.
+            if (m_BreakReady)
+            {
+                SkeletalRigState before;
+                m_Physics->GetSkeletalPhysics().ReadDiagnosticState(m_Break.Owner, before);
+                m_DynamicBefore = 0;
+                for (const auto& body : before.Bodies) m_DynamicBefore += body.Motion == MiniPhysics::BodyMotion::Dynamic;
+                m_RequestId = m_Physics->QueueBreak(m_Break, true);
+                PatchLog("SP7b queued RequestId=%llu JointId=%u ParentNode=%u %s\n", m_RequestId,
+                    m_Break.JointId, m_Incoming.ParentNode, m_Physics->IsSimulationRunning() ? "" : "paused: waiting");
+                m_BreakReady = false;
+            }
+
             auto* owner = scene.FindObject(m_CopyOwner);
             auto* piece = owner ? owner->FindMeshComponent(result.Other) : nullptr;
             SceneTransform world;

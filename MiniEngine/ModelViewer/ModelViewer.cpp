@@ -76,7 +76,7 @@ public:
     virtual bool IsDone() override
     {
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
-        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 20 && (m_CapturePath.empty() || m_CaptureComplete)))
+        if (m_SkeletalPatchBreakDone || m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 20 && (m_CapturePath.empty() || m_CaptureComplete)))
             return true;
 
         // 벤치마크 결과 파일을 쓴 뒤에는 남은 GPU 절단이 끝나면 종료한다.
@@ -91,6 +91,8 @@ public:
 private:
 
     uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0, m_SkeletalPatchCaptured = 0;
+    uint32_t m_SkeletalPatchBreakChecks = 0;
+    bool m_SkeletalPatchBreakDone = false;
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
     Viewer::SkeletalJointMode m_SkeletalJointMode = Viewer::SkeletalJointMode::Parent;
     Camera m_Camera;
@@ -383,6 +385,8 @@ void ModelViewer::Startup( void )
 
     // 진단·자동 절단 옵션은 뒤에서 해석하더라도 추가 모델 로딩 전에 격리한다.
     CommandLineArgs::GetInteger(L"skeletal-patch-checks", m_SkeletalPatchChecks);
+    CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", m_SkeletalPatchBreakChecks);
+    if (m_SkeletalPatchBreakChecks) m_UsePhysicsSim = 1;
 
     // 시작 모드를 검증하며 생략 시 Parent를 유지한다.
     std::wstring jointMode;
@@ -417,7 +421,7 @@ void ModelViewer::Startup( void )
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
 
         // 기존 네 모델 뒤에 연속 피부 검증 모델을 추가하고 첫 클립을 반복한다.
-        if (!diagnosticScene || m_SkeletalPatchChecks || autoRigChecks)
+        if (!diagnosticScene || m_SkeletalPatchChecks || m_SkeletalPatchBreakChecks || autoRigChecks)
         {
             const auto model = Renderer::LoadModel(L"Models/CesiumMan.glb", forceRebuild);
             m_Scene.CreateObject("CesiumMan", model).PlayAnimation(0);
@@ -773,7 +777,7 @@ void ModelViewer::Update( float deltaT )
     if (GameInput::IsFirstPressed(GameInput::kKey_p)) g_PhysicsRunning = !bool(g_PhysicsRunning);
     const int scenarioRunState = m_CutScenario.WantedRunState(m_Physics, m_CutOwner, m_CutMesh);
     if (scenarioRunState >= 0) g_PhysicsRunning = scenarioRunState != 0;
-    m_Physics.SetSimulationRunning(g_PhysicsRunning);
+    if (!m_SkeletalPatchBreakChecks) m_Physics.SetSimulationRunning(g_PhysicsRunning);
 
     // H 키와 디버그 UI는 같은 충돌 표시 플래그를 토글한다.
     if (GameInput::IsFirstPressed(GameInput::kKey_h)) g_ShowCollision = !bool(g_ShowCollision);
@@ -844,6 +848,8 @@ void ModelViewer::Update( float deltaT )
     }
 
     // Static batch 완료 집계를 마친 뒤에만 pending 패치가 단독 절단을 제출한다.
+    if (m_SkeletalPatchBreakChecks && !m_SkeletalPatchBreakDone)
+        m_SkeletalPatchBreakDone = m_SkeletalPatchCopy.RunBreakChecks(m_Scene, m_Physics, m_Cutting);
     Viewer::SkeletalPatchResult patchResult;
     if (!cutKey && m_SkeletalPatchCopy.Update(m_Scene, m_Cutting, patchResult) && m_SkeletalPatchChecks)
     {
@@ -892,7 +898,7 @@ void ModelViewer::Update( float deltaT )
             if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
             const auto mode = patchDiagnostic ? (m_SkeletalPatchCheckIndex % 2
                 ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent) : m_SkeletalJointMode;
-            m_SkeletalPatchCopy.Request(m_Scene, plane, patchDiagnostic, mode, patchRegion);
+            m_SkeletalPatchCopy.Request(m_Scene, plane, patchDiagnostic, mode, patchRegion, patchDiagnostic ? nullptr : &m_Physics);
         }
     }
 

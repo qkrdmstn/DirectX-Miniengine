@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7a3 dominant weight·bounds 중심 box·D/R 검증 PASS(미커밋, base `7090421e`); SP-7b~e 미구현 (2026-11-03)
+상태: 진행 중 — SP-7a3 `18848ec0`; SP-7b 지연 등록·incoming 조회·요청별 break 결과·D/R 독립 리뷰 검증 완료(미커밋, base `18848ec0`); SP-7c~e 미구현 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -88,8 +88,8 @@ C를 누르면 평면이 지나는 skin GameObject에 대해 다음을 처리한
 
 ### D5. 게시는 break 성공 뒤 (되돌리기 없음)
 - C에서 등록과 `FindIncomingJoint`를 하고 generation을 저장한다. 이어서 추출과 A/B 절단을 진행한다. 이 동안 원본은 바뀌지 않는다.
-- A/B가 준비되면 `QueueBreak`를 호출한다. `QueueBreak`는 신규 RequestId를 돌려주도록 확장한다. `AdvanceSimulation`은 요청별 `BreakStatus`를 결과 표에 남긴다(지금은 로그 후 버림).
-- 다음 실제 substep에서 Success가 나오면 같은 프레임 `SkeletalPatchCopy::Update`에서 다음을 게시한다. `ModelViewer::Update`는 물리 갱신 뒤 이 경로를 실행하므로 늘어난 원본이 보이는 프레임이 없다.
+- A/B가 준비되면 `QueueBreak(request, true)`를 호출해 RequestId를 받는다. `AdvanceSimulation`은 결과 보관을 지정한 요청만 `BreakStatus`를 남기며 `TryGetBreakResult`로 한 번 소비하거나 `Clear`로 해제한다. 기존 결과 미조회 호출은 보관하지 않는다.
+- 다음 실제 substep에서 Applied가 나오면 같은 프레임 `SkeletalPatchCopy::Update`에서 다음을 게시한다. `ModelViewer::Update`는 물리 갱신 뒤 이 경로를 실행하므로 늘어난 원본이 보이는 프레임이 없다.
   - 상태 버퍼·치환 IB 갱신
   - A/B 부착
 - 실패(Stale, UnsupportedPose 등)하면 A/B를 버리고 사유만 로그로 남긴다. 원본은 처음부터 바뀌지 않았으므로 되돌릴 것이 없다.
@@ -111,8 +111,8 @@ IncomingJointResult SkeletalPhysicsSystem::FindIncomingJoint(ObjectId owner, uin
 // 등록 pose의 skeleton·skin weight로 box body 전신 asset을 만든다. 실패 사유는 로그로 남긴다.
 bool BuildSkeletalPhysicsAsset(const Model& model, const SkeletalPoseSnapshot& pose, MiniPhysics::SkeletalPhysicsAsset& outAsset);
 
-// QueueBreak 확장: 요청 번호를 돌려주고, 결과는 번호로 조회한다.
-uint64_t PhysicsSystem::QueueBreak(const BreakRequest& request);
+// 요청 번호를 돌려주며 keepResult=true인 결과만 번호로 한 번 조회한다.
+uint64_t PhysicsSystem::QueueBreak(const BreakRequest& request, bool keepResult = false);
 bool PhysicsSystem::TryGetBreakResult(uint64_t requestId, BreakStatus& outStatus);
 
 // MeshComponent 소유 숨김 상태. State는 삼각형당 uint(bit31 제거, 하위 16bit 패치 id).
@@ -185,3 +185,13 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - 등록 pose(sample 0)의 최대 anchor 오차는 Xbot 3.159522748e-6 m, CesiumMan 3.144542234e-6 m다. 5표본 최대는 각각 3.372932952e-6/3.966760687e-6 m이며 D/R 동일하다. body 중심을 옮겨도 자식 본 원점 anchor 계약이 유지된다.
 - `RunSkeletalAutoRigChecks`와 `ReadDiagnosticNodeNames`는 원본 GLB의 기본 scene을 `ModelConvert::WalkGraph`와 같은 깊이 우선 순서로 읽어 이름을 붙인다. `%TEMP%/SP7a3/BodyExtents.csv`는 71 body의 세 축 half extent(m)를 담는다. 구성별 보존본은 `BodyExtents-Debug.csv`, `BodyExtents-Release.csv`, 진단 요약은 `AutoRig-{Debug,Release}.log`, D3D12 로그는 `Runtime-{Debug,Release}-AutoRig.log`다.
 - 미검증: 수동 C 입력·실제 물리 등록/break·충돌 box overlay 시각 확인·별도 새 세션 독립 리뷰. SP-7b~e는 미구현이다. branch 변경·commit·push 없이 이 단계에서 멈춘다.- 독립 리뷰: Codex 리뷰는 용량 한도로 중간 종료됐다. 중간 결론은 dominant 배정·동률·미터 offset/anchor 일관, 결함 없음이다. 남은 CSV 판단은 Opus가 확인했다: 71 body 중 0.005 m 클램프 0개, 좌우 대칭 본의 크기 차이 1% 이내, 최대 box는 허벅지·몸통·머리다. 본-box 공간 겹침 계측은 미검증이다.
+
+## SP-7b 구현·검증 (2026-11-03, base `18848ec0`, 미커밋)
+- `SkeletalPatchCopy::Request`는 미등록 Parent owner만 최종 pose로 등록하고 incoming·세대를 저장한다. 지원 거절은 이유를 기록하고 SP-6을 유지하며 A/B 준비 뒤 무충격 `QueueBreak`를 제출한다. 숨김·부착은 후속 단계다.
+- `FindIncomingJoint`는 NoBody·RigRoot·AlreadyBroken·NotRegistered를 구분한다. `AdvanceSimulation`은 RequestId별 BreakStatus를 보관하고 `TryGetBreakResult`는 한 번 소비한다.
+- VS 2022/v143/SDK 10.0.26100.0, Windows(x64) Debug/Release 빌드 exit 0. CPU AutoRig 55·SkeletalPatch 59·SkeletalBreak 914 checks씩 PASS.
+- `-skeletal-patch-break-checks 1` D/R PASS: Xbot 전완 JointId 기대/실제 7/7, subtree={14~18,20~22,24~26,28~30,32~34}; 허벅지 43/43, 추가={60~63}(누적 21); CesiumMan 팔 5/5, subtree={8,9}. Dynamic 전환 17/4/2, 모두 Applied.
+- RigRoot 조회·같은 C의 AlreadyBroken·physics off 거절·pause 대기 PASS. 기존 break fixture/Xbot·Static 게시 1건/면적/부피/hull·SP-6 20회 GPU==CPU도 D/R PASS. 10회 실행 D3D12 ERROR/CORRUPTION 0, NVIDIA MX450/32.0.15.9186.
+- 산출물·로그는 `%TEMP%/SP7b`를 재사용한다. offset 복사본·0.1 m 간격은 유지한다. 수동 C·지원 거절 모델의 통합 fallback은 미검증이다.
+
+- 독립 리뷰: 미조회 break 결과의 누적을 막도록 결과 보관을 명시적 선택으로 바꿨다. JointId 7/43/5와 subtree 17/4/2개는 원본 GLB weight·DFS로 재확인했다. D/R CPU 55/59/915 checks, 결과 분리·한 번 소비·Clear 통합 검증 PASS. 로그는 `%TEMP%/SP7b/*Review*.log`에 보관한다.

@@ -271,11 +271,22 @@ static void CheckPoseWriteback(PhysicsWorld& world, SkeletalPhysicsSystem& skele
 // 동기 break의 원자적 거절·속도 상속·반복 요청·끊긴 경계 탐색을 검사한다.
 static void CheckSynchronousBreak(PhysicsWorld& world, SkeletalPhysicsSystem& skeletal)
 {
-    // rest fixture와 세대가 일치하는 요청을 준비한다.
+    // body 없는 중간 본을 둔 rest fixture와 세대가 일치하는 요청을 준비한다.
     using Viewer::BreakStatus;
-    const auto fixture = CreateThreeBodyFixture();
+    auto fixture = CreateThreeBodyFixture();
+    fixture.NodeParents = { InvalidSkeletalId, 3, 1, 0 };
     const auto frames = FixtureBodyFrames(fixture);
     Check(skeletal.Register(30, fixture.Asset, fixture.NodeParents, frames), "Break fixture registered");
+    // incoming 조회는 등록 여부와 body 없는 본과 root를 구분한다.
+    using Viewer::IncomingJointStatus;
+    Check(skeletal.FindIncomingJoint(999, 0).Status == IncomingJointStatus::NotRegistered, "Incoming unregistered");
+    Check(skeletal.FindIncomingJoint(30, 3).Status == IncomingJointStatus::NoBody, "Incoming no body");
+    Check(skeletal.FindIncomingJoint(30, fixture.Asset.Bodies[0].Node).Status == IncomingJointStatus::RigRoot, "Incoming root");
+    const auto incoming = skeletal.FindIncomingJoint(30, fixture.Asset.Bodies[1].Node);
+    Check(incoming.Status == IncomingJointStatus::Ok && incoming.JointId == 0 && incoming.ChildBody == 1 &&
+        incoming.ParentBody == 0 && incoming.ParentNode == fixture.Asset.Bodies[0].Node, "Incoming nearest body ancestor");
+
+    // 기존 동기 break 요청의 세대와 runtime handle을 준비한다.
     const auto root = skeletal.GetBodyHandle(30, 0);
     const auto arm = skeletal.GetBodyHandle(30, 1);
     const auto hand = skeletal.GetBodyHandle(30, 2);
@@ -310,6 +321,7 @@ static void CheckSynchronousBreak(PhysicsWorld& world, SkeletalPhysicsSystem& sk
     }
     Check(skeletal.UpdateKinematicTargets(30, Math::Matrix4(Math::kIdentity), nodes, 1.0f / 60), "Break targets before step");
     Check(skeletal.BreakConstraint(request) == BreakStatus::Applied, "Elbow break applied");
+    Check(skeletal.FindIncomingJoint(30, 1).Status == IncomingJointStatus::AlreadyBroken, "Incoming broken");
     Check(world.GetBodyCount() == 3 && world.GetConstraintCount() == 1, "Break preserves bodies and wrist");
     Check(skeletal.GetTopologyGeneration(30) == 2 && skeletal.GetConstraintHandle(30, 0) == InvalidConstraint, "Break publishes topology");
     Check(world.GetBodyMotion(root, motion) && motion == BodyMotion::Kinematic, "Root stays animation");

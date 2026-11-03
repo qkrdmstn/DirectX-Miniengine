@@ -48,8 +48,10 @@ namespace Viewer
         unsigned AdvanceSimulation(double deltaSeconds);
         // 공통 simulation 진행과 렌더 프레임의 GPU 준비를 함께 조율한다.
         unsigned UpdateFrame(GraphicsContext& context, double deltaSeconds, float animationSeconds);
-        // 다음 fixed step의 목표 갱신 뒤 동기 break를 처리한다.
-        void QueueBreak(const BreakRequest& request);
+        // 다음 fixed step에서 처리하며 keepResult인 요청만 결과를 소비할 때까지 보관한다.
+        uint64_t QueueBreak(const BreakRequest& request, bool keepResult = false);
+        // 완료된 요청 결과를 한 번 소비하며 실제 substep 전에는 false를 반환한다.
+        bool TryGetBreakResult(uint64_t requestId, BreakStatus& status);
         // 큐에서 실제 처리한 요청과 그중 NotFound 결과의 누적 수다. Clear 뒤에도 보존한다.
         struct QueuedBreakDiagnostics
         {
@@ -115,7 +117,9 @@ namespace Viewer
             std::vector<Math::Matrix4>& nodes) const;
         // 일반 owner와 물리 owner의 최종 pose를 각각 한 번 확정한다.
         void FinalizeSimulationPoses();
-        std::vector<BreakRequest> m_PendingBreaks;
+        std::vector<std::pair<uint64_t, BreakRequest>> m_PendingBreaks;
+        std::map<uint64_t, BreakStatus> m_BreakResults;
+        uint64_t m_NextBreakRequest = 1;
         QueuedBreakDiagnostics m_QueuedBreakDiagnostics;
         friend class CutTransaction;
         friend class EditApplyChecks;
