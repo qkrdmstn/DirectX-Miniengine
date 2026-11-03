@@ -29,6 +29,7 @@ namespace Viewer::PatchReference
     {
         std::vector<Section> Sections;
         std::vector<uint32_t> JointNodes;
+        std::vector<uint32_t> State; // 비어 있으면 마스크가 없는 원래 추출이다.
         MeshCutting::CutPlaneData Plane; // World 필드 이름과 무관하게 모두 component-local이다.
         float Epsilon = 1e-5f;
     };
@@ -128,16 +129,18 @@ namespace Viewer::PatchReference
         return selected;
     }
 
-    // 선택 본에 양수 weight가 있는 삼각형 전체를 원본 순서로 추출한다.
+    // 선택 본에 양수 weight가 있고 제거되지 않은 삼각형을 원본 순서로 추출한다.
     inline std::vector<Triangle> ExtractPatchReference(const Input& input, uint32_t node)
     {
         // section/draw/triangle 순서와 원본 꼭짓점 번호를 함께 보존한다.
         std::vector<Triangle> result;
         if (node == InvalidNode) return result;
+        uint32_t global = 0;
         for (uint32_t s = 0; s < input.Sections.size(); ++s)
             for (uint32_t d = 0; d < input.Sections[s].Draws.size(); ++d)
-                for (uint32_t t = 0; t < input.Sections[s].Draws[d].IndexCount / 3; ++t)
+                for (uint32_t t = 0; t < input.Sections[s].Draws[d].IndexCount / 3; ++t, ++global)
                 {
+                    if (!input.State.empty() && (input.State.at(global) & 0x80000000u)) continue;
                     const auto& section = input.Sections[s];
                     const auto indices = TriangleIndices(section, section.Draws[d], t);
                     bool include = false;

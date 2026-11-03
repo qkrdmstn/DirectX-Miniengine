@@ -141,6 +141,7 @@ namespace Viewer
         void Render(Renderer::MeshSorter& sorter) const;
 
     private:
+        friend class SkeletalPatchJob; // 추출 제출 직전에 예약된 마스크 업로드를 완료한다.
         friend class PhysicsSystem;
         friend class CutTransaction;
         // 현재 revision과 SourceFrame으로 컴포넌트 로컬 충돌을 다시 만든다.

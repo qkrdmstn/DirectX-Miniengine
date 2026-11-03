@@ -6,7 +6,7 @@ cbuffer Parameters : register(b0)
     float Epsilon, HalfWidth, HalfHeight;
     uint Triangles;
     uint Draws, DepthOffset, IndexOffset, Mode;
-    uint NodeCount, Influence, Padding0, Padding1;
+    uint NodeCount, Influence, HasState, Padding1;
 };
 struct DrawInput
 {
@@ -19,6 +19,8 @@ ByteAddressBuffer Source : register(t0);
 ByteAddressBuffer SourcePose : register(t1);
 StructuredBuffer<DrawInput> Inputs : register(t2);
 StructuredBuffer<uint> Mask : register(t3);
+StructuredBuffer<uint> State : register(t4);
+RWByteAddressBuffer Adjacent : register(u7); // patch id별 인접 제거 삼각형 수
 RWByteAddressBuffer Data : register(u0);
 RWByteAddressBuffer Pose : register(u1);
 RWByteAddressBuffer Sources : register(u2);
@@ -110,7 +112,7 @@ uint Ordered(float x)
     // 음수 구간은 비트를 반전하고 양수는 부호 비트를 뒤집는다.
     uint b=asuint(x); return b&0x80000000?~b:b^0x80000000;
 }
-// 투표·선택과 기존 추출 세 패스를 같은 입력 계약으로 실행한다.
+// 투표·선택·추출과 기존 제거 패치의 인접 집계를 같은 입력으로 실행한다.
 [numthreads(64,1,1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -155,6 +157,30 @@ void main(uint3 id : SV_DispatchThreadID)
     while(sId+1<Draws && t>=Inputs[sId+1].FirstTriangle) sId++;
     DrawInput s=Inputs[sId]; uint triangleId=t-s.FirstTriangle;
     uint3 indices=uint3(Index(s,triangleId*3),Index(s,triangleId*3+1),Index(s,triangleId*3+2));
+    // 제거 삼각형마다 새 패치와 공유하는 원본 정점이 있으면 소유 패치에 한 번 집계한다.
+    if(Mode==5)
+    {
+        if(!(State[t]&0x80000000u) || Meta.Load(0)==0) return;
+        for(uint d=0;d<Draws;d++)
+        {
+            DrawInput other=Inputs[d];
+            if(s.VbOffset!=other.VbOffset || s.Stride!=other.Stride) continue;
+            for(uint j=0;j<other.Triangles;j++)
+            {
+                uint global=other.FirstTriangle+j;
+                if(Scan.Load(global*8)==(global?Scan.Load((global-1)*8):0)) continue;
+                uint3 v=uint3(Index(other,j*3),Index(other,j*3+1),Index(other,j*3+2));
+                if(any(indices.x==v)||any(indices.y==v)||any(indices.z==v))
+                {
+                    uint ignored;
+                    Adjacent.InterlockedAdd((State[t]&65535u)*4,1,ignored);
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
     if(Mode==3)
     {
         // 추출 카운터와 같은 유한 사각형 교차 판정을 사용한다.
@@ -191,9 +217,10 @@ void main(uint3 id : SV_DispatchThreadID)
             Meta.InterlockedMin(36,x,ignored); Meta.InterlockedMax(40,x,ignored);
         }
 
-        // 기존 선택 본 기여와 유한 평면 교차 규칙을 유지한다.
-        bool selected=Selected(s,indices.x)||Selected(s,indices.y)||Selected(s,indices.z);
-        bool crossing=Crossing(asfloat(SourcePose.Load3(s.PoseOffset+indices.x*40)),
+        // 제거 상태를 선택 조건에 더해 prefix와 모든 출력에 함께 반영한다.
+        bool available=!HasState || !(State[t]&0x80000000u);
+        bool selected=available && (Selected(s,indices.x)||Selected(s,indices.y)||Selected(s,indices.z));
+        bool crossing=available && Crossing(asfloat(SourcePose.Load3(s.PoseOffset+indices.x*40)),
             asfloat(SourcePose.Load3(s.PoseOffset+indices.y*40)),asfloat(SourcePose.Load3(s.PoseOffset+indices.z*40)));
         Scan.Store2(t*8,uint2(selected,crossing)); return;
     }

@@ -20,7 +20,7 @@ static void Check(bool condition, const char* message)
         throw std::runtime_error(message);
 }
 
-// 작은 합성 입력으로 본 선택과 패치 출처의 결정성을 검증한다.
+// 합성 입력으로 본 선택·제거 마스크와 패치 출처의 결정성을 검증한다.
 int main()
 {
     // 중복 팔레트·동점·서로 다른 mesh 시작 위치를 GPU 정수 규칙으로 검사한다.
@@ -92,6 +92,17 @@ int main()
         Check(patch[0].SectionId == 0 && patch[0].DrawId == 0 && patch[0].TriangleId == 0
             && patch[1].TriangleId == 1 && patch[2].DrawId == 1 && patch[2].TriangleId == 0
             && patch[3].SectionId == 1 && patch[5].DrawId == 1, "source output order");
+
+        // 전역 번호는 draw와 section을 넘어 누적하며 소유 id만으로는 제거하지 않는다.
+        input.State = { 0x80000001u, 0, 2, 0x80000002u, 0, 0x8000ffffu };
+        const auto masked = ExtractPatchReference(input, 7);
+        Check(masked.size() == 3 && masked[0].TriangleId == 1 && masked[1].DrawId == 1
+            && masked[2].SectionId == 1 && masked[2].TriangleId == 1, "global removed mask and owner id");
+        input.State.assign(6, 0x80000001u);
+        Check(ExtractPatchReference(input, 7).empty(), "all removed produces empty patch");
+        input.State.assign(6, 0);
+        Check(ExtractPatchReference(input, 7).size() == patch.size(), "zero mask preserves selection");
+        input.State.clear();
 
         // 양수 weight 하나만으로도 삼각형을 포함하고 무관한 본은 제외한다.
         input.Sections.resize(1);

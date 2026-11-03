@@ -5,13 +5,101 @@
 #include "ConstantBuffers.h"
 #include "ShadowBuffer.h"
 #include "ReadbackBuffer.h"
+#include "SkeletalPatchCopy.h"
+#include "CommandListManager.h"
 #include <array>
 #include <cstring>
 #include <stdexcept>
 
 namespace Viewer
 {
-    // 원본 IB 기대값과 두 컴포넌트의 색상·깊이·그림자 readback을 독립 비교한다.
+    // 부모 제거 후 자식 추출과 마스크 없는 출력의 바이트 불변을 검사한다.
+    void CheckMaskedPatch(GameObject& object, const std::vector<uint32_t>& state, uint32_t range, uint32_t overlap)
+    {
+        // 동일 pose와 평면에서 자식 본의 팔레트 선택을 고정한다.
+        auto& component = *object.GetMeshComponents().front();
+        const auto& geometry = *component.GetGeometry();
+        const auto& model = *geometry.GetSource();
+        std::vector<std::vector<uint32_t>> palette;
+        for (size_t s = 0; s < geometry.GetSections().size(); ++s)
+        {
+            const auto& mesh = geometry.GetMesh(s);
+            palette.emplace_back(mesh.numJoints, 0);
+            for (uint32_t j = 0; j < mesh.numJoints; ++j)
+                palette.back()[j] = model.m_JointIndices[mesh.startJoint + j] == 12;
+        }
+        MeshCutting::CutPlaneData plane;
+        const float extent = float(model.m_BoundingSphere.GetRadius()) * 2;
+        if (!MeshCutting::TryBuildCutPlaneData({ extent, extent },
+            Math::AffineTransform(model.m_BoundingSphere.GetCenter()), plane))
+            throw std::runtime_error("SP7d plane invalid");
+
+        // 진단 제출은 실제 GPU 완료를 기다리고 CPU 출처 비교도 실행한다.
+        const auto extract = [&](uint32_t expected)
+        {
+            // 결과의 유효 바이트만 이어 붙여 미초기화 출력 여유를 제외한다.
+            SkeletalPatchJob job;
+            if (!job.Submit(component, plane, palette, Math::Matrix4(component.GetWorldTransform(object.GetTransform())), 12, true))
+                throw std::runtime_error("SP7d extraction rejected");
+            Graphics::g_CommandManager.IdleGPU();
+            SkeletalPatchResult result;
+            std::shared_ptr<SkeletalPatchBuffers> patch;
+            if (!job.Poll(result, patch) || result.PatchTriangles != expected)
+                throw std::runtime_error("SP7d Q count mismatch");
+
+            // 기준 평면이 실제로 교차해야 전체 제거 검사가 회귀를 검출한다.
+            if (expected == range && !result.CrossingTriangles)
+                throw std::runtime_error("SP7d baseline has no crossings");
+
+            // 전체 제거에서는 출력과 교차·미포함 카운터가 모두 비어야 한다.
+            if (!expected)
+            {
+                if (result.CrossingTriangles || result.UncoveredCrossing)
+                    throw std::runtime_error("SP7d removed crossings counted");
+                Utility::Printf("SP7d allRemoved patch/crossing/uncovered=0/0/0 PASS\n");
+                return std::vector<uint8_t>{};
+            }
+
+            std::vector<uint8_t> bytes;
+            auto& context = GraphicsContext::Begin(L"SP7d bit comparison");
+            ReadbackBuffer data, origins, meta;
+            data.Create(L"SP7d data", patch->Geometry->Data.GetBufferSize(), 1);
+            origins.Create(L"SP7d origins", expected, 12);
+            meta.Create(L"SP7d metadata", 44, 1);
+            context.CopyBuffer(data, patch->Geometry->Data);
+            context.TransitionResource(patch->TriangleSources, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            context.CopyBufferRegion(origins, 0, patch->TriangleSources, 0, expected * 12);
+            context.CopyBuffer(meta, patch->LocalBounds);
+            context.Finish(true);
+            const auto* packed = static_cast<const uint8_t*>(data.Map());
+            const auto& mesh = patch->Geometry->Meshes.front();
+            bytes.insert(bytes.end(), packed, packed + mesh.vbSize);
+            bytes.insert(bytes.end(), packed + mesh.vbDepthOffset, packed + mesh.vbDepthOffset + mesh.vbDepthSize);
+            bytes.insert(bytes.end(), packed + mesh.ibOffset, packed + mesh.ibOffset + mesh.ibSize);
+            const auto* source = static_cast<const uint8_t*>(origins.Map());
+            bytes.insert(bytes.end(), source, source + expected * 12);
+            const auto* counts = static_cast<const uint8_t*>(meta.Map());
+            bytes.insert(bytes.end(), counts, counts + 44);
+            data.Unmap(); origins.Unmap(); meta.Unmap();
+            return bytes;
+        };
+        // 없음·부분 제거·전체 제거·0·해제 상태를 같은 입력에서 순서대로 비교한다.
+        const auto before = extract(range);
+        if (!component.SetTriangleMask(state)) throw std::runtime_error("SP7d mask rejected");
+        extract(range - overlap);
+        if (!component.SetTriangleMask(std::vector<uint32_t>(state.size(), 0x80000001u)))
+            throw std::runtime_error("SP7d all removed mask rejected");
+        extract(0);
+        if (!component.SetTriangleMask(std::vector<uint32_t>(state.size()))) throw std::runtime_error("SP7d zero mask rejected");
+        const auto zero = extract(range);
+        component.ClearTriangleMask();
+        const bool same = before == zero && before == extract(range);
+        Utility::Printf("SP7d Xbot P=6 Q=12 range=%u alreadyRemoved=%u extracted=%u GPU==CPU=PASS noMaskBitIdentical=%s\n",
+            range, overlap, range - overlap, same ? "PASS" : "FAIL");
+        if (!same || !overlap || range <= overlap) throw std::runtime_error("SP7d mask regression");
+    }
+
+    // 원본 IB와 패치 추출 및 두 컴포넌트의 패스별 readback을 독립 비교한다.
     void RunSkeletalMaskChecks(Scene& scene)
     {
         // 원본 GPU 데이터를 읽고 각 모델의 지정 본을 선택한다.
@@ -35,7 +123,8 @@ namespace Viewer
             const std::vector<uint8_t> original(bytes, bytes + source.GetBufferSize());
             auto expected = original;
             std::vector<uint32_t> state;
-            uint32_t removed = 0;
+            std::vector<uint32_t> parentState;
+            uint32_t removed = 0, childRange = 0, childOverlap = 0;
             for (size_t s = 0; s < geometry.GetSections().size(); ++s)
             {
                 const auto& mesh = geometry.GetMesh(s);
@@ -43,7 +132,7 @@ namespace Viewer
                 for (uint32_t d = 0; d < mesh.numDraws; ++d)
                     for (uint32_t t = 0; t < mesh.draw[d].primCount / 3; ++t)
                     {
-                        bool selected = false;
+                        bool selected = false, child = false, parent = false;
                         const uint32_t at = mesh.ibOffset + (mesh.draw[d].startIndex + t * 3) * width;
                         for (uint32_t k = 0; k < 3 && (mesh.psoFlags & PSOFlags::kHasSkin); ++k)
                         {
@@ -53,9 +142,18 @@ namespace Viewer
                             uint16_t skin[8];
                             std::memcpy(skin, bytes + mesh.vbOffset + vertex * mesh.vbStride + mesh.vbStride - 16, 16);
                             for (uint32_t w = 0; w < 4; ++w)
+                            {
                                 selected |= skin[w] < mesh.numJoints && skin[w + 4] > 0
                                     && model.m_JointIndices[mesh.startJoint + skin[w]] == joint;
+                                child |= skin[w] < mesh.numJoints && skin[w + 4] > 0
+                                    && model.m_JointIndices[mesh.startJoint + skin[w]] == 12;
+                                parent |= skin[w] < mesh.numJoints && skin[w + 4] > 0
+                                    && model.m_JointIndices[mesh.startJoint + skin[w]] == 6;
+                            }
                         }
+                        childRange += child;
+                        childOverlap += child && parent;
+                        parentState.push_back(parent ? 0x80000001u : 0u);
                         state.push_back(selected ? 0x80000001u : 0u);
                         if (!selected) continue;
                         ++removed;
@@ -64,6 +162,9 @@ namespace Viewer
             }
             sourceRead.Unmap();
             if (!removed) throw std::runtime_error("Mask fixture has no selected triangles");
+
+            // Xbot Spine2를 제거한 뒤 자식 LeftShoulder를 별도 패치로 추출한다.
+            if (object->GetName() == "Xbot") CheckMaskedPatch(*object, parentState, childRange, childOverlap);
 
             // 같은 Model과 pose를 공유하는 별도 컴포넌트를 같은 위치에서 검사한다.
             MeshComponent peer(ComponentId(100000), component.GetGeometry());

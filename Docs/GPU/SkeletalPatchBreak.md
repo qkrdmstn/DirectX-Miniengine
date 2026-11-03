@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7b 완료; SP-7c 컴포넌트 상태·치환 IB·렌더 연결·두 모델 GPU 진단 구현(미커밋, base `d10077bd`); SP-7d~e 미구현 (2026-11-03)
+상태: 진행 중 — SP-7c `f83ecf1e` 완료; SP-7d D3 제거 제외·D6 인접 진단 독립 리뷰·D/R 재검증 완료(미커밋, base `f83ecf1e`); SP-7e 미구현 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -131,7 +131,7 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 | SP-7a3 | dominant 배정·낮은 NodeId 동률·bounds 중심 box·이름별 CSV | D/R AutoRig·SkeletalPatch CPU, D/R 빌드·두 모델 크기/anchor·D3D12 진단 | 직전 빌드 실측 75/77초 + R 2~5분 |
 | SP-7b | C 시점 지연 등록 + `FindIncomingJoint` + RequestId `QueueBreak`/결과 표. 이 단계만 숨김·부착 없이 원본에 바로 break(늘어남 정상), 오프셋 복사본 유지 | Xbot 팔·다리, CesiumMan 팔: 기대 JointId·subtree 낙하, root·AlreadyBroken·physics off 거절, pause 대기 | 구현 + R + B + V |
 | SP-7c | D3 상태 버퍼·퇴화 치환 IB·`RenderMeshes` IB 분리 + 진단 옵션(지정 joint 범위 숨김 fixture) | D/R IB·color/depth/shadow readback·독립 컴포넌트 보존·복원 PASS, D3D12 ERROR 0; Wire/Vertices 픽셀 미검증 | 구현 + R + B + V |
-| SP-7d | D3 추출 제거 조건(GPU·CPU) + D6 `adjacentPatch` 로그 | P 절단 뒤 인접 자식 Q 절단 시 복사 수 = Q 범위 − 이미 제거된 수, GPU==CPU | 구현 + R + B + T + V |
+| SP-7d | D3 추출 제거 조건(GPU·CPU) + D6 `adjacentPatch` 로그 | 완료(미커밋): Xbot P=6→Q=12, 934−799=135, 인접 id=1 64개, GPU==CPU·D/R 검증 PASS | 구현 + R + B + T + V |
 | SP-7e | D4 부착·물리 제외 + D5 break 성공 뒤 게시로 7b 경로 교체 + 오프셋 복사본 진단 옵션화 | 두 모델에서 게시 프레임 경계 오차 ≤ 1 mm, 이후 프레임 오차 보고, 강제 Stale 시 원본 불변, 캡처 | 구현 + R + B + V |
 
 각 단계는 약 300줄 이내다. 진행은 Codex 구현 → 별도 Codex 리뷰 → 로컬 커밋 순서다. 300줄을 넘으면 셰이더와 C++ 연결을 나눈다.
@@ -213,3 +213,11 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - D/R `-skeletal-mask-checks 1`: Xbot NodeId 14는 2,206삼각형, CesiumMan NodeId 8은 271삼각형 제거. shadow/depth/color 소실 픽셀은 각각 4,623/2,288/1,786과 20,037/9,903/9,863이며 변경 바이트는 9,826/9,887/8,057과 40,273/39,916/39,824다. IB CPU 기대값·원본·peer·갱신/해제 복원 PASS.
 - 리뷰 재검증: D/R 빌드 exit 0(41.8/38.7초), D/R 마스크 진단과 Release `-compute-pose 0` exit 0·D3D12 ERROR/CORRUPTION 0(MX450). CPU AutoRig 55/SkeletalPatch 59/SkeletalBreak 915·CutPlaneTests PASS. `TriangleMaskShaderTests::main`은 원래 offset/compact 출력 각각 13상태(총 26표본·3,328 DWORD), 불일치 0·D3D12 ERROR 0. 출력은 `%TEMP%/SP7b`만 사용하며 MiniPhysics/Jolt는 변경 없는 기존 의존성을 재사용한다.
 - 미검증: 실제 V/C 입력·Wireframe/Vertices 픽셀·대형 IB 2차원 dispatch·GPU 진행 중 삭제 스트레스. `PlaneSlicerTests.cpp`는 없어 현행 CutPlaneTests를 실행했다. SP-7d~e는 후속이며 C 입력은 이번 범위에서 변경하지 않는다.
+
+## SP-7d 구현·검증 (2026-11-03, base `f83ecf1e`, 미커밋)
+- `PatchExtractCS::main`·`ExtractPatchReference`는 전역 삼각형 State의 bit31을 선택에서 제외하며 마스크 없음은 0 버퍼로 처리한다. 교차·미포함 카운터에서도 제거 삼각형을 제외한다. Influence 투표 규칙은 유지한다.
+- `SkeletalPatchJob::Submit`·`Poll`은 VB 시작·stride와 baseVertex 적용 후 정점 번호가 같은 제거 삼각형을 소유 id별로 한 번씩 집계하고 `adjacentPatch`를 기록한다. draw/section 경계도 같은 조건으로 비교하며 공유 정점 하나면 인접이다(변 공유나 위치 용접은 요구하지 않음). GPU 비용은 제거 수×전체 삼각형 수, 최악 O(N²)이며 대형 입력 성능은 미검증이다. 병합과 C 게시 변경은 없다.
+- `CheckMaskedPatch`·`RunSkeletalMaskChecks`: Xbot Spine2(P=6)→LeftShoulder(Q=12), 범위 934−제거 799=추출 135, `adjacentPatch id=1 removedNeighbors=64 separatePatch=1`, GPU==CPU 및 없음/0/해제 출력 바이트 비교 PASS.
+- D/R 빌드(53.3/50.7초)·AutoRig 55·SkeletalPatch 63·SkeletalBreak 915·CutPlaneTests·TriangleMask 26표본/3,328 DWORD·마스크·SP-6 20행 기존 로그 일치·patch-break·Static PASS, D3D12 ERROR 0(MX450, 32.0.15.9186, `-debug 1`). 산출물은 `%TEMP%/SP7b`; 대형 입력 인접 집계 성능·실제 C 게시(SP-7e)는 미검증이다.
+- 독립 리뷰: 제거 삼각형이 교차·미포함 카운터에 남는 GPU/CPU 누락과 0 버퍼 업로드의 16바이트 올림 범위 초과 읽기를 수정했다. 기존 metadata/selectedNode 정렬·패딩 변경도 `InitializeBuffer`의 SIMD 복사 계약상 필요하다. 실제 교차 평면으로 진단을 보강해 전체 제거 시 교차 373→0, 출력/교차/미포함 0/0/0을 확인했다.
+- 재검증: D/R 빌드 39.9/30.8초(기존 MiniPhysics/Jolt 재사용), CPU 55/65/915·CutPlaneTests 및 TriangleMask 각 26표본/3,328 DWORD PASS. 마스크·SP-6·patch-break·Static 8실행 exit 0, SP-6 각 20행 불변, 934−799=135·인접 64·바이트 불변 유지. D3D12 ERROR/CORRUPTION·바인딩 경고 0; 기존 Release PSO 출력 #974·중복 barrier #1008 및 Debug live-resource 경고는 남는다. 근거: `%TEMP%/SP7b/Independent-*`, `Runtime-*-SP7d*.log`.
