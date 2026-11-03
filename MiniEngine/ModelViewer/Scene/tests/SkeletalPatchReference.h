@@ -23,6 +23,7 @@ namespace Viewer::PatchReference
         std::vector<uint32_t> Indices32; // R32일 때만 사용하고, 그 외에는 R16을 사용한다.
         std::vector<Draw> Draws;
         uint32_t StartJoint = 0;
+        uint32_t JointCount = UINT32_MAX; // GPU 진단은 mesh.numJoints를 사용한다.
     };
     struct Input
     {
@@ -82,6 +83,49 @@ namespace Viewer::PatchReference
         }
         float t0, t1;
         return count == 2 && MeshCutting::ClipCoplanarSegmentToCutPlaneRectangle(input.Plane, hits[0], hits[1], t0, t1);
+    }
+
+    // 유한 사각형 교차 꼭짓점의 정규화 weight를 GPU와 같은 고정소수로 합산한다.
+    inline uint32_t SelectInfluenceJointReference(const Input& input)
+    {
+        // 팔레트 중복과 section 시작 위치를 NodeId로 환산한 뒤 함께 누적한다.
+        std::vector<uint64_t> votes;
+        for (uint32_t node : input.JointNodes)
+            if (node != InvalidNode && votes.size() <= node) votes.resize(size_t(node) + 1, 0);
+        for (const auto& section : input.Sections)
+            for (const auto& draw : section.Draws)
+                for (uint32_t t = 0; t < draw.IndexCount / 3; ++t)
+                {
+                    const auto indices = TriangleIndices(section, draw, t);
+                    if (!CrossesRectangle(input, section, indices)) continue;
+                    for (uint32_t index : indices)
+                    {
+                        const auto& vertex = section.Vertices.at(index);
+                        uint32_t sum = 0;
+                        for (uint32_t weight : vertex.Weights) sum += weight;
+                        sum = std::max(sum, 1u);
+                        for (uint32_t slot = 0; slot < 4; ++slot)
+                        {
+                            if (vertex.Palette[slot] >= section.JointCount) continue;
+                            const size_t at = size_t(section.StartJoint) + vertex.Palette[slot];
+                            if (at >= input.JointNodes.size()) continue;
+                            const uint32_t node = input.JointNodes[at];
+                            if (node < votes.size())
+                                votes[node] += (uint32_t(vertex.Weights[slot]) * 65535u + sum / 2) / sum;
+                        }
+                    }
+                }
+
+        // 오름차순 순회와 엄격한 비교로 동점의 작은 NodeId를 선택한다.
+        uint32_t selected = InvalidNode;
+        uint64_t best = 0;
+        for (uint32_t node = 0; node < votes.size(); ++node)
+            if (votes[node] > best)
+            {
+                best = votes[node];
+                selected = node;
+            }
+        return selected;
     }
 
     // 선택 본에 양수 weight가 있는 삼각형 전체를 원본 순서로 추출한다.

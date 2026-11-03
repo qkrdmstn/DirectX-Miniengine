@@ -25,7 +25,7 @@ namespace Viewer
             uint32_t VbOffset, Stride, IbOffset, Index32;
             uint32_t StartIndex, BaseVertex, Triangles, PoseOffset;
             uint32_t FirstTriangle, MaskOffset, Flags, SectionId;
-            uint32_t DrawId, JointCount, Reserved0, Reserved1;
+            uint32_t DrawId, JointCount, VertexCount, Reserved1;
         };
         struct Parameters
         {
@@ -34,8 +34,9 @@ namespace Viewer
             Math::Matrix4 LocalToWorld;
             float Epsilon, HalfWidth, HalfHeight;
             uint32_t Triangles, Draws, DepthOffset, IndexOffset, Mode;
+            uint32_t NodeCount, Influence, Padding0, Padding1;
         };
-        static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 176, "Patch shader layout");
+        static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 192, "Patch shader layout");
         static_assert(sizeof(SkeletalPatchResult) == 12, "Patch counts readback layout");
 
         // GPU AABB의 정렬 가능한 정수 비트를 원래 float 좌표로 복원한다.
@@ -69,10 +70,25 @@ namespace Viewer
             va_end(args);
             Utility::Print(line);
             FILE* file = nullptr;
-            if (fopen_s(&file, "SkeletalPatchChecks.log", "a") == 0)
+            char path[MAX_PATH];
+            if (!GetTempPathA(MAX_PATH, path)) throw std::runtime_error("No patch log directory");
+            strcat_s(path, "SP6-SkeletalPatchChecks.log");
+            if (fopen_s(&file, path, "a") == 0)
             {
                 fputs(line, file);
                 fclose(file);
+            }
+
+            // 최종 비교 행만 별도 파일에 모아 두 모드를 나란히 검토한다.
+            if (std::strncmp(line, "SP6 comparison", 14) == 0)
+            {
+                GetTempPathA(MAX_PATH, path);
+                strcat_s(path, "SP6-comparison.log");
+                if (fopen_s(&file, path, "a") == 0)
+                {
+                    fputs(line, file);
+                    fclose(file);
+                }
             }
         }
 
@@ -100,16 +116,16 @@ namespace Viewer
             return "unavailable";
         }
 
-        // 세 추출 패스가 공유하는 root signature와 compute PSO를 준비한다.
+        // 투표·선택·추출 패스가 공유하는 root signature와 compute PSO를 준비한다.
         void InitializePatch()
         {
             // 여러 C 요청 사이에 파이프라인을 재사용한다.
             static bool initialized = false;
             if (initialized) return;
-            PatchRoot.Reset(10);
+            PatchRoot.Reset(12);
             PatchRoot[0].InitAsConstantBuffer(0);
             for (uint32_t i = 0; i < 4; ++i) PatchRoot[i + 1].InitAsBufferSRV(i);
-            for (uint32_t i = 0; i < 5; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
+            for (uint32_t i = 0; i < 7; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
             PatchRoot.Finalize(L"Skeletal patch extraction");
             PatchPSO.SetRootSignature(PatchRoot);
             PatchPSO.SetComputeShader(g_pPatchExtractCS, sizeof(g_pPatchExtractCS));
@@ -144,9 +160,13 @@ namespace Viewer
     }
 
     // 유한 평면 사각형에 닿는 가장 가까운 skin 대상을 선택하고 추출한다.
-    void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic)
+    void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
+        SkeletalJointMode mode, uint32_t diagnosticCase)
     {
-        // 새 C는 대상 유무와 관계없이 이전 결과를 무효화한다.
+        // 새 C의 모드를 기록하고 대상 유무와 관계없이 이전 결과를 무효화한다.
+        m_Mode = mode;
+        m_DiagnosticCase = diagnosticCase;
+        PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
         m_Job.Cancel();
         m_Name.clear();
 
@@ -185,8 +205,11 @@ namespace Viewer
             if (diagnostic) throw std::runtime_error("Skeletal patch diagnostic target rejected");
             return;
         }
-        const auto selected = SelectSegmentJoint(*target->GetModelInstance(), *mesh, target->GetTransform(), plane);
-        if (selected.NodeId == UINT32_MAX)
+        const bool influence = mode == SkeletalJointMode::Influence;
+        const auto selected = influence ? SegmentJointSelection{}
+            : SelectSegmentJoint(*target->GetModelInstance(), *mesh, target->GetTransform(), plane);
+        if ((!influence && selected.NodeId == UINT32_MAX) || !target->GetModelInstance()->HasValidPose()
+            || mesh->GetDeformBinding().Pose != PoseMode::FollowModel)
         {
             PatchLog("Skeletal patch rejected: no current skin joint pose (frozen or invalid input)\n");
             if (diagnostic) throw std::runtime_error("Skeletal patch diagnostic selection rejected");
@@ -194,12 +217,12 @@ namespace Viewer
         }
 
         // 현재 GPU 입력과 일치하는 유효 선택만 segment 또는 말단으로 기록한다.
-        PatchLog("Skeletal patch target=%s NodeId=%u kind=%s child=%u intersection=(%.6f, %.6f, %.6f)\n",
+        if (!influence) PatchLog("Skeletal patch target=%s NodeId=%u kind=%s child=%u intersection=(%.6f, %.6f, %.6f)\n",
             target->GetName().c_str(), selected.NodeId, selected.Kind == SegmentJointKind::Segment ? "segment" : "leaf",
             selected.ChildNodeId, float(selected.Intersection.GetX()), float(selected.Intersection.GetY()), float(selected.Intersection.GetZ()));
 
         // 모델 이름은 진단 파일 조회에만 사용하고 선택·추출 조건에는 사용하지 않는다.
-        if (diagnostic)
+        if (diagnostic && !influence)
             PatchLog("Skeletal patch selected model=%s NodeId=%u name=%s kind=%s child=%u\n",
                 target->GetName().c_str(), selected.NodeId, DiagnosticNodeName(target->GetName(), selected.NodeId).c_str(),
                 selected.Kind == SegmentJointKind::Segment ? "segment" : "leaf", selected.ChildNodeId);
@@ -211,10 +234,11 @@ namespace Viewer
         // 제출 시점 component world를 고정하고 폭은 GPU의 posed 월드 X 경계로 받는다.
         if (!SceneTransform::TryFromAffine(mesh->GetWorldTransform(target->GetTransform()), m_World))
             throw std::runtime_error("Skeletal patch source world is not TRS");
-        m_Name = target->GetName() + "_SkeletalPatch";
+        m_ModelName = target->GetName();
+        m_Name = m_ModelName + "_SkeletalPatch";
         m_Diagnostic = diagnostic;
         m_Plane = plane;
-        if (!m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic) && diagnostic)
+        if (!m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic, influence) && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
     }
 
@@ -292,10 +316,11 @@ namespace Viewer
         // 영향 삼각형이 없는 패치만 생략하며 유한 영역 교차 수는 무한 절단을 막지 않는다.
         std::shared_ptr<SkeletalPatchBuffers> patch;
         if (!m_Job.Poll(result, patch)) return false;
+        m_SelectedNode = m_Job.SelectedNode();
         if (!result.PatchTriangles)
         {
             PatchLog("Skeletal patch publish skipped: %s; no copy or cut requested\n",
-                "no influenced triangles");
+                result.CrossingTriangles ? "no influenced triangles" : "no finite rectangle crossing triangles");
             PatchLog("Skeletal patch cut result: rejected %s components=0 caps=0 uncapped=0 error=0 gap=0\n",
                 "no influenced triangles");
             if (m_Diagnostic && scene.FindObject(m_CopyOwner))
@@ -408,15 +433,20 @@ namespace Viewer
         const size_t components = owner ? owner->GetMeshComponents().size() : 0;
         PatchLog("Skeletal patch cut result: %s components=%zu caps=%u uncapped=%u error=%u\n",
             reason, components, caps, uncapped, error);
+        if (m_Diagnostic)
+            PatchLog("SP6 comparison case=%u model=%s mode=%s NodeId=%u name=%s patch/crossing/uncovered=%u/%u/%u GPU==CPU=PASS components/caps/uncapped/error=%zu/%u/%u/%u\n",
+                m_DiagnosticCase, m_ModelName.c_str(), m_Mode == SkeletalJointMode::Parent ? "Parent" : "Influence", m_SelectedNode,
+                DiagnosticNodeName(m_ModelName, m_SelectedNode).c_str(), m_Result.PatchTriangles, m_Result.CrossingTriangles,
+                m_Result.UncoveredCrossing, components, caps, uncapped, error);
         m_Completed = true;
         if (m_Diagnostic && components != 2 && (!reason || !*reason || std::strcmp(reason, "published A/B") == 0))
             throw std::runtime_error("Skeletal patch cut diagnostic missing rejection reason");
     }
 
-    // 모든 skin 모델에서 길이·계층 깊이로 고른 두 segment와 말단 평면을 만든다.
+    // 모든 skin 모델에서 기존 세 평면과 두 blend-zone 진단 평면을 만든다.
     bool BuildSkeletalPatchDiagnosticPlane(const Scene& scene, uint32_t index, MeshCutting::CutPlaneData& plane)
     {
-        // 기본 장면 순서의 skin 모델마다 세 case를 배정하고 생성 복사본은 제외한다.
+        // 기본 장면 순서의 skin 모델마다 다섯 case를 배정하고 생성 복사본은 제외한다.
         using namespace Math;
         uint32_t modelIndex = 0;
         for (const auto& object : scene.GetObjects())
@@ -425,7 +455,7 @@ namespace Viewer
             if (!pose || !pose->HasValidPose()) continue;
             const auto& model = *pose->GetModel();
             if (!model.m_NumJoints || !object->IsCuttable()) continue;
-            if (modelIndex++ != index / 3) continue;
+            if (modelIndex++ != index / 5) continue;
             const auto& component = *object->GetMeshComponents().front();
             const auto& parents = pose->GetPoseParents();
             std::vector<bool> skin(model.m_NumNodes, false), hasChild(model.m_NumNodes, false);
@@ -475,16 +505,24 @@ namespace Viewer
             std::sort(segments.begin(), segments.end(), longer);
             std::sort(leaves.begin(), leaves.end(), longer);
             if (segments.size() < 2 || leaves.empty()) return false;
-            const bool leaf = index % 3 == 2;
-            const uint32_t child = leaf ? leaves.front() : segments[index % 3];
+            const uint32_t region = index % 5;
+            const bool leaf = region == 2;
+            // blend-zone은 최장 segment의 바로 위 segment로 골라 관절 주변을 비교한다.
+            const uint32_t blendChild = parent[segments.front()];
+            if (parent[blendChild] == UINT32_MAX) return false;
+            const uint32_t child = leaf ? leaves.front() : region < 2 ? segments[region] : blendChild;
             const Vector3 a = positions[parent[child]], b = positions[child];
-            const Vector3 normal = Normalize(b - a);
+            Vector3 normal = Normalize(b - a);
             const Vector3 x = Normalize(Cross(normal, std::abs(float(normal.GetY())) < 0.9f ? Vector3(kYUnitVector) : Vector3(kXUnitVector)));
-            const Vector3 origin = leaf ? b : (a + b) * 0.5f;
+            const Vector3 origin = leaf ? b : region == 3 ? a + (b - a) * 0.9f : (a + b) * 0.5f;
+
+            // 이름 없이 같은 최장 segment의 중점에 45도 사선 평면을 만든다.
+            if (region == 4) normal = Normalize(normal + x);
+            const Vector3 planeX = region == 4 ? Normalize(Cross(normal, Cross(x, Normalize(b - a)))) : x;
             const float size = float(component.GetBoundingSphere(object->GetTransform()).GetRadius()) * 0.15f;
             PatchLog("Skeletal patch case=%u model=%s expected=%s parent=%u child=%u rectangle=%.6f\n",
-                index, object->GetName().c_str(), leaf ? "leaf" : "segment", parent[child], child, size);
-            return MeshCutting::TryBuildCutPlaneData({ size, size }, AffineTransform(Matrix3(x, normal, Cross(x, normal)), origin), plane);
+                index, object->GetName().c_str(), leaf ? "leaf" : region == 3 ? "near-child-90pct" : region == 4 ? "oblique-45deg" : "segment", parent[child], child, size);
+            return MeshCutting::TryBuildCutPlaneData({ size, size }, AffineTransform(Matrix3(planeX, normal, Cross(planeX, normal)), origin), plane);
         }
         return false;
     }
@@ -506,16 +544,16 @@ namespace Viewer
         m_PoseOffsets.clear();
     }
 
-    // 원본 GPU 입력에서 분류·prefix sum·packed 출력을 순서대로 제출한다.
+    // 선택 모드에 따라 GPU 투표·선택 뒤 분류·prefix sum·packed 출력을 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
-        const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world, uint32_t node, bool diagnostic)
+        const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world, uint32_t node, bool diagnostic, bool influence)
     {
         // 준비되지 않았거나 생성된 입력은 이 단계의 skeletal 추출 대상이 아니다.
         Cancel();
         const auto& input = *source.GetGeometry();
         const auto& posed = source.GetPosedGeometry();
         if (!Renderer::UseComputePose || !posed.IsReady() || input.IsGenerated()
-            || mask.size() != input.GetSections().size()) return false;
+            || (!influence && mask.size() != input.GetSections().size())) return false;
         InitializePatch();
         std::vector<DrawInput> draws;
         std::vector<uint32_t> masks;
@@ -523,9 +561,12 @@ namespace Viewer
         for (uint32_t s = 0; s < input.GetSections().size(); ++s)
         {
             const auto& mesh = input.GetMesh(s);
-            if (mask[s].size() != mesh.numJoints) return false;
+            if (!influence && mask[s].size() != mesh.numJoints) return false;
             const uint32_t maskOffset = uint32_t(masks.size());
-            masks.insert(masks.end(), mask[s].begin(), mask[s].end());
+            if (influence)
+                masks.insert(masks.end(), input.GetSource()->m_JointIndices.get() + mesh.startJoint,
+                    input.GetSource()->m_JointIndices.get() + mesh.startJoint + mesh.numJoints);
+            else masks.insert(masks.end(), mask[s].begin(), mask[s].end());
             m_PoseOffsets.push_back(posed.GetOffset(input.GetSections()[s].SourceMesh));
             for (uint32_t d = 0; d < mesh.numDraws; ++d)
             {
@@ -533,15 +574,17 @@ namespace Viewer
                 if (!draw.primCount) continue;
                 draws.push_back({ mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
                     draw.startIndex, draw.baseVertex, draw.primCount / 3, m_PoseOffsets.back(),
-                    uint32_t(triangles), maskOffset, mesh.psoFlags, s, d, mesh.numJoints, 0, 0 });
+                    uint32_t(triangles), maskOffset, mesh.psoFlags, s, d, mesh.numJoints, mesh.vbSize / mesh.vbStride, 0 });
                 triangles += draw.primCount / 3;
             }
         }
-        if (!triangles || triangles > UINT32_MAX / (3 * 48ull)) return false;
+        if (!triangles || triangles > UINT32_MAX / (3 * 48ull)
+            || !input.GetSource()->m_NumNodes || input.GetSource()->m_NumNodes > UINT32_MAX / 8) return false;
 
         // 대상 전체 삼각형 수를 상한으로 잡아 compaction 출력 overflow를 없앤다.
         m_Input = source.GetGeometry();
         m_Plane = plane; m_Node = node; m_Diagnostic = diagnostic;
+        m_Influence = influence;
         m_SourceWorld = world;
         m_Output = std::make_shared<SkeletalPatchBuffers>();
         m_Output->Geometry = std::make_shared<GeometryBuffers>();
@@ -552,6 +595,8 @@ namespace Viewer
         c.Plane = plane.WorldPlane; c.LocalToRectangle = plane.WorldToPlane;
         c.LocalToWorld = world;
         c.Epsilon = 1e-5f; c.HalfWidth = plane.HalfWidth; c.HalfHeight = plane.HalfHeight;
+        c.NodeCount = input.GetSource()->m_NumNodes;
+        c.Influence = influence;
         c.Triangles = uint32_t(triangles); c.Draws = uint32_t(draws.size());
         c.DepthOffset = vertices * 28; c.IndexOffset = vertices * 44;
         geometry.Data.Create(L"Patch packed geometry", vertices * 48, 1);
@@ -573,7 +618,10 @@ namespace Viewer
         m_Descriptors.Create(L"Patch draw inputs", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
         if (masks.empty()) masks.push_back(0);
         m_Masks.Create(L"Patch palette mask", uint32_t(masks.size()), 4, masks.data());
-        m_Readback.Create(L"Patch counts and bounds readback", 11, 4);
+        m_Readback.Create(L"Patch counts and bounds readback", 12, 4);
+        const std::vector<uint32_t> votes(size_t(c.NodeCount) * 2, 0);
+        m_Votes.Create(L"Patch uint64 joint votes", c.NodeCount, 8, votes.data());
+        m_Selected.Create(L"Patch selected NodeId", 1, 4, &node);
 
         // 같은 graphics queue에서 pose 준비 뒤 추출하고 패스 사이 UAV 의존성을 보장한다.
         auto& graphics = GraphicsContext::Begin(L"Extract skeletal patch");
@@ -587,13 +635,25 @@ namespace Viewer
         compute.TransitionResource(m_Masks, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.SetBufferSRV(1, input.GetDataBuffer()); compute.SetBufferSRV(2, posed.GetBuffer());
         compute.SetBufferSRV(3, m_Descriptors); compute.SetBufferSRV(4, m_Masks);
-        GpuBuffer* outputs[] = { &geometry.Data, &geometry.Pose, &m_Output->TriangleSources, &m_Output->LocalBounds, &m_Scan };
-        for (uint32_t i = 0; i < 5; ++i)
+        GpuBuffer* outputs[] = { &geometry.Data, &geometry.Pose, &m_Output->TriangleSources, &m_Output->LocalBounds, &m_Scan, &m_Votes, &m_Selected };
+        for (uint32_t i = 0; i < 7; ++i)
         {
             compute.TransitionResource(*outputs[i], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.SetBufferUAV(i + 5, *outputs[i]);
         }
         const uint32_t groups = (c.Triangles + 63) / 64;
+        // GPU 선택 결과를 CPU 대기 없이 추출에 연결한다.
+        if (influence)
+        {
+            c.Mode = 3;
+            compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            compute.InsertUAVBarrier(m_Votes);
+            c.Mode = 4;
+            compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+            compute.Dispatch(1);
+            compute.InsertUAVBarrier(m_Selected);
+        }
         for (c.Mode = 0; c.Mode < 3; ++c.Mode)
         {
             compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
@@ -607,6 +667,8 @@ namespace Viewer
         }
         graphics.TransitionResource(m_Output->LocalBounds, D3D12_RESOURCE_STATE_COPY_SOURCE);
         graphics.CopyBufferRegion(m_Readback, 0, m_Output->LocalBounds, 0, 44);
+        graphics.TransitionResource(m_Selected, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        graphics.CopyBufferRegion(m_Readback, 44, m_Selected, 0, 4);
 
         // 진단에서만 동일 제출 시점의 VB/IB·pose·출처를 저장한다.
         if (diagnostic)
@@ -638,9 +700,11 @@ namespace Viewer
             return false;
 
         // 기본 경로는 정점 대신 세 카운터와 로컬 경계·원본 월드 X 경계만 읽는다.
-        uint32_t metadata[11];
+        uint32_t metadata[12];
         std::memcpy(metadata, m_Readback.Map(), sizeof(metadata));
         std::memcpy(&result, metadata, sizeof(result));
+        m_Node = metadata[11];
+        PatchLog("Skeletal patch GPU selected mode=%s NodeId=%u\n", m_Influence ? "Influence" : "Parent", m_Node);
         m_Readback.Unmap();
         m_Output->SourceWorldWidth = BoundsCoordinate(metadata[10]) - BoundsCoordinate(metadata[9]);
         PatchLog("Skeletal patch source posed world X=[%.6f,%.6f] width=%.6f offset=%.6f\n",
@@ -689,6 +753,7 @@ namespace Viewer
             const auto& mesh = m_Input->GetMesh(s);
             Section section;
             section.StartJoint = mesh.startJoint;
+            section.JointCount = mesh.numJoints;
             for (uint32_t i = 0; i < mesh.vbSize / mesh.vbStride; ++i)
             {
                 Vertex vertex{};
@@ -720,6 +785,13 @@ namespace Viewer
         m_SourceReadback.Unmap(); m_PoseReadback.Unmap();
 
         // CPU 기준의 원본 순서와 GPU compact source list를 항목별로 대조한다.
+        if (m_Influence)
+        {
+            const uint32_t reference = SelectInfluenceJointReference(input);
+            PatchLog("Skeletal patch Influence GPU==CPU NodeId GPU=%u CPU=%u %s\n", m_Node, reference,
+                m_Node == reference ? "PASS" : "FAIL");
+            if (m_Node != reference) throw std::runtime_error("Influence selected NodeId mismatch");
+        }
         const auto expected = ExtractPatchReference(input, m_Node);
 
         // 원본 pose와 실제 packed VB를 게시 TRS로 변환해 오프셋 제거 후 월드 경계를 대조한다.

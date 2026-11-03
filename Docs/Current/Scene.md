@@ -1,4 +1,4 @@
-상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29)
+상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29); SP-6 `J` Parent/Influence 전환 완료(미커밋, base `329aec7b`, 2026-11-03)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -27,6 +27,7 @@ Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::P
 | `L` | 이동·회전의 World / Local 축 전환 (크기는 항상 Local) |
 | `V` | Solid → Wireframe → Vertices → Solid 순환 (현재 모드 overlay 표시) |
 | `C` | 현재 유한 평면 영역의 Static 컴포넌트 후보를 조회하고 실제 분할만 게시. 처리 중 재입력은 Busy 안내 |
+| `J` | Skeletal 본 선택 Parent ↔ Influence 전환. 기본 Parent, 시작 옵션은 `-skeletal-joint-mode parent\|influence`. 전환과 매 C에 모드를 로그로 남긴다 |
 | `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태. 기본 정지 상태로 시작한다 |
 | `H` | 조각별 충돌 convex hull 모서리와 물리 바닥 상자 표시 켜기/끄기(기본 꺼짐). 디버그 UI `Viewer/Physics/ShowCollision`과 동일 상태. 깨어 있음 초록·잠듦 파랑·body 없음 노랑·바닥 회색 |
 | `Delete` | 드래그 밖에서 현재 편집 대상 삭제(Mesh는 조각만, Owner는 객체 전체). 바닥은 거절 |

@@ -75,7 +75,7 @@ public:
     virtual bool IsDone() override
     {
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
-        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 6 && (m_CapturePath.empty() || m_CaptureComplete)))
+        if (m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 20 && (m_CapturePath.empty() || m_CaptureComplete)))
             return true;
 
         // 벤치마크 결과 파일을 쓴 뒤에는 남은 GPU 절단이 끝나면 종료한다.
@@ -91,6 +91,7 @@ private:
 
     uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0, m_SkeletalPatchCaptured = 0;
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
+    Viewer::SkeletalJointMode m_SkeletalJointMode = Viewer::SkeletalJointMode::Parent;
     Camera m_Camera;
     unique_ptr<CameraController> m_CameraController;
 
@@ -378,6 +379,15 @@ void ModelViewer::Startup( void )
 
     // 진단·자동 절단 옵션은 뒤에서 해석하더라도 추가 모델 로딩 전에 격리한다.
     CommandLineArgs::GetInteger(L"skeletal-patch-checks", m_SkeletalPatchChecks);
+
+    // 시작 모드를 검증하며 생략 시 Parent를 유지한다.
+    std::wstring jointMode;
+    if (CommandLineArgs::GetString(L"skeletal-joint-mode", jointMode))
+    {
+        if (jointMode != L"parent" && jointMode != L"influence")
+            throw std::runtime_error("skeletal-joint-mode must be parent or influence");
+        m_SkeletalJointMode = jointMode == L"influence" ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent;
+    }
     bool diagnosticScene = false;
     std::wstring diagnosticValue;
     for (const wchar_t* option : { L"edit-target-checks", L"edit-apply-checks", L"edit-delete-checks",
@@ -641,9 +651,21 @@ void ModelViewer::Update( float deltaT )
     const bool wasCuttingBusy = m_Cutting.IsBusy();
     const bool wasPatchCutting = m_SkeletalPatchCopy.IsCutInFlight();
     const bool wasBenchmarkAtUpdateStart = m_BenchmarkRemaining != 0;
-    // 새 C는 이전 복사본 절단 결과 게시 전에 공통 삭제 경로로 무효화한다.
+    // 사용하지 않던 J로 다음 C의 선택 모드를 전환한다.
+    if (GameInput::IsFirstPressed(GameInput::kKey_j))
+    {
+        m_SkeletalJointMode = m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent
+            ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent;
+        Utility::Printf("Skeletal joint mode=%s\n", m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent ? "Parent" : "Influence");
+    }
+
+    // 새 C는 모드를 기록하고 이전 복사본을 공통 삭제 경로로 무효화한다.
     const bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
-    if (cutKey) m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
+    if (cutKey)
+    {
+        Utility::Printf("Skeletal C mode=%s\n", m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent ? "Parent" : "Influence");
+        m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
+    }
 
     // 열린 패치에는 Static 전용 cap 최소 개수 검증을 적용하지 않고 설정은 보존한다.
     const uint32_t staticMinimumLoops = m_Cutting.ExpectedMinimumLoops;
@@ -820,18 +842,23 @@ void ModelViewer::Update( float deltaT )
         // 새 geometry가 일반 프레임 준비 경로를 지난 뒤 캡처한다.
         m_CaptureFrame = 0;
     }
-    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 6 && !m_SkeletalPatchCopy.IsPending()
-        && (m_CapturePath.empty() || m_SkeletalPatchCheckIndex % 3 != 1 || m_SkeletalPatchCaptured > m_SkeletalPatchCheckIndex / 3);
+
+    // 45도 blend-zone 결과를 모델·모드마다 한 장씩 캡처한 뒤 다음 case로 진행한다.
+    const uint32_t captureChecks[] = { 9, 10, 19, 20 };
+    const bool patchCapturePending = m_SkeletalPatchCaptured < 4
+        && m_SkeletalPatchCheckIndex == captureChecks[m_SkeletalPatchCaptured];
+    const bool patchDiagnostic = m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex < 20 && !m_SkeletalPatchCopy.IsPending()
+        && (m_CapturePath.empty() || !patchCapturePending);
     if (patchDiagnostic) m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
 
     // 자동 진단도 C와 같은 Static 요청·skin 선택 경로를 한 프레임에 한 번 실행한다.
     MeshCutting::CutPlaneData diagnosticPlane;
-    const uint32_t patchRegion = m_SkeletalPatchCheckIndex;
+    const uint32_t patchRegion = m_SkeletalPatchCheckIndex / 2;
     if (patchDiagnostic && !Viewer::BuildSkeletalPatchDiagnosticPlane(m_Scene, patchRegion, diagnosticPlane))
         throw std::runtime_error("Skeletal patch diagnostic plane failed");
 
     // 첫 case에서 모델별 진단 중심을 향해 카메라와 이동 제어기를 함께 맞춘다.
-    if (patchDiagnostic && m_SkeletalPatchCheckIndex % 3 == 0)
+    if (patchDiagnostic && (patchRegion % 5 == 0 || patchRegion % 5 == 3))
     {
         const Vector3 center = (diagnosticPlane.WorldCorners[0] + diagnosticPlane.WorldCorners[2]) * 0.5f;
         const Vector3 target = center + Vector3(1.0f, 0, 0);
@@ -853,7 +880,9 @@ void ModelViewer::Update( float deltaT )
             if (patchDiagnostic)
                 plane = diagnosticPlane;
             if (m_Cutting.RequestAll(plane,m_CapMode)) m_LastCutNormal = Vector3(plane.WorldPlane);
-            m_SkeletalPatchCopy.Request(m_Scene, plane, patchDiagnostic);
+            const auto mode = patchDiagnostic ? (m_SkeletalPatchCheckIndex % 2
+                ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent) : m_SkeletalJointMode;
+            m_SkeletalPatchCopy.Request(m_Scene, plane, patchDiagnostic, mode, patchRegion);
         }
     }
 
@@ -939,7 +968,7 @@ void ModelViewer::Update( float deltaT )
 
     // 패치 결과 격리까지 끝난 뒤 후보 없음·제출 거절도 최종 Static 게시 수를 검증한다.
     if (!m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && !m_SkeletalPatchCopy.IsPending()
-        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 6) && m_ExpectedPublications != ~0u)
+        && (!m_SkeletalPatchChecks || m_SkeletalPatchCheckIndex == 20) && m_ExpectedPublications != ~0u)
     {
         if (m_Publications != m_ExpectedPublications)
             throw std::runtime_error("Unexpected number of cut publications");
@@ -1091,14 +1120,19 @@ void ModelViewer::RenderScene( void )
 
     const bool capture = !m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
-        && (!m_SkeletalPatchChecks || (m_SkeletalPatchCheckIndex == m_SkeletalPatchCaptured * 3 + 1 && !m_SkeletalPatchCopy.IsPending()));
+        && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending()));
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
     {
-        // 패치 진단은 첫 segment의 A/B 간격을 모델별 파일에 저장한다.
+        // 패치 진단은 45도 blend-zone의 A/B 간격을 모델별 파일에 저장한다.
         m_ActiveCapturePath = m_CapturePath;
-        if (m_SkeletalPatchChecks) m_ActiveCapturePath += L"-model" + std::to_wstring(++m_SkeletalPatchCaptured);
-        m_CaptureComplete = !m_SkeletalPatchChecks || m_SkeletalPatchCaptured == 2;
+        if (m_SkeletalPatchChecks)
+        {
+            m_ActiveCapturePath += L"-model" + std::to_wstring(m_SkeletalPatchCaptured / 2 + 1)
+                + (m_SkeletalPatchCaptured % 2 ? L"-influence" : L"-parent");
+            ++m_SkeletalPatchCaptured;
+        }
+        m_CaptureComplete = !m_SkeletalPatchChecks || m_SkeletalPatchCaptured == 4;
         g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-hdr.raw");
         auto& restore = GraphicsContext::Begin(L"Restore capture state");
         restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

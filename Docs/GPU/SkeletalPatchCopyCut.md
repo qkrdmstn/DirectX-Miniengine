@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-1~SP-5a 커밋, SP-5b 독립 리뷰·수정·검증 완료(미커밋, base `70a754d7`): Xbot·CesiumMan 각 3/3 A/B, GPU==CPU, B 0.1 m, 물리 ON 캡처·Static 회귀 PASS; SP-6·SP-7 미구현 (2026-11-03)
+상태: 진행 중 — SP-6 독립 리뷰·최소 수정 완료(미커밋, base `329aec7b`): 20/20 A/B·추출 GPU==CPU, Influence NodeId 10/10, 기존 Parent 6행 보존, 비교 차이 2/10, D/R·CPU·Static·45도 캡처 PASS; SP-7 미구현 (2026-11-03)
 
 # Skeletal 패치 복사 절단 (첫 단계)
 
@@ -30,7 +30,7 @@ NDC25 방식(영향 영역 복사→복사본 절단→원본 숨김)의 앞 두
 | D11 | 수명과 격리. 새 C는 진행 중인 SkeletalPatchJob과 pending 요청을 무효화하고, `RequestAll` 전에 이전 복사본 owner를 `DeleteEditTarget`의 owner 삭제 경로로 지운다(`CancelTarget`·`PhysicsSystem::RemoveTarget` 포함). 대상이 없어도 이전 복사본은 지운다. 복사본 owner는 Static publication 수·벤치마크·자동 재절단 집계에서 뺀다. | 복사본은 정적이라 다음 C의 Static 후보가 될 수 있다. 진단 화면이 쌓이지 않게 하고, 기존 측정을 바꾸지 않는다. |
 | D12 | (SP-6) 본 선택 모드 두 가지. Parent는 D6 그대로다. Influence는 유한 사각형 교차 삼각형(D7과 같은 판정)의 꼭짓점 정규화 weight를 NodeId별로 합해 최대 joint를 고른다(동점은 작은 NodeId). Influence는 GPU 합산·선택 패스가 고른 결과를 GPU 버퍼로 추출 패스에 바로 넘기고, CPU는 로그용 NodeId 4바이트만 기존 readback에 붙여 읽는다. 교차 삼각형이 없으면 기존처럼 거절 로그를 남긴다. 실행 옵션 `-skeletal-joint-mode parent\|influence`(기본 parent)와 빈 키 하나로 전환하고 전환 시 로그를 남긴다. `-skeletal-patch-checks`는 부위마다 두 모드를 차례로 돌려 joint·패치·교차·미포함·절단 결과를 나란히 로그로 남긴다. Influence 선택은 CPU 기준 함수(테스트 전용)와 비교한다. | 사용자가 두 기준의 결과를 화면과 수치로 비교한 뒤 BreakConstraint 단계의 기준을 정한다. SP-2a 투표 셰이더(`8af35400`)를 고쳐 재사용한다. |
 | D13 | (SP-5b) 절단 결과를 보이게 한다. 복사본 절단 A/B가 게시되면 B 컴포넌트를 평면 법선 방향으로 A에서 멀어지게 0.1 m(world) 옮겨 렌더링한다. | A/B가 붙어 있으면 잘렸는지 보이지 않는다(사용자 결정). |
-| D14 | (SP-5b) 스켈레탈 메시 일반화. 선택·추출·게시·절단은 모델 이름·노드 이름·좌표 상수 없이 동작한다. 한 Model 안의 여러 내부 Mesh(예: Xbot의 Surface·Joints)는 각 `mesh.startJoint`로 palette→NodeId를 풀고, 선택 본 영향 삼각형을 모든 Mesh에서 함께 복사한다. `-skeletal-patch-checks`는 CesiumMan과 Xbot을 모두 올리고, 각 모델의 골격 구조에서 결정적으로 고른 segment 2개 이상과 말단 1개로 평면을 만든다(중심 = segment 중점, 법선 = segment 방향, 하드코딩 이름 없음). | CesiumMan 전용 구현이 되지 않게 한다(사용자 요구). |
+| D14 | (SP-5b) 스켈레탈 메시 일반화. 선택·추출·게시·절단은 모델 이름·노드 이름·좌표 상수 없이 동작한다. 한 Model 안의 여러 내부 Mesh(예: Xbot의 Surface·Joints)는 각 `mesh.startJoint`로 palette→NodeId를 풀고, 선택 본 영향 삼각형을 모든 Mesh에서 함께 복사한다. `-skeletal-patch-checks`는 CesiumMan과 Xbot을 모두 올리고, 각 모델의 골격 구조에서 결정적으로 고른 segment 2개 이상과 말단 1개로 평면을 만든다(중심 = segment 중점, 법선 = segment 방향, 하드코딩 이름 없음). SP-6 비교 진단에는 최장 segment의 바로 위 segment에서 90% 위치 평면과 중점 45도 평면을 모델마다 두 개 추가한다. | CesiumMan 전용 구현이 되지 않게 한다(사용자 요구). |
 
 ## 3. 인터페이스 골격 (이름은 구현 시 주변 코드에 맞춘다)
 
@@ -73,7 +73,7 @@ public:
 | SP-4 | 복사본 owner 게시(D8) + 이전 복사본 정리·격리(D11) | 완료 `9bf4ec77`: 캡처·위팔 재요청 포함 복사본 1개, 원본 posed 월드 X 폭 + 0.5 m, GPU packed VB와 원본 pose의 월드 위치 대조 PASS | 구현 + R + B + V |
 | SP-5a | pose 준비·batch 대기·오프셋 평면 절단 요청(D9) + 결과/실패 로그(당시 D10) | 완료 `17cdbdbe`: 위팔·허벅지 유한 사각형 거절, 손 A/B 캡처, 교차 0 게시 생략, Static 회귀·집계 격리, D3D12 ERROR 0 | — |
 | SP-5b | 복사본 무한 평면 절단(D10) + B 분리 0.1 m(D13) + 일반화·Xbot 진단(D14) | 독립 리뷰·수정 완료(미커밋): 영향 joint 캐시·비균일 평면 scale 보정, 두 모델 각 3 A/B·GPU==CPU·B 0.1 m, 물리 ON 캡처와 Static 격리/회귀·D/R·CPU PASS, D3D12 ERROR 0. 아래 근거 참조 | 구현 + R + B + V |
-| SP-6 | 본 선택 모드 Parent/Influence 전환·비교 진단(D12) | 두 모델·부위별 두 모드 비교 로그와 캡처, Influence GPU==CPU, D3D12 ERROR 0. 끝나면 멈추고 사용자에게 비교 결과를 보고한다 | 구현 + R + B + V |
+| SP-6 | 본 선택 모드 Parent/Influence 전환·비교 진단(D12) | 독립 리뷰·수정 완료(미커밋, base `329aec7b`): 20/20 추출·A/B, Influence NodeId 10/10 GPU==CPU, D3D12 ERROR 0. 기존 Parent 6행 동일. 차이 2/10: Xbot leaf 63→62, 사선 60→21(patch 2118→604, caps 1→0, uncapped 0→100); CesiumMan 5/5 동일. 이름 없는 90%·45도 진단, 모드별 캡처·D/R·CPU·Static PASS. 아래 비교표 참조 | 구현 + R + B + V |
 | SP-7 | (사용자가 SP-6 결과를 본 뒤 설계) 선택 joint에 BreakConstraint 적용 | — | — |
 
 한 단계가 300줄을 넘으면 shader와 C++ 연결을 나눈다.
@@ -123,6 +123,45 @@ SP-5b 독립 리뷰·수정·검증 (2026-11-03, base `70a754d7`, 미커밋):
 - 로그: `%TEMP%/SP5b-review-external-{Debug,Release}-build.log`, `%TEMP%/SP5b-review-external-build-summary.log`, `%TEMP%/SP5b-review-tests-summary.log`, `%TEMP%/SP5b-review-tests/`, `%TEMP%/step7-Release-SP5b-review-{exact,physics,static}.log`. 실행 helper는 `%TEMP%/SP5b-review-runtime.ps1`이며 최종 외부 실행 파일은 `%TEMP%/SP5b-review-build/Release/Output/ModelViewer/ModelViewer.exe`다. 빌드 완료 전 첫 외부 실행 시도는 CreateProcess error 2였고, 빌드 완료 뒤 같은 이름의 최종 로그로 재실행해 위 exit 0을 확인했다.
 - 캡처: `%TEMP%/SP5b-review-Xbot-physics.png`, `%TEMP%/SP5b-review-CesiumMan-physics.png`; 원본은 `%TEMP%/SP5b-review-physics-model{1,2}-{hdr,post}.raw`. PNG를 직접 열어 바닥 위 원본·복사 A/B를 확인했다. 추적 `.mini` 변경은 없어 복원할 파일이 없었다. SP-6·SP-7은 구현하지 않았고 커밋하지 않았다.
 
+SP-6 독립 리뷰·검증(2026-11-03, base `329aec7b`, 미커밋):
+
+- 수정: CPU `SelectInfluenceJointReference`의 팔레트 경계가 전체 배열만 확인하던 것을 section의 `JointCount`로 제한했다. GPU `mesh.numJoints`와 동일한 계약이다. 뒤 mesh 팔레트 침범과 uint32 범위를 넘는 투표(4,915,200,000 대 3,932,100,000) 회귀 검사를 추가했다. 투표 버퍼도 `NodeCount*8`의 uint32 크기 상한을 제출 전에 검사한다.
+- 수정: 기존 3개 사례에 모델별 두 사례를 더했다. 이름 없이 최장 segment의 바로 위 segment를 골라 90% 위치와 중점 45도 평면을 만든다. 10개 평면을 각각 Parent→Influence로 실행한다. 기존 CesiumMan case 3/4/5는 이제 5/6/7이며 기존 Parent 여섯 행의 본·추출·교차·미포함·절단 수치는 SP-5b와 같다.
+- 문제 아님: `PatchExtractCS::Crossing`을 투표와 CrossingTriangles 분류가 공유하므로 유한 사각형·eps 투영 규칙이 같다. `PreparePoseCS::main`처럼 네 UNORM weight의 합으로 정규화하며 고정소수 반올림은 slot별 `(weight*65535 + sum/2)/sum`이다. 각 mesh.startJoint의 palette→NodeId를 사용하고 중복 슬롯은 같은 NodeId에 더한다. 동점은 작은 NodeId다.
+- 문제 아님: 분자 최대는 65535²+131070=4,294,967,295로 uint32에 들어간다. 제출 삼각형 상한은 floor(UINT32_MAX/144)=29,826,161이며 corner별 반올림 총합 상한 65,537을 사용해도 전체 합은 5,864,151,340,371 이하로 uint64에 들어간다. 낮은 DWORD의 InterlockedAdd overflow마다 높은 DWORD에 carry를 더하므로 순서에 무관하며 float atomic은 없다.
+- 문제 아님: 투표→선택은 Votes UAV barrier, 선택→추출은 Selected UAV barrier, 분류→prefix→출력은 Scan/LocalBounds UAV barrier를 쓴다. Dispatch가 대기 중 barrier를 flush한다. `Selected`는 GPU의 Chosen을 직접 읽으며 CPU 결과는 로깅에만 쓴다. 기본 readback은 44→48바이트(+4)다. 교차 투표가 없으면 invalid NodeId→빈 추출→거절 로그로 끝나 owner·절단을 만들지 않는다.
+- 문제 아님: Parent 선택·양수 weight 추출·게시·무한 절단·B 0.1 m·Static 격리는 보존했다. J 검색 결과 ModelViewer의 새 바인딩 외에는 GameInput/Input의 키 enum·장치 매핑뿐이며 Scene.md 조작 표가 J를 문서화한다. 변경 함수의 한글 역할·기능 단락 주석을 점검했다.
+
+| 모델 / case | 모드 | NodeId·이름 | patch/crossing/uncovered | GPU==CPU | components/caps/uncapped/error |
+| --- | --- | --- | --- | --- | --- |
+| Xbot / 0 (segment 0) | Parent | 61 mixamorig:LeftLeg | 1556/32/0 | PASS | 2/1/0/0 |
+| Xbot / 0 (segment 0) | Influence | 61 mixamorig:LeftLeg | 1556/32/0 | PASS | 2/1/0/0 |
+| Xbot / 1 (segment 1) | Parent | 66 mixamorig:RightLeg | 1556/32/0 | PASS | 2/1/0/0 |
+| Xbot / 1 (segment 1) | Influence | 66 mixamorig:RightLeg | 1556/32/0 | PASS | 2/1/0/0 |
+| Xbot / 2 (leaf) | Parent | 63 mixamorig:LeftToeBase | 420/138/82 | PASS | 2/1/0/0 |
+| Xbot / 2 (leaf) | Influence | 62 mixamorig:LeftFoot | 2736/138/56 | PASS | 2/2/0/0 |
+| Xbot / 3 (blend 90%) | Parent | 60 mixamorig:LeftUpLeg | 2118/115/55 | PASS | 2/1/0/0 |
+| Xbot / 3 (blend 90%) | Influence | 60 mixamorig:LeftUpLeg | 2118/115/55 | PASS | 2/1/0/0 |
+| Xbot / 4 (blend 45°) | Parent | 60 mixamorig:LeftUpLeg | 2118/280/206 | PASS | 2/1/0/0 |
+| Xbot / 4 (blend 45°) | Influence | 21 mixamorig:LeftHandIndex2 | 604/280/180 | PASS | 2/0/100/0 |
+| CesiumMan / 5 (segment 0) | Parent | 18 leg_joint_R_2 | 412/16/0 | PASS | 2/1/0/0 |
+| CesiumMan / 5 (segment 0) | Influence | 18 leg_joint_R_2 | 412/16/0 | PASS | 2/1/0/0 |
+| CesiumMan / 6 (segment 1) | Parent | 14 leg_joint_L_2 | 406/16/0 | PASS | 2/1/0/0 |
+| CesiumMan / 6 (segment 1) | Influence | 14 leg_joint_L_2 | 406/16/0 | PASS | 2/1/0/0 |
+| CesiumMan / 7 (leaf) | Parent | 12 Skeleton_arm_joint_R__3_ | 222/20/0 | PASS | 2/1/0/0 |
+| CesiumMan / 7 (leaf) | Influence | 12 Skeleton_arm_joint_R__3_ | 222/20/0 | PASS | 2/1/0/0 |
+| CesiumMan / 8 (blend 90%) | Parent | 17 leg_joint_R_1 | 352/16/0 | PASS | 2/1/0/0 |
+| CesiumMan / 8 (blend 90%) | Influence | 17 leg_joint_R_1 | 352/16/0 | PASS | 2/1/0/0 |
+| CesiumMan / 9 (blend 45°) | Parent | 17 leg_joint_R_1 | 352/16/0 | PASS | 2/1/0/0 |
+| CesiumMan / 9 (blend 45°) | Influence | 17 leg_joint_R_1 | 352/16/0 | PASS | 2/1/0/0 |
+
+- 추출 개수·출처·정점 위치 20/20 및 Influence 선택 NodeId 10/10 GPU==CPU PASS. 전부 A/B 게시, B gap=0.100000 m. 차이는 2/10이다. Xbot leaf는 63→62, 사선은 60(LeftUpLeg)→21(LeftHandIndex2)이다. 사선 사각형이 손도 지나므로 weight 총합 규칙이 손가락을 고른다. uncapped=100은 D10의 열린 경계 surface 게시 정책이며 error=0이다. CesiumMan은 추가 두 사례도 동일하다. 차이가 항상 발생한다고 가정하는 assertion은 넣지 않았다.
+- 최종 .slnx MSBuild `/restore /m /p:Configuration=Debug|Release /p:Platform=Windows` exit 0(43/52초). `%TEMP%/SP6-output.props`로 출력은 외부 `%TEMP%/SP5b-review-build/`에 둔다. 변경 없는 MiniPhysics/Jolt prebuilt 재사용. SkeletalPatchTests D/R 각 59 checks, CutPlaneTests D/R 모두 build/run exit 0, CPU 출력은 `%TEMP%/SP6-tests/`다.
+- Release `-skeletal-patch-checks 1 -debug 1` exit 0(70초). 최종 캡처 실행도 같은 20행과 정확히 일치하며 exit 0(45초), Static 집계 0 검증. 두 실행과 cube 회귀 모두 D3D12 ERROR/CORRUPTION 0. 기존 D3D12 WARNING·DXGI 하이브리드 출력 ERROR #80·ShadowPlay 87은 남는다. GPU NVIDIA GeForce MX450, 드라이버 32.0.15.9186(레지스트리 재조회), v143/SDK 10.0.26100.0/x64 Windows.
+- 캡처: `-skeletal-patch-checks 1 -debug 1 -capture <TEMP>/SP6-review-copy -capture-frame 3 -cut-expect-publications 0`. case 4/9의 45도 결과를 모델·모드마다 한 장씩 저장한다. `%TEMP%/SP6-review-{Xbot,CesiumMan}-{parent,influence}.png` 네 장을 직접 열어 확인했다. Xbot Parent의 허벅지와 Influence의 작은 손가락 복사본 차이가 보인다. CesiumMan은 동일한 A/B다. RAW는 `%TEMP%/SP6-review-copy-model{1,2}-{parent,influence}-{hdr,post}.raw`다.
+- 정적 회귀: `-debug 1 -model Models/cube.glb -cut 1 -cut-angle 30 -cut-validate 1 -cut-expect-loops 1 -cut-expect-publications 1 -physics-query-exit 90` exit 0(19초). publication=1, 양쪽 cap 면적·부피·부모 보존·hull containment PASS. 추적 .mini 변경이 없어 git checkout 복원 대상은 없었다.
+- 로그: `%TEMP%/SP6-review-comparison-{exact,capture}.log`(두 파일 동일), `SP6-review-SkeletalPatchChecks-exact.log`, `SP6-{Debug,Release}-build.log`, `SP6-review-build-summary.log`, `SP6-review-tests-summary.log`, `step7-Release-SP6-review-{exact,capture,static}.log`. 중간 실행 파일 잠금 LNK1104는 실행 종료 뒤 재빌드하여 해결했다. VS 셸 준비의 vswhere 검색 경고에도 실제 MSBuild·cl exit는 위와 같다. SP-7은 구현하지 않았고 커밋하지 않았다.
+
 ## 5. 완료 조건
 
 - C를 누르면 평면이 지나는 segment의 부모 본(segment가 없으면 가장 가까운 말단 joint)이 선택되고, 그 본의 영향 삼각형만 원본 옆에 같은 pose로 보인다.
@@ -131,7 +170,7 @@ SP-5b 독립 리뷰·수정·검증 (2026-11-03, base `70a754d7`, 미커밋):
 - (SP-6) Parent/Influence 모드를 바꿔 같은 평면의 결과를 비교할 수 있다.
 - 기존 Static C 절단(Cube·Bunny·Dragon)의 동작·배치·진단·벤치마크 결과가 바뀌지 않는다. 원본 skin 메시는 바뀌지 않는다.
 - 평면이 skin 메시와 겹치지 않거나 교차 삼각형이 없거나 Compute Pose가 꺼져 있으면 아무것도 만들지 않고 이유를 로그로 남긴다.
-- 기본 실행 경로에서 정점 데이터의 CPU readback·CPU 추출이 없다(결과 몇 바이트만 비동기). 본 선택만 CPU 본 행렬로 한다.
+- 기본 실행 경로에서 정점 데이터의 CPU readback·CPU 추출이 없다(결과 몇 바이트만 비동기). Parent 본 선택은 CPU 본 행렬로, Influence 본 선택은 GPU 투표·선택으로 한다.
 - 미포함 교차 수가 로그에 남고, 0이 아니어도 복사·절단은 수행된다.
 - Debug/Release 빌드, CPU 테스트, viewer 실행 D3D12 ERROR 0.
 

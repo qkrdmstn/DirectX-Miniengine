@@ -6,13 +6,14 @@ cbuffer Parameters : register(b0)
     float Epsilon, HalfWidth, HalfHeight;
     uint Triangles;
     uint Draws, DepthOffset, IndexOffset, Mode;
+    uint NodeCount, Influence, Padding0, Padding1;
 };
 struct DrawInput
 {
     uint VbOffset, Stride, IbOffset, Index32;
     uint StartIndex, BaseVertex, Triangles, PoseOffset;
     uint FirstTriangle, MaskOffset, Flags, SectionId;
-    uint DrawId, JointCount, Reserved0, Reserved1;
+    uint DrawId, JointCount, VertexCount, Reserved1;
 };
 ByteAddressBuffer Source : register(t0);
 ByteAddressBuffer SourcePose : register(t1);
@@ -23,6 +24,8 @@ RWByteAddressBuffer Pose : register(u1);
 RWByteAddressBuffer Sources : register(u2);
 RWByteAddressBuffer Meta : register(u3); // counts 0..8, local AABB 12..32, source world X 36..40
 RWByteAddressBuffer Scan : register(u4); // inclusive prefix, crossing flag
+RWByteAddressBuffer Votes : register(u5); // NodeId별 uint64 (lo, hi)
+RWByteAddressBuffer Chosen : register(u6);
 
 // 원본 draw의 R16/R32 인덱스와 baseVertex를 해석한다.
 uint Index(DrawInput s, uint i)
@@ -36,14 +39,14 @@ uint Index(DrawInput s, uint i)
 bool Selected(DrawInput s, uint i)
 {
     // skin이 없는 section은 선택 본의 영향을 받지 않는다.
-    if (!(s.Flags&256)) return false;
+    if (!(s.Flags&256) || (Influence && Chosen.Load(0)==0xffffffff)) return false;
     uint4 p=Source.Load4(s.VbOffset+i*s.Stride+s.Stride-16);
     uint4 joints=uint4(p.x&65535,p.x>>16,p.y&65535,p.y>>16);
     float4 weights=float4(p.z&65535,p.z>>16,p.w&65535,p.w>>16);
     weights/=max(dot(weights,1),1);
     bool selected=false;
     [unroll] for(uint k=0;k<4;k++)
-        if(joints[k]<s.JointCount && weights[k]>0) selected|=Mask[s.MaskOffset+joints[k]]!=0;
+        if(joints[k]<s.JointCount && weights[k]>0) selected|=Influence ? Mask[s.MaskOffset+joints[k]]==Chosen.Load(0) : Mask[s.MaskOffset+joints[k]]!=0;
     return selected;
 }
 // CPU ClipCoplanarSegmentToCutPlaneRectangle과 같은 닫힌 구간 겹침을 검사한다.
@@ -107,12 +110,31 @@ uint Ordered(float x)
     // 음수 구간은 비트를 반전하고 양수는 부호 비트를 뒤집는다.
     uint b=asuint(x); return b&0x80000000?~b:b^0x80000000;
 }
-// 선택·prefix sum·정적 packed 출력의 세 패스를 같은 입력 계약으로 실행한다.
+// 투표·선택과 기존 추출 세 패스를 같은 입력 계약으로 실행한다.
 [numthreads(64,1,1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
-    // 순차 prefix sum으로 원본 삼각형 순서를 보존한다.
+    // 64비트 투표를 비교하고 동점이면 작은 NodeId를 보존한다.
     uint t=id.x+id.y*(65535*64);
+    if(Mode==4)
+    {
+        if(t!=0) return;
+        uint selected=0xffffffff;
+        uint2 best=0;
+        for(uint node=0;node<NodeCount;node++)
+        {
+            uint2 vote=Votes.Load2(node*8);
+            if(vote.y>best.y || (vote.y==best.y && vote.x>best.x))
+            {
+                best=vote;
+                selected=node;
+            }
+        }
+        Chosen.Store(0,selected);
+        return;
+    }
+
+    // 순차 prefix sum으로 원본 삼각형 순서를 보존한다.
     if(Mode==1)
     {
         if(t!=0) return;
@@ -133,6 +155,32 @@ void main(uint3 id : SV_DispatchThreadID)
     while(sId+1<Draws && t>=Inputs[sId+1].FirstTriangle) sId++;
     DrawInput s=Inputs[sId]; uint triangleId=t-s.FirstTriangle;
     uint3 indices=uint3(Index(s,triangleId*3),Index(s,triangleId*3+1),Index(s,triangleId*3+2));
+    if(Mode==3)
+    {
+        // 추출 카운터와 같은 유한 사각형 교차 판정을 사용한다.
+        if(!(s.Flags&256) || any(indices>=s.VertexCount)) return;
+        if(!Crossing(asfloat(SourcePose.Load3(s.PoseOffset+indices.x*40)),
+            asfloat(SourcePose.Load3(s.PoseOffset+indices.y*40)),asfloat(SourcePose.Load3(s.PoseOffset+indices.z*40)))) return;
+
+        // 정규화 weight를 배율 65535로 반올림하고 원자 덧셈의 carry를 별도 누적한다.
+        [unroll] for(uint corner=0;corner<3;corner++)
+        {
+            uint4 p=Source.Load4(s.VbOffset+indices[corner]*s.Stride+s.Stride-16);
+            uint4 joints=uint4(p.x&65535,p.x>>16,p.y&65535,p.y>>16);
+            uint4 weights=uint4(p.z&65535,p.z>>16,p.w&65535,p.w>>16);
+            uint sum=max(weights.x+weights.y+weights.z+weights.w,1u);
+            [unroll] for(uint slot=0;slot<4;slot++)
+            {
+                if(joints[slot]>=s.JointCount || weights[slot]==0) continue;
+                uint node=Mask[s.MaskOffset+joints[slot]];
+                if(node>=NodeCount) continue;
+                uint weight=(weights[slot]*65535u+sum/2)/sum,previous;
+                Votes.InterlockedAdd(node*8,weight,previous);
+                if(previous>0xffffffffu-weight) Votes.InterlockedAdd(node*8+4,1);
+            }
+        }
+        return;
+    }
     if(Mode==0)
     {
         // 선택 여부와 무관하게 원본 전체 posed 정점의 월드 X 폭을 집계한다.

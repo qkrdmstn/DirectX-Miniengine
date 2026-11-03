@@ -23,6 +23,53 @@ static void Check(bool condition, const char* message)
 // 작은 합성 입력으로 본 선택과 패치 출처의 결정성을 검증한다.
 int main()
 {
+    // 중복 팔레트·동점·서로 다른 mesh 시작 위치를 GPU 정수 규칙으로 검사한다.
+    {
+        Input input;
+        Check(MeshCutting::TryBuildCutPlaneData({2, 2}, AffineTransform(kIdentity), input.Plane), "influence plane");
+        input.JointNodes = {99, 20, 7, 7, 3};
+        Section section;
+        section.StartJoint = 1;
+        section.Vertices = { {Vector3(-1, -1, 0), {0, 1, 2, 0}, {4, 3, 3, 0}},
+            {Vector3(1, 1, 0), {0, 1, 2, 0}, {4, 3, 3, 0}},
+            {Vector3(0, 0, 1), {0, 1, 2, 0}, {4, 3, 3, 0}} };
+        section.Indices16 = {0, 1, 2};
+        section.Draws = {{0, 3, 0}};
+        input.Sections = {section};
+        Check(SelectInfluenceJointReference(input) == 7, "duplicate palette sums by NodeId");
+        for (auto& vertex : input.Sections[0].Vertices) vertex.Weights = {1, 1, 0, 0};
+        Check(SelectInfluenceJointReference(input) == 7, "tie chooses smaller NodeId");
+
+        // 뒤 section의 팔레트를 잘못 참조하지 않고 mesh의 팔레트 길이를 지킨다.
+        input.Sections[0].JointCount = 1;
+        Check(SelectInfluenceJointReference(input) == 20, "palette stays within mesh joint count");
+        input.Sections[0].JointCount = UINT32_MAX;
+
+        // 최대 UNORM 입력의 반올림과 32비트를 넘는 누적값을 검사한다.
+        for (auto& vertex : input.Sections[0].Vertices) vertex.Weights = {65535, 65535, 65535, 65535};
+        input.Sections[0].Draws.resize(50000, {0, 3, 0});
+        Section competitor = section;
+        competitor.StartJoint = 4;
+        for (auto& vertex : competitor.Vertices) vertex.Weights = {65535, 0, 0, 0};
+        competitor.Draws.resize(20000, {0, 3, 0});
+        input.Sections.push_back(competitor);
+        Check(SelectInfluenceJointReference(input) == 7, "uint64 votes with maximum normalization numerator");
+        input.Sections.resize(1);
+        input.Sections[0].Draws.resize(1);
+        section.StartJoint = 4;
+        for (auto& vertex : section.Vertices) vertex.Weights = {65535, 0, 0, 0};
+        input.Sections.push_back(section);
+        Check(SelectInfluenceJointReference(input) == 3, "multi mesh startJoint mapping");
+        input.Sections.resize(1);
+        input.Sections[0].Vertices[0].Position = Vector3(-1, -input.Epsilon, 0);
+        Check(SelectInfluenceJointReference(input) == InvalidNode, "eps contact has no crossing votes");
+        input.Sections[0].Vertices[0].Position = Vector3(-1, -1, 0);
+        input.Sections[0].Vertices[2].Position = Vector3(0, input.Epsilon * 0.5f, 1);
+        Check(SelectInfluenceJointReference(input) == 7, "eps projected corner votes");
+        for (auto& vertex : input.Sections[0].Vertices) vertex.Position += Vector3(0, 0, 10);
+        Check(SelectInfluenceJointReference(input) == InvalidNode, "no finite rectangle crossing");
+    }
+
     // 두 인덱스 형식에서 draw offset과 음수 baseVertex까지 동일하게 검사한다.
     for (bool r32 : { false, true })
     {

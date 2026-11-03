@@ -6,6 +6,7 @@
 
 namespace Viewer
 {
+    enum class SkeletalJointMode { Parent, Influence };
     // 모델 pose와 컴포넌트 section을 순수 선택 함수의 입력으로 바꾼다.
     SegmentJointSelection SelectSegmentJoint(const ModelInstance& pose, const MeshComponent& component,
         const SceneTransform& owner, const MeshCutting::CutPlaneData& plane);
@@ -33,14 +34,20 @@ namespace Viewer
     public:
         // 제출 자원이 GPU에서 해제될 때까지 수명을 보장한다.
         ~SkeletalPatchJob();
-        // component-local 평면과 section별 팔레트 마스크로 GPU 추출을 제출한다.
+        // component-local 평면과 section별 팔레트로 GPU 선택·추출을 제출한다.
         bool Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
             const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
-            uint32_t node = UINT32_MAX, bool diagnostic = false);
+            uint32_t node = UINT32_MAX, bool diagnostic = false, bool influence = false);
         // fence 완료 후 카운터·로컬 경계와 GPU 출력을 수집하고 진단 모드에서 CPU 기준과 비교한다.
         bool Poll(SkeletalPatchResult& result, std::shared_ptr<SkeletalPatchBuffers>& patch);
         // 이전 작업을 무효화하고 제출 자원의 GPU 사용 완료를 보장한다.
         void Cancel();
+        // 완료된 GPU 선택을 로깅에만 사용한다.
+        uint32_t SelectedNode() const
+        {
+            // 추출과 같은 제출의 NodeId이다.
+            return m_Node;
+        }
         // 자동 진단이 완료 전에 다음 지역을 제출하지 않도록 상태를 읽는다.
         bool IsPending() const { return m_Fence != 0; }
     private:
@@ -51,7 +58,8 @@ namespace Viewer
         ReadbackBuffer m_OutputReadback;
         Math::Matrix4 m_SourceWorld;
         StructuredBuffer m_Descriptors, m_Masks;
-        ByteAddressBuffer m_Scan;
+        ByteAddressBuffer m_Scan, m_Votes, m_Selected;
+        bool m_Influence = false;
         std::shared_ptr<SkeletalPatchBuffers> m_Output;
         std::shared_ptr<const GeometryRevision> m_Input;
         MeshCutting::CutPlaneData m_Plane;
@@ -70,7 +78,8 @@ namespace Viewer
         // 새 C의 Static 후보 조회 전에 이전 작업과 owner를 공통 삭제 경로로 정리한다.
         void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
-        void Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic);
+        void Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
+            SkeletalJointMode mode = SkeletalJointMode::Parent, uint32_t diagnosticCase = UINT32_MAX);
         // 복사본을 준비하고 Static batch 뒤 절단하여 최종 완료를 반환한다.
         bool Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result);
         // 복사본 결과를 소비하여 Static 집계와 격리한다.
@@ -97,7 +106,9 @@ namespace Viewer
         bool m_CutPending = false, m_CutInFlight = false, m_Completed = false;
         ObjectId m_CopyOwner = 0;
         SceneTransform m_World;
-        std::string m_Name;
+        std::string m_Name, m_ModelName;
+        uint32_t m_SelectedNode = UINT32_MAX, m_DiagnosticCase = UINT32_MAX;
+        SkeletalJointMode m_Mode = SkeletalJointMode::Parent;
         float m_Offset = 0;
         bool m_Diagnostic = false;
     };
