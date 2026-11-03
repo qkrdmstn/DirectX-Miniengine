@@ -37,6 +37,15 @@ namespace Viewer
         std::string CollisionReason;
     };
 
+    struct TriangleMask
+    {
+        StructuredBuffer State;
+        ByteAddressBuffer ReplacedIB;
+        uint32_t TriangleCount = 0, Revision = 0, AppliedRevision = 0;
+        uint32_t FirstByte = 0, ByteCount = 0;
+        std::vector<uint32_t> Pending;
+    };
+
     // 세대 증가 규칙 (R6)
     //  EditGeneration: SetGeometry, SetDeformBinding(source frame), SetTransform(배치·teleport·scale 포함),
     //                  SetPlacement(위 둘의 합)에서 증가한다.
@@ -118,6 +127,16 @@ namespace Viewer
         Math::BoundingSphere GetBoundingSphere(const SceneTransform& owner) const;
         // 공유 CPU pose를 읽어 컴포넌트별 GPU 정점과 렌더 상수를 준비한다.
         void Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner);
+        // 원본 삼각형 순서의 상태를 저장하고 다음 GPU 준비에서 반영한다.
+        bool SetTriangleMask(const std::vector<uint32_t>& state);
+        // 제출된 GPU 사용이 끝난 뒤 마스크를 해제하여 원래 IB로 복귀한다.
+        void ClearTriangleMask();
+        // 컴포넌트 전용 마스크 자원을 읽는다.
+        const TriangleMask* GetTriangleMask() const
+        {
+            // 현재 컴포넌트의 지연 생성 자원을 반환한다.
+            return m_TriangleMask.get();
+        }
         // 현재 revision의 section만 기본·깊이·그림자 pass에 등록한다.
         void Render(Renderer::MeshSorter& sorter) const;
 
@@ -127,6 +146,9 @@ namespace Viewer
         // 현재 revision과 SourceFrame으로 컴포넌트 로컬 충돌을 다시 만든다.
         void RebuildCollision();
 
+        // 같은 그래픽 명령 목록에서 치환 IB를 갱신한다.
+        void UpdateTriangleMask(GraphicsContext& context);
+        std::unique_ptr<TriangleMask> m_TriangleMask;
         ComponentId m_Id;
         uint64_t m_EditGeneration = 1;
         uint64_t m_PhysicsPoseGeneration = 1;

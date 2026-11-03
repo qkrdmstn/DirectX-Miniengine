@@ -103,13 +103,15 @@ int main()
         Check(list->Close());
         ComPtr<ID3D12Fence> fence; Check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
         UINT mismatches = 0;
-        for (UINT sample = 0; sample < 13; ++sample)
+        for (UINT sample = 0; sample < 26; ++sample)
         {
-            // 소유권만 설정한 경우와 개별 제거 및 전체 제거 후 해제를 포함한다.
+            // 같은 13개 상태를 원래 offset 출력과 compact 출력에서 각각 검사한다.
+            const UINT fixture = sample % 13;
+            const UINT outputFirst = sample >= 13 ? 1 : 0;
             std::array<UINT, 8> mask{};
             for (UINT t = 0; t < 8; ++t)
-                mask[t] = (sample == 1 ? 65535u : 1u) | ((sample >= 2 && sample < 10 && t == sample - 2)
-                    || sample == 10 || (sample == 11 && t % 2 == 0) ? 0x80000000u : 0);
+                mask[t] = (fixture == 1 ? 65535u : 1u) | ((fixture >= 2 && fixture < 10 && t == fixture - 2)
+                    || fixture == 10 || (fixture == 11 && t % 2 == 0) ? 0x80000000u : 0);
             void* mapped; Check(state->Map(0, nullptr, &mapped));
             std::memcpy(mapped, mask.data(), sizeof(mask)); state->Unmap(0, nullptr);
             auto expected = original;
@@ -127,11 +129,26 @@ int main()
                 }
             }
 
+            // compact IB는 첫 입력 DWORD를 출력 0으로 옮기며 마지막 두 sentinel을 보존한다.
+            if (outputFirst)
+            {
+                for (size_t i = 0; i < original.size() - 2; ++i) expected[i] = expected[i + 1];
+                expected[original.size() - 2] = sentinels.back();
+            }
+
             // 출력에는 이전 결과가 남아 있어도 매번 원본으로 재구성해야 한다.
             Check(allocator->Reset()); Check(list->Reset(allocator.Get(), pso.Get()));
-            if (sample == 0)
+            if (fixture == 0)
             {
                 // 자원 안의 양끝에 원본과 다른 값을 두어 범위 밖 쓰기를 검출한다.
+                if (outputFirst)
+                {
+                    D3D12_RESOURCE_BARRIER reset{};
+                    reset.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                    reset.Transition = { output.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST };
+                    list->ResourceBarrier(1, &reset);
+                }
                 list->CopyResource(output.Get(), initial.Get());
                 D3D12_RESOURCE_BARRIER initialize{};
                 initialize.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -142,7 +159,7 @@ int main()
 
             // 시작 DWORD를 건너뛰고 마지막 DWORD 전에 끝내며 여분 스레드도 제출한다.
             list->SetComputeRootSignature(signature.Get());
-            const UINT parameters[] = { 1, static_cast<UINT>(original.size()) - 2, 3, 0 };
+            const UINT parameters[] = { 1, static_cast<UINT>(original.size()) - 2, 3, outputFirst };
             list->SetComputeRoot32BitConstants(0, 4, parameters, 0);
             list->SetComputeRootShaderResourceView(1, source->GetGPUVirtualAddress());
             list->SetComputeRootShaderResourceView(2, inputs->GetGPUVirtualAddress());
@@ -171,7 +188,7 @@ int main()
             Check(info->GetMessage(i, message, &size));
             if (message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) ++validationErrors;
         }
-        std::printf("TriangleMask GPU samples=13 comparedWords=1664 mismatches=%u D3D12_ERROR=%u\n", mismatches, validationErrors);
+        std::printf("TriangleMask GPU samples=26 comparedWords=3328 mismatches=%u D3D12_ERROR=%u\n", mismatches, validationErrors);
         return mismatches || validationErrors ? 1 : 0;
     }
     catch (const std::exception& error)

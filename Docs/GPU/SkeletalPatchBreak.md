@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7a3 `18848ec0`; SP-7b 지연 등록·incoming 조회·요청별 break 결과·D/R 독립 리뷰 검증 완료; SP-7c 셰이더·독립 GPU 검증·경계 테스트 보강 리뷰 완료, C++ 연결 미구현(미커밋, base `94f2bf24`); SP-7d~e 미구현 (2026-11-03)
+상태: 진행 중 — SP-7b 완료; SP-7c 컴포넌트 상태·치환 IB·렌더 연결·두 모델 GPU 진단 구현(미커밋, base `d10077bd`); SP-7d~e 미구현 (2026-11-03)
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -130,7 +130,7 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 | SP-7a2 | Model의 최소 skin CPU 복사본과 등록 pose 정점 bounds, leaf bounds, fallback·메모리·extent 진단 | D/R CPU 43 checks, 두 모델 fallback 0, 메모리·bounds 실측, Static·SP-6 회귀 | D/R 빌드 실측 75/77초 + 실행 진단 |
 | SP-7a3 | dominant 배정·낮은 NodeId 동률·bounds 중심 box·이름별 CSV | D/R AutoRig·SkeletalPatch CPU, D/R 빌드·두 모델 크기/anchor·D3D12 진단 | 직전 빌드 실측 75/77초 + R 2~5분 |
 | SP-7b | C 시점 지연 등록 + `FindIncomingJoint` + RequestId `QueueBreak`/결과 표. 이 단계만 숨김·부착 없이 원본에 바로 break(늘어남 정상), 오프셋 복사본 유지 | Xbot 팔·다리, CesiumMan 팔: 기대 JointId·subtree 낙하, root·AlreadyBroken·physics off 거절, pause 대기 | 구현 + R + B + V |
-| SP-7c | D3 상태 버퍼·퇴화 치환 IB·`RenderMeshes` IB 분리 + 진단 옵션(지정 joint 범위 숨김 fixture) | 지정 범위가 color/depth/shadow/Wire에서 사라짐, 같은 Model의 다른 인스턴스 불변, D3D12 ERROR 0 | 구현 + R + B + V |
+| SP-7c | D3 상태 버퍼·퇴화 치환 IB·`RenderMeshes` IB 분리 + 진단 옵션(지정 joint 범위 숨김 fixture) | D/R IB·color/depth/shadow readback·독립 컴포넌트 보존·복원 PASS, D3D12 ERROR 0; Wire/Vertices 픽셀 미검증 | 구현 + R + B + V |
 | SP-7d | D3 추출 제거 조건(GPU·CPU) + D6 `adjacentPatch` 로그 | P 절단 뒤 인접 자식 Q 절단 시 복사 수 = Q 범위 − 이미 제거된 수, GPU==CPU | 구현 + R + B + T + V |
 | SP-7e | D4 부착·물리 제외 + D5 break 성공 뒤 게시로 7b 경로 교체 + 오프셋 복사본 진단 옵션화 | 두 모델에서 게시 프레임 경계 오차 ≤ 1 mm, 이후 프레임 오차 보고, 강제 Stale 시 원본 불변, 캡처 | 구현 + R + B + V |
 
@@ -205,3 +205,11 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 - 미구현·미검증: `TriangleMask` 자원/Revision/수명, `MeshSorter::AddMesh`·`RenderMeshes` 연결, `-skeletal-mask-checks`, Xbot/CesiumMan 패스별 숨김·다른 인스턴스 보존·복원. C 입력은 변경하지 않았다.
 - 독립 리뷰: 기존 초과 dispatch는 자원 밖 쓰기를 놓칠 수 있어 `TriangleMaskShaderTests::main`에 원본과 다른 양끝 sentinel을 추가했다. `FirstWord=1`, `WordCount=126`, 192스레드로 시작 오프셋·종료 경계와 이전 출력 복원을 검사한다. D/R 각각 13표본·1,664 DWORD(경계 sentinel 26개 포함), 불일치 0·D3D12 ERROR 0(MX450).
 - 리뷰 재검증: ModelViewer D/R 증분 빌드 exit 0(37.3/34.6초, 기존 MiniPhysics/Jolt 의존성 재사용), `CutPlaneTests` D/R PASS, `git diff --check` PASS. 요청된 `PlaneSlicerTests.cpp`는 현재 저장소에 없어 현행 `MeshCutting/tests/CutPlaneTests.cpp`의 헤더 명령으로 실행했다. 대형 IB의 2차원 dispatch·GPU 드라이버 버전·기존 모델 진단은 이번 리뷰에서 재검증하지 않았다. 로그는 `%TEMP%/SP7b/{Build-*,MaskTests-*,CutPlaneReview-*}`에 둔다.
+
+## SP-7c 컴포넌트 연결·검증 (2026-11-03, base `d10077bd`, 미커밋)
+- `MeshComponent::SetTriangleMask`·`UpdateTriangleMask`·`ClearTriangleMask`는 상태·compact IB·Revision을 컴포넌트별로 소유하며 geometry 교체 때 해제한다. 최초 compute 전에는 원본 IB를 유지한다. 소멸·해제는 기존 GPU 대기로 제출된 사용을 보호한다.
+- `MeshSorter::AddMesh`·`RenderMeshes`는 VB/IB 주소만 분리하여 모든 패스의 ibOffset·format·draw 범위·baseVertex와 깊이 전용 VB를 유지한다. 마스크 compute는 전달받은 그래픽 목록에서 실행되며 일반 프레임의 Update→Render 목록은 같은 direct queue 제출 순서를 따른다.
+- 독립 리뷰에서 `RunSkeletalMaskChecks`를 패치 복사와 의존성이 없는 `Scene/SkeletalMaskChecks.cpp`로 분리했다. padding을 제외한 모델 커버리지 ROI에서 before→after clear 소실을 검사하며 color는 같은 픽셀의 depth 소실도 요구한다. Revision 유지·State 0 갱신·공유 Model 전체 불변·별도 MeshComponent 보존·Clear 완전 복원을 검사한다.
+- D/R `-skeletal-mask-checks 1`: Xbot NodeId 14는 2,206삼각형, CesiumMan NodeId 8은 271삼각형 제거. shadow/depth/color 소실 픽셀은 각각 4,623/2,288/1,786과 20,037/9,903/9,863이며 변경 바이트는 9,826/9,887/8,057과 40,273/39,916/39,824다. IB CPU 기대값·원본·peer·갱신/해제 복원 PASS.
+- 리뷰 재검증: D/R 빌드 exit 0(41.8/38.7초), D/R 마스크 진단과 Release `-compute-pose 0` exit 0·D3D12 ERROR/CORRUPTION 0(MX450). CPU AutoRig 55/SkeletalPatch 59/SkeletalBreak 915·CutPlaneTests PASS. `TriangleMaskShaderTests::main`은 원래 offset/compact 출력 각각 13상태(총 26표본·3,328 DWORD), 불일치 0·D3D12 ERROR 0. 출력은 `%TEMP%/SP7b`만 사용하며 MiniPhysics/Jolt는 변경 없는 기존 의존성을 재사용한다.
+- 미검증: 실제 V/C 입력·Wireframe/Vertices 픽셀·대형 IB 2차원 dispatch·GPU 진행 중 삭제 스트레스. `PlaneSlicerTests.cpp`는 없어 현행 CutPlaneTests를 실행했다. SP-7d~e는 후속이며 C 입력은 이번 범위에서 변경하지 않는다.

@@ -114,7 +114,7 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
             const Joint* skeleton = nullptr, const GpuBuffer* posedBuffer = nullptr,
-            uint32_t posedOffset = 0);
+            uint32_t posedOffset = 0, D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr = 0);
 
         void Sort();
 
@@ -144,6 +144,7 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV;
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV;
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr;
+            D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr;
             const GpuBuffer* posedBuffer;
             uint32_t posedOffset;
         };

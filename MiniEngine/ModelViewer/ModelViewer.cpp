@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 // THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
@@ -39,6 +39,7 @@
 #include "Scene/CutPlaneRenderer.h"
 #include "Scene/CuttingSystem.h"
 #include "Scene/SkeletalPatchCopy.h"
+#include "Scene/SkeletalMaskChecks.h"
 #include "Scene/CollisionDebugDraw.h"
 #include <algorithm>
 #include "Scene/tests/MeshComponentChecks.h"
@@ -76,7 +77,7 @@ public:
     virtual bool IsDone() override
     {
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
-        if (m_SkeletalPatchBreakDone || m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 20 && (m_CapturePath.empty() || m_CaptureComplete)))
+        if (m_SkeletalMaskDone || m_SkeletalPatchBreakDone || m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 20 && (m_CapturePath.empty() || m_CaptureComplete)))
             return true;
 
         // 벤치마크 결과 파일을 쓴 뒤에는 남은 GPU 절단이 끝나면 종료한다.
@@ -91,6 +92,8 @@ public:
 private:
 
     uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0, m_SkeletalPatchCaptured = 0;
+    uint32_t m_SkeletalMaskChecks = 0;
+    bool m_SkeletalMaskDone = false;
     uint32_t m_SkeletalPatchBreakChecks = 0;
     bool m_SkeletalPatchBreakDone = false;
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
@@ -384,6 +387,7 @@ void ModelViewer::Startup( void )
     m_DemoTower = std::min(m_DemoTower, 16u);
 
     // 진단·자동 절단 옵션은 뒤에서 해석하더라도 추가 모델 로딩 전에 격리한다.
+    CommandLineArgs::GetInteger(L"skeletal-mask-checks", m_SkeletalMaskChecks);
     CommandLineArgs::GetInteger(L"skeletal-patch-checks", m_SkeletalPatchChecks);
     CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", m_SkeletalPatchBreakChecks);
     if (m_SkeletalPatchBreakChecks) m_UsePhysicsSim = 1;
@@ -1029,6 +1033,13 @@ void ModelViewer::Update( float deltaT )
 // opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
+    // 독립 픽셀 진단은 기존 프레임 명령 목록을 열기 전에 완료한다.
+    if (m_SkeletalMaskChecks && !m_SkeletalMaskDone)
+    {
+        Viewer::RunSkeletalMaskChecks(m_Scene);
+        m_SkeletalMaskDone = true;
+    }
+
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();

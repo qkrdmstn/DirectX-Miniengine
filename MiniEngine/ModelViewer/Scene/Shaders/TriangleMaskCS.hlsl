@@ -1,9 +1,9 @@
-// SP-7c 셰이더 단계이며 컴포넌트 연결은 후속 단계에서 추가한다.
-// Source와 ReplacedIB는 서로 다른 자원이며 원본과 같은 바이트 오프셋을 사용한다.
+// 컴포넌트 상태로 원본 IB를 퇴화 치환한다.
+// Source와 ReplacedIB는 별도 자원이며 OutputFirstWord로 출력 IB 구간의 시작을 뺀다.
 // 호출자는 IB 범위를 DWORD 단위로 감싸고 ceil(WordCount / 64)개 그룹을 제출한다.
 cbuffer Parameters : register(b0)
 {
-    uint FirstWord, WordCount, Draws, Padding;
+    uint FirstWord, WordCount, Draws, OutputFirstWord;
 };
 
 // PatchExtractCS의 입력 배치와 section/draw 누적 FirstTriangle을 그대로 사용한다.
@@ -73,5 +73,5 @@ void main(uint3 id : SV_DispatchThreadID)
     }
 
     // 이전 치환 IB를 읽지 않아 마스크 해제와 소유권 변경에도 원본에서 재생성한다.
-    ReplacedIB.Store(address, result);
+    ReplacedIB.Store(address - OutputFirstWord * 4, result);
 }

@@ -541,8 +541,10 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
     D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
-    const Joint* skeleton, const GpuBuffer* posedBuffer, uint32_t posedOffset)
+    const Joint* skeleton, const GpuBuffer* posedBuffer, uint32_t posedOffset,
+    D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr)
 {
+    // 기존 분류 규칙으로 모든 패스에 같은 독립 IB를 전달한다.
     SortKey key;
     key.value = m_SortObjects.size();
 
@@ -596,7 +598,8 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_PassCounts[kOpaque]++;
     }
 
-    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr, posedBuffer, posedOffset };
+    SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr,
+        indexBufferPtr ? indexBufferPtr : bufferPtr, posedBuffer, posedOffset };
     m_SortObjects.push_back(object);
 }
 
@@ -606,7 +609,7 @@ void MeshSorter::Sort()
     std::sort(m_SortKeys.begin(), m_SortKeys.end(), Cmp);
 }
 
-// 모든 패스가 같은 posed 정점을 읽으며 깊이·그림자와 선·점 차폐 정책을 유지한다.
+// 모든 패스가 같은 독립 IB와 posed 정점을 읽으며 깊이·그림자와 선·점 차폐 정책을 유지한다.
 void MeshSorter::RenderMeshes(
     DrawPass pass,
     GraphicsContext& context,
@@ -759,7 +762,8 @@ void MeshSorter::RenderMeshes(
                 context.SetVertexBuffer(0, {object.bufferPtr + mesh.vbOffset, mesh.vbSize, mesh.vbStride});
             }
 
-            context.SetIndexBuffer({object.bufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat});
+            // 컴포넌트별 IB와 원본 VB 주소를 분리한다.
+            context.SetIndexBuffer({object.indexBufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat});
 
             for (uint32_t i = 0; i < mesh.numDraws; ++i)
             {

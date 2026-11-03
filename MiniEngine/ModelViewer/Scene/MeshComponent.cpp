@@ -4,6 +4,10 @@
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
 #include "Util/CommandLineArg.h"
+#include "RootSignature.h"
+#include "PipelineState.h"
+#include "CompiledShaders/TriangleMaskCS.h"
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -32,6 +36,111 @@ namespace Viewer
 
         // 현재 revision의 충돌을 만든다.
         RebuildCollision();
+    }
+
+    // 삼각형 수와 상태 비트를 검사하고 컴포넌트 전용 변경을 예약한다.
+    bool MeshComponent::SetTriangleMask(const std::vector<uint32_t>& state)
+    {
+        // 생성 geometry에는 원본 삼각형 번호를 적용하지 않는다.
+        if (m_Geometry->IsGenerated()) return false;
+        uint64_t triangles = 0;
+        uint32_t first = UINT32_MAX, last = 0;
+        for (size_t s = 0; s < m_Geometry->GetSections().size(); ++s)
+        {
+            const Mesh& mesh = m_Geometry->GetMesh(s);
+            first = std::min(first, mesh.ibOffset & ~3u);
+            last = std::max(last, (mesh.ibOffset + mesh.ibSize + 3u) & ~3u);
+            for (uint32_t d = 0; d < mesh.numDraws; ++d) triangles += mesh.draw[d].primCount / 3;
+        }
+        if (!triangles || triangles != state.size()) return false;
+        for (uint32_t value : state) if (value & 0x7fff0000u) return false;
+
+        // 최초 변경에만 IB 구간과 삼각형 상태 버퍼를 할당한다.
+        if (!m_TriangleMask)
+        {
+            m_TriangleMask = std::make_unique<TriangleMask>();
+            m_TriangleMask->TriangleCount = uint32_t(triangles);
+            m_TriangleMask->FirstByte = first;
+            m_TriangleMask->ByteCount = last - first;
+            m_TriangleMask->State.Create(L"Component triangle state", uint32_t(triangles), 4);
+            m_TriangleMask->ReplacedIB.Create(L"Component replacement IB", (last - first) / 4, 4);
+        }
+        if (m_TriangleMask->Pending == state) return true;
+        m_TriangleMask->Pending = state;
+        ++m_TriangleMask->Revision;
+        return true;
+    }
+
+    // 이전 프레임이 읽는 자원을 기다린 뒤 원본 인덱스 경로로 복귀한다.
+    void MeshComponent::ClearTriangleMask()
+    {
+        // 프레임 입력 단계에서만 자원을 해제한다.
+        if (!m_TriangleMask) return;
+        Graphics::g_CommandManager.IdleGPU();
+        m_TriangleMask.reset();
+    }
+
+    // 상태 변경만 같은 명령 목록에서 계산하고 모든 렌더 패스가 읽을 IB로 전환한다.
+    void MeshComponent::UpdateTriangleMask(GraphicsContext& context)
+    {
+        // 변경되지 않은 마스크에는 업로드나 dispatch가 없다.
+        if (!m_TriangleMask || m_TriangleMask->Revision == m_TriangleMask->AppliedRevision) return;
+        auto& mask = *m_TriangleMask;
+        static RootSignature root;
+        static ComputePSO pso(L"Component triangle mask");
+        static bool initialized = false;
+        if (!initialized)
+        {
+            root.Reset(5);
+            root[0].InitAsConstants(0, 4);
+            for (uint32_t i = 0; i < 3; ++i) root[i + 1].InitAsBufferSRV(i);
+            root[4].InitAsBufferUAV(0);
+            root.Finalize(L"Component triangle mask");
+            pso.SetRootSignature(root);
+            pso.SetComputeShader(g_pTriangleMaskCS, sizeof(g_pTriangleMaskCS));
+            pso.Finalize();
+            initialized = true;
+        }
+
+        // 추출과 같은 section/draw 순서로 전역 삼각형 번호를 누적한다.
+        std::vector<std::array<uint32_t, 16>> draws;
+        uint32_t triangle = 0;
+        for (size_t s = 0; s < m_Geometry->GetSections().size(); ++s)
+        {
+            const Mesh& mesh = m_Geometry->GetMesh(s);
+            for (uint32_t d = 0; d < mesh.numDraws; ++d)
+            {
+                const auto& draw = mesh.draw[d];
+                if (!draw.primCount) continue;
+                draws.push_back({ 0, 0, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
+                    draw.startIndex, draw.baseVertex, draw.primCount / 3, 0, triangle });
+                triangle += draw.primCount / 3;
+            }
+        }
+
+        // 상태를 업로드하고 원본 SRV에서 독립 UAV를 다시 만든다.
+        const size_t bytes = mask.Pending.size() * 4;
+        DynAlloc upload = context.ReserveUploadMemory(bytes);
+        std::memcpy(upload.DataPtr, mask.Pending.data(), bytes);
+        context.CopyBufferRegion(mask.State, 0, upload.Buffer, upload.Offset, bytes);
+        auto& source = const_cast<ByteAddressBuffer&>(m_Geometry->GetDataBuffer());
+        auto& compute = context.GetComputeContext();
+        compute.SetRootSignature(root);
+        compute.SetPipelineState(pso);
+        compute.TransitionResource(source, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.TransitionResource(mask.State, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.TransitionResource(mask.ReplacedIB, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.SetBufferSRV(1, source);
+        compute.SetDynamicSRV(2, draws.size() * sizeof(draws[0]), draws.data());
+        compute.SetBufferSRV(3, mask.State);
+        compute.SetBufferUAV(4, mask.ReplacedIB);
+        const uint32_t parameters[] = { mask.FirstByte / 4, mask.ByteCount / 4, uint32_t(draws.size()), mask.FirstByte / 4 };
+        compute.SetConstantArray(0, 4, parameters);
+        const uint32_t groups = (mask.ByteCount / 4 + 63) / 64;
+        compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+        context.TransitionResource(mask.ReplacedIB, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        context.TransitionResource(source, D3D12_RESOURCE_STATE_GENERIC_READ);
+        mask.AppliedRevision = mask.Revision;
     }
 
     // 선택 section이 모두 Generated hull을 가져야 SourceFrame⁻¹를 적용해 out에 모은다. 하나라도 아니면 out을 비우고 이유를 남긴다.
@@ -317,6 +426,7 @@ namespace Viewer
 
         // revision을 교체하고 경계·준비 상태를 무효화한다.
         ++m_EditGeneration;
+        ClearTriangleMask();
         m_Geometry = std::move(geometry);
         m_SectionBounds.clear();
         m_Ready = false;
@@ -368,6 +478,7 @@ namespace Viewer
         m_PosedGeometry = std::move(prepared.Posed);
 
         // SetGeometry·SetTransform·SetDeformBinding과 같은 세대 증가와 캐시 무효화를 적용한다.
+        ClearTriangleMask();
         m_EditGeneration += 3;
         m_Geometry = std::move(prepared.Geometry);
         m_Transform = prepared.Transform;
@@ -406,6 +517,10 @@ namespace Viewer
     // CPU pose는 복제 평가하지 않고 source-to-component와 target 월드 변환을 분리한다.
     void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner)
     {
+        // 같은 명령 목록에서 마스크를 먼저 갱신한다.
+        UpdateTriangleMask(context);
+
+        // 최종 pose의 유효성을 검사한다.
         m_Ready = false;
         if (!pose.HasValidPose() || pose.GetModel() != m_Geometry->GetSource())
             return;
@@ -521,7 +636,9 @@ namespace Viewer
                 m_Geometry->GetMaterialAddress(mesh),
                 m_Geometry->GetDataBuffer().GetGpuVirtualAddress(), joints,
                 posed ? &m_PosedGeometry->GetBuffer() : nullptr,
-                posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0);
+                posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0,
+                m_TriangleMask && m_TriangleMask->AppliedRevision
+                    ? m_TriangleMask->ReplacedIB.GetGpuVirtualAddress() - m_TriangleMask->FirstByte : 0);
         }
     }
 }
