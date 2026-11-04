@@ -170,7 +170,7 @@ namespace Viewer
         return Submit(owner,meshId,plane,publish,worldEpsilon,capMode);
     }
 
-    // pose와 인덱스는 GPU에 유지하며 요청의 소유·revision·월드 배치만 고정한다.
+    // revision Data와 section 행렬을 입력으로 요청의 소유·월드 배치를 고정한다.
     bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
     {
         // 합산 예산 대기만 후보를 다음 frame에 남기도록 구별한다.
@@ -203,8 +203,8 @@ namespace Viewer
             return false;
         }
 
-        // 기존 GPU 준비 및 section 지원 조건을 검사한다.
-        if (!mesh || !mesh->HasPoseBounds() || !mesh->GetPosedGeometry().IsReady())
+        // 대상 존재와 section 지원 조건을 검사한다.
+        if (!mesh)
         {
             m_StatusText = "Cut target is not ready";
             return false;
@@ -223,15 +223,17 @@ namespace Viewer
         uint32_t forceCount = 0;
         CommandLineArgs::GetInteger(L"cut-count-first", forceCount);
         const uint64_t retainedLimit = std::max(512ull * 1024 * 1024, m_MemoryLimitBytes);
-        // PG 갱신에서 고정한 section 행렬과 Wc를 같은 제출 시점에 snapshot한다.
+
+        // section 행렬과 Wc를 같은 제출 시점에 snapshot하고 PG는 진단에만 전달한다.
         const Math::AffineTransform world = mesh->GetWorldTransform(object->GetTransform());
         std::vector<Math::Matrix4> sectionFrames;
+        const PosedGeometry* diagnosticPose = ValidateResults ? &mesh->GetPosedGeometry() : nullptr;
         try
         {
             if (!mesh->BuildCutSectionFrames(sectionFrames))
                 throw std::invalid_argument("Cut section frames are not ready");
-            capacity = MeshCutting::GpuMeshCutter::PlanCapacity(*geometry, mesh->GetPosedGeometry(), sectionFrames, world, plane, worldEpsilon, forceCount != 0);
-            estimate = MeshCutting::GpuMeshCutter::EstimateWorkingBytes(*geometry, mesh->GetPosedGeometry(), ValidateResults, &capacity);
+            capacity = MeshCutting::GpuMeshCutter::PlanCapacity(*geometry, sectionFrames, world, plane, worldEpsilon, forceCount != 0);
+            estimate = MeshCutting::GpuMeshCutter::EstimateWorkingBytes(*geometry, diagnosticPose, ValidateResults, &capacity);
             if (!capacity.SurfaceVertices.empty())
             {
                 uint64_t vertices = uint64_t(capacity.MaxSegments) * 3;
@@ -282,7 +284,7 @@ namespace Viewer
             std::vector<Math::BoundingSphere> bounds;
             for (size_t i = 0; i < geometry->GetSections().size(); ++i)
                 bounds.push_back(mesh->GetLocalSectionBounds(i));
-            active.Job = MeshCutting::GpuMeshCutter::Submit(geometry, mesh->GetPosedGeometry(), sectionFrames, world, plane, worldEpsilon, capMode,bounds,ValidateResults,&capacity,retainedLimit);
+            active.Job = MeshCutting::GpuMeshCutter::Submit(geometry, diagnosticPose, sectionFrames, world, plane, worldEpsilon, capMode, bounds, ValidateResults, &capacity, retainedLimit);
         }
         catch (const std::exception& error)
         {

@@ -1,4 +1,4 @@
-상태: 설계안 — base `c2cb5923`, 결정 A 확정·결정 B 사용자 선택(강체 유지), Codex 리뷰 11건 반영, 구현 전 (2026-11-04)
+상태: 진행 중 — CI-1a `62b5228c`, CI-1b 입력 전환 D/R 빌드·실행 검증 완료(base `62b5228c`); CI-2~5 남음; 결정 B 강체 유지 (2026-11-04)
 
 # 절단 입력을 revision 데이터 버퍼로: 애니메이션과 절단 분리
 
@@ -93,13 +93,19 @@ Vertex ReadVertex(CutSection section, uint vertex); // P = mul(S, float4(p,1)), 
 - 순서 제약: CI-4·CI-5는 `SkeletalPatchCopy.*`·`SkeletalBoundaryChecks.*`·`PatchExtractCS`를 건드린다. 이 파일들을 수정 중인 SP-7 세션이 커밋한 뒤에 시작한다. CI-1a~3은 그 파일들을 건드리지 않는다.
 - 단계마다 사용자가 읽고 커밋한 뒤 다음 단계로 간다. 이 문서의 상태 줄과 README 행을 갱신한다.
 
+CI-1b 구현: `ReadVertex`는 t0 Data를 디코드하고 section 행렬을 적용한다. `PlanCapacity`와 `Submit`은 같은 행렬 snapshot과 clip shader를 쓴다. t1 및 해당 root parameter는 제거했다. PG는 `snapshotDiagnostics`에서만 준비 검사·크기 회계·`PoseOffset`·`DiagnosticInputPose` 복사에 사용한다. CI-1a의 section frames 진단은 유지한다.
+
+CI-1b 검증(MX450, D/R 빌드 36/48초 exit 0, `-debug 1`, D3D12 ERROR 0): Debug의 Cube 정상·Bunny 재절단·transform-checks·B 재절단·width 거절·동일 평면 3회·Bunny `-cut-count-first 1`·`-compute-pose 0`+transform-checks(진단 없음, 게시 1)·CesiumMan 패치 절단, Release의 Bunny y=-240·45도가 통과했다. cap 면적·loop·uncapped·게시 수는 CI-1a 실행과 같고 회귀표와 일치한다. section frames 최대 오차는 6e-8이다. 기본 장면 `-cut-scene 1`의 시작 직후 C++ 예외 종료는 기준 `df81e1e5` 빌드에서도 같아 이 작업과 무관한 기존 문제로 남긴다. 로그는 `%TEMP%/CI1a/`에 있다.
+
+CI-1b 조사(코드 추가 없음): `ModelInstance::PauseAnimation`은 시간을 멈추지만 ModelViewer의 키·명령줄에는 연결되어 있지 않다. P 키는 물리만 정지한다. `-animation-step-ms 0`은 실제 deltaT를 쓴다. `-compute-pose 0`은 원본 메시의 `MeshComponent::Update`에서 PG 갱신을 생략하지만 CPU node 평가·section 행렬·bounds는 갱신한다. 이 옵션으로 진단을 끈 Static 절단과 `-cut-count-first 1`을 검증할 수 있다. `PosedGeometry::Update`는 본이 없고 node 행렬이 같으면 dispatch를 생략하며, `UpdateBaked`는 첫 복사 후 재사용한다. `-cut-validate 1`은 임시 PG snapshot이 필요하므로 PG 미준비 상태와 함께 쓸 수 없다.
+
 ## 6. 완료 조건
 
 공통(매 단계): Debug/Release 빌드 exit 0, SceneMathTests·CutPlaneTests 통과, `-debug 1`에서 새 D3D12 ERROR/CORRUPTION 0, `git diff --check` 통과.
 
 결정 A 전체:
 1. [StaticCutImplementation.md](StaticCutImplementation.md)의 `-cut-validate 1` 회귀표가 같은 결과다. 대상은 Cube 접촉/비교차/정상/동일 평면 3회/45도/B 재절단, Bunny y=0·y=-240, `-cut-transform-checks 1`, width=0.25 거절, 기본 장면 전체 후보다. 게시 수, loop 수, uncapped 수가 같아야 하고 cap 면적은 기존 허용오차 안이어야 한다.
-2. `GpuMeshCutter`와 `CutCommon.hlsli`에 PG 참조와 t1 입력이 없고, `CuttingSystem::Submit`에 PG 준비 검사가 없다(CI-1b 뒤 코드 확인). `-animation-step-ms 0`은 정지가 아니라 실제 deltaT를 쓰므로 쓰지 않는다. 실제 애니메이션 정지 수단과 "PG 갱신을 건너뛴 프레임" 확인 방법은 CI-1b 구현 전 Codex 조사 메모에서 정하고, 그 프레임에서 절단해도 결과가 같은지 확인한다.
+2. `GpuMeshCutter`와 `CutCommon.hlsli`의 절단 계산에 PG 참조와 t1 입력이 없고(CI-2 전까지는 `-cut-validate` 진단 snapshot만 예외), `CuttingSystem::Submit`에 PG 준비 검사가 없다(CI-1b 뒤 코드 확인). `-animation-step-ms 0`은 정지가 아니라 실제 deltaT를 쓰므로 쓰지 않는다. 실제 애니메이션 정지 수단과 "PG 갱신을 건너뛴 프레임" 확인 방법은 CI-1b 구현 전 Codex 조사 메모에서 정하고, 그 프레임에서 절단해도 결과가 같은지 확인한다.
 3. CI-1a: node 행렬이 단위가 아닌 원본(transform-checks의 SourceFrame 회전·비균일 배율)에서 `Data×행렬` 위치가 PG 위치와 1e-5 이내로 같다. Generated 패치 입력은 단위 행렬로 같은 검사를 통과한다.
 4. CI-1b: `-cut-count-first 1`로 preflight(`PlanCapacity`)와 실제 `Submit`이 같은 section 행렬을 쓰고 출력 용량이 일치한다.
 5. 정밀도: Bunny 직교 재절단 3세대에서 출력 법선과 CI-1a 전 출력 법선의 최대 각도 오차를 기록한다. 법선 길이 검사(0.01)와 별개다.

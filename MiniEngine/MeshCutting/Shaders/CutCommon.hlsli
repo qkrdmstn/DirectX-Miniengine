@@ -20,7 +20,6 @@ cbuffer Parameters : register(b0)
     uint MaxSegments, HashMask, HashOffset, HashLinksOffset;
 };
 ByteAddressBuffer Source : register(t0);
-ByteAddressBuffer SourcePose : register(t1);
 StructuredBuffer<Section> Inputs : register(t2);
 RWByteAddressBuffer DataA : register(u0);
 RWByteAddressBuffer PoseA : register(u1);
@@ -55,13 +54,23 @@ uint Index(Section s, uint i)
     uint word=Source.Load(s.IbOffset+(s.Index32?at*4:(at/2)*4));
     return (s.Index32?word:((word>>((at&1)*16))&65535))+s.BaseVertex;
 }
-// 현재 pose와 원본/생성 packed 속성을 같은 정점 번호로 읽는다.
+// revision 정점을 디코드하고 section 행렬로 component-local 속성을 복원한다.
 Vertex ReadVertex(Section s, uint i)
 {
-    Vertex v=(Vertex)0;
-    v.Origin=uint4(s.SourceSection,s.SourceDraw,i,i);
-    uint a=s.VbOffset+i*s.Stride, p=s.PoseOffset+i*40;
-    v.P=asfloat(SourcePose.Load3(p)); v.N=asfloat(SourcePose.Load3(p+12)); v.T=asfloat(SourcePose.Load4(p+24));
+    // PreparePoseCS와 같은 packed 프레임 및 tangent 기본값을 읽는다.
+    Vertex v = (Vertex)0;
+    v.Origin = uint4(s.SourceSection, s.SourceDraw, i, i);
+    uint a = s.VbOffset + i * s.Stride;
+    float3 position = asfloat(Source.Load3(a));
+    float3 normal = Frame(Source.Load(a + 12)).xyz;
+    float4 tangent = (s.Flags & 4) ? Frame(Source.Load(a + 16)) : float4(1, 0, 0, 1);
+
+    // N/T는 보간 전 길이를 유지하고 handedness는 변환하지 않는다.
+    v.P = mul(s.SectionToComponent, float4(position, 1));
+    v.N = mul((float3x3)s.NormalToComponent, normal);
+    v.T = float4(mul((float3x3)s.NormalToComponent, tangent.xyz), tangent.w);
+
+    // tangent 존재 여부에 맞춰 UV 시작 주소를 구한다.
     uint uv=a+16+((s.Flags&4)?4:0);
     v.UV0=(s.Flags&8)?UV(Source.Load(uv)):0;
     v.UV1=(s.Flags&16)?UV(Source.Load(uv+((s.Flags&8)?4:0))):v.UV0;

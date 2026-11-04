@@ -36,11 +36,11 @@ namespace Viewer
     public:
         // 절단 작업이 사용할 장면을 연결한다.
         explicit CuttingSystem(Scene& scene, PhysicsSystem& physics) : m_Scene(scene), m_Physics(physics) {}
-        // 정점 준비가 끝난 Static 컴포넌트와 평면을 고정해 작업을 시작한다.
+        // section 행렬이 준비된 Static 컴포넌트와 평면을 고정해 작업을 시작한다.
         bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0);
         // 현재 절단 영역의 Static 후보를 고정하고 이후 프레임에서 제한된 수만큼 제출한다.
         bool RequestAll(const MeshCutting::CutPlaneData& plane, uint32_t capMode = 0);
-        // Scene.Update 뒤 준비된 pose로 다음 후보를 제출하고 변경된 후보는 건너뛴다.
+        // Scene.Update 뒤 revision과 section 행렬로 다음 후보를 제출한다.
         void SubmitPending();
         // 삭제 대상의 대기 후보를 결과 기록 없이 제거한다.
         void CancelTarget(ObjectId owner, ComponentId mesh);

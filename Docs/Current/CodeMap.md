@@ -4,7 +4,7 @@
 
 현재 구현은 객체 선택·TRS 편집, 유한 평면의 기하·격자 표시와 Static GPU 절단·cap·재절단을 포함한다. 유한 영역을 넘는 교차는 후보 전체를 거절한다. 원본 Skeletal 절단은 SP-7e 게시·부착 단계이며 경계 확장 진단과 교차 미리보기는 미완료다. SP-5b(미커밋)는 영향 패치의 정적 복사본만 무한 평면으로 절단하고 B를 월드 0.1 m 분리한다([설계·검증](../GPU/SkeletalPatchCopyCut.md)). 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.
 
-> 메모 (2026-11-04): 현재 Static 절단 입력은 PosedGeometry다. 이를 revision Data와 section 행렬로 바꾸는 설계안은 [CutInputFromRevision.md](../GPU/CutInputFromRevision.md)에 있으며 아직 구현 전이다.
+> 메모 (2026-11-04): CI-1a `62b5228c`에 이어 CI-1b는 Static 절단 입력을 revision Data와 section 행렬로 전환했다. `GpuMeshCutter::{PlanCapacity,Submit}`은 같은 clip shader와 행렬 snapshot을 쓰며 t1은 제거했다. PG는 명시적 진단 snapshot에만 남는다. D/R 빌드·회귀 실행을 통과했으며 후속 단계는 [CutInputFromRevision.md](../GPU/CutInputFromRevision.md)를 따른다.
 
 ## 실행 흐름
 

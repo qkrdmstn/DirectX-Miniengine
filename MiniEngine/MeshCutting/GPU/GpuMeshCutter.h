@@ -68,17 +68,16 @@ namespace MeshCutting
         // 첫 절단 중 shader/PSO 생성으로 멈추지 않도록 장면 시작에서 파이프라인을 준비한다.
         static void Prepare();
         // 큰 입력만 작은 GPU count pass를 완료해 실제 출력 용량을 계산한다.
-        static CutCapacityPlan PlanCapacity(const GeometryRevision& input, const PosedGeometry& posed,
+        static CutCapacityPlan PlanCapacity(const GeometryRevision& input,
             const std::vector<Math::Matrix4>& sectionFrames,
             const Math::AffineTransform& world, const CutPlaneData& plane, float epsilon, bool force = false);
         // 지원 용량 계약 안에서 작업별 임시 GPU 메모리 예약치를 보수적으로 계산한다.
-        // 원본 geometry·부모 lineage·posed cache는 이 값에 포함하지 않는다.
-        // snapshotDiagnostics가 참이면 진단용 입력 복제와 최대 readback 묶음은 포함한다.
-        static uint64_t EstimateWorkingBytes(const GeometryRevision& input, const PosedGeometry& posed,
+        // 진단 시에만 diagnosticPose snapshot과 최대 readback 묶음을 포함한다.
+        static uint64_t EstimateWorkingBytes(const GeometryRevision& input, const PosedGeometry* diagnosticPose = nullptr,
             bool snapshotDiagnostics = false, const CutCapacityPlan* capacity = nullptr);
-        // 현재 posed GPU 정점을 입력으로 Static A/B 표면·경계·cap을 같은 queue에서 계산한다.
+        // revision Data와 section 행렬로 Static 절단하며 PG는 명시적 진단에만 사용한다.
         static std::unique_ptr<CutJob> Submit(std::shared_ptr<const GeometryRevision> input,
-            const PosedGeometry& posed, const std::vector<Math::Matrix4>& sectionFrames, const Math::AffineTransform& world,
+            const PosedGeometry* diagnosticPose, const std::vector<Math::Matrix4>& sectionFrames, const Math::AffineTransform& world,
             const CutPlaneData& plane, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0,
             const std::vector<Math::BoundingSphere>& bounds = {}, bool snapshotDiagnostics = false,
             const CutCapacityPlan* capacity = nullptr, uint64_t retainedLimitBytes = 512ull * 1024 * 1024);
