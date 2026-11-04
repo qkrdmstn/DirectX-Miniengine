@@ -181,6 +181,14 @@ namespace Viewer
             physics.SetSimulationRunning(true);
         }
         if (IsPending() || cutting.IsBusy()) return false;
+
+        // 실패 결과 소비 뒤 원본 불변을 확인하고 같은 부위의 정상 요청을 허용한다.
+        if (m_ForceStale)
+        {
+            VerifyStale(scene, physics);
+            m_ForceStale = false;
+            m_StaleStage = 1;
+        }
         auto& skeletal = physics.GetSkeletalPhysics();
         const uint32_t nodes[] = { 14, 60, 8 }, children[] = { 15, 61, 9 }, joints[] = { 7, 43, 5 };
 
@@ -251,12 +259,14 @@ namespace Viewer
             if (IsPending() || m_Incoming.Status != IncomingJointStatus::AlreadyBroken) throw std::runtime_error("SP7b second C submitted");
             PatchLog("SP7b second C AlreadyBroken PASS\n");
             m_CheckAwaiting = false;
+            m_StaleStage = 0;
         }
         if (m_BreakCheck == 3)
         {
-            // 실제 세 C만 처리되어 취소 요청이 관절을 추가로 건드리지 않았음을 확인한다.
-            if (physics.GetQueuedBreakDiagnostics().Processed != 3) throw std::runtime_error("SP7e cancelled break processed");
-            PatchLog("SP7e cancelled break PASS: processed=3\n");
+            // 정상·Stale 요청만 처리되어 취소 요청이 관절을 건드리지 않았음을 확인한다.
+            if (physics.GetQueuedBreakDiagnostics().Processed != (m_OffsetCopy ? 3u : 6u)) throw std::runtime_error("SP7e cancelled break processed");
+            PatchLog("SP7e cancelled break PASS: processed=%u\n", physics.GetQueuedBreakDiagnostics().Processed);
+            PatchLog("SP7e2 publish boundary <=1mm %s\n", m_BoundaryFailed ? "FAIL" : "PASS");
             return true;
         }
 
@@ -273,11 +283,73 @@ namespace Viewer
             if (!m_BreakCheck) physics.SetSimulationRunning(false);
             Request(scene, plane, true, SkeletalJointMode::Parent, UINT32_MAX, &physics);
             if (!m_BreakReady || m_Incoming.Status != IncomingJointStatus::Ok) throw std::runtime_error("SP7b C rejected");
+            // 각 부위의 첫 시도만 generation 불일치를 주입하고 게시 전 상태를 저장한다.
+            if (!m_OffsetCopy && !m_StaleStage)
+            {
+                m_ForceStale = true;
+                m_StaleBefore = ReadOriginalState(scene, physics);
+                return false;
+            }
             ++m_BreakCheck;
             m_CheckAwaiting = true;
             return false;
         }
         throw std::runtime_error("SP7b missing diagnostic model");
+    }
+
+    // Stale 전후 비교를 위해 원본 mask와 게시·물리 상태를 읽는다.
+    std::vector<uint64_t> SkeletalPatchCopy::ReadOriginalState(const Scene& scene, PhysicsSystem& physics) const
+    {
+        // 준비 owner와 분리된 원본의 상태만 모은다.
+        const auto* owner = scene.FindObject(m_Break.Owner);
+        const auto* source = owner->FindMeshComponent(m_SourceMesh);
+        const auto* mask = source->GetTriangleMask();
+        std::vector<uint64_t> result{ physics.GetSkeletalPhysics().GetTopologyGeneration(m_Break.Owner),
+            mask ? mask->Revision : 0, mask ? mask->Pending.size() : 0 };
+        if (mask) result.insert(result.end(), mask->Pending.begin(), mask->Pending.end());
+        for (const auto& mesh : owner->GetMeshComponents()) if (mesh->Attachment) result.push_back(mesh->GetId());
+        result.push_back(UINT64_MAX);
+
+        // 정상 애니메이션 이동과 분리하여 motion 종류와 끊긴 관절을 비교한다.
+        SkeletalRigState rig;
+        if (!physics.GetSkeletalPhysics().ReadDiagnosticState(m_Break.Owner, rig)) throw std::runtime_error("SP7e2 missing rig");
+        for (const auto& body : rig.Bodies) result.push_back(unsigned(body.Motion));
+        for (const auto& joint : rig.Joints) result.push_back(joint.Broken);
+        return result;
+    }
+
+    // 실제 Stale 결과와 원본 mask·조각·물리 상태 보존을 검증한다.
+    void SkeletalPatchCopy::VerifyStale(const Scene& scene, PhysicsSystem& physics)
+    {
+        // A/B 준비 owner까지 제거된 뒤 저장 상태와 대조한다.
+        const bool pass = m_LastBreakStatus == BreakStatus::Stale && !m_CopyOwner
+            && m_StaleBefore == ReadOriginalState(scene, physics);
+        PatchLog("SP7e2 case=%u forcedStale=%s maskAttachmentsPhysicsUnchanged=%u noNewAB=%u\n",
+            m_BreakCheck + 1, pass ? "PASS" : "FAIL", pass, !m_CopyOwner);
+        if (!pass) throw std::runtime_error("SP7e2 Stale changed original");
+    }
+
+    // 같은 프레임 posed 원본과 강체 부착 조각의 외곽 경계 최대 거리를 기록한다.
+    void SkeletalPatchCopy::MeasureBoundaryAt(const Scene& scene, const char* label)
+    {
+        // 비교 대상이 없으면 0 mm 성공으로 간주하지 않고 완료 조건 미충족으로 남긴다.
+        if (m_Boundary.empty())
+        {
+            m_BoundaryFailed = true;
+            PatchLog("SP7e2 case=%u frame=%s max_mm=N/A noCoincidentKeptBoundary=1\n", m_BreakCheck, label);
+            return;
+        }
+
+        // C에서 대응시킨 정점 번호를 유지해 이후 프레임에도 같은 경계를 비교한다.
+        const auto* owner = scene.FindObject(m_Break.Owner);
+        const MeshComponent* pieces[] = { owner->FindMeshComponent(m_PieceIds[0]), owner->FindMeshComponent(m_PieceIds[1]) };
+        float error;
+        if (!MeasureBoundary(*owner, *owner->FindMeshComponent(m_SourceMesh), pieces, m_Boundary, m_BoundaryPairs, error))
+            throw std::runtime_error("SP7e2 boundary readback unavailable");
+        const float maximum = error * 1000;
+        if (std::strcmp(label, "publish") == 0) m_BoundaryFailed |= maximum > 1;
+        PatchLog("SP7e2 case=%u frame=%s boundary=%zu paired=%zu max_mm=%.6f\n",
+            m_BreakCheck, label, m_Boundary.size(), m_BoundaryPairs.size(), maximum);
     }
 
     // 유한 평면 사각형에 닿는 가장 가까운 skin 대상을 선택하고 추출한다.
@@ -491,6 +563,13 @@ namespace Viewer
     // 복사본을 준비하고 Static batch가 비면 저장한 평면으로 절단한다.
     bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
+        // 게시 다음 Update부터 정확히 60번의 물리·애니메이션 프레임을 진행한다.
+        if (m_BoundaryWait && !--m_BoundaryWait)
+        {
+            MeasureBoundaryAt(scene, "after60");
+            if (m_BreakCheck >= 2) m_CaptureRequest = m_BreakCheck - 1;
+        }
+
         // substep이 결과를 만들 때까지 다음 C 진단을 대기시킨다.
         if (m_RequestId)
         {
@@ -526,6 +605,7 @@ namespace Viewer
                             throw std::runtime_error("SP7e invalid piece world");
                         piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
                         piece->Attachment = std::make_unique<NodeAttachment>(i == 0 ? m_AttachA : m_AttachB);
+                        if (m_BreakCheck && !m_ForceStale) m_PieceIds[i] = piece->GetId();
                         pieces.push_back(std::move(piece));
                     }
                     if (!source->SetTriangleMask(m_Removal)) throw std::runtime_error("SP7e invalid removal mask");
@@ -537,6 +617,13 @@ namespace Viewer
                     auto& context = GraphicsContext::Begin(L"Publish attached skeletal pieces");
                     scene.PrepareMeshes(context);
                     context.Finish();
+
+                    // 실제 게시 프레임의 posed 원본과 부착 조각을 비교한다.
+                    if (m_BreakCheck && !m_ForceStale)
+                    {
+                        MeasureBoundaryAt(scene, "publish");
+                        m_BoundaryWait = 60;
+                    }
                 }
                 else PatchLog("SP7e discarded BreakStatus=%u revisionMatch=%u originalUntouched=1\n", unsigned(status), current);
                 if (staging) scene.DeleteObject(m_CopyOwner);
@@ -623,6 +710,7 @@ namespace Viewer
 
         // 같은 원본 재질을 쓰는 자동 생성 컴포넌트의 geometry만 교체한다.
         m_Result = result;
+        if (m_Diagnostic && !m_OffsetCopy) m_Boundary = patch->Boundary;
 
         // 원본 전역 삼각형 번호로 기존 마스크를 보존하며 새 패치 id를 배정한다.
         if (!m_OffsetCopy)
@@ -732,7 +820,10 @@ namespace Viewer
                 m_Physics->GetSkeletalPhysics().ReadDiagnosticState(m_Break.Owner, before);
                 m_DynamicBefore = 0;
                 for (const auto& body : before.Bodies) m_DynamicBefore += body.Motion == MiniPhysics::BodyMotion::Dynamic;
-                m_RequestId = m_Physics->QueueBreak(m_Break, true);
+                // 진단에서만 저장된 topology 세대를 바꿔 실제 Stale 거절 경로를 통과시킨다.
+                auto request = m_Break;
+                if (m_ForceStale) ++request.ExpectedTopologyGeneration;
+                m_RequestId = m_Physics->QueueBreak(request, true);
                 PatchLog("SP7b queued RequestId=%llu JointId=%u ParentNode=%u %s\n", m_RequestId,
                     m_Break.JointId, m_Incoming.ParentNode, m_Physics->IsSimulationRunning() ? "" : "paused: waiting");
                 m_BreakReady = false;
@@ -740,6 +831,14 @@ namespace Viewer
 
             if (!m_OffsetCopy)
             {
+                // C snapshot의 외곽 정점을 숨긴 A/B의 baked 정점과 대응시킨다.
+                if (!m_ForceStale && m_BreakCheck)
+                {
+                    const auto& meshes = scene.FindObject(m_CopyOwner)->GetMeshComponents();
+                    const MeshComponent* pieces[] = { meshes[m_PositiveA ? 0 : 1].get(), meshes[m_PositiveA ? 1 : 0].get() };
+                    if (!PairBoundary(pieces, m_Boundary, m_BoundaryPairs))
+                        throw std::runtime_error("SP7e2 incomplete boundary pairing");
+                }
                 LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
                 return true;
             }
@@ -1190,6 +1289,34 @@ namespace Viewer
             if (m_Node != reference) throw std::runtime_error("Influence selected NodeId mismatch");
         }
         const auto expected = ExtractPatchReference(input, m_Node);
+
+        // 추출·유지 삼각형이 공유하는 원본 정점만 외곽 경계로 기록한다.
+        // 재질·UV 이음매의 중복 인덱스도 같은 위치의 원본 경계로 묶는다.
+        const auto key = [](const Math::Vector3& p)
+        {
+            // 10 마이크로 로컬 단위 격자로 GPU의 같은 위치를 대응시킨다.
+            return std::make_tuple(std::llround(float(p.GetX()) * 1e5), std::llround(float(p.GetY()) * 1e5),
+                std::llround(float(p.GetZ()) * 1e5));
+        };
+        std::set<std::tuple<int64_t, int64_t, int64_t>> selectedVertices;
+        for (const auto& triangle : expected)
+        {
+            for (uint32_t index : triangle.Vertices) selectedVertices.insert(key(input.Sections[triangle.SectionId].Vertices[index].Position));
+        }
+        const std::set<uint32_t> extracted(m_Output->Triangles.begin(), m_Output->Triangles.end());
+        uint32_t globalBoundary = 0;
+        std::set<std::pair<uint32_t, uint32_t>> recorded;
+        for (uint32_t section = 0; section < input.Sections.size(); ++section)
+            for (const auto& draw : input.Sections[section].Draws)
+                for (uint32_t t = 0; t < draw.IndexCount / 3; ++t, ++globalBoundary)
+                {
+                    if ((!input.State.empty() && (input.State[globalBoundary] & 0x80000000u))
+                        || extracted.count(globalBoundary)) continue;
+                    for (uint32_t index : TriangleIndices(input.Sections[section], draw, t))
+                        if (selectedVertices.count(key(input.Sections[section].Vertices[index].Position)) && recorded.emplace(section, index).second)
+                            m_Output->Boundary.push_back({ section, index, input.Sections[section].Vertices[index].Position });
+                }
+        PatchLog("SP7e2 extracted boundary=%zu selectedPositions=%zu\n", m_Output->Boundary.size(), selectedVertices.size());
 
         // 원본 정점 번호 집합으로 인접 제거 삼각형을 독립 계산해 GPU 집계를 대조한다.
         if (!input.State.empty())

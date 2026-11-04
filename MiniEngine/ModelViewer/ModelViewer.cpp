@@ -830,7 +830,7 @@ void ModelViewer::Update( float deltaT )
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
     m_SkeletalChecks.BeforeStep(m_Physics);
     const unsigned steps = m_Physics.UpdateFrame(gfxContext,
-        m_SkeletalChecks.Enabled ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
         m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
     m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
 
@@ -1033,6 +1033,17 @@ void ModelViewer::Update( float deltaT )
 // opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
+    // 캡처 대상 모델을 화면 가운데에 두고 같은 60프레임 측정 결과를 담는다.
+    const uint32_t breakCapture = m_SkeletalPatchCopy.TakeCaptureRequest();
+    if (breakCapture)
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == (breakCapture == 1 ? "Xbot" : "CesiumMan"))
+            {
+                const Vector3 center = object->GetTransform().ToAffine() * object->GetModelInstance()->GetModel()->m_BoundingSphere.GetCenter();
+                m_Camera.SetEyeAtUp(center + Vector3(0, 0, 5.5f), center, Vector3(kYUnitVector));
+                m_Camera.Update();
+            }
+
     // 독립 픽셀 진단은 기존 프레임 명령 목록을 열기 전에 완료한다.
     if (m_SkeletalMaskChecks && !m_SkeletalMaskDone)
     {
@@ -1041,6 +1052,7 @@ void ModelViewer::RenderScene( void )
     }
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
+    if (breakCapture) TemporalEffects::ClearHistory(gfxContext);
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
     const D3D12_VIEWPORT& viewport = m_MainViewport;
@@ -1145,14 +1157,21 @@ void ModelViewer::RenderScene( void )
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    const bool capture = !m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
+    // C 진단의 모델별 60프레임 경계 측정과 같은 화면을 저장한다.
+    const bool capture = breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
-        && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending()));
+        && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())));
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
     {
         // 패치 진단은 45도 blend-zone의 A/B 간격을 모델별 파일에 저장한다.
         m_ActiveCapturePath = m_CapturePath;
+        if (breakCapture)
+        {
+            wchar_t directory[MAX_PATH];
+            GetTempPathW(MAX_PATH, directory);
+            m_ActiveCapturePath = std::wstring(directory) + L"SP7b/SP7e2-" + (breakCapture == 1 ? L"Xbot" : L"CesiumMan");
+        }
         if (m_SkeletalPatchChecks)
         {
             m_ActiveCapturePath += L"-model" + std::to_wstring(m_SkeletalPatchCaptured / 2 + 1)

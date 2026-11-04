@@ -3,6 +3,7 @@
 #include "SegmentJointSelection.h"
 #include "SkeletalPhysicsSystem.h"
 #include "ReadbackBuffer.h"
+#include "SkeletalBoundaryChecks.h"
 #include "../../MeshCutting/Geometry/CutPlane.h"
 
 namespace Viewer
@@ -28,6 +29,7 @@ namespace Viewer
         ByteAddressBuffer LocalBounds; // counts 0..8, local AABB 12..32, source world X min/max 36..40
         float SourceWorldWidth = 0;
         std::vector<uint32_t> Triangles;
+        std::vector<BoundaryVertex> Boundary; // 진단에서만 채우는 C 시점 바깥 경계 정점
     };
 
     // 단일 제출 작업이다. 호출자는 UpdateFrame/Finish 후 component-local 평면을 전달한다.
@@ -96,7 +98,15 @@ namespace Viewer
         bool IsPending() const
         {
             // 추출부터 절단 결과 소비까지 같은 요청으로 취급한다.
-            return m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed || m_RequestId;
+            return m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed || m_RequestId || m_BoundaryWait;
+        }
+        // 게시 후 N 프레임 뒤 저장할 모델별 캡처 번호를 한 번만 돌려준다.
+        uint32_t TakeCaptureRequest()
+        {
+            // 요청이 없으면 0이며 읽은 요청은 즉시 지운다.
+            const uint32_t request = m_CaptureRequest;
+            m_CaptureRequest = 0;
+            return request;
         }
         // 자동 Static batch 완료 집계에서 직접 절단 작업을 구별한다.
         bool IsCutInFlight() const
@@ -105,6 +115,12 @@ namespace Viewer
             return m_CutInFlight || !m_RetiredOwners.empty();
         }
     private:
+        // 원본 mask·부착 id·물리 상태를 비교 가능한 정수열로 읽는다.
+        std::vector<uint64_t> ReadOriginalState(const Scene& scene, PhysicsSystem& physics) const;
+        // 현재 프레임의 A/B 외곽 경계 최대 오차를 기록한다.
+        void MeasureBoundaryAt(const Scene& scene, const char* label);
+        // 강제 Stale 요청의 결과가 원본을 바꾸지 않았는지 확인한다.
+        void VerifyStale(const Scene& scene, PhysicsSystem& physics);
         // 최종 컴포넌트 수와 cap 진단을 기록한다.
         void LogCutResult(const Scene& scene, const char* reason, uint32_t caps, uint32_t uncapped, uint32_t error);
         SkeletalPatchJob m_Job;
@@ -122,6 +138,12 @@ namespace Viewer
         unsigned m_DynamicBefore = 0;
         uint32_t m_BreakCheck = 0;
         bool m_BreakReady = false, m_CheckAwaiting = false;
+        uint32_t m_StaleStage = 0, m_BoundaryWait = 0, m_CaptureRequest = 0;
+        bool m_ForceStale = false, m_BoundaryFailed = false;
+        std::vector<uint64_t> m_StaleBefore;
+        std::vector<BoundaryVertex> m_Boundary;
+        std::vector<BoundaryPair> m_BoundaryPairs;
+        ComponentId m_PieceIds[2]{};
         MeshCutting::CutPlaneData m_Plane;
         SkeletalPatchResult m_Result;
         std::vector<ObjectId> m_RetiredOwners;

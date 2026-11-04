@@ -316,6 +316,8 @@
     <ClInclude Include="Scene\SegmentJointSelection.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\SkeletalPatchCopy.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\SkeletalMaskChecks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\SkeletalBoundaryChecks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="Scene\SkeletalBoundaryChecks.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Scene\SkeletalMaskChecks.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
