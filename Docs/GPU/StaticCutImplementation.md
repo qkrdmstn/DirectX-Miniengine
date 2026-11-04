@@ -8,6 +8,8 @@
 
 입력은 현재 revision의 packed surface VB·IB 및 같은 프레임의 PosedGeometry다. 출력은 생성 surface/depth VB·32-bit IB, canonical RAW40 pose, 재질 참조, parent revision 기준 provenance, AABB다. GPU 생성 위치는 component-local이고 VS는 Wc·VP만 적용한다. 재절단은 생성된 cap을 포함한 최신 revision을 읽는다.
 
+> 메모 (2026-11-04): 입력에서 PosedGeometry를 빼고 revision Data와 section별 행렬을 읽도록 바꾸고 출력 Pose를 없애는 결정은 [CutInputFromRevision.md](CutInputFromRevision.md)를 따른다. 이 문서의 서술은 구현 당시 기록이다.
+
 ## 파일과 역할
 
 | 파일 | 역할 |

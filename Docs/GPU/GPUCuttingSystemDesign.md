@@ -293,6 +293,8 @@ NDC 관련 주장은 [NDC25Reference.md](../NDC/NDC25Reference.md)의 근거 등
 후속 절단: 동일 RAW40 + 컴포넌트 로컬로 변환한 유한 평면 → 교차 검사
 ```
 
+> 메모 (2026-11-04): Static 절단 입력을 RAW40(PG) 대신 revision Data와 section 행렬로 바꾸는 결정은 [CutInputFromRevision.md](CutInputFromRevision.md)를 따른다. 위 흐름은 구현 당시 기록이다.
+
 `MeshConstants::ObjectWorld`/`ObjectWorldIT`는 컴포넌트 Wc와 그 역전치를 담는다. 원본 경로의 `World`/`WorldIT`는 비교용으로 보존한다. HLSL packoffset과 C++ offsetof/sizeof assert로 상수 위치와 256바이트 stride를 맞춘다. `SV_VertexID`에는 draw의 `baseVertex`가 포함되지 않으므로 `MeshSorter::RenderMeshes`가 draw마다 RAW SRV 시작점을 `meshOutputOffset + baseVertex * 40`으로 바인딩한다.
 
 ### 11.2 갱신과 수명
