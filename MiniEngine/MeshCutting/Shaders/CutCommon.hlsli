@@ -4,6 +4,10 @@ struct Section
     uint StartIndex, BaseVertex, Triangles, PoseOffset;
     uint FirstTriangle, VertexStart, VertexCapacity, Flags;
     uint SourceSection, SourceDraw, VertexCount, Reserved;
+    // C++의 행 우선 3x4와 일치한다. 위치는 mul(S, float4(p, 1)) 규약이다.
+    row_major float3x4 SectionToComponent;
+    // 역전치 3x3의 네 번째 열은 0이다. N/T는 mul((float3x3)Nm, n) 규약이다.
+    row_major float3x4 NormalToComponent;
 };
 cbuffer Parameters : register(b0)
 {

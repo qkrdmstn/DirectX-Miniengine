@@ -184,11 +184,49 @@ namespace MeshCutting
         }
     }
 
-    // 전체 결과와 슬라이스·재맞춤 충돌의 포함을 같은 허용오차로 검사한다.
+    // 입력 section 행렬과 PG의 일치 및 전체 결과와 충돌의 포함을 검사한다.
     void CutJob::ValidateDiagnostics()
     {
         // GPU 완료 상태를 확인한다.
         Require(Collected && Status[0] == 0, "GPU cut status failed");
+
+        // 입력 Data의 모든 section 정점을 ABI 행렬로 옮겨 같은 시점의 PG와 비교한다.
+        Require(HasDiagnosticInput, "Parent snapshot is required for section frame diagnostics");
+        const auto* frameData = static_cast<const uint8_t*>(DiagnosticInputData.Map());
+        const auto* framePose = static_cast<const uint8_t*>(DiagnosticInputPose.Map());
+        uint64_t checkedVertices = 0;
+        double maxError = 0;
+        bool framesValid = true;
+        for (uint32_t section = 0; section + 1 < Constants.Sections; ++section)
+        {
+            const auto& desc = Sections[section];
+            for (uint32_t vertex = 0; vertex < desc.VertexCount; ++vertex)
+            {
+                const auto p = Read<Math::XMFLOAT3>(frameData, desc.VbOffset + vertex * desc.Stride);
+                const auto pg = Read<Math::XMFLOAT3>(framePose, desc.PoseOffset + vertex * 40);
+                const float source[4] = { p.x, p.y, p.z, 1 };
+                const float expected[3] = { pg.x, pg.y, pg.z };
+                for (uint32_t axis = 0; axis < 3; ++axis)
+                {
+                    const float* row = desc.SectionToComponent + axis * 4;
+                    const double actual = double(row[0]) * source[0] + double(row[1]) * source[1]
+                        + double(row[2]) * source[2] + row[3];
+                    const double error = std::abs(actual - expected[axis]);
+                    maxError = std::max(maxError, error);
+                    framesValid &= std::isfinite(actual) && std::isfinite(expected[axis])
+                        && error <= 1.0e-5 * std::max(1.0, std::abs(double(expected[axis])));
+                }
+                ++checkedVertices;
+            }
+        }
+
+        // no-split 입력도 결과를 남기고 snapshot 매핑을 반드시 해제한다.
+        DiagnosticInputData.Unmap();
+        DiagnosticInputPose.Unmap();
+        Utility::Printf("GPU cut section frames %s: generated=%u vertices=%llu maxError=%.9g tolerance=1e-5(relative)\n",
+            framesValid ? "PASS" : "FAIL", Input->IsGenerated() ? 1u : 0u,
+            static_cast<unsigned long long>(checkedVertices), maxError);
+        Require(framesValid, "Data section transform differs from PG snapshot");
 
         // 분할 여부와 무관하게 출력이 있는 모든 면의 GPU 18-DOP을 CPU 기준과 비교한다.
         ValidateSideDop(*this);

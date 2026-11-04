@@ -514,6 +514,18 @@ namespace Viewer
         return TransformBoundingSphere(GetWorldTransform(owner), result);
     }
 
+    // PG를 만든 section 행렬만 복사해 이후 node 애니메이션과 분리한다.
+    bool MeshComponent::BuildCutSectionFrames(std::vector<Matrix4>& frames) const
+    {
+        // 준비되지 않은 pose나 이전 revision의 행렬은 제출하지 않는다.
+        if (!HasPoseBounds() || m_CutSectionFrames.size() != m_Geometry->GetSections().size())
+            return false;
+
+        // 생성 revision에는 Update에서 기록한 단위 행렬을 사용한다.
+        frames = m_CutSectionFrames;
+        return true;
+    }
+
     // CPU pose는 복제 평가하지 않고 source-to-component와 target 월드 변환을 분리한다.
     void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner)
     {
@@ -522,6 +534,7 @@ namespace Viewer
 
         // 최종 pose의 유효성을 검사한다.
         m_Ready = false;
+        m_CutSectionFrames.clear();
         if (!pose.HasValidPose() || pose.GetModel() != m_Geometry->GetSource())
             return;
         if (m_Geometry->IsGenerated())
@@ -543,6 +556,8 @@ namespace Viewer
             m_SectionBounds.clear();
             for (size_t i = 0; i < m_Geometry->GetSections().size(); ++i)
                 m_SectionBounds.emplace_back(reinterpret_cast<const XMFLOAT4*>(m_Geometry->GetMesh(i).bounds));
+            // 생성 데이터는 component-local이므로 node 변환을 다시 적용하지 않는다.
+            m_CutSectionFrames.assign(m_Geometry->GetSections().size(), Matrix4(kIdentity));
             m_RenderJoints = nullptr;
             m_Ready = true;
             return;
@@ -562,6 +577,7 @@ namespace Viewer
             joints = m_FrozenJoints.data();
         }
 
+        // Frozen 선택을 마친 node와 source 기준으로 PG 및 절단 행렬을 함께 만든다.
         m_RenderJoints = joints;
         const Matrix4 sourceToComponent(Invert(m_DeformBinding.SourceFrame.ToAffine()));
         m_PreparedWorld = GetWorldTransform(owner);
@@ -585,6 +601,7 @@ namespace Viewer
             const Mesh& mesh = m_Geometry->GetMesh(i);
             const BoundingSphere rest(reinterpret_cast<const XMFLOAT4*>(mesh.bounds));
             const Matrix4& node = localNodes[mesh.meshCBV];
+            m_CutSectionFrames.push_back(node);
             const AffineTransform nodeAffine((Vector3)node.GetX(), (Vector3)node.GetY(),
                 (Vector3)node.GetZ(), (Vector3)node.GetW());
             BoundingSphere bound = TransformBoundingSphere(nodeAffine, rest);

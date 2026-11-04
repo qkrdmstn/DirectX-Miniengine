@@ -61,6 +61,19 @@ namespace MeshCutting
             Graphics::g_Device->CopyDescriptors(1,&handles,&count,kNumTextures,textures,counts,D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             initialized = true;
         }
+        // Math의 열 벡터 표현을 HLSL의 행 우선 3x4 ABI로 옮긴다.
+        void SetSectionFrame(CutSection& section, const Matrix4& frame)
+        {
+            // 전치한 상위 세 행에 위치 변환의 평행이동까지 포함한다.
+            XMFLOAT4X4 position, normal;
+            XMStoreFloat4x4(&position, Transpose(frame));
+            XMStoreFloat4x4(&normal, Transpose(Matrix4(InverseTranspose(frame.Get3x3()))));
+
+            // 법선 행렬의 패딩 열은 Matrix4 생성자가 0으로 채운다.
+            std::memcpy(section.SectionToComponent, &position, sizeof(section.SectionToComponent));
+            std::memcpy(section.NormalToComponent, &normal, sizeof(section.NormalToComponent));
+        }
+
         // GPU ordered-float 경계를 다시 실수로 복원한다.
         float Unorder(uint32_t value)
         {
@@ -77,9 +90,12 @@ namespace MeshCutting
 
     // 큰 입력의 동일 clip 판정으로 출력 개수만 읽고 실제 버퍼 할당은 예산 검사 뒤로 미룬다.
     CutCapacityPlan GpuMeshCutter::PlanCapacity(const GeometryRevision& input, const PosedGeometry& posed,
+        const std::vector<Math::Matrix4>& sectionFrames,
         const AffineTransform& world, const CutPlaneData& plane, float epsilon, bool force)
     {
         // 먼저 기존 draw 검사를 수행하고 작은 입력은 기존 최악 용량 경로를 유지한다.
+        if (sectionFrames.size() != input.GetSections().size())
+            throw std::invalid_argument("Cut section frame count mismatch");
         EstimateWorkingBytes(input, posed, false);
         uint64_t triangles = 0;
         for (size_t i = 0; i < input.GetSections().size(); ++i)
@@ -103,10 +119,12 @@ namespace MeshCutting
                 sections.push_back({ mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
                     draw.startIndex, draw.baseVertex, draw.primCount / 3, posed.GetOffset(input.GetSections()[i].SourceMesh),
                     first, 0, draw.primCount * 2, mesh.psoFlags, i, d, mesh.vbSize / mesh.vbStride, 0 });
+                SetSectionFrame(sections.back(), sectionFrames[i]);
                 first += draw.primCount / 3;
             }
         }
         sections.push_back({});
+        SetSectionFrame(sections.back(), Matrix4(kIdentity));
 
         // 기존 clip shader의 출력 용량 0 모드로 표면·경계 카운터만 갱신한다.
         Initialize();
@@ -384,9 +402,10 @@ namespace MeshCutting
 
     // GPU 절단을 제출하고 명시적 진단에서만 같은 시점의 부모 정점·인덱스를 보존한다.
     std::unique_ptr<CutJob> GpuMeshCutter::Submit(std::shared_ptr<const GeometryRevision> input,
-        const PosedGeometry& posed, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics, const CutCapacityPlan* capacity, uint64_t retainedLimitBytes)
+        const PosedGeometry& posed, const std::vector<Math::Matrix4>& sectionFrames, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics, const CutCapacityPlan* capacity, uint64_t retainedLimitBytes)
     {
-        if (!input || !posed.IsReady() || !std::isfinite(epsilon) || epsilon <= 0)
+        // section snapshot과 기존 PG 준비 계약을 함께 검사한다.
+        if (!input || sectionFrames.size() != input->GetSections().size() || !posed.IsReady() || !std::isfinite(epsilon) || epsilon <= 0)
             throw std::invalid_argument("Static cut requires prepared geometry");
         // Submit도 같은 지원 용량 계약을 확인해 scheduler 추정과 작업 생성 조건을 맞춘다.
         const uint64_t workingEstimate = EstimateWorkingBytes(*input, posed, snapshotDiagnostics, capacity);
@@ -398,6 +417,7 @@ namespace MeshCutting
         auto job = std::make_unique<CutJob>();
         job->Started = std::chrono::steady_clock::now();
         job->Input = std::move(input);
+        job->SectionFrames = sectionFrames;
         uint64_t total = 0, vertices = 0;
         for (uint32_t i = 0; i < job->Input->GetSections().size(); ++i)
         {
@@ -418,6 +438,7 @@ namespace MeshCutting
                     draw.startIndex, draw.baseVertex, draw.primCount / 3,
                     posed.GetOffset(job->Input->GetSections()[i].SourceMesh), uint32_t(total), uint32_t(vertices),
                     draw.primCount * 2, mesh.psoFlags, i, d, mesh.vbSize / mesh.vbStride, 0 };
+                SetSectionFrame(s, job->SectionFrames[i]);
                 if (capacity && !capacity->SurfaceVertices.empty())
                     s.VertexCapacity = capacity->SurfaceVertices.at(job->Sections.size());
                 total += s.Triangles; vertices += s.VertexCapacity;
@@ -432,6 +453,7 @@ namespace MeshCutting
         const uint64_t segments = capacity && !capacity->SurfaceVertices.empty() ? capacity->MaxSegments : total;
         // cap도 독립 section이며 양쪽에서 같은 topology를 반대로 사용한다.
         CutSection cap{}; cap.VertexStart = uint32_t(vertices); cap.VertexCapacity = uint32_t(segments * 3); cap.Flags = 31;
+        SetSectionFrame(cap, Matrix4(kIdentity));
         job->Sections.push_back(cap);
         Mesh capTemplate = job->Templates.front(); capTemplate.psoFlags = 31;
         capTemplate.materialCBV = 0xffff; capTemplate.srvTable = CapTextureTable;

@@ -130,6 +130,8 @@ namespace Viewer
         Math::AffineTransform GetWorldTransform(const SceneTransform& owner) const;
         // 첫 pose 준비 전이나 기준 변경 직후에는 선택을 보류한다.
         bool HasPoseBounds() const { return m_Ready && !m_SectionBounds.empty(); }
+        // 마지막 PG 갱신과 같은 section 행렬을 요청 시점에 복사한다.
+        bool BuildCutSectionFrames(std::vector<Math::Matrix4>& frames) const;
         // 절단 section AABB를 만들기 위한 component-local 경계를 읽는다.
         Math::BoundingSphere GetLocalSectionBounds(size_t section) const { return m_SectionBounds.at(section); }
         // 현재 geometry의 보수적인 월드 경계 구를 반환한다.
@@ -171,6 +173,7 @@ namespace Viewer
         ByteAddressBuffer m_ConstantsGPU;
         Math::AffineTransform m_PreparedWorld{ Math::kIdentity };
         std::vector<Math::BoundingSphere> m_SectionBounds;
+        std::vector<Math::Matrix4> m_CutSectionFrames;
         std::vector<Math::Matrix4> m_FrozenNodes;
         std::vector<Joint> m_FrozenJoints;
         const Joint* m_RenderJoints = nullptr;

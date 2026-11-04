@@ -12,8 +12,12 @@ namespace MeshCutting
         uint32_t StartIndex, BaseVertex, Triangles, PoseOffset;
         uint32_t FirstTriangle, VertexStart, VertexCapacity, Flags;
         uint32_t SourceSection, SourceDraw, VertexCount, Reserved;
+        // Math 행렬을 전치해 행 우선으로 저장한다. HLSL은 mul(S, float4(p, 1))을 쓴다.
+        float SectionToComponent[12];
+        // 3x3 역전치를 행 우선 3x4로 패딩한다. N/T는 mul((float3x3)Nm, n)을 쓴다.
+        float NormalToComponent[12];
     };
-    static_assert(sizeof(CutSection) == 64, "HLSL section layout");
+    static_assert(sizeof(CutSection) == 160, "HLSL section layout");
 
     // 평면 부호 거리는 월드 단위이며 ProjectU/V는 월드 직교 단면 좌표를 만든다.
     struct CutConstants
