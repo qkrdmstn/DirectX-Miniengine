@@ -1,7 +1,7 @@
 struct Section
 {
     uint VbOffset, Stride, IbOffset, Index32;
-    uint StartIndex, BaseVertex, Triangles, PoseOffset;
+    uint StartIndex, BaseVertex, Triangles, ReservedPose; // C++과 같은 예약 DWORD이며 읽지 않는다.
     uint FirstTriangle, VertexStart, VertexCapacity, Flags;
     uint SourceSection, SourceDraw, VertexCount, Reserved;
     // C++의 행 우선 3x4와 일치한다. 위치는 mul(S, float4(p, 1)) 규약이다.

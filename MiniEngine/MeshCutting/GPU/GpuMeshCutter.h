@@ -21,7 +21,7 @@ namespace MeshCutting
         ByteAddressBuffer Metadata, Scratch;
         StructuredBuffer Descriptors;
         ReadbackBuffer StatusReadback, TimeReadback;
-        ReadbackBuffer DiagnosticInputPose, DiagnosticInputData;
+        ReadbackBuffer DiagnosticInputData;
         bool HasDiagnosticInput = false;
         // A(0)/B(1)의 포함 검증과 공통 허용오차 기준으로 쓰는 슬라이스 충돌이다.
         std::array<MiniCollision::AggregateGeom, 2> ContainmentHulls;
@@ -72,12 +72,12 @@ namespace MeshCutting
             const std::vector<Math::Matrix4>& sectionFrames,
             const Math::AffineTransform& world, const CutPlaneData& plane, float epsilon, bool force = false);
         // 지원 용량 계약 안에서 작업별 임시 GPU 메모리 예약치를 보수적으로 계산한다.
-        // 진단 시에만 diagnosticPose snapshot과 최대 readback 묶음을 포함한다.
-        static uint64_t EstimateWorkingBytes(const GeometryRevision& input, const PosedGeometry* diagnosticPose = nullptr,
+        // 진단 시에만 Data snapshot과 최대 readback 묶음을 포함한다.
+        static uint64_t EstimateWorkingBytes(const GeometryRevision& input,
             bool snapshotDiagnostics = false, const CutCapacityPlan* capacity = nullptr);
-        // revision Data와 section 행렬로 Static 절단하며 PG는 명시적 진단에만 사용한다.
+        // revision Data와 section 행렬로 Static 절단하며 진단도 같은 입력을 사용한다.
         static std::unique_ptr<CutJob> Submit(std::shared_ptr<const GeometryRevision> input,
-            const PosedGeometry* diagnosticPose, const std::vector<Math::Matrix4>& sectionFrames, const Math::AffineTransform& world,
+            const std::vector<Math::Matrix4>& sectionFrames, const Math::AffineTransform& world,
             const CutPlaneData& plane, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0,
             const std::vector<Math::BoundingSphere>& bounds = {}, bool snapshotDiagnostics = false,
             const CutCapacityPlan* capacity = nullptr, uint64_t retainedLimitBytes = 512ull * 1024 * 1024);

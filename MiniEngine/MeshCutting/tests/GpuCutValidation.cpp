@@ -1,4 +1,4 @@
-﻿#include "../GPU/GpuMeshCutter.h"
+#include "../GPU/GpuMeshCutter.h"
 #include "Utility.h"
 #include <cmath>
 #include <algorithm>
@@ -10,6 +10,43 @@ namespace MeshCutting
 {
     namespace
     {
+        // 진단 readback 매핑을 정상 반환과 예외 전파 모두에서 해제한다.
+        struct ScopedReadback
+        {
+            ReadbackBuffer& Buffer;
+            const uint8_t* Data;
+
+            // 버퍼를 매핑하고 수명을 현재 검사 범위에 묶는다.
+            explicit ScopedReadback(ReadbackBuffer& buffer) : Buffer(buffer)
+            {
+                // 성공한 매핑만 소멸자에서 해제한다.
+                Data = static_cast<const uint8_t*>(Buffer.Map());
+            }
+
+            // 검사 도중 예외가 발생해도 매핑을 해제한다.
+            ~ScopedReadback()
+            {
+                // 소유한 매핑을 한 번 해제한다.
+                Buffer.Unmap();
+            }
+
+            ScopedReadback(const ScopedReadback&) = delete;
+            ScopedReadback& operator=(const ScopedReadback&) = delete;
+        };
+
+        // 유한성과 오차를 검사하고 실패 좌표 및 허용치를 출력한다.
+        bool CheckValue(const char* kind, uint32_t section, uint32_t vertex, uint32_t axis,
+            double actual, double expected, double tolerance)
+        {
+            // NaN도 실패로 분류하고 첫 예외 전에 구체적인 값을 남긴다.
+            const bool valid = std::isfinite(actual) && std::isfinite(expected)
+                && std::abs(actual - expected) <= tolerance;
+            if (!valid)
+                Utility::Printf("GPU cut diagnostic FAIL: kind=%s section=%u vertex=%u axis=%u actual=%.9g expected=%.9g tolerance=%.9g\n",
+                    kind, section, vertex, axis, actual, expected, tolerance);
+            return valid;
+        }
+
         // 테스트 실패를 Release에서도 숨기지 않는다.
         void Require(bool condition, const char* message)
         {
@@ -19,6 +56,69 @@ namespace MeshCutting
         template<class T> T Read(const uint8_t* data, size_t offset)
         {
             T value; std::memcpy(&value, data + offset, sizeof(value)); return value;
+        }
+
+        // GPU ReadVertex와 같은 행 우선 3x4의 mul(S, float4(p, 1))로 입력 위치를 복원한다.
+        Math::XMFLOAT3 ParentPosition(const uint8_t* data, const CutSection& desc, uint32_t section, uint32_t vertex)
+        {
+            // Data의 float3 위치를 읽고 GPU와 같은 float 연산으로 세 행을 적용한다.
+            const auto p = Read<Math::XMFLOAT3>(data, size_t(desc.VbOffset) + size_t(vertex) * desc.Stride);
+            float result[3];
+            for (uint32_t axis = 0; axis < 3; ++axis)
+            {
+                const float* row = desc.SectionToComponent + axis * 4;
+                result[axis] = row[0] * p.x + row[1] * p.y + row[2] * p.z + row[3];
+                Require(CheckValue("parent position finite", section, vertex, axis, result[axis], result[axis], 0),
+                    "Nonfinite parent position");
+            }
+            return Math::XMFLOAT3(result[0], result[1], result[2]);
+        }
+
+        // 행렬의 유한성·역전치와 생성 revision의 단위 변환 계약을 검사한다.
+        void ValidateSectionFrames(const CutJob& job)
+        {
+            // 모든 입력 draw와 cap의 행렬을 검사하고 기존 로그 형식을 유지한다.
+            bool valid = true;
+            double maxError = 0;
+            uint64_t vertices = 0;
+            for (uint32_t section = 0; section < job.Constants.Sections; ++section)
+            {
+                const auto& desc = job.Sections[section];
+                const float* s = desc.SectionToComponent;
+                const float* n = desc.NormalToComponent;
+                vertices += desc.VertexCount;
+
+                // 3x3의 여인수 행렬을 double로 계산해 역전치 기준을 독립적으로 만든다.
+                double cofactor[3][3];
+                for (uint32_t row = 0; row < 3; ++row)
+                    for (uint32_t col = 0; col < 3; ++col)
+                        cofactor[row][col] = double(s[((row + 1) % 3) * 4 + (col + 1) % 3]) * s[((row + 2) % 3) * 4 + (col + 2) % 3]
+                            - double(s[((row + 1) % 3) * 4 + (col + 2) % 3]) * s[((row + 2) % 3) * 4 + (col + 1) % 3];
+                const double determinant = s[0] * cofactor[0][0] + s[1] * cofactor[0][1] + s[2] * cofactor[0][2];
+
+                // axis는 행 우선 원소 번호이며 행렬 검사에는 정점 미해당 표식을 쓴다.
+                for (uint32_t axis = 0; axis < 12; ++axis)
+                {
+                    valid &= CheckValue("section finite", section, 0xffffffffu, axis, s[axis], s[axis], 0);
+                    const double expected = axis % 4 == 3 ? 0 : cofactor[axis / 4][axis % 4] / determinant;
+                    const double tolerance = 1.0e-5 * std::max(1.0, std::abs(expected));
+                    valid &= CheckValue("normal inverse-transpose", section, 0xffffffffu, axis, n[axis], expected, tolerance);
+                    maxError = std::max(maxError, std::abs(double(n[axis]) - expected));
+                    if (job.Input->IsGenerated() || section + 1 == job.Constants.Sections)
+                    {
+                        const double identity = axis / 4 == axis % 4 ? 1 : 0;
+                        valid &= CheckValue("generated position identity", section, 0xffffffffu, axis, s[axis], identity, 1.0e-5);
+                        valid &= CheckValue("generated normal identity", section, 0xffffffffu, axis, n[axis], identity, 1.0e-5);
+                        maxError = std::max({maxError, std::abs(double(s[axis]) - identity), std::abs(double(n[axis]) - identity)});
+                    }
+                }
+            }
+
+            // 실패 정보 뒤에도 집계 로그를 남긴 다음 예외를 전파한다.
+            Utility::Printf("GPU cut section frames %s: generated=%u vertices=%llu maxError=%.9g tolerance=1e-5(relative)\n",
+                valid ? "PASS" : "FAIL", job.Input->IsGenerated() ? 1u : 0u,
+                static_cast<unsigned long long>(vertices), maxError);
+            Require(valid, "Invalid cut section matrices");
         }
         // 월드 직교 단면 좌표로 삼각형 면적을 비교한다.
         double Cross(double ax, double ay, double bx, double by) { return ax * by - ay * bx; }
@@ -125,7 +225,8 @@ namespace MeshCutting
                 read.CopyBuffer(pose, out.Pose);
                 read.TransitionResource(out.Pose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 read.Finish(true);
-                const auto* vertices = static_cast<const uint8_t*>(pose.Map());
+                const ScopedReadback verticesMapping(pose);
+                const auto* vertices = verticesMapping.Data;
 
                 // CPU에서 9개 축의 최솟값/최댓값과 기여 정점 수를 double로 구한다.
                 double cpuMin[9];
@@ -152,7 +253,6 @@ namespace MeshCutting
                         }
                     }
                 }
-                pose.Unmap();
 
                 // 유한한 출력 정점이 하나도 없으면 GPU도 DOP을 비워야 하며 극값은 비교하지 않는다.
                 if (contributing == 0)
@@ -184,53 +284,20 @@ namespace MeshCutting
         }
     }
 
-    // 입력 section 행렬과 PG의 일치 및 전체 결과와 충돌의 포함을 검사한다.
+    // 입력 행렬 계약과 Data 기반 부모 재구성 및 출력·충돌의 포함을 검사한다.
     void CutJob::ValidateDiagnostics()
     {
         // GPU 완료 상태를 확인한다.
         Require(Collected && Status[0] == 0, "GPU cut status failed");
 
-        // 입력 Data의 모든 section 정점을 ABI 행렬로 옮겨 같은 시점의 PG와 비교한다.
-        Require(HasDiagnosticInput, "Parent snapshot is required for section frame diagnostics");
-        const auto* frameData = static_cast<const uint8_t*>(DiagnosticInputData.Map());
-        const auto* framePose = static_cast<const uint8_t*>(DiagnosticInputPose.Map());
-        uint64_t checkedVertices = 0;
-        double maxError = 0;
-        bool framesValid = true;
-        for (uint32_t section = 0; section + 1 < Constants.Sections; ++section)
-        {
-            const auto& desc = Sections[section];
-            for (uint32_t vertex = 0; vertex < desc.VertexCount; ++vertex)
-            {
-                const auto p = Read<Math::XMFLOAT3>(frameData, desc.VbOffset + vertex * desc.Stride);
-                const auto pg = Read<Math::XMFLOAT3>(framePose, desc.PoseOffset + vertex * 40);
-                const float source[4] = { p.x, p.y, p.z, 1 };
-                const float expected[3] = { pg.x, pg.y, pg.z };
-                for (uint32_t axis = 0; axis < 3; ++axis)
-                {
-                    const float* row = desc.SectionToComponent + axis * 4;
-                    const double actual = double(row[0]) * source[0] + double(row[1]) * source[1]
-                        + double(row[2]) * source[2] + row[3];
-                    const double error = std::abs(actual - expected[axis]);
-                    maxError = std::max(maxError, error);
-                    framesValid &= std::isfinite(actual) && std::isfinite(expected[axis])
-                        && error <= 1.0e-5 * std::max(1.0, std::abs(double(expected[axis])));
-                }
-                ++checkedVertices;
-            }
-        }
-
-        // no-split 입력도 결과를 남기고 snapshot 매핑을 반드시 해제한다.
-        DiagnosticInputData.Unmap();
-        DiagnosticInputPose.Unmap();
-        Utility::Printf("GPU cut section frames %s: generated=%u vertices=%llu maxError=%.9g tolerance=1e-5(relative)\n",
-            framesValid ? "PASS" : "FAIL", Input->IsGenerated() ? 1u : 0u,
-            static_cast<unsigned long long>(checkedVertices), maxError);
-        Require(framesValid, "Data section transform differs from PG snapshot");
+        // PG 없이 section 행렬의 유한성·역전치·생성 단위 행렬을 검사한다.
+        Require(HasDiagnosticInput, "Parent snapshot is required for cut diagnostics");
+        ValidateSectionFrames(*this);
 
         // 분할 여부와 무관하게 출력이 있는 모든 면의 GPU 18-DOP을 CPU 기준과 비교한다.
         ValidateSideDop(*this);
 
+        // 접촉·비교차는 cap이 없음을 확인한 뒤 종료한다.
         if (!HasSplit())
         {
             for (uint32_t side = 0; side < 2; ++side)
@@ -239,13 +306,16 @@ namespace MeshCutting
             Utility::Printf("GPU cut no-split validation passed: surfaceSides=%u\n",Status[5]&3);
             return;
         }
+
+        // GPU 경계 고리에서 닫힌 단면의 기준 면적을 구한다.
         ReadbackBuffer boundary;
         boundary.Create(L"Diagnostic boundary", std::max(Status[1], 1u), 128);
         auto& context = GraphicsContext::Begin(L"Validate generated GPU geometry");
         context.CopyBufferRegion(boundary, 0, Scratch, 0, uint64_t(std::max(Status[1], 1u)) * 128);
         context.TransitionResource(Scratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         context.Finish(true);
-        const auto* ring = static_cast<const uint8_t*>(boundary.Map());
+        const ScopedReadback ringMapping(boundary);
+        const auto* ring = ringMapping.Data;
         std::map<uint32_t, double> loopAreas;
         for (uint32_t i = 0; i < Status[1]; ++i)
         {
@@ -255,12 +325,12 @@ namespace MeshCutting
             const auto a = Read<Math::XMFLOAT2>(ring, i * 128 + 24), b = Read<Math::XMFLOAT2>(ring, i * 128 + 32);
             loopAreas[leader] += Cross(a.x, a.y, b.x, b.y) * 0.5;
         }
-        boundary.Unmap();
+
+        // 입력 Data를 매핑하고 부모 삼각형별 면적·부피를 component-local에서 구한다.
         double expectedArea = 0;
         for (const auto& loop : loopAreas) expectedArea += std::abs(loop.second);
-        Require(HasDiagnosticInput,"Parent snapshot is required for cut diagnostics");
-        const auto* parentPose = static_cast<const uint8_t*>(DiagnosticInputPose.Map());
-        const auto* parentData = static_cast<const uint8_t*>(DiagnosticInputData.Map());
+        const ScopedReadback parentDataMapping(DiagnosticInputData);
+        const auto* parentData = parentDataMapping.Data;
         std::vector<std::array<uint32_t,3>> parentIndices(Constants.Triangles);
         std::vector<double> parentAreas(Constants.Triangles), outputAreas(Constants.Triangles,0.0);
         double parentVolume = 0, absoluteVolume = 0, parentArea = 0, resultVolume = 0;
@@ -275,14 +345,17 @@ namespace MeshCutting
                 {
                     indices[corner] = ParentIndex(parentData,desc,tri*3+corner);
                     Require(indices[corner] < desc.VertexCount,"Invalid parent triangle index");
-                    p[corner] = Read<Math::XMFLOAT3>(parentPose,desc.PoseOffset+indices[corner]*40);
+                    p[corner] = ParentPosition(parentData, desc, section, indices[corner]);
                 }
                 const double volume = SignedVolume(p[0],p[1],p[2]);
-                parentVolume += volume; absoluteVolume += std::abs(volume);
+                parentVolume += volume;
+                absoluteVolume += std::abs(volume);
                 parentAreas[desc.FirstTriangle+tri] = TriangleArea(p[0],p[1],p[2]);
                 parentArea += parentAreas[desc.FirstTriangle+tri];
             }
         }
+
+        // 양쪽 출력과 출처를 읽어 부모 보간·단면·충돌 포함을 검사한다.
         for (uint32_t side = 0; side < 2; ++side)
         {
             uint64_t surfaceCorners = 0;
@@ -295,15 +368,21 @@ namespace MeshCutting
             pose.Create(L"Diagnostic pose result", uint32_t(out.Pose.GetBufferSize()), 1);
             origin.Create(L"Diagnostic provenance", uint32_t(out.Provenance.GetBufferSize()), 1);
             auto& read = GraphicsContext::Begin(L"Read explicit cut diagnostics");
-            read.CopyBuffer(data, out.Data); read.CopyBuffer(pose, out.Pose); read.CopyBuffer(origin, out.Provenance);
+            read.CopyBuffer(data, out.Data);
+            read.CopyBuffer(pose, out.Pose);
+            read.CopyBuffer(origin, out.Provenance);
             read.TransitionResource(out.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
             read.TransitionResource(out.Pose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             read.TransitionResource(out.Provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             read.Finish(true);
-            const auto* packed = static_cast<const uint8_t*>(data.Map());
-            const auto* vertices = static_cast<const uint8_t*>(pose.Map());
-            const auto* provenance = static_cast<const uint8_t*>(origin.Map());
-            double capArea = 0, volume = 0; uint32_t triangles = 0;
+            const ScopedReadback packedMapping(data);
+            const auto* packed = packedMapping.Data;
+            const ScopedReadback verticesMapping(pose);
+            const auto* vertices = verticesMapping.Data;
+            const ScopedReadback provenanceMapping(origin);
+            const auto* provenance = provenanceMapping.Data;
+            double capArea = 0, volume = 0;
+            uint32_t triangles = 0;
 
             // 계승 hull의 요소별 지지 평면과 허용 오차를 준비한다.
             // hull 최대 변 길이에 비례한 float 오차와 snap 후 MinHullVertDistance 이내 병합 근사를 흡수한다.
@@ -333,6 +412,8 @@ namespace MeshCutting
             double thickness = 0;
             const double planeLength = std::sqrt(double(float(Constants.Plane.GetX()))*float(Constants.Plane.GetX()) +
                 double(float(Constants.Plane.GetY()))*float(Constants.Plane.GetY()) + double(float(Constants.Plane.GetZ()))*float(Constants.Plane.GetZ()));
+
+            // section별 유효 출력 위치와 부모 출처를 검증한다.
             for (uint32_t section = 0; section < Constants.Sections; ++section)
             {
                 const CutSection& desc = Sections[section];
@@ -343,9 +424,22 @@ namespace MeshCutting
                     const uint32_t global = desc.VertexStart + i;
                     const auto p = Read<Math::XMFLOAT3>(vertices, global * 40);
                     const auto n = Read<Math::XMFLOAT3>(vertices, global * 40 + 12);
-                    Require(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z), "Nonfinite result position");
+
+                    // 출력 Data/Pose 위치의 기존 비트 일치와 유한성 검사를 축별로 보고한다.
+                    const auto packedPosition = Read<Math::XMFLOAT3>(packed, size_t(global) * 28);
+                    const float actualPosition[3] = { p.x, p.y, p.z };
+                    const float expectedPosition[3] = { packedPosition.x, packedPosition.y, packedPosition.z };
+                    for (uint32_t axis = 0; axis < 3; ++axis)
+                    {
+                        const bool finite = CheckValue("output position", section, i, axis, actualPosition[axis], expectedPosition[axis], 0);
+                        const bool sameBits = std::memcmp(packed + size_t(global) * 28 + axis * 4,
+                            vertices + size_t(global) * 40 + axis * 4, 4) == 0;
+                        if (finite && !sameBits)
+                            Utility::Printf("GPU cut diagnostic FAIL: kind=position bits section=%u vertex=%u axis=%u actual=%.9g expected=%.9g tolerance=0\n",
+                                section, i, axis, actualPosition[axis], expectedPosition[axis]);
+                        Require(finite && sameBits, "Packed/posed position differs or is nonfinite");
+                    }
                     Require(std::isfinite(n.x) && std::abs(n.x*n.x+n.y*n.y+n.z*n.z-1) < 0.01f, "Invalid result normal");
-                    Require(std::memcmp(packed + global * 28, vertices + global * 40, 12) == 0, "Packed/posed position differs");
                     Require(Read<uint32_t>(packed, Constants.IndexOffset + global * 4) == i, "Invalid generated index");
                     const auto parent = Read<uint32_t>(provenance, global * 32);
                     Require(parent == 0xffffffff || parent < Input->GetSections().size(), "Invalid provenance section");
@@ -366,16 +460,25 @@ namespace MeshCutting
                         const auto& indices = parentIndices[desc.FirstTriangle+triangle];
                         Require(std::find(indices.begin(),indices.end(),ia) != indices.end() &&
                             std::find(indices.begin(),indices.end(),ib) != indices.end(),"Vertex endpoints are outside parent triangle");
-                        const auto a = Read<Math::XMFLOAT3>(parentPose,desc.PoseOffset+ia*40);
-                        const auto b = Read<Math::XMFLOAT3>(parentPose,desc.PoseOffset+ib*40);
+                        const auto a = ParentPosition(parentData, desc, section, ia);
+                        const auto b = ParentPosition(parentData, desc, section, ib);
                         const double tolerance = 2.0e-6*std::max({1.0,std::abs(double(a.x)),std::abs(double(a.y)),std::abs(double(a.z)),
                             std::abs(double(b.x)),std::abs(double(b.y)),std::abs(double(b.z))});
-                        Require(std::abs(p.x-(double(a.x)+(double(b.x)-a.x)*t)) <= tolerance &&
-                            std::abs(p.y-(double(a.y)+(double(b.y)-a.y)*t)) <= tolerance &&
-                            std::abs(p.z-(double(a.z)+(double(b.z)-a.z)*t)) <= tolerance,"Output position differs from parent interpolation");
+
+                        // 부모 보간 오차의 축과 실제·기대 좌표를 실패 전에 남긴다.
+                        const float actual[3] = { p.x, p.y, p.z };
+                        const double expected[3] = { double(a.x) + (double(b.x) - a.x) * t,
+                            double(a.y) + (double(b.y) - a.y) * t, double(a.z) + (double(b.z) - a.z) * t };
+                        for (uint32_t axis = 0; axis < 3; ++axis)
+                            Require(CheckValue("parent interpolation", section, i, axis, actual[axis], expected[axis], tolerance),
+                                "Output position differs from parent interpolation");
                     }
+
+                    // 평면 반대편으로 벗어난 위치도 실제 거리와 허용치를 보고한다.
                     const float distance = Math::Dot(Constants.Plane, Math::Vector4(Math::Vector3(p), 1));
-                    Require(side == 0 ? distance >= -Constants.Epsilon*4 : distance <= Constants.Epsilon*4, "Wrong side of cut plane");
+                    const double expectedDistance = side == 0 ? std::max(0.0, double(distance)) : std::min(0.0, double(distance));
+                    Require(CheckValue("cut plane distance", section, i, 3, distance, expectedDistance, Constants.Epsilon * 4),
+                        "Wrong side of cut plane");
                     thickness = std::max(thickness, std::abs(double(distance)) / planeLength);
 
                     // 정점이 계승 hull 요소 중 하나의 모든 지지 평면 안쪽(PlaneDot <= tol)에 있어야 한다.
@@ -394,6 +497,8 @@ namespace MeshCutting
                         ++hullChecked[kind];
                     }
                 }
+
+                // 출력 삼각형별 부모 면적·방향 부피와 cap 면적을 누적한다.
                 for (uint32_t tri = 0; tri < count; tri += 3)
                 {
                     const auto p0 = Read<Math::XMFLOAT3>(vertices, (desc.VertexStart + tri) * 40);
@@ -425,7 +530,7 @@ namespace MeshCutting
             // 기존 검사를 마친 cap 위치로 순서 무관 checksum을 기록한다.
             PrintCapChecksum(vertices, Sections.back(), Status[20 + side * Constants.Sections + Constants.Sections - 1], side);
 
-            data.Unmap(); pose.Unmap(); origin.Unmap();
+            // 경계 기준 cap 면적과 양쪽 결과의 방향 부피를 기록한다.
             Require(std::abs(capArea-expectedArea) <= std::max(1.0e-8, expectedArea*0.001), "Cap area does not match closed boundary");
             Utility::Printf("GPU cut validation passed: side=%u triangles=%u capArea=%.9f expected=%.9f signedVolume=%.9f\n",
                 side, triangles, capArea, expectedArea, volume);
@@ -454,7 +559,8 @@ namespace MeshCutting
                     Utility::Printf("GPU cut hull containment skipped: side=%u kind=%s (parent has no collision)\n", side, name);
             }
         }
-        DiagnosticInputPose.Unmap(); DiagnosticInputData.Unmap();
+
+        // 부모 삼각형별 면적과 전체 방향 부피가 양쪽 결과에 보존되는지 확인한다.
         double maximumAreaError = 0;
         for (uint32_t triangle = 0; triangle < Constants.Triangles; ++triangle)
         {

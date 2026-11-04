@@ -189,7 +189,7 @@ namespace MeshCutting
 
     // 지원 용량 계약과 Submit의 draw 해석에 맞춰 임시 자원 예약치를 계산한다.
     // 원본 geometry·부모 lineage·posed cache는 별도 소유이므로 포함하지 않는다.
-    uint64_t GpuMeshCutter::EstimateWorkingBytes(const GeometryRevision& input, const PosedGeometry* diagnosticPose,
+    uint64_t GpuMeshCutter::EstimateWorkingBytes(const GeometryRevision& input,
         bool snapshotDiagnostics, const CutCapacityPlan* capacity)
     {
         // CPU draw 정보로 작업량과 출력 정점 용량을 합산한다.
@@ -285,14 +285,9 @@ namespace MeshCutting
         // 명시적 진단은 원본 입력 snapshot과 추가 readback 버퍼를 만들어 그 임시 공간도 예약한다.
         if (snapshotDiagnostics)
         {
-            if (!diagnosticPose || !diagnosticPose->IsReady())
-                throw std::invalid_argument("Cut diagnostics require prepared pose");
-            const uint64_t poseSnapshotBytes = diagnosticPose->GetBuffer().GetBufferSize();
             const uint64_t dataSnapshotBytes = input.GetDataBuffer().GetBufferSize();
-            if (poseSnapshotBytes > std::numeric_limits<uint32_t>::max() ||
-                dataSnapshotBytes > std::numeric_limits<uint32_t>::max())
+            if (dataSnapshotBytes > std::numeric_limits<uint32_t>::max())
                 throw std::length_error("Static cut diagnostic snapshot exceeds supported buffer size");
-            bytes += allocated(poseSnapshotBytes);
             bytes += allocated(dataSnapshotBytes);
 
             // ValidateDiagnostics의 boundary·양쪽 surface readback과 각 면 DOP pose readback을 합산한다.
@@ -415,14 +410,14 @@ namespace MeshCutting
 
     // GPU 절단을 제출하고 명시적 진단에서만 같은 시점의 부모 정점·인덱스를 보존한다.
     std::unique_ptr<CutJob> GpuMeshCutter::Submit(std::shared_ptr<const GeometryRevision> input,
-        const PosedGeometry* diagnosticPose, const std::vector<Math::Matrix4>& sectionFrames, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics, const CutCapacityPlan* capacity, uint64_t retainedLimitBytes)
+        const std::vector<Math::Matrix4>& sectionFrames, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics, const CutCapacityPlan* capacity, uint64_t retainedLimitBytes)
     {
         // section snapshot과 평면 허용오차를 검사한다.
         if (!input || sectionFrames.size() != input->GetSections().size() || !std::isfinite(epsilon) || epsilon <= 0)
             throw std::invalid_argument("Static cut requires section frames and a valid epsilon");
 
         // Submit도 같은 지원 용량 계약을 확인해 scheduler 추정과 작업 생성 조건을 맞춘다.
-        const uint64_t workingEstimate = EstimateWorkingBytes(*input, diagnosticPose, snapshotDiagnostics, capacity);
+        const uint64_t workingEstimate = EstimateWorkingBytes(*input, snapshotDiagnostics, capacity);
         (void)workingEstimate;
 
         // 큰 입력은 작은 count 결과 없이 최악 용량 버퍼를 만들지 않는다.
@@ -454,7 +449,7 @@ namespace MeshCutting
                     throw std::invalid_argument("Invalid static draw range");
                 CutSection s = { mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
                     draw.startIndex, draw.baseVertex, draw.primCount / 3,
-                    snapshotDiagnostics ? diagnosticPose->GetOffset(job->Input->GetSections()[i].SourceMesh) : 0, uint32_t(total), uint32_t(vertices),
+                    0, uint32_t(total), uint32_t(vertices),
                     draw.primCount * 2, mesh.psoFlags, i, d, mesh.vbSize / mesh.vbStride, 0 };
                 SetSectionFrame(s, job->SectionFrames[i]);
                 if (capacity && !capacity->SurfaceVertices.empty())
@@ -584,7 +579,6 @@ namespace MeshCutting
             throw std::runtime_error("Cut timestamp query allocation failed");
         if (snapshotDiagnostics)
         {
-            job->DiagnosticInputPose.Create(L"Diagnostic parent pose", uint32_t(diagnosticPose->GetBuffer().GetBufferSize()), 1);
             job->DiagnosticInputData.Create(L"Diagnostic parent geometry", uint32_t(job->Input->GetDataBuffer().GetBufferSize()), 1);
         }
         GraphicsContext& graphics = GraphicsContext::Begin(L"Static mesh cut");
@@ -671,14 +665,11 @@ namespace MeshCutting
         graphics.CopyBuffer(job->StatusReadback, job->Metadata);
         graphics.ResolveTimeStamps(job->TimeReadback.GetResource(), job->Queries.Get(), 5);
 
-        // PG는 셰이더 입력이나 scratch 대신 진단 readback으로만 복사한다.
+        // 진단용 입력 Data만 보존하고 section 행렬은 작업 snapshot을 사용한다.
         if (snapshotDiagnostics)
         {
-            auto& inputPose = const_cast<ByteAddressBuffer&>(diagnosticPose->GetBuffer());
             auto& inputData = const_cast<ByteAddressBuffer&>(job->Input->GetDataBuffer());
-            graphics.CopyBuffer(job->DiagnosticInputPose,inputPose);
             graphics.CopyBuffer(job->DiagnosticInputData,inputData);
-            graphics.TransitionResource(inputPose,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             graphics.TransitionResource(inputData,D3D12_RESOURCE_STATE_GENERIC_READ);
             job->HasDiagnosticInput = true;
         }

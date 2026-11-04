@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "VectorMath.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace MeshCutting
@@ -9,7 +10,7 @@ namespace MeshCutting
     struct CutSection
     {
         uint32_t VbOffset, Stride, IbOffset, Index32;
-        uint32_t StartIndex, BaseVertex, Triangles, PoseOffset;
+        uint32_t StartIndex, BaseVertex, Triangles, ReservedPose; // 이전 PG offset 자리는 0으로 예약한다.
         uint32_t FirstTriangle, VertexStart, VertexCapacity, Flags;
         uint32_t SourceSection, SourceDraw, VertexCount, Reserved;
         // Math 행렬을 전치해 행 우선으로 저장한다. HLSL은 mul(S, float4(p, 1))을 쓴다.
@@ -18,6 +19,8 @@ namespace MeshCutting
         float NormalToComponent[12];
     };
     static_assert(sizeof(CutSection) == 160, "HLSL section layout");
+    static_assert(offsetof(CutSection, SectionToComponent) == 64, "HLSL position matrix offset");
+    static_assert(offsetof(CutSection, NormalToComponent) == 112, "HLSL normal matrix offset");
 
     // 평면 부호 거리는 월드 단위이며 ProjectU/V는 월드 직교 단면 좌표를 만든다.
     struct CutConstants

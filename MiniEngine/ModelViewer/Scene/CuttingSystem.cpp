@@ -224,16 +224,15 @@ namespace Viewer
         CommandLineArgs::GetInteger(L"cut-count-first", forceCount);
         const uint64_t retainedLimit = std::max(512ull * 1024 * 1024, m_MemoryLimitBytes);
 
-        // section 행렬과 Wc를 같은 제출 시점에 snapshot하고 PG는 진단에만 전달한다.
+        // section 행렬과 Wc를 같은 제출 시점에 snapshot한다.
         const Math::AffineTransform world = mesh->GetWorldTransform(object->GetTransform());
         std::vector<Math::Matrix4> sectionFrames;
-        const PosedGeometry* diagnosticPose = ValidateResults ? &mesh->GetPosedGeometry() : nullptr;
         try
         {
             if (!mesh->BuildCutSectionFrames(sectionFrames))
                 throw std::invalid_argument("Cut section frames are not ready");
             capacity = MeshCutting::GpuMeshCutter::PlanCapacity(*geometry, sectionFrames, world, plane, worldEpsilon, forceCount != 0);
-            estimate = MeshCutting::GpuMeshCutter::EstimateWorkingBytes(*geometry, diagnosticPose, ValidateResults, &capacity);
+            estimate = MeshCutting::GpuMeshCutter::EstimateWorkingBytes(*geometry, ValidateResults, &capacity);
             if (!capacity.SurfaceVertices.empty())
             {
                 uint64_t vertices = uint64_t(capacity.MaxSegments) * 3;
@@ -284,7 +283,7 @@ namespace Viewer
             std::vector<Math::BoundingSphere> bounds;
             for (size_t i = 0; i < geometry->GetSections().size(); ++i)
                 bounds.push_back(mesh->GetLocalSectionBounds(i));
-            active.Job = MeshCutting::GpuMeshCutter::Submit(geometry, diagnosticPose, sectionFrames, world, plane, worldEpsilon, capMode, bounds, ValidateResults, &capacity, retainedLimit);
+            active.Job = MeshCutting::GpuMeshCutter::Submit(geometry, sectionFrames, world, plane, worldEpsilon, capMode, bounds, ValidateResults, &capacity, retainedLimit);
         }
         catch (const std::exception& error)
         {
