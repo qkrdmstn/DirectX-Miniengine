@@ -32,31 +32,66 @@ RWByteAddressBuffer Ring : register(u3);
 RWByteAddressBuffer OriginA : register(u4);
 RWByteAddressBuffer OriginB : register(u5);
 
-struct Vertex { float3 P, N; float4 T; float2 UV0, UV1; uint4 Origin; float Parameter; uint TriangleId; };
+struct Vertex
+{
+    float3 P, N;
+    float4 T;
+    float2 UV0, UV1;
+    uint4 Origin;
+    float Parameter;
+    uint TriangleId;
+};
 // 잘못된 후보를 게시하지 않도록 fatal 비트를 설정한다.
-void Fail(uint flag) { uint ignored; Meta.InterlockedOr(0, flag, ignored); }
+void Fail(uint flag)
+{
+    uint ignored;
+    Meta.InterlockedOr(0, flag, ignored);
+}
 // 정렬 가능한 float 표현으로 GPU AABB의 최소/최대를 원자 갱신한다.
-uint Ordered(float x) { uint b = asuint(x); return (b & 0x80000000) ? ~b : (b ^ 0x80000000); }
+uint Ordered(float x)
+{
+    uint b = asuint(x);
+    return (b & 0x80000000) ? ~b : (b ^ 0x80000000);
+}
+
 // 렌더 입력의 UNORM 프레임을 복원한다.
-float4 Frame(uint p) { return float4(uint4(p, p>>10, p>>20, p>>30)&uint4(1023,1023,1023,3))/float4(1023,1023,1023,3)*2-1; }
+float4 Frame(uint p)
+{
+    return float4(uint4(p, p >> 10, p >> 20, p >> 30) & uint4(1023, 1023, 1023, 3)) / float4(1023, 1023, 1023, 3) * 2 - 1;
+}
+
 // 생성 표면의 packed tangent/normal을 기록한다.
-uint PackFrame(float4 v) { uint4 a = uint4(round(saturate(v*.5+.5)*float4(1023,1023,1023,3))); return a.x|(a.y<<10)|(a.z<<20)|(a.w<<30); }
+uint PackFrame(float4 v)
+{
+    uint4 a = uint4(round(saturate(v * .5 + .5) * float4(1023, 1023, 1023, 3)));
+    return a.x | (a.y << 10) | (a.z << 20) | (a.w << 30);
+}
+
 // 반정밀도 UV를 읽는다.
-float2 UV(uint v) { return float2(f16tof32(v&65535),f16tof32(v>>16)); }
+float2 UV(uint v)
+{
+    return float2(f16tof32(v & 65535), f16tof32(v >> 16));
+}
+
 // 반정밀도 UV를 기록한다.
-uint PackUV(float2 v) { return f32tof16(v.x)|(f32tof16(v.y)<<16); }
+uint PackUV(float2 v)
+{
+    return f32tof16(v.x) | (f32tof16(v.y) << 16);
+}
+
 // 원본 인덱스 형식을 해석한다.
 uint Index(Section s, uint i)
 {
-    uint at=s.StartIndex+i;
-    uint word=Source.Load(s.IbOffset+(s.Index32?at*4:(at/2)*4));
-    return (s.Index32?word:((word>>((at&1)*16))&65535))+s.BaseVertex;
+    uint at = s.StartIndex + i;
+    uint word = Source.Load(s.IbOffset + (s.Index32 ? at * 4 : (at / 2) * 4));
+    return (s.Index32 ? word : ((word >> ((at & 1) * 16)) & 65535)) + s.BaseVertex;
 }
+
 // revision 정점을 디코드하고 section 행렬로 component-local 속성을 복원한다.
 Vertex ReadVertex(Section s, uint i)
 {
     // PreparePoseCS와 같은 packed 프레임 및 tangent 기본값을 읽는다.
-    Vertex v = (Vertex)0;
+    Vertex v = (Vertex) 0;
     v.Origin = uint4(s.SourceSection, s.SourceDraw, i, i);
     uint a = s.VbOffset + i * s.Stride;
     float3 position = asfloat(Source.Load3(a));
@@ -65,31 +100,53 @@ Vertex ReadVertex(Section s, uint i)
 
     // N/T는 보간 전 길이를 유지하고 handedness는 변환하지 않는다.
     v.P = mul(s.SectionToComponent, float4(position, 1));
-    v.N = mul((float3x3)s.NormalToComponent, normal);
-    v.T = float4(mul((float3x3)s.NormalToComponent, tangent.xyz), tangent.w);
+    v.N = mul((float3x3) s.NormalToComponent, normal);
+    v.T = float4(mul((float3x3) s.NormalToComponent, tangent.xyz), tangent.w);
 
     // tangent 존재 여부에 맞춰 UV 시작 주소를 구한다.
-    uint uv=a+16+((s.Flags&4)?4:0);
-    v.UV0=(s.Flags&8)?UV(Source.Load(uv)):0;
-    v.UV1=(s.Flags&16)?UV(Source.Load(uv+((s.Flags&8)?4:0))):v.UV0;
+    uint uv = a + 16 + ((s.Flags & 4) ? 4 : 0);
+    v.UV0 = (s.Flags & 8) ? UV(Source.Load(uv)) : 0;
+    v.UV1 = (s.Flags & 16) ? UV(Source.Load(uv + ((s.Flags & 8) ? 4 : 0))) : v.UV0;
     return v;
 }
+
 // 교차점 속성을 같은 계수로 보간한다.
 Vertex Blend(Vertex a, Vertex b, float t)
 {
-    Vertex v; v.P=lerp(a.P,b.P,t); v.N=lerp(a.N,b.N,t); v.T=lerp(a.T,b.T,t);
-    v.UV0=lerp(a.UV0,b.UV0,t); v.UV1=lerp(a.UV1,b.UV1,t);
-    v.Origin=uint4(a.Origin.xy,a.Origin.z,b.Origin.z);v.Parameter=t;v.TriangleId=a.TriangleId;return v;
+    Vertex v;
+    v.P = lerp(a.P, b.P, t);
+    v.N = lerp(a.N, b.N, t);
+    v.T = lerp(a.T, b.T, t);
+    v.UV0 = lerp(a.UV0, b.UV0, t);
+    v.UV1 = lerp(a.UV1, b.UV1, t);
+    v.Origin = uint4(a.Origin.xy, a.Origin.z, b.Origin.z);
+    v.Parameter = t;
+    v.TriangleId = a.TriangleId;
+    return v;
 }
+
 // 공유 변의 방향에 무관하게 같은 산술 순서로 교점을 만들어 seam 오차를 줄인다.
-Vertex IntersectEdge(Vertex a,Vertex b,float da,float db)
+Vertex IntersectEdge(Vertex a, Vertex b, float da, float db)
 {
-    bool reverse=a.P.x>b.P.x || (a.P.x==b.P.x && (a.P.y>b.P.y || (a.P.y==b.P.y && a.P.z>b.P.z)));
-    if(reverse){Vertex tmp=a;a=b;b=tmp;float t=da;da=db;db=t;}
-    return Blend(a,b,da/(da-db));
+    bool reverse = a.P.x > b.P.x || (a.P.x == b.P.x && (a.P.y > b.P.y || (a.P.y == b.P.y && a.P.z > b.P.z)));
+    if (reverse)
+    {
+        Vertex tmp = a;
+        a = b;
+        b = tmp;
+        float t = da;
+        da = db;
+        db = t;
+    }
+    return Blend(a, b, da / (da - db));
 }
+
 // 유효하지 않은 법선의 NaN 전파를 막는다.
-float3 SafeNormal(float3 n) { return dot(n,n)>1e-20?normalize(n):float3(0,1,0); }
+float3 SafeNormal(float3 n)
+{
+    return dot(n, n) > 1e-20 ? normalize(n) : float3(0, 1, 0);
+}
+
 // 고정 할당 구간에 서로 겹치지 않는 triangle-corner 출력을 쓴다.
 void WriteVertex(uint side, Section s, uint local, Vertex v)
 {
@@ -153,25 +210,56 @@ void WriteVertex(uint side, Section s, uint local, Vertex v)
         OriginB.Store4(originAddress + 16, uint4(asuint(v.Parameter), v.TriangleId, 0, 0));
     }
 }
-// section별 counter로 출력 영역을 확보하고 overflow 시 쓰기 없이 실패한다.
+// 정점 3개를 입력받아 삼각형을 출력 버퍼에 저장하는 함수
 void EmitTriangle(uint side, uint section, Vertex a, Vertex b, Vertex c)
 {
-    Section s=Inputs[section]; uint start;
-    Meta.InterlockedAdd(80+(side*Sections+section)*4,3,start);
+    Section s = Inputs[section];
+    uint start;
+    Meta.InterlockedAdd(80 + (side * Sections + section) * 4, 3, start);
     // 사전 집계는 동일한 삼각형 판정 뒤 카운터만 남긴다.
-    if(VertexCapacity==0)return;
-    if(start+3>s.VertexCapacity){Fail(2);return;}
-    WriteVertex(side,s,start,a);WriteVertex(side,s,start+1,b);WriteVertex(side,s,start+2,c);
+    if (VertexCapacity == 0)
+        return;
+    if (start + 3 > s.VertexCapacity)
+    {
+        Fail(2);
+        return;
+    }
+    WriteVertex(side, s, start, a);
+    WriteVertex(side, s, start + 1, b);
+    WriteVertex(side, s, start + 2, c);
 }
 // 단면의 직교 2D 좌표를 만든다.
-float2 Project(float3 p) { return float2(dot(ProjectU,float4(p,1)),dot(ProjectV,float4(p,1))); }
+float2 Project(float3 p)
+{
+    return float2(dot(ProjectU, float4(p, 1)), dot(ProjectV, float4(p, 1)));
+}
+
 // 단면 점과 연결 정보를 읽는다.
-float3 Point(uint i) { return asfloat(Ring.Load3(i*128)); }
+float3 Point(uint i)
+{
+    return asfloat(Ring.Load3(i * 128));
+}
+
 // 선분 시작점의 평면 좌표를 읽는다.
-float2 Point2(uint i) { return asfloat(Ring.Load2(i*128+24)); }
+float2 Point2(uint i)
+{
+    return asfloat(Ring.Load2(i * 128 + 24));
+}
+
 // GPU 경계의 다음 선분을 읽는다.
-uint Next(uint i) { return Ring.Load(i*128+40); }
+uint Next(uint i)
+{
+    return Ring.Load(i * 128 + 40);
+}
+
 // GPU 경계의 이전 선분을 읽는다.
-uint Prev(uint i) { return Ring.Load(i*128+44); }
+uint Prev(uint i)
+{
+    return Ring.Load(i * 128 + 44);
+}
+
 // 2D 외적의 부호 있는 크기를 계산한다.
-float Cross2(float2 a,float2 b) {return a.x*b.y-a.y*b.x;}
+float Cross2(float2 a, float2 b)
+{
+    return a.x * b.y - a.y * b.x;
+}
