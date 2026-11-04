@@ -22,17 +22,15 @@ cbuffer Parameters : register(b0)
 ByteAddressBuffer Source : register(t0);
 StructuredBuffer<Section> Inputs : register(t2);
 RWByteAddressBuffer DataA : register(u0);
-RWByteAddressBuffer PoseA : register(u1);
-RWByteAddressBuffer DataB : register(u2);
-RWByteAddressBuffer PoseB : register(u3);
-RWByteAddressBuffer Meta : register(u4);
+RWByteAddressBuffer DataB : register(u1);
+RWByteAddressBuffer Meta : register(u2);
 // Meta DWORD: section 카운터 [20,20+2*Sections), KDop 38개 뒤에 cap 진단 5개를 추가한다.
 // [58+2*Sections,+1,+2]는 각각 capRounds, capMarked, capRemoved이며 기존 오프셋은 유지한다.
 // [61+2*Sections,+1]는 각각 capMaxLoop, capMappedLoops다.
 // [63+2*Sections]는 큰 loop scan map 구간을 예약하는 원자 cursor다.
-RWByteAddressBuffer Ring : register(u5);
-RWByteAddressBuffer OriginA : register(u6);
-RWByteAddressBuffer OriginB : register(u7);
+RWByteAddressBuffer Ring : register(u3);
+RWByteAddressBuffer OriginA : register(u4);
+RWByteAddressBuffer OriginB : register(u5);
 
 struct Vertex { float3 P, N; float4 T; float2 UV0, UV1; uint4 Origin; float Parameter; uint TriangleId; };
 // 잘못된 후보를 게시하지 않도록 fatal 비트를 설정한다.
@@ -95,36 +93,65 @@ float3 SafeNormal(float3 n) { return dot(n,n)>1e-20?normalize(n):float3(0,1,0); 
 // 고정 할당 구간에 서로 겹치지 않는 triangle-corner 출력을 쓴다.
 void WriteVertex(uint side, Section s, uint local, Vertex v)
 {
-    uint global=s.VertexStart+local;
-    v.N=SafeNormal(v.N); v.T.xyz=SafeNormal(v.T.xyz); v.T.w=v.T.w<0?-1:1;
-    uint a=global*28, p=global*40;
-    uint stride=(s.Flags&0x40)?16:12;
-    uint d=DepthOffset+s.VertexStart*16+local*stride;
-    if(side==0)
+    // 정점 프레임을 정규화하고 표면·depth 주소를 계산한다.
+    uint global = s.VertexStart + local;
+    v.N = SafeNormal(v.N);
+    v.T.xyz = SafeNormal(v.T.xyz);
+    v.T.w = v.T.w < 0 ? -1 : 1;
+    uint a = global * 28;
+    uint stride = (s.Flags & 0x40) ? 16 : 12;
+    uint d = DepthOffset + s.VertexStart * 16 + local * stride;
+
+    // 선택한 출력면의 packed Data와 인덱스를 기록한다.
+    if (side == 0)
     {
-        DataA.Store3(a,asuint(v.P)); DataA.Store(a+12,PackFrame(float4(v.N,1)));
-        uint uv=a+16;
-        if(s.Flags&4){DataA.Store(uv,PackFrame(v.T));uv+=4;}
-        DataA.Store(uv,PackUV(v.UV0));if(s.Flags&16)DataA.Store(uv+4,PackUV(v.UV1));
-        DataA.Store3(d,asuint(v.P)); if(stride==16)DataA.Store(d+12,PackUV(v.UV0));
-        DataA.Store(IndexOffset+global*4,local);
-        PoseA.Store3(p,asuint(v.P)); PoseA.Store3(p+12,asuint(v.N)); PoseA.Store4(p+24,asuint(v.T));
+        DataA.Store3(a, asuint(v.P));
+        DataA.Store(a + 12, PackFrame(float4(v.N, 1)));
+        uint uv = a + 16;
+        if (s.Flags & 4)
+        {
+            DataA.Store(uv, PackFrame(v.T));
+            uv += 4;
+        }
+        DataA.Store(uv, PackUV(v.UV0));
+        if (s.Flags & 16)
+            DataA.Store(uv + 4, PackUV(v.UV1));
+        DataA.Store3(d, asuint(v.P));
+        if (stride == 16)
+            DataA.Store(d + 12, PackUV(v.UV0));
+        DataA.Store(IndexOffset + global * 4, local);
     }
     else
     {
-        DataB.Store3(a,asuint(v.P)); DataB.Store(a+12,PackFrame(float4(v.N,1)));
-        uint uv=a+16;
-        if(s.Flags&4){DataB.Store(uv,PackFrame(v.T));uv+=4;}
-        DataB.Store(uv,PackUV(v.UV0));if(s.Flags&16)DataB.Store(uv+4,PackUV(v.UV1));
-        DataB.Store3(d,asuint(v.P)); if(stride==16)DataB.Store(d+12,PackUV(v.UV0));
-        DataB.Store(IndexOffset+global*4,local);
-        PoseB.Store3(p,asuint(v.P)); PoseB.Store3(p+12,asuint(v.N)); PoseB.Store4(p+24,asuint(v.T));
+        DataB.Store3(a, asuint(v.P));
+        DataB.Store(a + 12, PackFrame(float4(v.N, 1)));
+        uint uv = a + 16;
+        if (s.Flags & 4)
+        {
+            DataB.Store(uv, PackFrame(v.T));
+            uv += 4;
+        }
+        DataB.Store(uv, PackUV(v.UV0));
+        if (s.Flags & 16)
+            DataB.Store(uv + 4, PackUV(v.UV1));
+        DataB.Store3(d, asuint(v.P));
+        if (stride == 16)
+            DataB.Store(d + 12, PackUV(v.UV0));
+        DataB.Store(IndexOffset + global * 4, local);
     }
-    // Parent revision의 현재 section/draw/vertex와 교차 계수를 보존한다. cap은 별도 생성 출처다.
-    uint originAddress=global*32;
-    if(side==0){OriginA.Store4(originAddress,v.Origin);OriginA.Store4(originAddress+16,uint4(asuint(v.Parameter),v.TriangleId,0,0));}
-    else{OriginB.Store4(originAddress,v.Origin);OriginB.Store4(originAddress+16,uint4(asuint(v.Parameter),v.TriangleId,0,0));}
 
+    // 부모 revision의 section·draw·정점과 교차 계수를 보존한다.
+    uint originAddress = global * 32;
+    if (side == 0)
+    {
+        OriginA.Store4(originAddress, v.Origin);
+        OriginA.Store4(originAddress + 16, uint4(asuint(v.Parameter), v.TriangleId, 0, 0));
+    }
+    else
+    {
+        OriginB.Store4(originAddress, v.Origin);
+        OriginB.Store4(originAddress + 16, uint4(asuint(v.Parameter), v.TriangleId, 0, 0));
+    }
 }
 // section별 counter로 출력 영역을 확보하고 overflow 시 쓰기 없이 실패한다.
 void EmitTriangle(uint side, uint section, Vertex a, Vertex b, Vertex c)

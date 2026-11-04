@@ -56,12 +56,12 @@ public:
     // GPU 작업 완료 후 생성 geometry를 불변 revision으로 게시한다.
     static std::shared_ptr<const GeometryRevision> FromGenerated(std::shared_ptr<GeometryBuffers> buffers)
     {
-        if (!buffers || !buffers->Source || buffers->Meshes.size() != buffers->PoseOffsets.size())
+        // 원본 소유권과 Data의 draw 범위만 검증한다.
+        if (!buffers || !buffers->Source)
             throw std::invalid_argument("Invalid generated geometry");
         for (size_t i = 0; i < buffers->Meshes.size(); ++i)
         {
             const Mesh& mesh = buffers->Meshes[i];
-            const uint64_t vertices = mesh.vbSize / 28;
             if (mesh.meshCBV != 0 || mesh.numJoints != 0 || (mesh.psoFlags & PSOFlags::kHasSkin)
                 || (mesh.psoFlags & 11) != 11 || mesh.numDraws != 1 || mesh.vbStride != 28 || mesh.ibFormat != DXGI_FORMAT_R32_UINT
                 || mesh.vbSize % 28 || mesh.ibSize % 4 || mesh.draw[0].primCount % 3
@@ -70,11 +70,12 @@ public:
                 || uint64_t(mesh.vbOffset) + mesh.vbSize > buffers->Data.GetBufferSize()
                 || uint64_t(mesh.ibOffset) + mesh.ibSize > buffers->Data.GetBufferSize()
                 || uint64_t(mesh.vbDepthOffset) + mesh.vbDepthSize > buffers->Data.GetBufferSize()
-                || uint64_t(buffers->PoseOffsets[i]) + vertices * 40 > buffers->Pose.GetBufferSize()
                 || (mesh.materialCBV == 0xffff ? buffers->CapMaterial.GetBufferSize() < 256
                     : mesh.materialCBV * 256ull + 256 > buffers->Source->m_MaterialConstants.GetBufferSize()))
                 throw std::invalid_argument("Invalid generated draw descriptor");
         }
+
+        // 검증된 메시를 불변 revision의 section으로 게시한다.
         auto result = std::shared_ptr<GeometryRevision>(new GeometryRevision(buffers->Source, {}));
         for (uint32_t i = 0; i < buffers->Meshes.size(); ++i)
             result->m_Sections.push_back({ i, 0 });

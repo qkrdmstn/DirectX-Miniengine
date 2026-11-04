@@ -8,6 +8,7 @@
 #include "DescriptorHeap.h"
 #include "Texture.h"
 #include "GraphicsCommon.h"
+#include "Utility.h"
 #include "CompiledShaders/ClipTrianglesCS.h"
 #include "CompiledShaders/BoundaryKeysCS.h"
 #include "CompiledShaders/LinkBoundaryCS.h"
@@ -35,12 +36,12 @@ namespace MeshCutting
             static bool initialized = false;
             if (initialized)
                 return;
-            Root.Reset(12);
+            Root.Reset(10);
             Root[0].InitAsConstantBuffer(0);
             Root[1].InitAsConstants(1, 1);
             Root[2].InitAsBufferSRV(0);
             Root[3].InitAsBufferSRV(2);
-            for (uint32_t i = 0; i < 8; ++i)
+            for (uint32_t i = 0; i < 6; ++i)
                 Root[i + 4].InitAsBufferUAV(i);
             Root.Finalize(L"Static cut");
 
@@ -164,7 +165,7 @@ namespace MeshCutting
         compute.SetBufferSRV(2, input.GetDataBuffer());
         compute.SetBufferSRV(3, descriptors);
         compute.TransitionResource(metadata, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        for (uint32_t slot = 4; slot < 12; ++slot)
+        for (uint32_t slot = 4; slot < 10; ++slot)
             compute.SetBufferUAV(slot, metadata);
         compute.Dispatch1D(first, 64);
         graphics.CopyBuffer(readback, metadata);
@@ -251,9 +252,8 @@ namespace MeshCutting
         };
         uint64_t bytes = 0;
 
-        // A/B의 Data·Pose·Provenance 출력 버퍼는 각 양쪽 크기로 따로 정렬한다.
+        // A/B의 Data·Provenance 출력 버퍼는 각 양쪽 크기로 따로 정렬한다.
         bytes += allocated(vertices * 48) * 2;
-        bytes += allocated(vertices * 40) * 2;
         bytes += allocated(vertices * 32) * 2;
         bytes += allocated(sizeof(MaterialConstants)) * 2;
 
@@ -266,7 +266,7 @@ namespace MeshCutting
         bytes += allocated(metadataBytes);
         bytes += allocated(5 * sizeof(uint64_t));
 
-        // 13개 GPU buffer 외 counter·query heap·동적 constant allocator page를 더한다.
+        // 11개 GPU buffer 외 counter·query heap·동적 constant allocator page를 더한다.
         bytes += AllocationGranularity * 3;
 
         // 네 초기 upload 각각의 CPU allocator 사용을 2 MiB 단위로 올림한다.
@@ -290,10 +290,10 @@ namespace MeshCutting
                 throw std::length_error("Static cut diagnostic snapshot exceeds supported buffer size");
             bytes += allocated(dataSnapshotBytes);
 
-            // ValidateDiagnostics의 boundary·양쪽 surface readback과 각 면 DOP pose readback을 합산한다.
+            // ValidateDiagnostics의 boundary·양쪽 surface·provenance와 각 면 DOP Data readback을 합산한다.
             bytes += allocated(segments * 128);
             bytes += allocated(vertices * 48) * 2;
-            bytes += allocated(vertices * 40) * 4;
+            bytes += allocated(vertices * 28) * 2;
             bytes += allocated(vertices * 32) * 2;
         }
         return bytes;
@@ -399,11 +399,30 @@ namespace MeshCutting
                 mesh.pso = Renderer::GetPSO(mesh.psoFlags);
                 XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(mesh.bounds), Vector4(center, radius));
                 out.Meshes.push_back(mesh);
-                out.PoseOffsets.push_back(s.VertexStart * 40);
             }
             if (out.Meshes.empty()) return {};
             out.UncappedSegments = Status[2];
             result[side] = GeometryRevision::FromGenerated(Output[side]);
+        }
+
+        // 진단에서만 양쪽 실제 정점 수와 출력 자원의 정렬된 실제 할당량을 합산한다.
+        if (HasDiagnosticInput)
+        {
+            uint64_t vertices = 0, allocated = 0;
+            for (const auto& out : Output)
+            {
+                for (const auto& mesh : out->Meshes)
+                    vertices += mesh.vbSize / mesh.vbStride;
+                GpuBuffer* buffers[] = { &out->Data, &out->Provenance, &out->CapMaterial };
+                for (auto* buffer : buffers)
+                {
+                    const auto desc = buffer->GetResource()->GetDesc();
+                    allocated += Graphics::g_Device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+                }
+            }
+            Utility::Printf("Cut output bytes: vertices=%llu logicalPerVertex=80 logicalTotal=%llu allocated=%llu\n",
+                static_cast<unsigned long long>(vertices), static_cast<unsigned long long>(vertices * 80),
+                static_cast<unsigned long long>(allocated));
         }
         return result;
     }
@@ -491,7 +510,7 @@ namespace MeshCutting
 
         // 기본 512 MiB를 유지하며 명시 작업 예산도 최대 1024 MiB 안에서만 허용한다.
         retainedLimitBytes = std::max(512ull * 1024 * 1024, std::min(retainedLimitBytes, 1024ull * 1024 * 1024));
-        if (parentBytes + vertices * 240 > retainedLimitBytes)
+        if (parentBytes + vertices * 160 > retainedLimitBytes)
             throw std::length_error("Cut retained geometry budget exceeded (limitBytes=" + std::to_string(retainedLimitBytes) + ")");
 
         // 요청 평면을 component-local로 옮긴다.
@@ -548,9 +567,8 @@ namespace MeshCutting
             out->Source = job->Input->GetSource();
             out->Parent = job->Input;
             out->Generation = generation;
-            out->LineageBytes = parentBytes + vertices * 120;
+            out->LineageBytes = parentBytes + vertices * 80;
             out->Data.Create(L"Cut surface/depth/index", uint32_t(vertices * 48), 1);
-            out->Pose.Create(L"Canonical cut pose", uint32_t(vertices * 40), 1);
             out->Provenance.Create(L"Cut current-parent provenance", uint32_t(vertices * 32), 1);
             out->CapMaterial.Create(L"Cut cap material",1,sizeof(material));
         }
@@ -609,9 +627,9 @@ namespace MeshCutting
         compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
         compute.SetBufferSRV(2, job->Input->GetDataBuffer());
         compute.SetBufferSRV(3, job->Descriptors);
-        GpuBuffer* buffers[] = { &job->Output[0]->Data, &job->Output[0]->Pose, &job->Output[1]->Data,
-            &job->Output[1]->Pose, &job->Metadata, &job->Scratch, &job->Output[0]->Provenance, &job->Output[1]->Provenance };
-        for (uint32_t i = 0; i < 8; ++i)
+        GpuBuffer* buffers[] = { &job->Output[0]->Data, &job->Output[1]->Data,
+            &job->Metadata, &job->Scratch, &job->Output[0]->Provenance, &job->Output[1]->Provenance };
+        for (uint32_t i = 0; i < 6; ++i)
         {
             compute.TransitionResource(*buffers[i], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.SetBufferUAV(i + 4, *buffers[i]);
@@ -657,13 +675,11 @@ namespace MeshCutting
         graphics.InsertTimeStamp(job->Queries.Get(), 3);
         dispatch(5, c.MaxSegments);
 
-        // bounds가 읽을 Data 쓰기를 완료하고 Pose 생산 경로의 기존 barrier도 유지한다.
+        // bounds가 읽을 양쪽 Data 쓰기를 완료한다.
         compute.InsertUAVBarrier(job->Output[0]->Data);
         compute.InsertUAVBarrier(job->Output[1]->Data);
-        compute.InsertUAVBarrier(job->Output[0]->Pose);
-        compute.InsertUAVBarrier(job->Output[1]->Pose);
         dispatch(6, c.VertexCapacity);
-        for (uint32_t i = 0; i < 4; ++i)
+        for (uint32_t i = 0; i < 2; ++i)
             compute.InsertUAVBarrier(*buffers[i]);
         graphics.InsertTimeStamp(job->Queries.Get(), 4);
         graphics.CopyBuffer(job->StatusReadback, job->Metadata);
@@ -682,7 +698,6 @@ namespace MeshCutting
         for (auto& out : job->Output)
         {
             graphics.TransitionResource(out->Data, D3D12_RESOURCE_STATE_GENERIC_READ);
-            graphics.TransitionResource(out->Pose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             graphics.TransitionResource(out->Provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
         job->Fence = graphics.Finish();

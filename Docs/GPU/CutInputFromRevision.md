@@ -1,4 +1,4 @@
-상태: 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 `f7b0bb9c`, CI-4 Pose 독자 Data 이전 D/R 빌드·실행 검증 완료(base `67209feb`); CI-5 남음; 결정 B 강체 부착 유지 (2026-11-04)
+상태: 완료 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 `f7b0bb9c`, CI-4 `6bfa3092`, CI-5 GB::Pose 제거 D/R 빌드·실행 검증(base `6bfa3092`); §6 조건 5(재절단 세대별 법선 각도 오차)와 CI-5 이전 실제 할당량은 미측정; 결정 B 강체 부착 유지 (2026-11-04)
 
 # 절단 입력을 revision 데이터 버퍼로: 애니메이션과 절단 분리
 
@@ -45,11 +45,17 @@ CI-3 검증(MX450, D/R 빌드 exit 0, `-debug 1 -cut-validate 1`, D3D12 ERROR 0)
 - 정밀도: 재절단과 조각 PG의 N/T가 float에서 10 bit로 바뀐다(단계 약 0.002). 기존 0.01 검사는 법선 길이 검사라서 이 변화를 재지 못한다. 그래서 6절에 법선 각도 오차 측정을 따로 둔다.
 
 ### A3. GB::Pose를 없앤다
+CI-5 구현: GB::Pose/PoseOffsets와 생산·수명·바인딩·FromGenerated 검사를 제거하고 UAV 슬롯을 함께 재배치했다.
+Generated PG 검증은 단위 행렬의 CPU Data 디코드로 대체했으며 기존 허용치·로그·탄젠트 제외 규칙을 유지한다.
+출력 논리는 cutter 120→80 B/정점(양쪽 240→160), 패치 92→52 B/정점이며 `-cut-validate 1`에서 실제 출력 할당량을 함께 기록한다.
+
+CI-5 검증(MX450, D/R 빌드 exit 0, D3D12 ERROR 0): CI-4 회귀와 `-cut-count-first 1`, Release B 재절단이 통과했다. 경계 오차는 CI-4와 출력 자릿수까지 같다. 조각 PG와 Data CPU 디코드 차이는 위치 0, N/T 6e-6도 이하다. 출력 논리 용량은 Static 정점당 120→80 B(Data 48+Provenance 32), 패치 92→52 B다. 실제 할당은 용량 예약 때문에 논리보다 크다(Bunny 논리 7.6 MB/할당 43.9 MB, Cube 7.7 KB/384 KB, CesiumMan 패치 0.34 MB/7.7 MB). CI-5 이전 실제 할당은 측정하지 않아 감소량은 논리 값으로만 말한다.
+
 CI-4 구현: `CutBoundsCS`와 출력 진단(DOP·면적·cap checksum·hull 포함), `PairBoundary`는 component-local Data의 P(28 B)를 읽는다. 진단 법선은 packed N을 디코드한다.
+기존 Data UAV(u0/u2)와 루트 바인딩을 유지하고 bounds dispatch 전에 Data UAV barrier를 추가했다.
+Pose 생산·버퍼 수명·`FromGenerated` 검사와 Data/Pose 위치·Generated PG/Pose 교차 검사는 CI-5까지 유지한다.
 
 CI-4 검증(MX450, D/R 빌드 exit 0, D3D12 ERROR 0): CI-3 회귀 10건과 `-skeletal-mask-checks 1`, `-skeletal-patch-offset-copy 1 -skeletal-patch-checks 1`, Bunny DOP·hull·부모 보존 검증이 통과했다. 경계 오차는 CI-4 전과 출력 자릿수까지 같다(Xbot P60 1.041798/2.564214 mm, CesiumMan Debug 40.788208/615.210205 mm, 게시/게시+60).
-기존 Data UAV(u0/u2)와 루트 바인딩을 유지하고 bounds dispatch 전에 Data UAV barrier를 추가했다.
-Pose 생산·버퍼 수명·`FromGenerated` 검사와 Data/Pose 위치·Generated PG/Pose 교차 검사는 CI-5까지 유지한다. 빌드·실행 및 §6 조건 7의 경계 오차 비교는 호출자가 검증한다.
 
 - 결정 B가 강체 유지이므로 생성 정점에 posed 위치 외의 속성은 필요 없다. Pose는 Data의 P/N/T를 float로 한 번 더 담은 중복이다.
 - 독자를 먼저 Data로 옮긴 뒤(`CutBoundsCS`, 진단, `PairBoundary`, A2), 생산자와 버퍼를 없앤다(`WriteVertex`, `PatchExtractCS`, `GeometryBuffers::Pose/PoseOffsets`, `FromGenerated`의 Pose 검사).

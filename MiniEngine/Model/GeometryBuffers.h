@@ -8,12 +8,10 @@ class GeometryRevision;
 struct GeometryBuffers
 {
     ByteAddressBuffer Data;
-    ByteAddressBuffer Pose;
     ByteAddressBuffer Provenance;
     ByteAddressBuffer CapMaterial;
     std::shared_ptr<const GeometryRevision> Parent;
     std::vector<Mesh> Meshes;
-    std::vector<uint32_t> PoseOffsets;
     std::shared_ptr<const Model> Source;
     uint32_t UncappedSegments = 0;
     uint32_t Generation = 1;

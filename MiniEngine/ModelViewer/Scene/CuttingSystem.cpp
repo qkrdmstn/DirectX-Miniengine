@@ -153,7 +153,7 @@ namespace Viewer
             static_cast<unsigned long long>(triangles), static_cast<unsigned long long>(triangles * 9));
         Utility::Printf("Cut budget: parentGen=%u nextGen=%llu lineage=%llu retained=%llu working=%llu limit=%llu reserved=%llu\n",
             parentGeneration, static_cast<unsigned long long>(uint64_t(parentGeneration) + 1),
-            static_cast<unsigned long long>(lineageBytes), static_cast<unsigned long long>(lineageBytes + triangles * 9 * 240),
+            static_cast<unsigned long long>(lineageBytes), static_cast<unsigned long long>(lineageBytes + triangles * 9 * 160),
             static_cast<unsigned long long>(requestedWorking), static_cast<unsigned long long>(m_MemoryLimitBytes),
             static_cast<unsigned long long>(m_ReservedBytes));
     }
@@ -241,7 +241,7 @@ namespace Viewer
                 Utility::Printf("Static cut capacity: draws=%zu segments=%u vertices=%llu workingBytes=%llu retainedBytes=%llu retainedLimitBytes=%llu preflightAllowanceBytes=8388608\n",
                     capacity.SurfaceVertices.size(), capacity.MaxSegments,
                     static_cast<unsigned long long>(vertices), static_cast<unsigned long long>(estimate),
-                    static_cast<unsigned long long>((parent ? parent->LineageBytes : 0) + vertices * 240),
+                    static_cast<unsigned long long>((parent ? parent->LineageBytes : 0) + vertices * 160),
                     static_cast<unsigned long long>(retainedLimit));
             }
             for (size_t draw = 0; draw < capacity.SurfaceVertices.size(); ++draw)

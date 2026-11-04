@@ -218,7 +218,7 @@ namespace MeshCutting
                     continue;
                 }
 
-                // Data의 정점 영역만 읽어 기존 DOP 진단 예약량(정점당 40 B) 안에 유지한다.
+                // Data의 정점 영역만 읽어 정점당 28 B의 DOP 진단 공간을 사용한다.
                 auto& out = *job.Output[side];
                 const uint32_t vertexBytes = job.Constants.VertexCapacity * 28;
                 ReadbackBuffer data;
@@ -365,24 +365,18 @@ namespace MeshCutting
                 surfaceCorners += Status[20 + side * Constants.Sections + section];
             Require(surfaceCorners != 0,"Split result contains only cap triangles");
             auto& out = *Output[side];
-            ReadbackBuffer data, pose, origin;
+            ReadbackBuffer data, origin;
             data.Create(L"Diagnostic packed result", uint32_t(out.Data.GetBufferSize()), 1);
-            pose.Create(L"Diagnostic pose result", uint32_t(out.Pose.GetBufferSize()), 1);
             origin.Create(L"Diagnostic provenance", uint32_t(out.Provenance.GetBufferSize()), 1);
             auto& read = GraphicsContext::Begin(L"Read explicit cut diagnostics");
             read.CopyBuffer(data, out.Data);
-            read.CopyBuffer(pose, out.Pose);
             read.CopyBuffer(origin, out.Provenance);
             read.TransitionResource(out.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
-            read.TransitionResource(out.Pose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             read.TransitionResource(out.Provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             read.Finish(true);
             const ScopedReadback packedMapping(data);
             const auto* packed = packedMapping.Data;
 
-            // Pose는 Data 위치와의 교차 검사에만 사용한다.
-            const ScopedReadback posedMapping(pose);
-            const auto* posed = posedMapping.Data;
             const ScopedReadback provenanceMapping(origin);
             const auto* provenance = provenanceMapping.Data;
             double capArea = 0, volume = 0;
@@ -433,20 +427,8 @@ namespace MeshCutting
                         float((frame >> 10) & 1023u) / 1023.0f * 2.0f - 1.0f,
                         float((frame >> 20) & 1023u) / 1023.0f * 2.0f - 1.0f);
 
-                    // 출력 Data/Pose 위치의 기존 비트 일치와 유한성 검사를 축별로 보고한다.
-                    const auto posedPosition = Read<Math::XMFLOAT3>(posed, size_t(global) * 40);
-                    const float actualPosition[3] = { p.x, p.y, p.z };
-                    const float expectedPosition[3] = { posedPosition.x, posedPosition.y, posedPosition.z };
-                    for (uint32_t axis = 0; axis < 3; ++axis)
-                    {
-                        const bool finite = CheckValue("output position", section, i, axis, actualPosition[axis], expectedPosition[axis], 0);
-                        const bool sameBits = std::memcmp(packed + size_t(global) * 28 + axis * 4,
-                            posed + size_t(global) * 40 + axis * 4, 4) == 0;
-                        if (finite && !sameBits)
-                            Utility::Printf("GPU cut diagnostic FAIL: kind=position bits section=%u vertex=%u axis=%u actual=%.9g expected=%.9g tolerance=0\n",
-                                section, i, axis, actualPosition[axis], expectedPosition[axis]);
-                        Require(finite && sameBits, "Packed/posed position differs or is nonfinite");
-                    }
+                    // Data 위치의 유한성을 검사하고 기존 속성·출처 검사를 유지한다.
+                    Require(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z), "Nonfinite output position");
                     Require(std::isfinite(n.x) && std::abs(n.x*n.x+n.y*n.y+n.z*n.z-1) < 0.01f, "Invalid result normal");
                     Require(Read<uint32_t>(packed, Constants.IndexOffset + global * 4) == i, "Invalid generated index");
                     const auto parent = Read<uint32_t>(provenance, global * 32);

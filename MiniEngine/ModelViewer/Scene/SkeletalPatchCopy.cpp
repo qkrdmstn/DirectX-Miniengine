@@ -1,5 +1,7 @@
 ﻿#include "SkeletalPatchCopy.h"
 #include "CommandListManager.h"
+#include "GraphicsCore.h"
+#include "Utility.h"
 #include "ObjectSelection.h"
 #include "CuttingSystem.h"
 #include "SkeletalAutoRig.h"
@@ -126,12 +128,12 @@ namespace Viewer
             // 여러 C 요청 사이에 파이프라인을 재사용한다.
             static bool initialized = false;
             if (initialized) return;
-            PatchRoot.Reset(14);
+            PatchRoot.Reset(13);
             PatchRoot[0].InitAsConstantBuffer(0);
             for (uint32_t i = 0; i < 4; ++i) PatchRoot[i + 1].InitAsBufferSRV(i);
-            for (uint32_t i = 0; i < 7; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
-            PatchRoot[12].InitAsBufferSRV(4);
-            PatchRoot[13].InitAsBufferUAV(7);
+            for (uint32_t i = 0; i < 6; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
+            PatchRoot[11].InitAsBufferSRV(4);
+            PatchRoot[12].InitAsBufferUAV(6);
             PatchRoot.Finalize(L"Skeletal patch extraction");
             PatchPSO.SetRootSignature(PatchRoot);
             PatchPSO.SetComputeShader(g_pPatchExtractCS, sizeof(g_pPatchExtractCS));
@@ -1051,8 +1053,7 @@ namespace Viewer
         c.Triangles = uint32_t(triangles); c.Draws = uint32_t(draws.size());
         c.DepthOffset = vertices * 28; c.IndexOffset = vertices * 44;
         geometry.Data.Create(L"Patch packed geometry", vertices * 48, 1);
-        geometry.Pose.Create(L"Patch RAW40 pose", vertices * 40, 1);
-        geometry.PoseOffsets.push_back(0);
+        geometry.LineageBytes = uint64_t(vertices) * 48;
         Mesh mesh = input.GetMesh(draws.front().SectionId);
         mesh.vbOffset = 0; mesh.vbStride = 28; mesh.vbSize = vertices * 28;
         mesh.vbDepthOffset = c.DepthOffset; mesh.vbDepthSize = vertices * ((mesh.psoFlags & 64) ? 16 : 12);
@@ -1096,11 +1097,11 @@ namespace Viewer
         compute.SetBufferSRV(3, m_Descriptors); compute.SetBufferSRV(4, m_Masks);
         auto& state = triangleMask ? const_cast<StructuredBuffer&>(triangleMask->State) : m_EmptyState;
         compute.TransitionResource(state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        compute.SetBufferSRV(12, state);
+        compute.SetBufferSRV(11, state);
         compute.TransitionResource(m_Adjacent, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        compute.SetBufferUAV(13, m_Adjacent);
-        GpuBuffer* outputs[] = { &geometry.Data, &geometry.Pose, &m_Output->TriangleSources, &m_Output->LocalBounds, &m_Scan, &m_Votes, &m_Selected };
-        for (uint32_t i = 0; i < 7; ++i)
+        compute.SetBufferUAV(12, m_Adjacent);
+        GpuBuffer* outputs[] = { &geometry.Data, &m_Output->TriangleSources, &m_Output->LocalBounds, &m_Scan, &m_Votes, &m_Selected };
+        for (uint32_t i = 0; i < 6; ++i)
         {
             compute.TransitionResource(*outputs[i], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.SetBufferUAV(i + 5, *outputs[i]);
@@ -1161,7 +1162,6 @@ namespace Viewer
         graphics.TransitionResource(inputData, D3D12_RESOURCE_STATE_GENERIC_READ);
         graphics.TransitionResource(inputPose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         graphics.TransitionResource(geometry.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
-        graphics.TransitionResource(geometry.Pose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         graphics.TransitionResource(m_Output->TriangleSources, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         graphics.TransitionResource(m_Output->LocalBounds, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         m_Fence = graphics.Finish();
@@ -1227,6 +1227,24 @@ namespace Viewer
         mesh.vbSize = vertices * 28; mesh.ibSize = vertices * 4;
         mesh.vbDepthSize = vertices * ((mesh.psoFlags & PSOFlags::kAlphaTest) ? 16 : 12);
         mesh.draw[0].primCount = vertices;
+
+        // 절단 진단 옵션에서만 압축된 논리 출력과 실제 생성한 출력 버퍼 할당량을 기록한다.
+        uint32_t validate = 0;
+        if (CommandLineArgs::GetInteger(L"cut-validate", validate) && validate != 0)
+        {
+            uint64_t allocated = 0;
+            GpuBuffer* buffers[] = { &m_Output->Geometry->Data, &m_Output->TriangleSources, &m_Output->LocalBounds };
+            for (auto* buffer : buffers)
+            {
+                const auto desc = buffer->GetResource()->GetDesc();
+                allocated += Graphics::g_Device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+            }
+            Utility::Printf("Cut output bytes: vertices=%u logicalPerVertex=52 logicalTotal=%llu allocated=%llu\n",
+                vertices, static_cast<unsigned long long>(uint64_t(vertices) * 52),
+                static_cast<unsigned long long>(allocated));
+        }
+
+        // 수집한 출력의 소유권을 넘기고 다음 요청이 사용할 fence 상태를 비운다.
         patch = std::move(m_Output);
         m_Fence = 0;
         return true;

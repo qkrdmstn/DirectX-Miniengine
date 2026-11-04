@@ -84,30 +84,23 @@ namespace
         }
     };
 
-    // 생성 PG와 기존 Pose를 메시별로 비교하며 실제 탄젠트가 있는 메시만 T를 검사한다.
+    // 생성 PG를 CPU의 Data 디코드와 비교하며 실제 탄젠트가 있는 메시만 T를 검사한다.
     void ValidateGeneratedPose(GraphicsContext& context, ByteAddressBuffer& buffer,
         const std::vector<uint32_t>& offsets, const GeometryBuffers& geometry)
     {
-        // 진단 옵션에서만 동기 readback을 만들고 기존 Pose 구간도 연속 배치로 모은다.
+        // 진단 옵션에서만 생성 PG와 packed Data의 동기 readback을 만든다.
         uint32_t enabled = 0;
         if (!CommandLineArgs::GetInteger(L"cut-validate", enabled) || enabled == 0)
             return;
         const uint32_t bytes = static_cast<uint32_t>(buffer.GetBufferSize());
         ReadbackBuffer actualReadback, expectedReadback;
         actualReadback.Create(L"Generated decoded PG readback", bytes, 1);
-        expectedReadback.Create(L"Generated reference Pose readback", bytes, 1);
-        auto& reference = const_cast<ByteAddressBuffer&>(geometry.Pose);
+        auto& reference = const_cast<ByteAddressBuffer&>(geometry.Data);
+        expectedReadback.Create(L"Generated reference Data readback", uint32_t(reference.GetBufferSize()), 1);
         context.CopyBuffer(actualReadback, buffer);
-        context.TransitionResource(reference, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        for (size_t i = 0; i < geometry.Meshes.size(); ++i)
-        {
-            const Mesh& mesh = geometry.Meshes[i];
-            const uint32_t size = mesh.vbSize / mesh.vbStride * PosedGeometry::VertexStride;
-            if (size > 0)
-                context.CopyBufferRegion(expectedReadback, offsets[i], reference, geometry.PoseOffsets.at(i), size);
-        }
+        context.CopyBuffer(expectedReadback, reference);
         context.TransitionResource(buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        context.TransitionResource(reference, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        context.TransitionResource(reference, D3D12_RESOURCE_STATE_GENERIC_READ);
         context.Flush(true);
 
         // 메시별 출력 구간과 플래그로 최대 오차 및 탄젠트 생략 정점 수를 모은다.
@@ -128,9 +121,26 @@ namespace
             // 위치와 법선은 모든 메시의 정점에서 비교한다.
             for (uint32_t vertexIndex = 0; vertexIndex < count; ++vertexIndex)
             {
-                // 위치의 성분별 최대 오차와 법선 각도에 해당 정점 정보를 연결한다.
+                // 단위 행렬의 PreparePoseCS와 같은 UNORM 디코드 및 기본 탄젠트를 적용한다.
                 const float* a = actual.Data + firstFloat + size_t(vertexIndex) * 10;
-                const float* b = expected.Data + firstFloat + size_t(vertexIndex) * 10;
+                const auto* source = reinterpret_cast<const uint8_t*>(expected.Data)
+                    + mesh.vbOffset + size_t(vertexIndex) * mesh.vbStride;
+                float b[10] = { 0, 0, 0, 0, 0, 0, 1, 0, 0, 1 };
+                std::memcpy(b, source, 12);
+                uint32_t packedNormal = 0, packedTangent = 0;
+                std::memcpy(&packedNormal, source + 12, 4);
+                if (hasTangent)
+                    std::memcpy(&packedTangent, source + 16, 4);
+                for (uint32_t axis = 0; axis < 3; ++axis)
+                {
+                    b[3 + axis] = float((packedNormal >> (axis * 10)) & 1023u) / 1023.0f * 2.0f - 1.0f;
+                    if (hasTangent)
+                        b[6 + axis] = float((packedTangent >> (axis * 10)) & 1023u) / 1023.0f * 2.0f - 1.0f;
+                }
+                if (hasTangent)
+                    b[9] = float(packedTangent >> 30) / 3.0f * 2.0f - 1.0f;
+
+                // 위치 성분과 법선 각도 오차를 해당 정점 정보에 연결한다.
                 for (uint32_t axis = 0; axis < 3; ++axis)
                 {
                     const double error = std::abs(double(a[axis]) - b[axis]);
@@ -283,7 +293,7 @@ PosedGeometry::PosedGeometry(const GeometryBuffers& geometry)
             throw std::runtime_error("Generated posed geometry exceeds 4 GiB");
     }
 
-    // Pose 버퍼의 용량이나 희소 offset과 무관하게 필요한 정점 공간만 만든다.
+    // Data의 정점 수로 계산한 연속 PG 공간만 만든다.
     if (size > 0)
         m_Buffer.Create(L"Generated component pose", static_cast<uint32_t>(size), 1);
 }
@@ -324,7 +334,7 @@ void PosedGeometry::UpdateGenerated(GraphicsContext& context, const GeometryBuff
         compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
     }
 
-    // 렌더용 읽기 상태를 복원하고 옵션이 켜진 첫 갱신에서만 기존 Pose와 비교한다.
+    // 렌더용 읽기 상태를 복원하고 옵션이 켜진 첫 갱신에서만 CPU 디코드와 비교한다.
     compute.TransitionResource(m_Buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     compute.TransitionResource(source, D3D12_RESOURCE_STATE_GENERIC_READ);
     ValidateGeneratedPose(context, m_Buffer, m_Offsets, geometry);

@@ -20,14 +20,13 @@ ByteAddressBuffer SourcePose : register(t1);
 StructuredBuffer<DrawInput> Inputs : register(t2);
 StructuredBuffer<uint> Mask : register(t3);
 StructuredBuffer<uint> State : register(t4);
-RWByteAddressBuffer Adjacent : register(u7); // patch id별 인접 제거 삼각형 수
+RWByteAddressBuffer Adjacent : register(u6); // patch id별 인접 제거 삼각형 수
 RWByteAddressBuffer Data : register(u0);
-RWByteAddressBuffer Pose : register(u1);
-RWByteAddressBuffer Sources : register(u2);
-RWByteAddressBuffer Meta : register(u3); // counts 0..8, local AABB 12..32, source world X 36..40
-RWByteAddressBuffer Scan : register(u4); // inclusive prefix, crossing flag
-RWByteAddressBuffer Votes : register(u5); // NodeId별 uint64 (lo, hi)
-RWByteAddressBuffer Chosen : register(u6);
+RWByteAddressBuffer Sources : register(u1);
+RWByteAddressBuffer Meta : register(u2); // counts 0..8, local AABB 12..32, source world X 36..40
+RWByteAddressBuffer Scan : register(u3); // inclusive prefix, crossing flag
+RWByteAddressBuffer Votes : register(u4); // NodeId별 uint64 (lo, hi)
+RWByteAddressBuffer Chosen : register(u5);
 
 // 원본 draw의 R16/R32 인덱스와 baseVertex를 해석한다.
 uint Index(DrawInput s, uint i)
@@ -245,7 +244,6 @@ void main(uint3 id : SV_DispatchThreadID)
         Data.Store3(DepthOffset+v*depthStride,asuint(position));
         if(depthStride==16) Data.Store(DepthOffset+v*depthStride+12,uv0);
         Data.Store(IndexOffset+v*4,v);
-        Pose.Store3(v*40,asuint(position)); Pose.Store3(v*40+12,asuint(normal)); Pose.Store4(v*40+24,asuint(tangent));
         [unroll] for(uint axis=0;axis<3;axis++)
         {
             uint ignored; Meta.InterlockedMin(12+axis*4,Ordered(position[axis]),ignored);
