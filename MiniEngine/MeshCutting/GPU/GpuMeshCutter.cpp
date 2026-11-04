@@ -656,6 +656,10 @@ namespace MeshCutting
         compute.InsertUAVBarrier(job->Metadata);
         graphics.InsertTimeStamp(job->Queries.Get(), 3);
         dispatch(5, c.MaxSegments);
+
+        // bounds가 읽을 Data 쓰기를 완료하고 Pose 생산 경로의 기존 barrier도 유지한다.
+        compute.InsertUAVBarrier(job->Output[0]->Data);
+        compute.InsertUAVBarrier(job->Output[1]->Data);
         compute.InsertUAVBarrier(job->Output[0]->Pose);
         compute.InsertUAVBarrier(job->Output[1]->Pose);
         dispatch(6, c.VertexCapacity);

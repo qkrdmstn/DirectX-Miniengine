@@ -154,7 +154,7 @@ namespace MeshCutting
             }
         }
 
-        // winding을 보존하는 회전만 정규화하고 삼각형 순서와 무관한 cap checksum을 출력한다.
+        // Data 위치의 winding을 보존하고 삼각형 순서와 무관한 cap checksum을 출력한다.
         void PrintCapChecksum(const uint8_t* vertices, const CutSection& section, uint32_t count, uint32_t side)
         {
             // 세 위치의 원시 비트를 읽고 가장 작은 순환 회전을 고른다.
@@ -163,7 +163,7 @@ namespace MeshCutting
             {
                 std::array<std::array<uint32_t, 3>, 3> points;
                 for (uint32_t corner = 0; corner < 3; ++corner)
-                    points[corner] = Read<std::array<uint32_t, 3>>(vertices, size_t(section.VertexStart + tri + corner) * 40);
+                    points[corner] = Read<std::array<uint32_t, 3>>(vertices, size_t(section.VertexStart + tri + corner) * 28);
                 uint32_t first = 0;
                 for (uint32_t rotation = 1; rotation < 3; ++rotation)
                 {
@@ -199,6 +199,7 @@ namespace MeshCutting
         // 각 면 출력 정점을 읽어 CPU에서 double로 18-DOP을 구하고 GPU 값과 절대+상대 허용오차로 비교한다.
         void ValidateSideDop(CutJob& job)
         {
+            // 양쪽 Data의 유효 정점만 GPU DOP와 비교한다.
             for (uint32_t side = 0; side < 2; ++side)
             {
                 // CutBoundsCS와 같은 section별 유효 범위(min(count, capacity))의 정점 수를 센다.
@@ -217,15 +218,16 @@ namespace MeshCutting
                     continue;
                 }
 
-                // 출력 Pose 버퍼를 읽어 오고 원래 상태로 되돌린다.
+                // Data의 정점 영역만 읽어 기존 DOP 진단 예약량(정점당 40 B) 안에 유지한다.
                 auto& out = *job.Output[side];
-                ReadbackBuffer pose;
-                pose.Create(L"Diagnostic DOP pose", uint32_t(out.Pose.GetBufferSize()), 1);
-                auto& read = GraphicsContext::Begin(L"Read cut DOP pose");
-                read.CopyBuffer(pose, out.Pose);
-                read.TransitionResource(out.Pose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                const uint32_t vertexBytes = job.Constants.VertexCapacity * 28;
+                ReadbackBuffer data;
+                data.Create(L"Diagnostic DOP data", vertexBytes, 1);
+                auto& read = GraphicsContext::Begin(L"Read cut DOP data");
+                read.CopyBufferRegion(data, 0, out.Data, 0, vertexBytes);
+                read.TransitionResource(out.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
                 read.Finish(true);
-                const ScopedReadback verticesMapping(pose);
+                const ScopedReadback verticesMapping(data);
                 const auto* vertices = verticesMapping.Data;
 
                 // CPU에서 9개 축의 최솟값/최댓값과 기여 정점 수를 double로 구한다.
@@ -242,7 +244,7 @@ namespace MeshCutting
                     const uint32_t count = std::min(job.Status[20 + side * job.Constants.Sections + section], job.Sections[section].VertexCapacity);
                     for (uint32_t i = 0; i < count; ++i)
                     {
-                        const auto p = Read<Math::XMFLOAT3>(vertices, (job.Sections[section].VertexStart + i) * 40);
+                        const auto p = Read<Math::XMFLOAT3>(vertices, (job.Sections[section].VertexStart + i) * 28);
                         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
                         ++contributing;
                         for (uint32_t axis = 0; axis < 9; ++axis)
@@ -377,8 +379,10 @@ namespace MeshCutting
             read.Finish(true);
             const ScopedReadback packedMapping(data);
             const auto* packed = packedMapping.Data;
-            const ScopedReadback verticesMapping(pose);
-            const auto* vertices = verticesMapping.Data;
+
+            // Pose는 Data 위치와의 교차 검사에만 사용한다.
+            const ScopedReadback posedMapping(pose);
+            const auto* posed = posedMapping.Data;
             const ScopedReadback provenanceMapping(origin);
             const auto* provenance = provenanceMapping.Data;
             double capArea = 0, volume = 0;
@@ -421,19 +425,23 @@ namespace MeshCutting
                 Require(count <= desc.VertexCapacity && count % 3 == 0, "GPU output capacity/count");
                 for (uint32_t i = 0; i < count; ++i)
                 {
+                    // Data의 float 위치와 R10G10B10A2_UNORM 법선을 복원한다.
                     const uint32_t global = desc.VertexStart + i;
-                    const auto p = Read<Math::XMFLOAT3>(vertices, global * 40);
-                    const auto n = Read<Math::XMFLOAT3>(vertices, global * 40 + 12);
+                    const auto p = Read<Math::XMFLOAT3>(packed, size_t(global) * 28);
+                    const uint32_t frame = Read<uint32_t>(packed, size_t(global) * 28 + 12);
+                    const Math::XMFLOAT3 n(float(frame & 1023u) / 1023.0f * 2.0f - 1.0f,
+                        float((frame >> 10) & 1023u) / 1023.0f * 2.0f - 1.0f,
+                        float((frame >> 20) & 1023u) / 1023.0f * 2.0f - 1.0f);
 
                     // 출력 Data/Pose 위치의 기존 비트 일치와 유한성 검사를 축별로 보고한다.
-                    const auto packedPosition = Read<Math::XMFLOAT3>(packed, size_t(global) * 28);
+                    const auto posedPosition = Read<Math::XMFLOAT3>(posed, size_t(global) * 40);
                     const float actualPosition[3] = { p.x, p.y, p.z };
-                    const float expectedPosition[3] = { packedPosition.x, packedPosition.y, packedPosition.z };
+                    const float expectedPosition[3] = { posedPosition.x, posedPosition.y, posedPosition.z };
                     for (uint32_t axis = 0; axis < 3; ++axis)
                     {
                         const bool finite = CheckValue("output position", section, i, axis, actualPosition[axis], expectedPosition[axis], 0);
                         const bool sameBits = std::memcmp(packed + size_t(global) * 28 + axis * 4,
-                            vertices + size_t(global) * 40 + axis * 4, 4) == 0;
+                            posed + size_t(global) * 40 + axis * 4, 4) == 0;
                         if (finite && !sameBits)
                             Utility::Printf("GPU cut diagnostic FAIL: kind=position bits section=%u vertex=%u axis=%u actual=%.9g expected=%.9g tolerance=0\n",
                                 section, i, axis, actualPosition[axis], expectedPosition[axis]);
@@ -501,9 +509,9 @@ namespace MeshCutting
                 // 출력 삼각형별 부모 면적·방향 부피와 cap 면적을 누적한다.
                 for (uint32_t tri = 0; tri < count; tri += 3)
                 {
-                    const auto p0 = Read<Math::XMFLOAT3>(vertices, (desc.VertexStart + tri) * 40);
-                    const auto p1 = Read<Math::XMFLOAT3>(vertices, (desc.VertexStart + tri + 1) * 40);
-                    const auto p2 = Read<Math::XMFLOAT3>(vertices, (desc.VertexStart + tri + 2) * 40);
+                    const auto p0 = Read<Math::XMFLOAT3>(packed, (desc.VertexStart + tri) * 28);
+                    const auto p1 = Read<Math::XMFLOAT3>(packed, (desc.VertexStart + tri + 1) * 28);
+                    const auto p2 = Read<Math::XMFLOAT3>(packed, (desc.VertexStart + tri + 2) * 28);
                     const Math::Vector3 a(p0), b(p1), c(p2);
                     volume += SignedVolume(p0,p1,p2);
                     if (section + 1 < Constants.Sections)
@@ -528,7 +536,7 @@ namespace MeshCutting
             }
 
             // 기존 검사를 마친 cap 위치로 순서 무관 checksum을 기록한다.
-            PrintCapChecksum(vertices, Sections.back(), Status[20 + side * Constants.Sections + Constants.Sections - 1], side);
+            PrintCapChecksum(packed, Sections.back(), Status[20 + side * Constants.Sections + Constants.Sections - 1], side);
 
             // 경계 기준 cap 면적과 양쪽 결과의 방향 부피를 기록한다.
             Require(std::abs(capArea-expectedArea) <= std::max(1.0e-8, expectedArea*0.001), "Cap area does not match closed boundary");

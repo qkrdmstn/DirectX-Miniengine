@@ -65,30 +65,49 @@ void ReduceDop(uint side,bool valid,float3 p,uint tid)
 [numthreads(64,1,1)]
 void main(uint3 id:SV_DispatchThreadID,uint tid:SV_GroupIndex)
 {
+    // 전체 정점 번호에서 소속 section을 찾는다.
     uint vertex=id.x,section=0;
     while(section+1<Sections && vertex>=Inputs[section+1].VertexStart)section++;
     Section s=Inputs[section];
+
+    // 양쪽 Data의 component-local 위치로 AABB와 DOP를 계산한다.
     [unroll]for(uint side=0;side<2;side++)
     {
         uint count=Meta.Load(80+(side*Sections+section)*4);
         bool valid=vertex<VertexCapacity&&vertex>=s.VertexStart&&vertex-s.VertexStart<min(count,s.VertexCapacity);
         float3 p=0;
-        if(valid)p=side==0?asfloat(PoseA.Load3(vertex*40)):asfloat(PoseB.Load3(vertex*40));
+        if (valid)
+        {
+            uint address = s.VertexStart * 28 + (vertex - s.VertexStart) * 28;
+            p = side == 0 ? asfloat(DataA.Load3(address)) : asfloat(DataB.Load3(address));
+        }
+
+        // 그룹별 극값을 축소해 전역 AABB에 합친다.
         uint3 ordered=uint3(Ordered(p.x),Ordered(p.y),Ordered(p.z));
         Minimum[tid]=valid?ordered:uint3(0xffffffff,0xffffffff,0xffffffff);
         Maximum[tid]=valid?ordered:uint3(0,0,0);
         GroupMemoryBarrierWithGroupSync();
         for(uint offset=32;offset>0;offset/=2)
         {
-            if(tid<offset){Minimum[tid]=min(Minimum[tid],Minimum[tid+offset]);Maximum[tid]=max(Maximum[tid],Maximum[tid+offset]);}
+            if(tid<offset)
+            {
+                Minimum[tid]=min(Minimum[tid],Minimum[tid+offset]);
+                Maximum[tid]=max(Maximum[tid],Maximum[tid+offset]);
+            }
             GroupMemoryBarrierWithGroupSync();
         }
         if(tid==0)
         {
             uint ignored;
-            [unroll]for(uint k=0;k<3;k++){Meta.InterlockedMin(32+side*24+k*4,Minimum[0][k],ignored);Meta.InterlockedMax(44+side*24+k*4,Maximum[0][k],ignored);}
+            [unroll]for(uint k=0;k<3;k++)
+            {
+                Meta.InterlockedMin(32+side*24+k*4,Minimum[0][k],ignored);
+                Meta.InterlockedMax(44+side*24+k*4,Maximum[0][k],ignored);
+            }
         }
         GroupMemoryBarrierWithGroupSync();
+
+        // 같은 위치를 18-DOP 축에 투영한다.
         ReduceDop(side,valid,p,tid);
     }
 }

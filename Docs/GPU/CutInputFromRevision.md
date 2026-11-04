@@ -1,4 +1,4 @@
-상태: 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 조각 PG Data 디코드 D/R 빌드·실행 검증 완료(base `6dd6fe35`); CI-4·5는 SP-7 미커밋 파일 커밋 뒤 진행; 결정 B 강체 부착 유지 (2026-11-04)
+상태: 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 `f7b0bb9c`, CI-4 Pose 독자 Data 이전 D/R 빌드·실행 검증 완료(base `67209feb`); CI-5 남음; 결정 B 강체 부착 유지 (2026-11-04)
 
 # 절단 입력을 revision 데이터 버퍼로: 애니메이션과 절단 분리
 
@@ -45,6 +45,12 @@ CI-3 검증(MX450, D/R 빌드 exit 0, `-debug 1 -cut-validate 1`, D3D12 ERROR 0)
 - 정밀도: 재절단과 조각 PG의 N/T가 float에서 10 bit로 바뀐다(단계 약 0.002). 기존 0.01 검사는 법선 길이 검사라서 이 변화를 재지 못한다. 그래서 6절에 법선 각도 오차 측정을 따로 둔다.
 
 ### A3. GB::Pose를 없앤다
+CI-4 구현: `CutBoundsCS`와 출력 진단(DOP·면적·cap checksum·hull 포함), `PairBoundary`는 component-local Data의 P(28 B)를 읽는다. 진단 법선은 packed N을 디코드한다.
+
+CI-4 검증(MX450, D/R 빌드 exit 0, D3D12 ERROR 0): CI-3 회귀 10건과 `-skeletal-mask-checks 1`, `-skeletal-patch-offset-copy 1 -skeletal-patch-checks 1`, Bunny DOP·hull·부모 보존 검증이 통과했다. 경계 오차는 CI-4 전과 출력 자릿수까지 같다(Xbot P60 1.041798/2.564214 mm, CesiumMan Debug 40.788208/615.210205 mm, 게시/게시+60).
+기존 Data UAV(u0/u2)와 루트 바인딩을 유지하고 bounds dispatch 전에 Data UAV barrier를 추가했다.
+Pose 생산·버퍼 수명·`FromGenerated` 검사와 Data/Pose 위치·Generated PG/Pose 교차 검사는 CI-5까지 유지한다. 빌드·실행 및 §6 조건 7의 경계 오차 비교는 호출자가 검증한다.
+
 - 결정 B가 강체 유지이므로 생성 정점에 posed 위치 외의 속성은 필요 없다. Pose는 Data의 P/N/T를 float로 한 번 더 담은 중복이다.
 - 독자를 먼저 Data로 옮긴 뒤(`CutBoundsCS`, 진단, `PairBoundary`, A2), 생산자와 버퍼를 없앤다(`WriteVertex`, `PatchExtractCS`, `GeometryBuffers::Pose/PoseOffsets`, `FromGenerated`의 Pose 검사).
 - 수명과 회계도 같이 고친다: `GeometryBuffers::{~GeometryBuffers,ReleaseGpuResourcesAfterCompletion}`의 Pose 해제, cutter와 `CuttingSystem`의 정점당 120/240 B 계보·예산·로그 계산이다.

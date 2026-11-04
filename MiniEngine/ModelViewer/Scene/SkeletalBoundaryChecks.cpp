@@ -8,8 +8,9 @@ namespace Viewer
 {
     namespace
     {
-        // GPU buffer 전체를 완료까지 기다려 CPU 바이트로 읽는다.
-        std::vector<Math::Vector3> ReadPose(const ByteAddressBuffer& source)
+        // GPU 버퍼를 읽고 지정한 정점 stride의 float3 위치를 복원한다.
+        std::vector<Math::Vector3> ReadPositions(const ByteAddressBuffer& source, uint32_t stride,
+            D3D12_RESOURCE_STATES finalState)
         {
             // 같은 크기의 readback 버퍼로 복사하고 GPU 완료를 기다린다.
             const uint32_t size = uint32_t(source.GetBufferSize());
@@ -18,16 +19,16 @@ namespace Viewer
             auto& context = GraphicsContext::Begin(L"Boundary check copy");
             auto& buffer = const_cast<ByteAddressBuffer&>(source);
             context.CopyBuffer(readback, buffer);
-            context.TransitionResource(buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            context.TransitionResource(buffer, finalState);
             context.Finish(true);
 
             // 매핑한 내용을 복사해 readback 수명과 분리한다.
             const auto* bytes = static_cast<const uint8_t*>(readback.Map());
-            std::vector<Math::Vector3> positions(size / 40);
+            std::vector<Math::Vector3> positions(size / stride);
             for (size_t i = 0; i < positions.size(); ++i)
             {
                 float p[3];
-                std::memcpy(p, bytes + i * 40, sizeof(p));
+                std::memcpy(p, bytes + i * stride, sizeof(p));
                 positions[i] = Math::Vector3(p[0], p[1], p[2]);
             }
             readback.Unmap();
@@ -36,7 +37,7 @@ namespace Viewer
 
     }
 
-    // 두 조각의 baked pose를 읽어 C 시점 경계 정점과 같은 위치끼리 짝짓는다.
+    // 두 조각의 Data 위치를 읽어 C 시점 경계 정점과 같은 위치끼리 짝짓는다.
     bool PairBoundary(const MeshComponent* const pieces[2], const std::vector<BoundaryVertex>& boundary,
         std::vector<BoundaryPair>& pairs)
     {
@@ -49,15 +50,15 @@ namespace Viewer
         {
             const auto& geometry = *pieces[piece]->GetGeometry();
             const auto& baked = *geometry.GetGenerated();
-            const auto positions = ReadPose(baked.Pose);
+            const auto positions = ReadPositions(baked.Data, 28, D3D12_RESOURCE_STATE_GENERIC_READ);
             for (size_t s = 0; s < geometry.GetSections().size(); ++s)
             {
                 const auto& mesh = geometry.GetMesh(s);
                 if (mesh.materialCBV == 0xffff) continue;
-                const size_t base = baked.PoseOffsets.at(geometry.GetSections()[s].SourceMesh);
+                const size_t base = mesh.vbOffset / 28;
                 for (uint32_t v = 0; v < mesh.vbSize / mesh.vbStride; ++v)
                 {
-                    const auto position = positions.at(base / 40 + v);
+                    const auto position = positions.at(base + v);
                     for (uint32_t i = 0; i < boundary.size(); ++i)
                         if (float(Math::Length(position - boundary[i].Local)) <= 1e-5f)
                         {
@@ -67,6 +68,8 @@ namespace Viewer
                 }
             }
         }
+
+        // 원본 경계 정점의 누락 여부를 집계한다.
         Utility::Printf("SP7e2 boundary pairing boundary=%zu matched=%zu pairs=%zu\n", boundary.size(),
             std::count(matched.begin(), matched.end(), true), pairs.size());
         return std::all_of(matched.begin(), matched.end(), [](bool value) { return value; });
@@ -80,7 +83,7 @@ namespace Viewer
         // 같은 프레임의 원본 pose 전체를 읽고 각 mesh의 시작 위치를 구한다.
         const auto& posed = source.GetPosedGeometry();
         if (!posed.IsReady()) return false;
-        const auto positions = ReadPose(posed.GetBuffer());
+        const auto positions = ReadPositions(posed.GetBuffer(), 40, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         const auto& geometry = *source.GetGeometry();
         const Math::Matrix4 sourceWorld(source.GetWorldTransform(owner.GetTransform()));
 
