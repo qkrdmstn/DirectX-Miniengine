@@ -537,6 +537,8 @@ namespace Viewer
         m_CutSectionFrames.clear();
         if (!pose.HasValidPose() || pose.GetModel() != m_Geometry->GetSource())
             return;
+
+        // 생성 조각의 월드 상수를 업로드하고 Data 디코드 결과를 렌더 입력으로 준비한다.
         if (m_Geometry->IsGenerated())
         {
             m_PreparedWorld = GetWorldTransform(owner);
@@ -552,7 +554,9 @@ namespace Viewer
             context.GetCommandList()->CopyBufferRegion(m_ConstantsGPU.GetResource(), 0,
                 m_ConstantsCPU.GetResource(), 0, sizeof(cb));
             context.TransitionResource(m_ConstantsGPU, D3D12_RESOURCE_STATE_GENERIC_READ);
-            m_PosedGeometry->UpdateBaked(context, *m_Geometry->GetGenerated());
+            m_PosedGeometry->UpdateGenerated(context, *m_Geometry->GetGenerated());
+
+            // 생성 Data의 경계를 유지하고 section 행렬은 component-local 단위 행렬로 기록한다.
             m_SectionBounds.clear();
             for (size_t i = 0; i < m_Geometry->GetSections().size(); ++i)
                 m_SectionBounds.emplace_back(reinterpret_cast<const XMFLOAT4*>(m_Geometry->GetMesh(i).bounds));

@@ -1,4 +1,4 @@
-상태: 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 진단 입력 재구성 D/R 빌드·실행 검증 완료(base `7947cfb1`); CI-3~5 남음; 결정 B 강체 부착 유지 (2026-11-04)
+상태: 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 조각 PG Data 디코드 D/R 빌드·실행 검증 완료(base `6dd6fe35`); CI-4·5는 SP-7 미커밋 파일 커밋 뒤 진행; 결정 B 강체 부착 유지 (2026-11-04)
 
 # 절단 입력을 revision 데이터 버퍼로: 애니메이션과 절단 분리
 
@@ -35,6 +35,10 @@
 - 결과: 절단 제출은 이번 프레임에 PG가 갱신됐는지 기다리지 않는다. `CuttingSystem::Submit`의 PG 준비 검사를 없앤다.
 
 ### A2. 조각 PG는 Data에서 한 번 디코드해 채운다
+CI-3 구현: `PosedGeometry::UpdateGenerated`는 기존 `PreparePoseCS`에 28 B Data·생성 flags·단위 위치/법선 행렬을 바인딩하고 skin 없이 최초 한 번만 디코드한다. Generated 생성자는 `count = mesh.vbSize / mesh.vbStride`, `offset[i] = 40 * sum(count[0..i))`, `size = 40 * sum(count)`로 PG를 연속 할당해 렌더의 `meshOutputOffset + baseVertex * 40` 계약을 유지한다. `MeshComponent::Update`가 새 경로를 호출한다. `-cut-validate 1`에서만 첫 PG를 readback해 기존 GB::Pose의 대응 구간과 비교한다(위치 성분 최대 오차 1e-6, 정규화 N/T 최대 각도 0.5도). 로그는 `Generated PG decode PASS: vertices=.. maxPosError=.. maxNormalDeg=.. maxTangentDeg=..`이며 실패 시 FAIL과 예외를 남긴다. GB::Pose 및 `FromGenerated`의 Pose 검사는 유지했다. 빌드·실행 검증은 호출자에게 남긴다.
+
+CI-3 검증(MX450, D/R 빌드 exit 0, `-debug 1 -cut-validate 1`, D3D12 ERROR 0): Cube, `-cut-transform-checks 1`(비균일), Bunny 3회, B 재절단, CesiumMan 패치, `-component-checks 1`, Release Bunny y=-240·45도·패치가 통과했다. 조각 PG와 GB::Pose는 위치가 비트 동일(maxPosError=0)이고 법선 ≤0.093도, 탄젠트 ≤0.089도다. tangent가 없는 mesh는 렌더가 T를 읽지 않으므로 T 비교에서 제외한다(비균일 배율에서 기본 T가 13.06도 달랐던 원인). 진단 로그는 `Utility::Printf` 256바이트 버퍼에 맞게 두 줄로 나눴다.
+
 - `UpdateBaked`의 "GB::Pose 복사"를 "GB::Data 디코드(단위 행렬, skin 없음)"로 바꾼다. `PreparePoseCS`의 디코드를 재사용하는 Generated 전용 dispatch로 만든다.
 - 렌더 경로(`UsePosedVertices`, t21)는 바꾸지 않는다. 조각을 PG 없이 Data VB로 직접 그리는 안은 렌더러 변경이 커서 이번 범위에서 뺀다.
 - PG 할당 크기와 mesh별 offset은 GB::Pose 크기·`PoseOffsets` 대신 Data 정점 수에서 계산한다(Generated 생성자).
