@@ -1,5 +1,7 @@
 #include "CutCommon.hlsli"
 
+// 교차점을 포함한 Clip(교차점 삼각 분할 포함) 결과를 각각의 출력 버퍼에 작성
+// 단면 생성을 위한 교차점 선분 정보를 저장 (실제 생성은 X)
 // 유효한 입력 표면의 양쪽 존재를 기록하고 각 삼각형과 단면 선분을 출력한다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
@@ -129,12 +131,14 @@ void main(uint3 id : SV_DispatchThreadID)
         kind = positive ? 2u : 4u;
         [unroll]
         for (uint edge = 0; edge < 3; edge++)
+        {
             if (d[edge] == 0 && d[(edge + 1) % 3] == 0)
             {
                 enter = v[(edge + 1) % 3].P;
                 exit = v[edge].P;
                 gotEnter = gotExit = true;
             }
+        }
     }
     
     // 유효하지 않은 선분 return
