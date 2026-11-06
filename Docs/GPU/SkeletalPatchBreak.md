@@ -1,6 +1,20 @@
-상태: 진행 중 — SP-7e 게시·부착 구현(미커밋, base `9400691f`); 경계 오차·강제 Stale·캡처 확장 진단 미완료 (2026-11-03)
+상태: 진행 중 — SP-7e 게시·부착 구현; 연속 캡처 시연 옵션·리뷰 수정(미커밋, base `03b5c8a1`, 2026-11-06), 리뷰 수정은 정적 검토만 수행
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
+
+## 연속 캡처 시연 옵션 (2026-11-06, base `03b5c8a1`, 미커밋)
+
+- `ModelViewer::Update`는 `-skeletal-break-demo 1|2`에서 기본 장면·애니메이션·물리 실행을 사용하고 60프레임 이후 정상 `SkeletalPatchCopy::Request`를 한 번 호출한다. 고정 스텝은 `PhysicsStepClock::FixedSeconds`다.
+- `BuildSkeletalBreakPlane`을 `RunBreakChecks`와 공유한다. 1은 Xbot P60→61(JointId 43), 2는 CesiumMan P8→9(JointId 5)이며 현재 본 중점·본 방향 수직의 0.3×0.3 m 평면이다.
+- `FocusBreakCamera`는 요청 시 평면 중심을 향해 `2.5 * normalize(0.5, 0.2, 0.8660254)` m 오프셋으로 한 번 배치한다.
+- `SkeletalPatchCopy::Update`의 Applied·A/B 게시 완료를 `TakeCaptureRequest`로 전달한다. `-capture <prefix>`이면 해당 프레임부터 +0,+20,…,+140에 `<prefix>-demo-000`부터 `007`까지 `-hdr.raw`·`-post.raw`를 저장한다. `-physics-query-exit` 프레임 종료는 게시 성공 후 캡처가 없거나 8장을 모두 저장했을 때 허용한다. 종료 옵션이 없으면 성공 시 창을 유지한다.
+- `-skeletal-break-demo-unmask 1`은 `SetTriangleMask`를 생략하고 break·A/B 부착을 유지한다. 제거 상태·patch id도 게시되지 않으므로 첫 C 게시 이후 수동 C를 포함한 모든 후속 C 요청을 로그와 함께 거절한다. D6 연속 절단을 지원하는 모드가 아니며 재절단에는 재시작이 필요하다. 기본값 0이며 시연 외에는 적용하지 않는다.
+- 시연 요청 이후 pending 작업이 끝났는데 Applied·A/B 게시 신호가 없으면 요청 거절 또는 게시 실패로 판단한다. 오류 로그를 남기고 `IsDone`으로 정상 정리 후 종료하며 캡처나 `-physics-query-exit` 프레임을 기다리지 않는다. 사용자 일시정지 중 실제 step을 기다리는 요청은 실패로 판정하지 않는다.
+- `Startup`은 자동 검사·벤치·자동 절단 옵션과의 동시 지정을 값이 0이어도 `std::invalid_argument`로 거절한다. `skeletal-{patch-break,patch,mask,auto-rig,break}-checks`, `skeletal-break-xbot`, `xbot-arm-checks`, `edit-{target,apply,delete}-checks`, `retired-resource-checks`, `component-checks`, `physics-{sim,query,cut}-checks`, `physics-query-self-test`, `physics-cut-scenario`, `cut`, `cut-benchmark`, `cut-benchmark-out`, `cut-scene`, `cut-transform-checks`, `cut-validate`, `cut-expect-loops`, `cut-expect-publications`, `demo-tower`가 대상이다. `capture`, `physics-query-exit`, 표시·카메라 진단 옵션은 함께 사용할 수 있다.
+- 매 시연 캡처 로그는 카메라 위치, 전방 2.5 m 시선 대상 위치, 물리 활성·실행 상태와 누적 simulation step을 200자 이하 한 줄로 기록한다.
+- 호출자 제공 Release 실행 관찰: 두 모델의 break Applied를 확인했고 CesiumMan은 원본 숨김/비숨김 차이를 확인했다.
+- 같은 관찰에서 Xbot 다리 낙하는 보지 못했으며 일부 실행은 +140f에 카메라가 튀었다. 원인은 미확인이다.
+- 이번 리뷰 수정은 정적 diff와 호출 흐름만 검토했다. 빌드·실행은 수행하지 않았으며 위 관찰은 수정 후 검증 결과가 아니다.
 
 [SkeletalPatchCopyCut.md](SkeletalPatchCopyCut.md)의 SP-6까지 C 입력은 원본 옆 정적 복사본만 자른다. SP-7은 같은 C 입력으로 원본을 실제로 끊는다. 순서는 NDC25 해석([NDC25Reference.md](../NDC/NDC25Reference.md) 5절)의 1~5를 따른다.
 

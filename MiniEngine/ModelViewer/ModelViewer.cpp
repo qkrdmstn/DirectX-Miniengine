@@ -76,6 +76,10 @@ public:
     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
     virtual bool IsDone() override
     {
+        // 시연 요청 거절이나 게시 실패는 캡처를 기다리지 않고 정리 후 종료한다.
+        if (m_SkeletalDemoFailed)
+            return true;
+
         // Xbot 진단 완료 또는 기존 자동 검사 종료 조건을 확인한다.
         if (m_SkeletalMaskDone || m_SkeletalPatchBreakDone || m_XbotArmChecked || m_XbotArmFailed || m_SkeletalChecks.Done || (m_SkeletalPatchChecks && m_SkeletalPatchCheckIndex == 20 && (m_CapturePath.empty() || m_CaptureComplete)))
             return true;
@@ -84,8 +88,11 @@ public:
         if (m_BenchmarkWritten && !m_Cutting.IsBusy())
             return true;
 
+        // 시연 연속 캡처를 마친 뒤 기존 자동 종료 조건을 평가한다.
+        const bool demoReady = !m_SkeletalBreakDemo || (m_DemoAppliedFrame && (m_CapturePath.empty() || m_DemoCaptured == 8));
+
         // 기존 GPU 작업 완료와 사용자 종료 요청을 확인한다.
-        return (m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished() && m_EditApplyChecks.Finished() && m_EditDeleteChecks.Finished())
+        return (demoReady && m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished() && m_EditApplyChecks.Finished() && m_EditDeleteChecks.Finished())
             || (!m_EscapeConsumed && IGameApp::IsDone());
     }
 
@@ -96,6 +103,10 @@ private:
     bool m_SkeletalMaskDone = false;
     uint32_t m_SkeletalPatchBreakChecks = 0;
     bool m_SkeletalPatchBreakDone = false;
+    uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
+    bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+    // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
+    void FocusBreakCamera(const Vector3& center, bool demo);
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
     Viewer::SkeletalJointMode m_SkeletalJointMode = Viewer::SkeletalJointMode::Parent;
     Camera m_Camera;
@@ -286,6 +297,25 @@ static std::string GetDeviceGpuName()
 // 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
+    // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
+    CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
+    if (m_SkeletalBreakDemo)
+    {
+        std::wstring value;
+        for (const wchar_t* option : { L"skeletal-patch-break-checks", L"skeletal-patch-checks",
+            L"skeletal-mask-checks", L"skeletal-auto-rig-checks", L"skeletal-break-checks",
+            L"skeletal-break-xbot", L"xbot-arm-checks", L"edit-target-checks", L"edit-apply-checks",
+            L"edit-delete-checks", L"retired-resource-checks", L"component-checks",
+            L"physics-sim-checks", L"physics-query-checks", L"physics-query-self-test",
+            L"physics-cut-checks", L"physics-cut-scenario", L"cut", L"cut-benchmark",
+            L"cut-benchmark-out", L"cut-scene", L"cut-transform-checks", L"cut-validate",
+            L"cut-expect-loops", L"cut-expect-publications", L"demo-tower" })
+        {
+            if (CommandLineArgs::GetString(option, value))
+                throw std::invalid_argument("skeletal-break-demo cannot be combined with automatic checks, cuts or benchmarks");
+        }
+    }
+
     // 자동 rig 진단 옵션을 읽고 기존 종료 프레임 경로를 사용한다.
     uint32_t autoRigChecks = 0;
     CommandLineArgs::GetInteger(L"skeletal-auto-rig-checks", autoRigChecks);
@@ -390,7 +420,10 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"skeletal-mask-checks", m_SkeletalMaskChecks);
     CommandLineArgs::GetInteger(L"skeletal-patch-checks", m_SkeletalPatchChecks);
     CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", m_SkeletalPatchBreakChecks);
-    if (m_SkeletalPatchBreakChecks) m_UsePhysicsSim = 1;
+    CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
+    if (m_SkeletalBreakDemo > 2) throw std::runtime_error("skeletal-break-demo must be 1 or 2");
+    if (m_SkeletalBreakDemo) m_DemoTower = 0;
+    if (m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo) m_UsePhysicsSim = 1;
 
     // 시작 모드를 검증하며 생략 시 Parent를 유지한다.
     std::wstring jointMode;
@@ -405,14 +438,14 @@ void ModelViewer::Startup( void )
     for (const wchar_t* option : { L"edit-target-checks", L"edit-apply-checks", L"edit-delete-checks",
         L"physics-sim-checks", L"skeletal-break-checks", L"skeletal-break-xbot", L"xbot-arm-checks",
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
-        L"physics-query-exit", L"view",
+        L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask",
         L"capture", L"capture-frame", L"animation-step-ms",
         L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
         L"cut-step-y", L"cut-gap", L"cut-expect-publications", L"physics-cut-checks",
         L"physics-cut-scenario", L"cut-transform-checks", L"cut-validate", L"cut-expect-loops", L"cap-mode" })
         diagnosticScene |= CommandLineArgs::GetString(option, diagnosticValue);
-    const bool defaultScene = !m_DemoTower && !CommandLineArgs::GetString(L"model", gltfFileName);
+    const bool defaultScene = m_SkeletalBreakDemo || (!m_DemoTower && !CommandLineArgs::GetString(L"model", gltfFileName));
 
     if (m_DemoTower)
         CreateDemoTower(m_Scene, Renderer::LoadModel(L"Models/cube.glb", forceRebuild), m_DemoTower);
@@ -425,7 +458,7 @@ void ModelViewer::Startup( void )
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
 
         // 기존 네 모델 뒤에 연속 피부 검증 모델을 추가하고 첫 클립을 반복한다.
-        if (!diagnosticScene || m_SkeletalPatchChecks || m_SkeletalPatchBreakChecks || autoRigChecks)
+        if (!diagnosticScene || m_SkeletalPatchChecks || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || autoRigChecks)
         {
             const auto model = Renderer::LoadModel(L"Models/CesiumMan.glb", forceRebuild);
             m_Scene.CreateObject("CesiumMan", model).PlayAnimation(0);
@@ -504,7 +537,7 @@ void ModelViewer::Startup( void )
     // 세 검사 옵션의 기본 실행 상태를 정하고 명시적인 시작 옵션을 우선 적용한다.
     uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active() || m_DemoTower != 0) ? 1u : 0u;
     CommandLineArgs::GetInteger(L"physics-running",physicsRunning);
-    g_PhysicsRunning = physicsRunning != 0;
+    g_PhysicsRunning = m_SkeletalBreakDemo || physicsRunning != 0;
 
     // 절단 대상의 변환 검사 옵션을 적용한다.
     uint32_t transformChecks = 0;
@@ -678,7 +711,14 @@ void ModelViewer::Update( float deltaT )
     }
 
     // 새 C는 모드를 기록하고 이전 복사본을 공통 삭제 경로로 무효화한다.
-    const bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
+    bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
+    if (cutKey && m_SkeletalPatchCopy.IsUnmaskDemoPublished())
+    {
+        Utility::Printf("Skeletal demo C rejected: unmask demo already published; restart to cut again\n");
+        cutKey = false;
+    }
+
+    // 허용된 C만 이전 준비물을 정리하고 Static 절단 경로로 전달한다.
     if (cutKey)
     {
         Utility::Printf("Skeletal C mode=%s\n", m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent ? "Parent" : "Influence");
@@ -830,8 +870,8 @@ void ModelViewer::Update( float deltaT )
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
     m_SkeletalChecks.BeforeStep(m_Physics);
     const unsigned steps = m_Physics.UpdateFrame(gfxContext,
-        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
-        m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT);
+        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+        m_SkeletalBreakDemo ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
     m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
 
     // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
@@ -849,6 +889,22 @@ void ModelViewer::Update( float deltaT )
     {
         --m_AutoCuts;
         ++m_AutoCutIndex;
+    }
+
+    // 60프레임의 재생 pose에서 기존 case 평면으로 정상 C를 한 번 요청한다.
+    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60 && !m_Cutting.IsBusy())
+    {
+        // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
+        m_SkeletalDemoRequested = true;
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
+            {
+                const auto plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
+                m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
+                FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+                Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
+                break;
+            }
     }
 
     // Static batch 완료 집계를 마친 뒤에만 pending 패치가 단독 절단을 제출한다.
@@ -1029,19 +1085,45 @@ void ModelViewer::Update( float deltaT )
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
+// 절단 중심을 향한 카메라와 이동 제어기의 자세를 한 번 동기화한다.
+void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
+{
+    // 시연은 수평 30도·약간 위에서 2.5 m 거리로 절단 부위를 담는다.
+    const Vector3 offset = demo ? Normalize(Vector3(0.5f, 0.2f, 0.8660254f)) * 2.5f : Vector3(0, 0, 5.5f);
+    m_Camera.SetEyeAtUp(center + offset, center, Vector3(kYUnitVector));
+    m_Camera.Update();
+
+    // 다음 마우스 이동도 새 카메라 자세에서 시작한다.
+    const Vector3 forward = m_Camera.GetForwardVec();
+    static_cast<FlyingFPSCamera*>(m_CameraController.get())->SetHeadingPitchAndPosition(
+        std::atan2(-float(forward.GetX()), -float(forward.GetZ())), std::asin(float(forward.GetY())), m_Camera.GetPosition());
+}
+
 // solid 깊이 뒤 배경과 선택한 표시 모드를 그리고 평면·후처리를 수행한다.
 // opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
-    // 캡처 대상 모델을 화면 가운데에 두고 같은 60프레임 측정 결과를 담는다.
+    // 시연의 게시 프레임을 기록하고 기존 진단 캡처만 모델 중심으로 재배치한다.
     const uint32_t breakCapture = m_SkeletalPatchCopy.TakeCaptureRequest();
-    if (breakCapture)
+    if (breakCapture && m_SkeletalBreakDemo)
+    {
+        m_DemoAppliedFrame = m_QueryFrame;
+        Utility::Printf("Skeletal demo Applied frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
+    }
+
+    // 요청 이후 모든 작업이 끝났는데 게시 신호가 없으면 자동 종료 대기를 해제한다.
+    if (m_SkeletalDemoRequested && !m_DemoAppliedFrame && !m_SkeletalPatchCopy.IsPending() && !m_SkeletalDemoFailed)
+    {
+        Utility::Printf("Skeletal demo ERROR: request rejected or Applied publication failed; exiting\n");
+        m_SkeletalDemoFailed = true;
+    }
+
+    if (breakCapture && !m_SkeletalBreakDemo)
         for (const auto& object : m_Scene.GetObjects())
             if (object->GetName() == (breakCapture == 1 ? "Xbot" : "CesiumMan"))
             {
                 const Vector3 center = object->GetTransform().ToAffine() * object->GetModelInstance()->GetModel()->m_BoundingSphere.GetCenter();
-                m_Camera.SetEyeAtUp(center + Vector3(0, 0, 5.5f), center, Vector3(kYUnitVector));
-                m_Camera.Update();
+                FocusBreakCamera(center, false);
             }
 
     // 독립 픽셀 진단은 기존 프레임 명령 목록을 열기 전에 완료한다.
@@ -1157,20 +1239,39 @@ void ModelViewer::RenderScene( void )
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    // C 진단의 모델별 60프레임 경계 측정과 같은 화면을 저장한다.
-    const bool capture = breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
+    // 시연은 게시 후 지정 간격으로 저장하고 기존 진단은 자체 캡처 조건을 유지한다.
+    const bool demoCapture = m_SkeletalBreakDemo && !m_CapturePath.empty() && m_DemoAppliedFrame && m_DemoCaptured < 8
+        && m_QueryFrame - m_DemoAppliedFrame == m_DemoCaptured * 20;
+    const bool capture = demoCapture || (!m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
-        && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())));
+        && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())))));
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
     {
         // 패치 진단은 45도 blend-zone의 A/B 간격을 모델별 파일에 저장한다.
         m_ActiveCapturePath = m_CapturePath;
-        if (breakCapture)
+        if (breakCapture && !m_SkeletalBreakDemo)
         {
             wchar_t directory[MAX_PATH];
             GetTempPathW(MAX_PATH, directory);
             m_ActiveCapturePath = std::wstring(directory) + L"SP7b/SP7e2-" + (breakCapture == 1 ? L"Xbot" : L"CesiumMan");
+        }
+
+        // 게시 프레임부터 20프레임 간격의 순번을 세 자리 파일 이름에 붙인다.
+        if (demoCapture)
+        {
+            const auto number = std::to_wstring(m_DemoCaptured++);
+            m_ActiveCapturePath += L"-demo-" + std::wstring(3 - number.size(), L'0') + number;
+
+            // 현재 카메라와 전방 2.5 m 시선 대상 및 물리 누적 step을 짧게 기록한다.
+            const Vector3 eye = m_Camera.GetPosition();
+            const Vector3 target = eye + m_Camera.GetForwardVec() * 2.5f;
+            Utility::Printf("Demo cap f=%u i=%u +%u eye=(%.3g,%.3g,%.3g) target=(%.3g,%.3g,%.3g) sim=%u run=%u steps=%llu\n",
+                m_QueryFrame, m_DemoCaptured - 1, m_QueryFrame - m_DemoAppliedFrame,
+                float(eye.GetX()), float(eye.GetY()), float(eye.GetZ()),
+                float(target.GetX()), float(target.GetY()), float(target.GetZ()),
+                m_Physics.IsSimulationEnabled() ? 1u : 0u, m_Physics.IsSimulationRunning() ? 1u : 0u,
+                static_cast<unsigned long long>(m_Physics.GetSimulationStepCount()));
         }
         if (m_SkeletalPatchChecks)
         {

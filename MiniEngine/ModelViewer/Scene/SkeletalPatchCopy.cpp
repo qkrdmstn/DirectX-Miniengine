@@ -167,6 +167,29 @@ namespace Viewer
         return SelectSegmentJoint(pose.GetPoseParents(), positions, palettes, plane, model.m_InfluencingJoints);
     }
 
+    // break 진단과 시연에서 같은 본 쌍의 현재 중점·수직 평면을 재사용한다.
+    MeshCutting::CutPlaneData BuildSkeletalBreakPlane(const GameObject& object, uint32_t index)
+    {
+        // 전완·허벅지·팔의 기존 case 순서로 현재 월드 좌표를 조회한다.
+        const uint32_t nodes[] = { 14, 60, 8 }, children[] = { 15, 61, 9 };
+        const auto& instance = *object.GetModelInstance();
+        const auto frame = JointFrameToWorld(instance, *object.GetMeshComponents().front(), object.GetTransform(), 0);
+        const Math::Vector3 a(frame * instance.GetNodeTransforms()[nodes[index]].GetW());
+        const Math::Vector3 b(frame * instance.GetNodeTransforms()[children[index]].GetW());
+
+        // 본 방향의 법선과 수직 축으로 평면 좌표계를 구성한다.
+        const auto normal = Math::Normalize(b - a);
+        const auto x = Math::Normalize(Math::Cross(normal, std::abs(float(normal.GetY())) < 0.9f
+            ? Math::Vector3(Math::kYUnitVector) : Math::Vector3(Math::kXUnitVector)));
+
+        // 두 본의 중점에서 유한 절단 평면을 생성하고 유효성을 검사한다.
+        MeshCutting::CutPlaneData plane;
+        if (!MeshCutting::TryBuildCutPlaneData({ 0.3f, 0.3f },
+            Math::AffineTransform(Math::Matrix3(x, normal, Math::Cross(x, normal)), (a + b) * 0.5f), plane))
+            throw std::runtime_error("SP7b invalid diagnostic plane");
+        return plane;
+    }
+
     // 실제 C 경로를 스크립트로 실행하고 독립 ancestry 기준으로 Dynamic 집합을 비교한다.
     bool SkeletalPatchCopy::RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting)
     {
@@ -192,25 +215,7 @@ namespace Viewer
             m_StaleStage = 1;
         }
         auto& skeletal = physics.GetSkeletalPhysics();
-        const uint32_t nodes[] = { 14, 60, 8 }, children[] = { 15, 61, 9 }, joints[] = { 7, 43, 5 };
-
-        // 지정 segment의 현재 중점에서 실제 C 입력용 평면을 만든다.
-        const auto buildPlane = [&](const GameObject& object, uint32_t index)
-        {
-            // 최종 본 pose를 월드로 옮겨 segment에 수직인 축을 구성한다.
-            const auto& instance = *object.GetModelInstance();
-            const auto frame = JointFrameToWorld(instance, *object.GetMeshComponents().front(), object.GetTransform(), 0);
-            const Math::Vector3 a(frame * instance.GetNodeTransforms()[nodes[index]].GetW());
-            const Math::Vector3 b(frame * instance.GetNodeTransforms()[children[index]].GetW());
-            const auto normal = Math::Normalize(b - a);
-            const auto x = Math::Normalize(Math::Cross(normal, std::abs(float(normal.GetY())) < 0.9f
-                ? Math::Vector3(Math::kYUnitVector) : Math::Vector3(Math::kXUnitVector)));
-            MeshCutting::CutPlaneData plane;
-            if (!MeshCutting::TryBuildCutPlaneData({ 0.3f, 0.3f },
-                Math::AffineTransform(Math::Matrix3(x, normal, Math::Cross(x, normal)), (a + b) * 0.5f), plane))
-                throw std::runtime_error("SP7b invalid diagnostic plane");
-            return plane;
-        };
+        const uint32_t nodes[] = { 14, 60, 8 }, joints[] = { 7, 43, 5 };
 
         // JointId는 독립 GLB palette 조사값을 쓰고 subtree는 pose ancestry에서 계산한다.
         if (m_CheckAwaiting)
@@ -257,7 +262,7 @@ namespace Viewer
             }
 
             // 현재 segment에 수직인 평면으로 같은 C의 재절단 거절을 확인한다.
-            Request(scene, buildPlane(*object, m_BreakCheck - 1), false, SkeletalJointMode::Parent, UINT32_MAX, &physics);
+            Request(scene, BuildSkeletalBreakPlane(*object, m_BreakCheck - 1), false, SkeletalJointMode::Parent, UINT32_MAX, &physics);
             if (IsPending() || m_Incoming.Status != IncomingJointStatus::AlreadyBroken) throw std::runtime_error("SP7b second C submitted");
             PatchLog("SP7b second C AlreadyBroken PASS\n");
             m_CheckAwaiting = false;
@@ -277,7 +282,7 @@ namespace Viewer
         for (const auto& object : scene.GetObjects())
         {
             if (object->GetName() != (m_BreakCheck < 2 ? "Xbot" : "CesiumMan")) continue;
-            const auto plane = buildPlane(*object, m_BreakCheck);
+            const auto plane = BuildSkeletalBreakPlane(*object, m_BreakCheck);
             PhysicsSystem off(scene);
             Request(scene, plane, false, SkeletalJointMode::Parent, UINT32_MAX, &off);
             if (IsPending()) throw std::runtime_error("SP7b physics off submitted cut");
@@ -358,6 +363,13 @@ namespace Viewer
     void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
         SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics)
     {
+        // 제거 상태와 패치 id가 없는 unmask 게시 이후에는 모든 후속 C를 거절한다.
+        if (IsUnmaskDemoPublished())
+        {
+            PatchLog("Skeletal demo C rejected: unmask demo already published; restart to cut again\n");
+            return;
+        }
+
         // 새 C의 모드를 기록하고 대상 유무와 관계없이 이전 결과를 무효화한다.
         if (m_RequestId) { PatchLog("SP7b C waiting RequestId=%llu\n", m_RequestId); return; }
         m_Mode = mode;
@@ -372,6 +384,13 @@ namespace Viewer
         uint32_t offsetCopy = 0;
         CommandLineArgs::GetInteger(L"skeletal-patch-offset-copy", offsetCopy);
         m_OffsetCopy = offsetCopy != 0;
+
+        // 시연은 정상 C 경로를 사용하고 unmask 비교는 원본 제거 상태 게시를 생략한다.
+        uint32_t unmask = 0;
+        CommandLineArgs::GetInteger(L"skeletal-break-demo", m_Demo);
+        CommandLineArgs::GetInteger(L"skeletal-break-demo-unmask", unmask);
+        m_DemoUnmask = m_Demo && unmask != 0;
+        if (m_Demo) m_OffsetCopy = false;
 
         // 평면 로컬에서 가장 가까운 사각형 점을 월드로 돌려 경계 구와 비교한다.
         using namespace Math;
@@ -610,15 +629,23 @@ namespace Viewer
                         if (m_BreakCheck && !m_ForceStale) m_PieceIds[i] = piece->GetId();
                         pieces.push_back(std::move(piece));
                     }
-                    if (!source->SetTriangleMask(m_Removal)) throw std::runtime_error("SP7e invalid removal mask");
+                    if (!m_DemoUnmask && !source->SetTriangleMask(m_Removal))
+                        throw std::runtime_error("SP7e invalid removal mask");
                     for (auto& piece : pieces) owner->CommitMeshComponent(std::move(piece));
-                    PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=1 nodes=%u/%u\n",
-                        m_Break.Owner, m_Result.PatchTriangles, m_AttachA.NodeId, m_AttachB.NodeId);
+                    PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=%u nodes=%u/%u\n",
+                        m_Break.Owner, m_Result.PatchTriangles, m_DemoUnmask ? 0u : 1u, m_AttachA.NodeId, m_AttachB.NodeId);
 
                     // 같은 프레임에 치환 IB와 새 조각의 렌더 상수 준비를 끝낸다.
                     auto& context = GraphicsContext::Begin(L"Publish attached skeletal pieces");
                     scene.PrepareMeshes(context);
                     context.Finish();
+
+                    // 시연 캡처는 A/B 게시와 렌더 준비가 완료된 프레임부터 시작한다.
+                    if (m_Demo)
+                    {
+                        m_DemoPublished = true;
+                        m_CaptureRequest = m_Demo;
+                    }
 
                     // 실제 게시 프레임의 posed 원본과 부착 조각을 비교한다.
                     if (m_BreakCheck && !m_ForceStale)

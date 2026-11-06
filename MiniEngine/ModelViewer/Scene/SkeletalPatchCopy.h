@@ -15,6 +15,9 @@ namespace Viewer
     // 각 skin 모델의 골격에서 두 segment와 말단의 진단 평면을 배치한다.
     bool BuildSkeletalPatchDiagnosticPlane(const Scene& scene, uint32_t index, MeshCutting::CutPlaneData& plane);
 
+    // break 진단과 시연의 기존 case 평면을 현재 pose에서 구성한다.
+    MeshCutting::CutPlaneData BuildSkeletalBreakPlane(const GameObject& object, uint32_t index);
+
     struct SkeletalPatchResult
     {
         uint32_t PatchTriangles = 0;
@@ -100,7 +103,13 @@ namespace Viewer
             // 추출부터 절단 결과 소비까지 같은 요청으로 취급한다.
             return m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed || m_RequestId || m_BoundaryWait;
         }
-        // 게시 후 N 프레임 뒤 저장할 모델별 캡처 번호를 한 번만 돌려준다.
+        // 제거 상태를 게시하지 않는 unmask 시연의 후속 C 차단 여부를 읽는다.
+        bool IsUnmaskDemoPublished() const
+        {
+            // 게시 이력은 Reset 이후에도 유지해 같은 실행의 재절단을 막는다.
+            return m_DemoUnmask && m_DemoPublished;
+        }
+        // 시연 게시 직후 또는 진단 N 프레임 뒤의 모델별 캡처 번호를 한 번만 돌려준다.
         uint32_t TakeCaptureRequest()
         {
             // 요청이 없으면 0이며 읽은 요청은 즉시 지운다.
@@ -130,7 +139,9 @@ namespace Viewer
         uint32_t m_MaskRevision = 0;
         std::vector<uint32_t> m_Removal;
         NodeAttachment m_AttachA{}, m_AttachB{};
-        bool m_PositiveA = true, m_OffsetCopy = false;
+        bool m_PositiveA = true, m_OffsetCopy = false, m_DemoUnmask = false;
+        uint32_t m_Demo = 0;
+        bool m_DemoPublished = false;
         BreakRequest m_Break;
         BreakStatus m_LastBreakStatus = BreakStatus::NotReady;
         IncomingJointResult m_Incoming;
