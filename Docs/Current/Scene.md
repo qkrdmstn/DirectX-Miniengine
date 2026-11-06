@@ -1,11 +1,11 @@
-상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29); SP-6 `J` Parent/Influence 전환 완료(미커밋, base `329aec7b`, 2026-11-03)
+상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29); SP-6 `J` Parent/Influence 전환 완료(미커밋, base `329aec7b`, 2026-11-03); 스켈레탈 겹침 클릭 깊이 판정은 `Fix cut plane picking near skinned meshes`에 포함(2026-11-06)
 
 # ModelViewer GameObject와 Gizmo
 
 `MiniEngine/ModelViewer`를 작업 디렉터리로 실행하면 Cube·Bunny·Dragon·Xbot이 각각 X=-7.5/-2.5/2.5/7.5에 배치된다.
 Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::PlayAnimation`으로 클립 하나를 지정한다.
 원점의 4×4 청록색 격자는 모델 없는 Cut Plane 객체이며 시작 시 선택된 객체는 없다.
-평면 내부를 클릭하면 선택되고 테두리가 노란색으로 바뀐다. 이동·회전·TRS Undo는 모델과 같다.
+평면 내부를 클릭하면 선택되고 테두리가 노란색으로 바뀐다. 스켈레탈 메시의 경계 구와 겹치면 클릭 위치의 장면 깊이로 평면이 가려지는지 판정한다. 이동·회전·TRS Undo는 모델과 같다.
 평면의 R 크기 모드는 X/Z만 표시하며 중앙 핸들도 XZ만 변경하고 Y는 보존한다.
 평면 선은 장면 깊이에 가려지고 깊이에는 쓰지 않는다. `C`는 현재 평면 영역의 Static 메시를 조회해 GPU 절단한다. 교차 미리보기는 없다.
 기존 `-model <경로>` 인수는 단일 모델을 열고 모든 애니메이션을 반복 재생한다.

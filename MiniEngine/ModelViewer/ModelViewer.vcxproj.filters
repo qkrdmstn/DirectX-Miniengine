@@ -277,6 +277,7 @@
     <FxCompile Include="Scene\Shaders\GizmoPS.hlsl" />
     <FxCompile Include="Scene\Shaders\CutPlaneVS.hlsl" />
     <FxCompile Include="Scene\Shaders\CutPlanePS.hlsl" />
+    <FxCompile Include="Scene\Shaders\CutPlanePickDepthCS.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

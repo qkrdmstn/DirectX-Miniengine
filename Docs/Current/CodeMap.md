@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | 초기화 | `ModelViewer::Startup`, `CutPlaneSystem::CreatePlane` | Scene에 모델 객체와 원점의 4×4 XZ 평면을 만든다. 시작 선택은 없다. |
 | 갱신 | `Scene::Update`, `CutPlaneSystem::PruneStaleObjects` | 모델 자세를 갱신하고 일반 Scene 삭제로 남은 평면 설명을 정리한다. |
-| 선택 | `PickObject`, `CutPlaneSystem::Pick`, `NearestPickHit` | 생성 조각은 경계 구 뒤 충돌 hull 교점을 검사하고 원본 구·유한 직사각형과 월드 거리로 비교한다. |
+| 선택 | `ModelViewer::PickAtCursor`, `PickObject`, `CutPlaneSystem::Pick` | 생성 조각 hull·원본 경계 구·유한 평면을 월드 거리로 비교한다. 스킨 메시 후보와 평면이 겹치면 `ReadCutPlanePickDepth`로 클릭 픽셀의 가림을 확인한다. |
 | 편집 | `TransformGizmo`, `GetEditTargetPivot`, `GizmoMath::KeepPivot` | 생성 Mesh의 경계 중심으로 기즈모를 표시·편집하고 노란 hull 모서리로 선택을 표시한다. 평면 크기 모드는 로컬 X/Z만 바꾼다. |
 | 스냅샷 | `CutPlaneSystem::BuildData`, `TryBuildCutPlaneData` | 평면 설명과 현재 GameObject TRS로 기하 데이터를 계산한다. |
 | cap·진단 | `CapEarsCS::main`, `CutJob::ValidateDiagnostics`, `PrintCapChecksum` | `CAP_THREADS` 기본 256으로 모든 지원 loop에 MC 교대 선택을 적용한다. 1024 이하 공유 캐시와 초과 전역 map은 저장 위치만 다르며 해시 귀 선택은 제거했다. 진단에서 위치 원시 비트와 winding을 보존하는 순서 무관 cap checksum을 출력한다. 현재 구현과 검증은 [MC 통일 기록](../GPU/CapScanMarking.md)을 따른다. |

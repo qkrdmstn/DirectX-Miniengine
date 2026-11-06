@@ -3,6 +3,7 @@
 #include "GraphicsCommon.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
+#include "CompiledShaders/CutPlanePickDepthCS.h"
 #include "CompiledShaders/CutPlaneVS.h"
 #include "CompiledShaders/CutPlanePS.h"
 #include <vector>
@@ -27,6 +28,48 @@ namespace Viewer
             vertex.Color = color;
             vertices.push_back(vertex);
         }
+    }
+
+    // 직전 프레임의 장면 깊이에서 클릭 픽셀 하나를 읽는다.
+    float ReadCutPlanePickDepth(unsigned pixelX, unsigned pixelY, ByteAddressBuffer& sample, ReadbackBuffer& readback)
+    {
+        using namespace Graphics;
+
+        // 첫 겹침 클릭에서 깊이 조회용 파이프라인과 4바이트 버퍼를 준비한다.
+        static RootSignature root;
+        static ComputePSO pso(L"Cut Plane Pick Depth");
+        if (!sample.GetResource())
+        {
+            root.Reset(3, 0);
+            root[0].InitAsConstants(0, 2);
+            root[1].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, 1);
+            root[2].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 0, 1);
+            root.Finalize(L"Cut Plane Pick Depth");
+            pso.SetRootSignature(root);
+            pso.SetComputeShader(g_pCutPlanePickDepthCS, sizeof(g_pCutPlanePickDepthCS));
+            pso.Finalize();
+            readback.Create(L"Cut Plane Pick Readback", 1, sizeof(float));
+            sample.Create(L"Cut Plane Pick Sample", 1, sizeof(float));
+        }
+
+        // 그래픽 큐에서 앞선 프레임의 깊이 쓰기 뒤에 픽셀 조회를 제출한다.
+        auto& context = GraphicsContext::Begin(L"Cut Plane Pick Depth");
+        auto& compute = context.GetComputeContext();
+        context.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        context.TransitionResource(sample, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.SetRootSignature(root);
+        compute.SetPipelineState(pso);
+        compute.SetConstants(0, pixelX, pixelY);
+        compute.SetDynamicDescriptor(1, 0, g_SceneDepthBuffer.GetDepthSRV());
+        compute.SetDynamicDescriptor(2, 0, sample.GetUAV());
+        compute.Dispatch(1, 1, 1);
+        context.CopyBuffer(readback, sample);
+        context.Finish(true);
+
+        // GPU 복사가 끝난 뒤 선택에 쓸 깊이 값만 꺼낸다.
+        const float depth = *static_cast<const float*>(readback.Map());
+        readback.Unmap();
+        return depth;
     }
 
     // 현재 TRS의 네 모서리로 모든 선을 만들어 선택·후속 절단과 같은 기하를 사용한다.

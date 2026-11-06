@@ -231,19 +231,30 @@ namespace
         }
     }
 
-    // 평면 크기 축 제한과 공통 월드 거리 선택을 검사한다.
+    // 평면 크기 축 제한과 월드 거리·장면 깊이 선택을 검사한다.
     void PlaneEditingTests()
     {
+        // 크기 편집이 로컬 Y축을 보존하는지 검사한다.
         const Vector3 initial(2, 3, 4);
         Near(GizmoMath::ScaleComponents(initial, -1, 100, 5), Vector3(2 * std::exp(1.0f), 3, 4 * std::exp(1.0f)),
             "plane center changes XZ and preserves Y");
         Near(GizmoMath::ScaleComponents(initial, 1, 100, 5), initial, "plane Y scaling disabled");
+
+        // 일반 선택은 유효한 월드 거리로 비교한다.
         const PickHit model{1, 5}, plane{2, 3};
         Check(NearestPickHit(model, plane).Id == 2, "closer plane wins");
         Check(NearestPickHit(plane, model).Id == 2, "farther model loses");
         Check(NearestPickHit(model, {2, -1}).Id == 1, "behind candidate ignored");
         Check(NearestPickHit(model, {0, 1}).Id == 1, "invalid object ignored");
         Check(NearestPickHit(model, {2, 5}).Id == 1, "equal distance stable");
+
+        // 스킨 경계 구가 겹칠 때 빈 픽셀과 실제 앞쪽 표면을 구분한다.
+        Check(IsCutPlaneDepthVisible(0.25f, 0.0f), "plane wins over empty scene depth");
+        Check(IsCutPlaneDepthVisible(0.25f, 0.125f), "plane in front of surface is visible");
+        Check(!IsCutPlaneDepthVisible(0.25f, 0.5f), "foreground surface occludes plane");
+        Check(IsCutPlaneDepthVisible(0.25f, 0.25f), "equal depth matches the grid depth test");
+        Check(!IsCutPlaneDepthVisible(1.1f, 0.0f), "plane before the near clip is rejected");
+        Check(!IsCutPlaneDepthVisible(-0.1f, 0.0f), "plane beyond the far clip is rejected");
     }
 
     // pick 결과가 R8 규칙으로 Owner 또는 Mesh 대상이 되는지와 대상 동등 비교를 검사한다.

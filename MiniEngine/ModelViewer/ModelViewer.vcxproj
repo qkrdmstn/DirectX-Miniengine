@@ -134,6 +134,9 @@
     <FxCompile Include="Scene\Shaders\CutPlanePS.hlsl">
       <ShaderType>Pixel</ShaderType>
     </FxCompile>
+    <FxCompile Include="Scene\Shaders\CutPlanePickDepthCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Core/Core.vcxproj">

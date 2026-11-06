@@ -112,6 +112,12 @@ private:
     Camera m_Camera;
     unique_ptr<CameraController> m_CameraController;
 
+    // 겹친 평면과 스킨 메시의 클릭을 마지막 렌더 깊이로 판정한다.
+    Viewer::PickHit PickAtCursor(float x, float y);
+    Camera m_PickDepthCamera;
+    bool m_PickDepthReady = false;
+    ByteAddressBuffer m_PickDepthSample;
+    ReadbackBuffer m_PickDepthReadback;
     D3D12_VIEWPORT m_MainViewport;
     D3D12_RECT m_MainScissor;
 
@@ -681,12 +687,52 @@ void ModelViewer::Cleanup( void )
 
     g_IBLTextures.clear();
 
+    // GPU 읽기를 마친 선택 버퍼를 장치보다 먼저 해제한다.
+    m_PickDepthSample.Destroy();
+    m_PickDepthReadback.Destroy();
     Renderer::Shutdown();
 }
 
 namespace Graphics
 {
     extern EnumVar DebugZoom;
+}
+
+// 겹친 평면과 스킨 메시의 클릭을 마지막 렌더 깊이로 판정한다.
+Viewer::PickHit ModelViewer::PickAtCursor(float x, float y)
+{
+    // 직전 프레임의 깊이와 화면 크기가 맞으면 같은 픽셀 중앙에서 ray를 만든다.
+    const unsigned width = g_SceneDepthBuffer.GetWidth();
+    const unsigned height = g_SceneDepthBuffer.GetHeight();
+    const bool depthReady = m_PickDepthReady && m_MainViewport.Width == float(width) && m_MainViewport.Height == float(height);
+    const unsigned pixelX = std::min(unsigned(x * width), width - 1);
+    const unsigned pixelY = std::min(unsigned(y * height), height - 1);
+    const auto ray = depthReady ? Viewer::MakePickingRay(m_PickDepthCamera,
+        (float(pixelX) + 0.5f - m_MainViewport.TopLeftX) / width,
+        (float(pixelY) + 0.5f - m_MainViewport.TopLeftY) / height) : Viewer::MakePickingRay(m_Camera, x, y);
+
+    // 일반 클릭은 기존 월드 거리로 비교한다.
+    const auto object = Viewer::PickObject(m_Scene, ray);
+    const auto plane = m_CutPlanes.Pick(ray);
+    const auto nearest = Viewer::NearestPickHit(object, plane);
+    if (!depthReady || !object.Id || !plane.Id)
+        return nearest;
+
+    // 스킨 섹션이 있는 원본의 경계 구가 겹친 경우에만 깊이를 확인한다.
+    const auto& geometry = m_Scene.FindObject(object.Id)->FindMeshComponent(object.MeshId)->GetGeometry();
+    size_t section = 0;
+    while (section < geometry->GetSections().size() && !(geometry->GetMesh(section).psoFlags & PSOFlags::kHasSkin))
+        ++section;
+    if (section == geometry->GetSections().size())
+        return nearest;
+
+    // 평면 교점의 reversed-Z 깊이를 같은 픽셀의 장면 깊이와 비교한다.
+    const Vector4 clip = m_PickDepthCamera.GetViewProjMatrix() * Vector4(ray.Origin + ray.Direction * plane.WorldT, 1.0f);
+    if (clip.GetW() <= 0.0f)
+        return object;
+    const float planeDepth = float(clip.GetZ() / clip.GetW());
+    const float sceneDepth = Viewer::ReadCutPlanePickDepth(pixelX, pixelY, m_PickDepthSample, m_PickDepthReadback);
+    return Viewer::IsCutPlaneDepthVisible(planeDepth, sceneDepth) ? plane : object;
 }
 
 // 완료된 절단을 게시하고 최신 pose의 collider를 동기화한 뒤 후보를 제출한다.
@@ -855,12 +901,12 @@ void ModelViewer::Update( float deltaT )
     if (!gizmoInput && !m_Gizmo.IsDragging() && GameInput::IsPressed(GameInput::kMouse1))
         m_CameraController->Update(deltaT);
 
+    // 클릭한 대상과 다음 절단에 사용할 메시 또는 평면을 갱신한다.
     float mouseX, mouseY;
     if (!gizmoInput && GameInput::IsFirstPressed(GameInput::kMouse0) && !GameInput::IsPressed(GameInput::kMouse1) &&
         GameInput::GetMousePosition(mouseX, mouseY))
     {
-        const auto ray = Viewer::MakePickingRay(m_Camera, mouseX, mouseY);
-        const Viewer::PickHit hit = Viewer::NearestPickHit(Viewer::PickObject(m_Scene, ray), m_CutPlanes.Pick(ray));
+        const Viewer::PickHit hit = PickAtCursor(mouseX, mouseY);
         m_Target = Viewer::ResolveEditTarget(m_Scene, hit);
         if (hit.MeshId) { m_CutOwner = hit.Id; m_CutMesh = hit.MeshId; }
         if (m_CutPlanes.Find(hit.Id)) m_ActiveCutPlane = hit.Id;
@@ -1072,6 +1118,7 @@ void ModelViewer::Update( float deltaT )
     // dimensions with an extra pixel.  My solution is to only use positive fractional offsets,
     // but that means that the average sample position is +0.5, which I use when I disable
     // temporal AA.
+    m_PickDepthReady = false;
     TemporalEffects::GetJitterOffset(m_MainViewport.TopLeftX, m_MainViewport.TopLeftY);
 
     m_MainViewport.Width = (float)g_SceneColorBuffer.GetWidth();
@@ -1217,6 +1264,10 @@ void ModelViewer::RenderScene( void )
             }
 
             sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
+
+            // 다음 클릭에서 장면 깊이와 동일한 카메라·뷰포트를 사용한다.
+            m_PickDepthCamera = m_Camera;
+            m_PickDepthReady = true;
             const unsigned planeCount = Viewer::RenderCutPlanes(gfxContext, m_CutPlanes, m_Target.Object,
                 m_Camera, viewport, scissor);
             if (m_ViewDiagnosticPending)
