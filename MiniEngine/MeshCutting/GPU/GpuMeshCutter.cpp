@@ -647,7 +647,7 @@ namespace MeshCutting
         dispatch(0, c.Triangles);
         graphics.InsertTimeStamp(job->Queries.Get(), 1);
 
-        // 모서리 후보의 양쪽 지지 확인 뒤 같은 해시를 끝점 연결에 재사용한다.
+        // 루프에 들어갈 선분을 결정 & 결정된 선분의 양 끝점을 공간해싱
         compute.SetConstant(1, 0, 0);
         dispatch(1, c.MaxSegments);
         compute.SetConstant(1, 0, 1);
@@ -656,7 +656,11 @@ namespace MeshCutting
         dispatch(1, c.HashMask + 1);
         compute.SetConstant(1, 0, 3);
         dispatch(1, c.MaxSegments * 2);
+
+        // 각 선분의 끝점 연결
         dispatch(2, c.MaxSegments);
+
+        // 각 루프마다 대표 선분 지정, 상태 전파 (pointer jumping)
         for (uint32_t reach = 1; reach < c.MaxSegments; reach *= 2)
         {
             compute.SetConstant(1, 0, 0);
@@ -665,9 +669,12 @@ namespace MeshCutting
             dispatch(3, c.MaxSegments);
         }
         graphics.InsertTimeStamp(job->Queries.Get(), 2);
+
+        // earclipping 수행
         compute.SetConstant(1, 0, capMode);
         compute.SetPipelineState(Pipelines[4]);
 
+        // finalize
         // 모든 경계 대표를 처리하도록 큰 입력은 2D dispatch로 펼친다.
         compute.Dispatch(std::min(c.MaxSegments, 65535u), (c.MaxSegments + 65534) / 65535);
         compute.InsertUAVBarrier(job->Scratch);
@@ -675,7 +682,7 @@ namespace MeshCutting
         graphics.InsertTimeStamp(job->Queries.Get(), 3);
         dispatch(5, c.MaxSegments);
 
-        // bounds가 읽을 양쪽 Data 쓰기를 완료한다.
+        // cut bounds bounds가 읽을 양쪽 Data 쓰기를 완료한다.
         compute.InsertUAVBarrier(job->Output[0]->Data);
         compute.InsertUAVBarrier(job->Output[1]->Data);
         dispatch(6, c.VertexCapacity);
