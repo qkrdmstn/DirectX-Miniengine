@@ -1,6 +1,8 @@
 ﻿#include "CuttingSystem.h"
 #include "Utility.h"
 #include "../../Core/GraphicsCore.h"
+#include "../../Core/CommandContext.h"
+#include <stdexcept>
 #include "../../Core/CommandListManager.h"
 #include "Util/CommandLineArg.h"
 #include <array>
@@ -497,7 +499,129 @@ namespace Viewer
         return processed != 0;
     }
 
-    // 입력 변경·삭제·overflow는 원래 geometry를 유지하고 열린 경계는 cap 없이 게시한다.
+    // 완료된 결과의 실제 section 위치만 읽어 부착 해제 조각의 CPU 충돌을 만든다.
+    bool CuttingSystem::BuildDetachedCollision(MeshCutting::CutJob& job, uint32_t side, MiniCollision::AggregateGeom& out)
+    {
+        // 실패는 빈 충돌로 격리해 메시 게시를 계속 허용한다.
+        out.ConvexElems.clear();
+        try
+        {
+            // Poll 완료와 BuildResults가 채운 section 범위를 먼저 검증한다.
+            if (!job.Collected || !job.HasSplit() || side > 1 || !job.Output[side])
+                throw std::runtime_error("Detached result is not ready");
+            auto& result = *job.Output[side];
+            size_t count = 0;
+            size_t bytes = 0;
+            for (const auto& section : result.Meshes)
+            {
+                if (section.vbStride < sizeof(DirectX::XMFLOAT3) || section.vbSize % section.vbStride != 0 ||
+                    uint64_t(section.vbOffset) + section.vbSize > result.Data.GetBufferSize())
+                    throw std::runtime_error("Invalid detached section range");
+                count += section.vbSize / section.vbStride;
+                bytes += section.vbSize;
+            }
+            if (count == 0 || bytes > UINT32_MAX)
+                throw std::runtime_error("Invalid detached vertex count");
+
+            // section마다 정점 범위를 한 번에 복사하고 복사 완료까지 한 번 동기화한다.
+            ReadbackBuffer readback;
+            readback.Create(L"Detached positions", uint32_t(bytes), 1);
+            auto& read = GraphicsContext::Begin(L"Read detached collision positions");
+            read.TransitionResource(result.Data, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            size_t offset = 0;
+            for (const auto& section : result.Meshes)
+            {
+                read.CopyBufferRegion(readback, offset, result.Data, section.vbOffset, section.vbSize);
+                offset += section.vbSize;
+            }
+            read.TransitionResource(result.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
+            read.Finish(true);
+
+            // stride를 따라 위치 float3만 옮긴 뒤 즉시 매핑을 해제한다.
+            std::vector<MiniCollision::Vec3d> points(count);
+            const auto* data = static_cast<const uint8_t*>(readback.Map());
+            size_t point = 0;
+            offset = 0;
+            for (const auto& section : result.Meshes)
+            {
+                for (size_t vertex = 0; vertex < section.vbSize / section.vbStride; ++vertex)
+                {
+                    DirectX::XMFLOAT3 position;
+                    std::memcpy(&position, data + offset + vertex * section.vbStride, sizeof(position));
+                    points[point++] = { position.x, position.y, position.z };
+                }
+                offset += section.vbSize;
+            }
+            readback.Unmap();
+
+            // 유한 위치의 bounds와 가장 긴 기준선을 구한다.
+            using namespace MiniCollision;
+            Vec3d lo = points[0];
+            Vec3d hi = points[0];
+            Vec3d axis{};
+            for (const auto& point : points)
+            {
+                if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+                    throw std::runtime_error("Nonfinite detached position");
+                lo = { std::min(lo.x, point.x), std::min(lo.y, point.y), std::min(lo.z, point.z) };
+                hi = { std::max(hi.x, point.x), std::max(hi.y, point.y), std::max(hi.z, point.z) };
+                const Vec3d delta = point - points[0];
+                if (Dot(delta, delta) > Dot(axis, axis))
+                    axis = delta;
+            }
+
+            // DOP 팽창이 평탄한 입력을 숨기지 않도록 원래 점 집합의 차원을 검사한다.
+            Vec3d normal{};
+            for (const auto& point : points)
+            {
+                const Vec3d cross = Cross(axis, point - points[0]);
+                if (Dot(cross, cross) > Dot(normal, normal))
+                    normal = cross;
+            }
+            double height = 0;
+            for (const auto& point : points)
+                height = std::max(height, std::abs(Dot(normal, point - points[0])));
+            const bool flat = height <= std::sqrt(Dot(normal, normal)) * 1.0e-12;
+            const bool generated = GenerateKDop18(points, out);
+            if (count >= 4 && !flat && generated && TotalVolume(out) > 0)
+                return true;
+
+            // 퇴화 입력은 각 축 두께가 최소 1mm인 bounds box로 대체한다.
+            const Vec3d center = (lo + hi) * 0.5;
+            const Vec3d half = { std::max((hi.x - lo.x) * 0.5, 0.0005),
+                std::max((hi.y - lo.y) * 0.5, 0.0005), std::max((hi.z - lo.z) * 0.5, 0.0005) };
+            out.ConvexElems.clear();
+            out.ConvexElems.resize(1);
+            auto& box = out.ConvexElems[0];
+            for (uint32_t i = 0; i < 8; ++i)
+                box.VertexData.push_back(center + Vec3d{ (i & 1) ? half.x : -half.x,
+                    (i & 2) ? half.y : -half.y, (i & 4) ? half.z : -half.z });
+
+            // 얇은 상자도 병합 오차 없이 닫힌 바깥 감김 삼각형과 경계를 보존한다.
+            box.IndexData = { 0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6,
+                0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7,
+                0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5 };
+            box.UpdateBoundsOnly();
+            if (box.GetVolume() > 0)
+                return true;
+            throw std::runtime_error("Detached bounds box has no volume");
+        }
+        catch (const std::exception& error)
+        {
+            // 진단 길이를 제한하고 부분 생성된 hull도 버린다.
+            Utility::Printf("Detached collision failed: %.160s\n", error.what());
+        }
+        catch (...)
+        {
+            // 알 수 없는 실패도 게시 전체의 거절로 전파하지 않는다.
+            Utility::Printf("Detached collision failed: unknown exception\n");
+        }
+
+        // 호출자는 빈 충돌과 실패 이유로 조각을 게시한다.
+        out.ConvexElems.clear();
+        return false;
+    }
+
     // GPU DOP으로 충돌을 재맞춘 뒤 simulate 대상은 body 교체 transaction 검증을 통과할 때만 게시한다.
     bool CuttingSystem::UpdateOne()
     {
@@ -633,12 +757,16 @@ namespace Viewer
                                 throw std::runtime_error("Attached cut publish world is not ready");
                         }
 
-                        // AR-2에서는 양쪽 충돌을 비우고 node 쪽에만 부착 상태를 넘긴다.
+                        // node 반대쪽만 완료된 결과 위치로 충돌을 만들고 실패해도 게시한다.
+                        if (active.AttachmentSnapshot)
+                            BuildDetachedCollision(job, uint32_t(1 - active.NodeSide), inherited[1 - active.NodeSide]);
+
+                        // node 쪽 빈 충돌과 부착 해제 조각의 식별 이유를 함께 넘긴다.
                         const char* emptyReason = hasInherited ? "no convex after slice" : "parent has no collision";
                         const char* reasonA = active.AttachmentSnapshot
-                            ? (active.NodeSide == 0 ? "node attached" : "detached collision pending") : emptyReason;
+                            ? (active.NodeSide == 0 ? "node attached" : "detached kdop") : emptyReason;
                         const char* reasonB = active.AttachmentSnapshot
-                            ? (active.NodeSide == 1 ? "node attached" : "detached collision pending") : emptyReason;
+                            ? (active.NodeSide == 1 ? "node attached" : "detached kdop") : emptyReason;
                         std::unique_ptr<MeshComponent> preparedB = object->PrepareMeshComponent(results[1]);
                         preparedB->SetPlacement(transform, mode, DeformBinding{});
                         preparedB->SetInheritedCollision(std::move(inherited[1]), results[1]->GetId(), reasonB);

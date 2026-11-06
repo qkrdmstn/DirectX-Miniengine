@@ -85,7 +85,9 @@ namespace Viewer
             for (const auto& mesh : object->GetMeshComponents())
             {
                 if (object->GetId() == m_FloorOwner) continue;
-                if (mesh->Attachment || !mesh->PublishVisible || mesh->GetCollision().ConvexElems.empty()) continue;
+                const bool detached = std::strcmp(mesh->GetCollisionReason(), "detached kdop") == 0;
+                if (mesh->Attachment || !mesh->PublishVisible ||
+                    (!detached && mesh->GetCollision().ConvexElems.empty())) continue;
                 const Key key(object->GetId(), mesh->GetId());
                 const Math::Matrix4 matrix(mesh->GetWorldTransform(object->GetTransform()));
                 const auto previous = m_Bodies.find(key);
@@ -103,9 +105,26 @@ namespace Viewer
                 entry.EditGeneration = mesh->GetEditGeneration();
                 entry.World = matrix;
                 entry.ReservedAtFailure = m_World.GetReservedCount();
+
+                // 부착 해제 조각의 실패만 200자 이내로 식별해 기록한다.
+                const auto logDetachedFailure = [&](const char* reason)
+                {
+                    // 두 ID가 최대 길이여도 전체 로그가 200자를 넘지 않게 제한한다.
+                    if (detached)
+                        Utility::Printf("Detached piece body failed: owner=%llu mesh=%llu %.100s\n",
+                            key.first, key.second, reason);
+                };
+                if (detached && mesh->GetCollision().ConvexElems.empty())
+                {
+                    logDetachedFailure("collision unavailable");
+                    continue;
+                }
+
+                // 기존 TRS 거절 경로에서도 부착 해제 조각의 출처를 기록한다.
                 SceneTransform world;
                 if (!SceneTransform::TryFromAffine(mesh->GetWorldTransform(object->GetTransform()), world))
                 {
+                    logDetachedFailure("unsupported world TRS");
                     Utility::Printf("Physics body rejected: owner=%llu mesh=%llu unsupported world TRS\n", key.first, key.second);
                     continue;
                 }
@@ -126,15 +145,25 @@ namespace Viewer
                 std::string error;
                 if (!m_World.PrepareBody(desc, prepared, &error))
                 {
+                    logDetachedFailure(error.c_str());
                     Utility::Printf("Physics body rejected: owner=%llu mesh=%llu %s\n", key.first, key.second, error.c_str());
                     continue;
                 }
 
                 // 준비가 끝난 body와 월드 독립 배치를 같은 장면 경계에서 게시한다.
-                if (!mesh->MakeWorldIndependent(object->GetTransform())) continue;
+                if (!mesh->MakeWorldIndependent(object->GetTransform()))
+                {
+                    logDetachedFailure("world independent placement failed");
+                    continue;
+                }
                 entry.Handle = m_World.CommitBody(std::move(prepared), true);
                 mesh->m_Simulating = entry.Handle != MiniPhysics::InvalidBody;
                 entry.EditGeneration = mesh->GetEditGeneration();
+                if (detached && !mesh->m_Simulating)
+                {
+                    logDetachedFailure("body commit failed");
+                    continue;
+                }
                 Utility::Printf("Physics body registered: owner=%llu mesh=%llu body=%llu\n", key.first, key.second, entry.Handle);
             }
     }

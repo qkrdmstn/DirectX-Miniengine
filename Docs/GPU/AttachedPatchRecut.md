@@ -1,4 +1,4 @@
-상태: 진행 중 — AR-1 `a4d337b1`, AR-2 후보 허용·node 쪽 판정·Attachment 승계 완료(D/R 빌드, break checks D/R 회귀 동일; 실제 재절단 화면은 AR-4 검사로 확인 예정), AR-3~4 미착수 (2026-11-06)
+상태: 진행 중 — AR-1 `a4d337b1`, AR-2 `1a017f5a`, AR-3 반대쪽 조각 KDOP 충돌·body 등록 경로 완료(D/R 빌드, break checks·cube 회귀 동일; 실제 낙하는 AR-4 검사로 확인 예정), AR-4 미착수 (2026-11-06)
 
 # 부착 패치 조각의 Static 재절단
 
@@ -111,6 +111,12 @@ bool BuildDetachedCollision(CutJob& job, uint32_t side, MiniCollision::Aggregate
 | AR-2 | D3·D4·D5: 후보 허용, node 쪽 판정, Attachment 승계·해제. 반대쪽은 제자리에 남고 body는 없다. |
 | AR-3 | D6: 위치 readback, `GenerateKDop18`, 최소 두께, `SyncBodies` 등록과 낙하, 실패 로그. |
 | AR-4 | 진단 옵션 `-attached-recut-checks 1`(break 시연 뒤 부착 패치 자동 재절단, §6 판정), CodeMap/README/Scene.md 동기화. |
+
+AR-3 구현(미커밋): `CuttingSystem::UpdateOne`은 `Poll` 완료·`BuildResults` 뒤 반대쪽에만
+`BuildDetachedCollision`을 호출한다. 실제 section 범위의 float3 위치를 단일 readback에 모아
+`Finish(true)` 후 읽고 `GenerateKDop18`로 CPU 인덱스까지 생성한다. 퇴화 시 최소 두께 1 mm인
+bounds box로 대체하며, 예외 시 빈 충돌로 게시한다. `detached kdop` 이유를 보존해
+`PhysicsSystem::SyncBodies`가 등록 실패를 200자 이내로 기록한다. 빌드·실행은 사용자 지시로 미수행이다.
 
 각 단계가 끝나면 로컬에서 커밋한다. 회귀 항목은 `-skeletal-patch-break-checks 1`, `-skeletal-break-demo 1/2`, 기존 Static 절단 사례다.
 

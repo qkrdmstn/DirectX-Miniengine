@@ -94,6 +94,8 @@ namespace Viewer
         // 예외 원인을 소유 버퍼에 보존하고 대상·용량 진단을 할당 없이 기록한다.
         void RejectInput(ObjectId owner, ComponentId mesh, const GeometryRevision& geometry,
             uint64_t requestedWorking, const char* reason) noexcept;
+        // 완료된 반대쪽 결과의 위치를 읽어 독립 조각 충돌을 만든다.
+        bool BuildDetachedCollision(MeshCutting::CutJob& job, uint32_t side, MiniCollision::AggregateGeom& out);
         // Update에서 front 하나의 완료 결과만 장면에 반영한다.
         bool UpdateOne();
         // 여러 후보 중 하나라도 성공했으면 마지막 비교차 후보가 성공 안내를 덮지 않는다.

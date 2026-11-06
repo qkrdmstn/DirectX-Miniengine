@@ -262,7 +262,9 @@ namespace Viewer
         else
         {
             m_CollisionStatus = ComponentCollisionStatus::Inherited;
-            m_CollisionReason.clear();
+
+            // 부착 해제 출처만 body 등록 실패 진단에 사용할 수 있도록 보존한다.
+            m_CollisionReason = emptyReason && std::strcmp(emptyReason, "detached kdop") == 0 ? emptyReason : "";
         }
         return true;
     }
@@ -479,7 +481,12 @@ namespace Viewer
             prepared->CollisionReason = emptyReason;
         }
         else
+        {
+            // 유효 충돌도 부착 해제 출처만 선택적으로 보존한다.
             prepared->CollisionStatus = ComponentCollisionStatus::Inherited;
+            if (emptyReason && std::strcmp(emptyReason, "detached kdop") == 0)
+                prepared->CollisionReason = emptyReason;
+        }
         prepared->Geometry = std::move(geometry);
         return prepared;
     }
