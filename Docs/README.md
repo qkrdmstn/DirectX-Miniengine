@@ -32,6 +32,7 @@
 | [CutInputFromRevision.md](GPU/CutInputFromRevision.md) | Static 절단 입력을 PG에서 revision Data+section 행렬로 교체, GB::Pose 제거, 패치 조각 강체 유지 결정 | 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 `f7b0bb9c`, CI-4 `6bfa3092`, CI-5 GB::Pose 제거 D/R 검증 완료; 재절단 법선 오차 미측정 (2026-11-04) |
 | [SkeletalPatchCopyCut.md](GPU/SkeletalPatchCopyCut.md) | C 입력으로 영향 본 선택→패치 GPU 복사→정적 복사본 무한 절단 | 진행 중 — SP-7e 게시·부착 구현(미커밋, base `9400691f`); 경계 오차·강제 Stale·캡처 확장 진단 미완료 (2026-11-03) |
 | [SkeletalPatchBreak.md](GPU/SkeletalPatchBreak.md) | SP-7: 선택 joint BreakConstraint, 자동 rig, 원본 숨김(상태 버퍼+치환 IB), A/B node 부착 | 진행 중 — SP-7e 게시·부착 및 연속 캡처 시연 옵션(미커밋, base `03b5c8a1`, 2026-11-06); 시연 후속 C 거절·실패 종료·진단 옵션 격리; 호출자 Release 관찰 기록, 리뷰 수정 빌드·실행 미수행 |
+| [AttachedPatchRecut.md](GPU/AttachedPatchRecut.md) | 부착 패치 조각 Static 재절단: node 쪽 부착 유지, 반대쪽 독립 낙하 | 설계안 — 사용자 결정 (b) 반영, 구현 전 (2026-11-06) |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
@@ -50,6 +51,7 @@
 | [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — 7a~7d 완료, `26302519` 기반 바닥 최소 1,000×1,000 m 확장; 8단계 전체 검증 미진행 (2026-10-28) |
 | [BreakConstraintDesign.md](Physics/BreakConstraintDesign.md) | UE5.3.2 관절 해제·Actor 유지·physics pose 반영 원리 | 설계안 — `5f56b93d` 재대조, 구현 계약은 아래 인계 문서 참조 (2026-10-28) |
 | [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트 | 완료 — M1(BC-00~BC-13a) `0c7fcaa7` (2026-10-30). 실제 큐6/6 NotFound 자동 검사, CPU 두 구성·Debug/Release 빌드·Debug 회귀 PASS, 결과 버리기 변형 FAIL·SHA-256 복구. 수명 리소스0·D3D12 ERROR0. BC-09/14 GPU 절단은 후속 (2026-10-30) |
+| [RagdollPartGizmo.md](Physics/RagdollPartGizmo.md) | break 후 떨어진 Dynamic 성분과 kinematic 몸의 개별 기즈모, owner 이동 비추종 | 설계안 — 사용자 결정 반영, 구현 전 (2026-11-06) |
 
 ## NDC — 기법 근거
 
