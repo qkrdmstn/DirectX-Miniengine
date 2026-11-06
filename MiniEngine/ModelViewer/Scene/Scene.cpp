@@ -245,6 +245,34 @@ namespace Viewer
         return object->m_ModelInstance->FinalizePose(overrides, overrideCount);
     }
 
+    // 부착 조각과 같은 owner의 원본 pose에서 현재 node 월드를 계산한다.
+    bool Scene::TryGetAttachmentNodeWorld(const MeshComponent& piece, Math::Matrix4& nodeWorld) const
+    {
+        // 부착이 없거나 Scene 소유 컴포넌트가 아니면 계산하지 않는다.
+        if (!piece.Attachment) return false;
+        for (const auto& object : m_Objects)
+        {
+            if (object->FindMeshComponent(piece.GetId()) != &piece) continue;
+            const auto& attachment = *piece.Attachment;
+            const auto* instance = object->GetModelInstance();
+            const auto* source = object->FindMeshComponent(attachment.SourceMesh);
+            if (!source || !instance || !instance->HasValidPose()) return false;
+            if (attachment.NodeId >= instance->GetModel()->m_NumNodes) return false;
+
+            // C snapshot과 같은 첫 skin section의 E와 확정 node pose를 사용한다.
+            size_t section = 0;
+            const auto& geometry = *source->GetGeometry();
+            while (section < geometry.GetSections().size() && !geometry.GetMesh(section).numJoints) ++section;
+            if (section == geometry.GetSections().size()) return false;
+            const auto* nodes = instance->GetNodeTransforms();
+            nodeWorld = Math::Matrix4(source->GetWorldTransform(object->GetTransform()))
+                * Invert(Math::Matrix4(source->GetDeformBinding().SourceFrame.ToAffine()))
+                * nodes[geometry.GetMesh(section).meshCBV] * nodes[attachment.NodeId];
+            return true;
+        }
+        return false;
+    }
+
     // CPU pose를 다시 평가하지 않고 각 컴포넌트의 GPU geometry를 준비한다.
     void Scene::PrepareMeshes(GraphicsContext& context)
     {
@@ -262,18 +290,8 @@ namespace Viewer
                 if (mesh->Attachment)
                 {
                     const auto& attachment = *mesh->Attachment;
-                    const auto* source = object->FindMeshComponent(attachment.SourceMesh);
-                    if (!source || !object->m_ModelInstance->HasValidPose()) continue;
-                    const auto* nodes = object->m_ModelInstance->GetNodeTransforms();
-
-                    // C snapshot과 같은 첫 skin section의 E를 사용한다.
-                    size_t section = 0;
-                    const auto& geometry = *source->GetGeometry();
-                    while (section < geometry.GetSections().size() && !geometry.GetMesh(section).numJoints) ++section;
-                    if (section == geometry.GetSections().size()) continue;
-                    const Math::Matrix4 nodeWorld = Math::Matrix4(source->GetWorldTransform(object->m_Transform))
-                        * Invert(Math::Matrix4(source->GetDeformBinding().SourceFrame.ToAffine()))
-                        * nodes[geometry.GetMesh(section).meshCBV] * nodes[attachment.NodeId];
+                    Math::Matrix4 nodeWorld;
+                    if (!TryGetAttachmentNodeWorld(*mesh, nodeWorld)) continue;
                     SceneTransform world;
                     if (!SceneTransform::TryFromAffine(Math::AffineTransform(nodeWorld
                         * Invert(attachment.NodeWorldAtCut) * attachment.PieceWorldAtCut), world)) continue;

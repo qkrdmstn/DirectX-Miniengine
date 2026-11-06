@@ -45,9 +45,11 @@ namespace Viewer
     // 기존 Static 절단과 동일한 입력 지원 범위를 검사한다.
     bool PhysicsSystem::IsEligible(const MeshComponent& mesh)
     {
-        // 본 부착 조각과 미게시 준비물에는 조회 body를 만들지 않는다.
-        if (mesh.Attachment || !mesh.PublishVisible) return false;
+        // 미게시 준비물과 pose 미준비 입력은 조회 후보에서 제외한다.
+        if (!mesh.PublishVisible) return false;
         if (!mesh.HasPoseBounds() || !mesh.GetPosedGeometry().IsReady()) return false;
+
+        // 빈 section과 skin PSO 제외는 부착 여부와 무관하게 유지한다.
         const auto& geometry = mesh.GetGeometry();
         if (geometry->GetSections().empty()) return false;
         for (size_t i = 0; i < geometry->GetSections().size(); ++i)
@@ -183,6 +185,7 @@ namespace Viewer
 
         // 최종 후보의 부착 입력만 요청 시점 component-local 좌표로 고정한다.
         std::vector<CutCandidate> result;
+        size_t attachmentRejected = 0;
         for (const auto& key : keys)
         {
             const auto& entry = m_Entries.at(key);
@@ -193,6 +196,24 @@ namespace Viewer
             const auto* mesh = object->FindMeshComponent(candidate.Mesh);
             if (mesh->Attachment)
             {
+                // 요청 순간 node 원점의 월드 거리로 결과 side를 고정한다.
+                Math::Matrix4 nodeWorld;
+                if (!m_Scene.TryGetAttachmentNodeWorld(*mesh, nodeWorld))
+                {
+                    ++attachmentRejected;
+                    continue;
+                }
+                const float distance = float(Math::Dot(plane.WorldPlane, nodeWorld.GetW()));
+                if (std::abs(distance) <= 0.001f)
+                {
+                    Utility::Printf("Static cut rejected: ambiguous node side owner=%llu mesh=%llu\n",
+                        static_cast<unsigned long long>(candidate.Owner), static_cast<unsigned long long>(candidate.Mesh));
+                    ++attachmentRejected;
+                    continue;
+                }
+                candidate.NodeSide = distance > 0.0f ? 0 : 1;
+
+                // 절단 local 좌표와 부착 기준은 같은 요청 순간의 값으로 보관한다.
                 candidate.AttachmentSnapshot = std::make_shared<const NodeAttachment>(*mesh->Attachment);
                 const auto inverse = Invert(candidate.World);
                 candidate.LocalPlane = plane;
@@ -215,7 +236,7 @@ namespace Viewer
                     if (!std::binary_search(keys.begin(),keys.end(),entry.first))
                         throw std::runtime_error("Jolt cut query missed a bounds candidate");
                 }
-            if (expected != result.size()) throw std::runtime_error("Jolt cut query candidate mismatch");
+            if (expected != result.size() + attachmentRejected) throw std::runtime_error("Jolt cut query candidate mismatch");
             Utility::Printf("Physics cut query validation passed: candidates=%zu indexed=%zu fallback=%zu\n",
                 result.size(),GetColliderCount(),GetFallbackCount());
         }

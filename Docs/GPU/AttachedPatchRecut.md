@@ -1,4 +1,4 @@
-상태: 진행 중 — AR-1 부착 추종 세대 분리·요청 좌표 snapshot 완료(D/R 빌드, break checks·cube 반복 절단 회귀 동일), AR-2~4 미착수 (2026-11-06)
+상태: 진행 중 — AR-1 `a4d337b1`, AR-2 후보 허용·node 쪽 판정·Attachment 승계 완료(D/R 빌드, break checks D/R 회귀 동일; 실제 재절단 화면은 AR-4 검사로 확인 예정), AR-3~4 미착수 (2026-11-06)
 
 # 부착 패치 조각의 Static 재절단
 

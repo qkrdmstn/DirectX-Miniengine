@@ -161,12 +161,34 @@ namespace Viewer
     // 단일 대상 요청이 진행 중인 일괄 절단에 끼어들지 않도록 검사한다.
     bool CuttingSystem::Request(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
     {
-        if (IsBusy()) { m_StatusText = "Busy - wait for the current cut"; return false; }
+        // 진행 중인 작업이 있으면 단일 요청을 받지 않는다.
+        if (IsBusy())
+        {
+            m_StatusText = "Busy - wait for the current cut";
+            return false;
+        }
+
+        // 요청별 예산과 진단 집계를 초기화한다.
         m_MemoryLimitBytes = ReadCutMemoryLimitBytes();
         m_PeakReservedBytes = 0;
         m_PeakRetiredBytes = 0;
         m_UpdateMaxMs = 0;
         m_ProcessedMaxPerFrame = 0;
+
+        // 부착 단일 요청도 후보 생성의 side 판정과 snapshot 계약을 사용한다.
+        const auto* object = m_Scene.FindObject(owner);
+        const auto* mesh = object ? object->FindMeshComponent(meshId) : nullptr;
+        if (mesh && mesh->Attachment)
+        {
+            const auto candidates = m_Physics.QueryCutCandidates(plane, worldEpsilon);
+            for (const auto& candidate : candidates)
+                if (candidate.Owner == owner && candidate.Mesh == meshId)
+                    return Submit(owner, meshId, plane, publish, worldEpsilon, capMode, &candidate);
+            m_StatusText = "No eligible attached mesh in the cut area";
+            return false;
+        }
+
+        // 비부착 단일 요청은 기존 직접 제출 경로를 유지한다.
         return Submit(owner,meshId,plane,publish,worldEpsilon,capMode);
     }
 
@@ -283,6 +305,7 @@ namespace Viewer
         active.EditGeneration = mesh->GetEditGeneration();
         active.World = Math::Matrix4(world);
         active.AttachmentSnapshot = std::move(attachmentSnapshot);
+        active.NodeSide = candidate ? candidate->NodeSide : -1;
         active.Publish = publish;
         active.ReservedBytes = estimate;
         m_ReservedBytes += estimate;
@@ -490,7 +513,7 @@ namespace Viewer
             MeshComponent* targetMesh = target ? target->FindMeshComponent(active.Mesh) : nullptr;
             const bool current = targetMesh && targetMesh->GetGeometry() == active.Input &&
                 targetMesh->GetEditGeneration() == active.EditGeneration;
-            if (current && targetMesh->IsSimulating() && m_Budget.ShouldDefer(2))
+            if (current && !active.AttachmentSnapshot && targetMesh->IsSimulating() && m_Budget.ShouldDefer(2))
                 return false;
         }
 
@@ -526,7 +549,7 @@ namespace Viewer
             parentStatus = mesh->GetCollisionStatus();
             parentVolume = TotalVolume(mesh->GetCollision());
             parentConvex = (uint32_t)mesh->GetCollision().ConvexElems.size();
-            hasInherited = SliceParentCollision(*mesh, job, sliced);
+            hasInherited = !active.AttachmentSnapshot && SliceParentCollision(*mesh, job, sliced);
 
             // 진단과 게시 준비 전에 재맞추되 슬라이스 원본은 포함 검증용으로 보존한다.
             if (hasInherited)
@@ -589,19 +612,40 @@ namespace Viewer
                 }
                 if (results[0] && results[1])
                 {
-                    const SceneTransform transform = mesh->GetTransform();
-                    const MeshTransformMode mode = mesh->GetTransformMode();
-                    const bool physical = mesh->IsSimulating();
+                    SceneTransform transform = mesh->GetTransform();
+                    const MeshTransformMode mode = active.AttachmentSnapshot
+                        ? MeshTransformMode::WorldIndependent : mesh->GetTransformMode();
+                    const bool physical = !active.AttachmentSnapshot && mesh->IsSimulating();
                     CutTransaction transaction;
+
                     // 준비 단계에서 B 컴포넌트와 A 교체 자원을 모두 만든다.
                     try
                     {
+                        // 게시 시점 최신 node pose에서 두 결과가 공유할 부착 월드를 구한다.
+                        if (active.AttachmentSnapshot)
+                        {
+                            Math::Matrix4 nodeWorld;
+                            const auto& snapshot = *active.AttachmentSnapshot;
+                            if (active.NodeSide < 0 || active.NodeSide > 1 ||
+                                !m_Scene.TryGetAttachmentNodeWorld(*mesh, nodeWorld) ||
+                                !SceneTransform::TryFromAffine(Math::AffineTransform(nodeWorld
+                                    * Invert(snapshot.NodeWorldAtCut) * snapshot.PieceWorldAtCut), transform))
+                                throw std::runtime_error("Attached cut publish world is not ready");
+                        }
+
+                        // AR-2에서는 양쪽 충돌을 비우고 node 쪽에만 부착 상태를 넘긴다.
                         const char* emptyReason = hasInherited ? "no convex after slice" : "parent has no collision";
+                        const char* reasonA = active.AttachmentSnapshot
+                            ? (active.NodeSide == 0 ? "node attached" : "detached collision pending") : emptyReason;
+                        const char* reasonB = active.AttachmentSnapshot
+                            ? (active.NodeSide == 1 ? "node attached" : "detached collision pending") : emptyReason;
                         std::unique_ptr<MeshComponent> preparedB = object->PrepareMeshComponent(results[1]);
                         preparedB->SetPlacement(transform, mode, DeformBinding{});
-                        preparedB->SetInheritedCollision(std::move(inherited[1]), results[1]->GetId(), emptyReason);
+                        preparedB->SetInheritedCollision(std::move(inherited[1]), results[1]->GetId(), reasonB);
+                        if (active.AttachmentSnapshot && active.NodeSide == 1)
+                            preparedB->Attachment = std::make_unique<NodeAttachment>(*active.AttachmentSnapshot);
                         const ComponentId id = preparedB->GetId();
-                        auto preparedA = mesh->PrepareGeometryReplacement(results[0], transform, mode, DeformBinding{}, std::move(inherited[0]), emptyReason);
+                        auto preparedA = mesh->PrepareGeometryReplacement(results[0], transform, mode, DeformBinding{}, std::move(inherited[0]), reasonA);
 
                         // simulate 대상이면 body 준비와 검증까지 끝내고, 실패하면 아무것도 바꾸지 않는다.
                         if (preparedA && physical && !transaction.Prepare(m_Physics, m_Budget, *object, *mesh,
@@ -617,6 +661,15 @@ namespace Viewer
                         else if (preparedA)
                         {
                             mesh->CommitGeometryReplacement(*preparedA);
+
+                            // node 쪽 side 0의 snapshot은 유지하고 반대편이면 부착을 풀어 최신 월드로 고정한다.
+                            if (active.AttachmentSnapshot && active.NodeSide == 1)
+                            {
+                                mesh->Attachment.reset();
+                                mesh->SetTransform(transform, MeshTransformMode::WorldIndependent);
+                            }
+
+                            // side 1은 준비 단계의 snapshot과 동일 월드 배치로 공개한다.
                             MeshComponent& other = object->CommitMeshComponent(std::move(preparedB));
                             if (physical)
                                 transaction.Commit(*mesh, other);

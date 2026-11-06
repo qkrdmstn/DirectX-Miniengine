@@ -567,6 +567,9 @@ namespace Viewer
         m_Job.Cancel();
         m_Name.clear();
 
+        // Renderer 종료 전에 원본 모델 참조를 끊어 텍스처 참조가 관리자보다 오래 남지 않게 한다.
+        m_SourceRevision.reset();
+
         // 준비물을 버릴 때 아직 실행하지 않은 break도 취소한다.
         physics.CancelBreak(m_RequestId);
         m_RequestId = 0;

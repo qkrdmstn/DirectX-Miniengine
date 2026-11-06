@@ -83,6 +83,7 @@ namespace Viewer
             std::shared_ptr<const GeometryRevision> Input;
             Math::Matrix4 World;
             std::shared_ptr<const NodeAttachment> AttachmentSnapshot; // C++14: optional 대신 불변 snapshot을 공유한다.
+            int32_t NodeSide = -1;
             uint64_t EditGeneration = 0;
             uint64_t ReservedBytes = 0;
             bool Publish = true;

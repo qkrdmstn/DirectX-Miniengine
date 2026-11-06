@@ -95,6 +95,8 @@ namespace Viewer
         bool FinalizePoses();
         // 모델 소유권을 노출하지 않고 지정 owner의 물리 pose만 최종 확정한다.
         bool FinalizeObjectPose(ObjectId id, const NodePhysicsPose* overrides, uint32_t overrideCount);
+        // 부착 조각이 따라가는 node의 현재 월드 행렬을 계산한다.
+        bool TryGetAttachmentNodeWorld(const MeshComponent& piece, Math::Matrix4& nodeWorld) const;
         // 확정된 CPU pose를 소비하여 컴포넌트별 GPU geometry를 한 번 준비한다.
         void PrepareMeshes(GraphicsContext& context);
         // 렌더 프레임당 GPU 준비 호출 수를 진단한다.
