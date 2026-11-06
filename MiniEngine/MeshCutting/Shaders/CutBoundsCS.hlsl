@@ -20,26 +20,31 @@ void ReduceDop(uint side, bool valid, float3 p, uint tid)
 {
     
     // 현재 정점을 9개의 축에 투영해서 내 레지스터에 저장
+    // 현재 정점에서 유효하지 않은 값이 계산될 경우 모든 축에 대해 적용 X
     bool contributes = valid;
     float projection[9];
     [unroll]
     for (uint k = 0; k < 9; k++)
     {
         projection[k] = dot(p, DopAxes[k]);                     // 정점을 축 방향으로 투영해서 측정한 거리
-        contributes = contributes && isfinite(projection[k]);   // NaN, 무한대인 경우 기여 X
+        contributes = contributes && isfinite(projection[k]);   // NaN, 무한대 값이 한 번이라도 계산되는지 확인 => 유효하지 않으면 기여 X
     }
 
     // groupshared에 투영한 값을 저장
+    // 유효하지 않으면 영향을 미치지 않는 값을 저장 (0xffffffff, 0)
     [unroll]
     for (uint a = 0; a < 9; a++)
     {
-        DopMin[a][tid] = contributes ? Ordered(projection[a]) : 0xffffffff;
+        DopMin[a][tid] = contributes ? Ordered(projection[a]) : 0xffffffff; 
         DopMax[a][tid] = contributes ? Ordered(projection[a]) : 0;
     }
     DopCount[tid] = contributes ? 1 : 0;
+    
+    // 그룹 내의 스레드가 여기까지 도달하기를 기다림.
     GroupMemoryBarrierWithGroupSync();
 
-    // 매 단계 절반씩 접으면서 각 축에 대응하는 최소, 최대값을 계산한다.
+    // 매 단계 절반씩 축소하면서 각 축에 대응하는 최소, 최대값을 계산한다.
+    // 최종 결과는 0 번째 인덱스에 저장
     for (uint offset = 32; offset > 0; offset /= 2)
     {
         if (tid < offset)
@@ -55,8 +60,8 @@ void ReduceDop(uint side, bool valid, float3 p, uint tid)
         GroupMemoryBarrierWithGroupSync();
     }
 
-    // 기여가 있는 그룹만 Metadata 끝의 면별 19단어(최소 9, 최대 9, 개수 1)에 합친다.
-    if (tid == 0 && DopCount[0] != 0)
+    // 한 스레드 그룹의 결과를 모든 그룹이 공유하는 Meta에서 합친다.
+    if (tid == 0 && DopCount[0] != 0) // 유효한 정점이 있는 스레드 그룹에서 대표 스레드 하나만 Meta를 업데이트한다.
     {
         uint ignored;
         uint base = (20 + 2 * Sections + side * 19) * 4;
@@ -71,7 +76,7 @@ void ReduceDop(uint side, bool valid, float3 p, uint tid)
     GroupMemoryBarrierWithGroupSync();
 }
 
-// 정점마다 전역 atomic을 수행하지 않고 그룹별 축소 후 정확한 결과 AABB를 합친다.
+// 정점마다 전역 atomic을 수행하지 않고 그룹별 축소 후, AABB를 합친다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID, uint tid : SV_GroupIndex)
 {
@@ -85,6 +90,7 @@ void main(uint3 id : SV_DispatchThreadID, uint tid : SV_GroupIndex)
     [unroll]
     for (uint side = 0; side < 2; side++)
     {
+        // 실제 정점인지 확인하고 출력 버퍼 A/B에서 위치를 읽는다.
         uint count = Meta.Load(80 + (side * Sections + section) * 4);
         bool valid = vertex < VertexCapacity && vertex >= s.VertexStart && vertex - s.VertexStart < min(count, s.VertexCapacity);
         float3 p = 0;
@@ -94,7 +100,8 @@ void main(uint3 id : SV_DispatchThreadID, uint tid : SV_GroupIndex)
             p = side == 0 ? asfloat(DataA.Load3(address)) : asfloat(DataB.Load3(address));
         }
 
-        // 그룹별 극값을 축소해 전역 AABB에 합친다.
+        // Todo: 절반씩 접어서 최소/최대값 업데이트하는 거 중복 코드임 함수화 해서 줄일 것.
+        // 현재 스레드 그룹으로 지정된 정점들의 AABB를 계산
         uint3 ordered = uint3(Ordered(p.x), Ordered(p.y), Ordered(p.z));
         Minimum[tid] = valid ? ordered : uint3(0xffffffff, 0xffffffff, 0xffffffff);
         Maximum[tid] = valid ? ordered : uint3(0, 0, 0);
@@ -108,6 +115,8 @@ void main(uint3 id : SV_DispatchThreadID, uint tid : SV_GroupIndex)
             }
             GroupMemoryBarrierWithGroupSync();
         }
+        
+        // 각 그룹에서 대표 스레드 하나만 이 작업을 수행
         if (tid == 0)
         {
             uint ignored;
