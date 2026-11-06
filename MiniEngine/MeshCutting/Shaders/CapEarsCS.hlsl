@@ -145,27 +145,14 @@ bool InTriangle(float2 p, float2 a, float2 b, float2 c, float sign)
         && Cross2(a - c, p - c) * sign >= -Epsilon * Epsilon;
 }
 
-// 캐시 후보를 검사 목록으로 판정하고 경계 순서의 통과 순위로 잔여 정점을 보호한다.
+// 캐시 후보 종류를 읽어 개수를 세고 검사 목록과 경계 순서의 통과 순위로 잔여 정점을 보호한다.
 uint SelectCached(uint waveSlot, uint round, uint zeroRounds, out uint marked)
 {
-    // 연속 k개 위치를 소유하고 내부 점 검사 없이 후보 종류만 먼저 구한다.
+    // 연속 k개 위치를 소유하고 미리 계산된 후보 종류를 읽어 개수를 센다.
     uint k = (LoopLength + CAP_THREADS - 1) / CAP_THREADS;
     uint begin = waveSlot * k, end = min(begin + k, LoopLength), candidates = 0;
     for (uint i = begin; i < end; i++) // begin부터 정점 k개 순회
-    {
-        uint kind = 0;
-        if (Active(i) != 0)
-        {
-            float2 p = P2(Prv(i)), q = P2(i), r = P2(Nxt(i));
-            float turn = Cross2(q - p, r - q) * Orientation;
-            if (abs(turn) <= Epsilon * (length(q - p) + length(r - q)) && dot(q - p, q - r) <= Epsilon * Epsilon)
-                kind = 2;
-            else if (turn > 0)
-                kind = 1;
-        }
-        CachedFlags[i] = (CachedFlags[i] & ~14u) | (kind << 1);
-        candidates += kind != 0 ? 1 : 0;
-    }
+        candidates += Kind(i) != 0 ? 1 : 0;
 
     // 스레드별 후보 수를 경계 전체 후보 번호로 바꾼다.
     uint count;
@@ -224,28 +211,14 @@ uint SelectCached(uint waveSlot, uint round, uint zeroRounds, out uint marked)
     return 0;
 }
 
-// 큰 loop도 canonical 경계 순서의 scan으로 후보를 표시하고 제거 수를 제한한다.
+// 큰 loop도 후보 종류를 읽어 개수를 세고 canonical 경계 순서의 scan으로 제거 수를 제한한다.
 uint SelectMapped(uint waveSlot, uint round, uint zeroRounds, out uint marked)
 {
-    // 각 스레드가 소유한 연속 경계 위치에서 귀와 공선 후보를 판정한다.
+    // 각 스레드가 소유한 연속 경계 위치에서 미리 계산된 후보 종류를 읽어 개수를 센다.
     uint k = (LoopLength + CAP_THREADS - 1) / CAP_THREADS;
     uint begin = waveSlot * k, end = min(begin + k, LoopLength), candidates = 0;
     for (uint i = begin; i < end; i++)
-    {
-        uint kind = 0;
-        if (Active(i) != 0)
-        {
-            float2 p = P2(Prv(i)), q = P2(i), r = P2(Nxt(i));
-            float turn = Cross2(q - p, r - q) * Orientation;
-            if (abs(turn) <= Epsilon * (length(q - p) + length(r - q)) && dot(q - p, q - r) <= Epsilon * Epsilon)
-                kind = 2;
-            else if (turn > 0)
-                kind = 1;
-        }
-        Ring.Store(Slot(i) * 128 + 60, kind);
-        candidates += kind != 0 ? 1 : 0;
-    }
-    AllMemoryBarrierWithGroupSync();
+        candidates += Kind(i) != 0 ? 1 : 0;
 
     // 경계 순서의 후보 순번을 전체 그룹에 배분한다.
     uint count;
@@ -313,7 +286,7 @@ uint SelectMapped(uint waveSlot, uint round, uint zeroRounds, out uint marked)
 
 // 루프마다 스레드 그룹 하나 할당
 // 루프 내부의 각 선분(슬롯) 마다 스레드 하나를 할당
-// 캐시 검사 목록을 라운드마다 만들고 그룹 내부에서 귀 검사와 안전한 동시 제거를 수행한다.
+// 검사점 플래그와 후보 종류를 라운드마다 계산하고 귀 검사와 안전한 동시 제거를 수행한다.
 [numthreads(CAP_THREADS, 1, 1)]
 void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
 {
@@ -483,29 +456,41 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
     for (uint round = 0; round < roundLimit && Remaining > 3; round++)  // Remaining이 3개보다 많은 동안 round 상한 내에서 라운드를 반복
     {
         
-        // 검사점은 reflex/collinear 정점이다. 캐시는 bit4, 큰 loop는 별도 word에 보관한다.
+        // 검사점은 reflex/collinear 정점이다. 검사점 플래그와 별도로 후보 종류도 함께 준비한다.
         uint myTestCount = 0;
         
-        // 각 스레드가 루프 내의 각 정점을 나눠서 볼록/오목을 판정
+        // 각 스레드가 맡은 모든 정점의 검사점 플래그와 후보 종류를 계산한다.
         for (uint reflex = tid; reflex < size; reflex += CAP_THREADS)
         {
-            // 정점 유효성 검사(이미 clipping된 정점 컬링)
-            if (Active(reflex) == 0)
-                continue;
+            // 정점 유효성을 확인하고 비활성 정점의 후보 종류는 0으로 둔다.
+            uint active = Active(reflex), kind = 0, flag = 0;
+            if (active != 0)
+            {
+                // 같은 외적으로 볼록/오목과 귀/공선 후보 종류를 판정한다.
+                float2 p = P2(Prv(reflex)), q = P2(reflex), r = P2(Nxt(reflex));
+                float turn = Cross2(q - p, r - q) * Orientation;
+                flag = turn <= 0 ? 1 : 0;
+                if (abs(turn) <= Epsilon * (length(q - p) + length(r - q)) && dot(q - p, q - r) <= Epsilon * Epsilon)
+                    kind = 2;
+                else if (turn > 0)
+                    kind = 1;
+            }
             
-            // 외적으로 볼록/오목 판정
-            float turn = Cross2(P2(reflex) - P2(Prv(reflex)), P2(Nxt(reflex)) - P2(reflex)) * Orientation;
-            uint flag = turn <= 0 ? 1 : 0;
-            
-            // 작은 루프는 캐시에 저장
+            // 작은 루프는 캐시에 저장하고 선택 비트를 지우되 비활성 정점의 검사점 비트는 보존한다.
             if (Cached != 0)
             {
-                CachedFlags[reflex] = (CachedFlags[reflex] & ~16u) | (flag << 4); // 볼록/(오목 or 일직선) 결과 저장
-                myTestCount += AllPoints != 0 || flag != 0 ? 1 : 0;               // TestList Size 계산
+                CachedFlags[reflex] = (CachedFlags[reflex] & ~(active != 0 ? 30u : 14u))
+                    | (kind << 1) | (active != 0 ? flag << 4 : 0u); // 볼록/(오목 or 일직선) 결과 저장
+                if (active != 0)
+                    myTestCount += AllPoints != 0 || flag != 0 ? 1 : 0; // TestList Size 계산
             }
-            // 큰 루프는 Ring에 저장
+            // 큰 루프는 모든 후보 종류를 Ring에 저장하고 활성 정점의 검사점 플래그만 갱신한다.
             else
-                Ring.Store(Slot(reflex) * 128 + 92, flag);
+            {
+                Ring.Store(Slot(reflex) * 128 + 60, kind);
+                if (active != 0)
+                    Ring.Store(Slot(reflex) * 128 + 92, flag);
+            }
         }
 
         // 앞에서 표시한 InTriangle 검사 대상 정점들을 TestList에 저장 
