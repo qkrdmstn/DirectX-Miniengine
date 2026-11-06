@@ -151,7 +151,7 @@ uint SelectCached(uint waveSlot, uint round, uint zeroRounds, out uint marked)
     // 연속 k개 위치를 소유하고 내부 점 검사 없이 후보 종류만 먼저 구한다.
     uint k = (LoopLength + CAP_THREADS - 1) / CAP_THREADS;
     uint begin = waveSlot * k, end = min(begin + k, LoopLength), candidates = 0;
-    for (uint i = begin; i < end; i++)
+    for (uint i = begin; i < end; i++) // begin부터 정점 k개 순회
     {
         uint kind = 0;
         if (Active(i) != 0)
@@ -310,55 +310,73 @@ uint SelectMapped(uint waveSlot, uint round, uint zeroRounds, out uint marked)
     return 0;
 }
 
+
+// 루프마다 스레드 그룹 하나 할당
+// 루프 내부의 각 선분(슬롯) 마다 스레드 하나를 할당
 // 캐시 검사 목록을 라운드마다 만들고 그룹 내부에서 귀 검사와 안전한 동시 제거를 수행한다.
 [numthreads(CAP_THREADS, 1, 1)]
 void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
 {
-    // 유효 loop를 확인하고 그룹 공통 상태를 초기화한다.
-    uint leader = group.x + group.y * 65535, count = min(Meta.Load(4), MaxSegments);
+    //유효 loop인지 확인하고, 그룹의 대표 선분 스레드로 그룹 공통 상태를 초기화한다.
+    uint leader = group.x + group.y * 65535; // 2차원 그룹 좌표를 1차원 그룹 좌표 idx로 변환
+    uint count = min(Meta.Load(4), MaxSegments);
+    
+    // 슬롯 유효성 확인 || 현재 슬롯이 해당 루프의 대표 선분 슬롯인지 확인 || 유효 
     if (leader >= count || Ring.Load(leader * 128 + 48) != leader || (Ring.Load(leader * 128 + 52) & 5) != 0)
         return;
 
-    // 실행 wave에 번호를 부여하므로 tid와 lane 순서의 대응을 가정하지 않는다.
+    
+    // lane: 각 wave 내부의 스레드가 차지하는 자리
     if (tid == 0)
-        WaveCount = 0;
+        WaveCount = 0;  // 그룹의 대표 스레드가 waveCount를 0으로 초기화
     GroupMemoryBarrierWithGroupSync();
-    uint waveNumber = 0;
-    if (WaveIsFirstLane())
-        InterlockedAdd(WaveCount, 1, waveNumber);
-    waveNumber = WaveReadLaneFirst(waveNumber);
-    uint waveSlot = waveNumber * WaveGetLaneCount() + WaveGetLaneIndex();
-    if (tid == 0)
+    
+    // 각 wave의 처음으로 활성되는 lane이 그룹 내의 wave 번호를 하나 받는다.
+    uint waveNumber = 0;                                                    // 각 스레드가 자신만의 number를 생성
+    if (WaveIsFirstLane())                                                  // 자신의 wave에서 번호가 가장 작은 활성 lane인지 확인
+        InterlockedAdd(WaveCount, 1, waveNumber);                           // 그룹 공유 카운터 1 증가 시키고 waveNumber에도 반영한다.
+    waveNumber = WaveReadLaneFirst(waveNumber);                             // 각 wave의 모든 활성 lane은 첫 번째 활성 lane의 waveNumber를 자기 변수에 복사한다.
+    uint waveSlot = waveNumber * WaveGetLaneCount() + WaveGetLaneIndex();   // wave 번호화 lane을 합쳐서 그룹 내부의 waveSlot 인덱스를 만든다.
+    if (tid == 0)                                                           // 해당 w그룹을 대표하는 스레드의 waveSlot을 공유 변수에 저장
         ZeroSlot = waveSlot;
 
-    // loop 순회와 캐시 적재는 기존 leader 기준으로 초기화한다.
+    // 그룹의 0번 스레드가 leader에서 출발해 루프를 한 바퀴 돌면서 시작 위치, 저장 방식 등을 초기화한다.
     if (tid == 0)
     {
-        // leader부터 닫힌 경계를 검증하고 처음 1024개 위치의 슬롯을 보관한다.
-        LoopLeader = leader;
-        AllPoints = (Ring.Load(leader * 128 + 52) & 2) != 0 ? 1 : 0;
-        LoopLength = 0;
-        Rotation = 0;
-        Mapped = 0;
-        MapBase = 0;
-        uint2 minKey = uint2(~0u, ~0u);
-        uint slot = leader;
+        
+        // 순회 전 공유 변수 초기화
+        LoopLeader = leader;                                            // 현재 루프의 대표 슬롯 번호 (= 루프 ID)
+        AllPoints = (Ring.Load(leader * 128 + 52) & 2) != 0 ? 1 : 0;    // 접촉 위험(bad 2) 루프면 ear 검사 때 모든 점을 검사
+        LoopLength = 0;                                                 // 루프 길이, 0 = 닫힌 루프 확인 실패 (순회 성공 시 갱신)
+        Rotation = 0;                                                   // 시작 순번, 순회 중 좌표가 가장 작은 점으로 갱신 (매 실행마다 같은 순서, 디버깅용)
+        Mapped = 0;                                                     // 1024 초과 루프를 Ring에 펼쳐 처리하는지 (순회 후 결정)
+        MapBase = 0;                                                    // Mapped일 때 Ring 전용 구간의 시작 위치 (순회 후 예약)
+        
+        // 루프 순회
+        uint2 minKey = uint2(~0u, ~0u);                                 //
+        uint slot = leader;                                             // 현재 위치
+        
+        // 루프에 속한 각 선분(슬롯) or p번째 선분의 시작점들을 순회한다.    
         for (uint p = 0; p < min(count, 4096u); p++)
         {
-            if (slot >= count)
+            if (slot >= count) // 슬롯 유효성 검사
                 break;
-            if (Ring.Load(slot * 128 + 48) != leader)
+            if (Ring.Load(slot * 128 + 48) != leader) // 다른 루프 선분으로 넘어간 경우
                 break;
             if (p < 1024)
                 CachedSlot[p] = slot;
+            
+            // 순회하면서 Rotation 결정
             uint2 key = asuint(Point2(slot));
             if (key.x < minKey.x || (key.x == minKey.x && key.y < minKey.y))
             {
                 minKey = key;
                 Rotation = p;
             }
+            
+            // 다음 슬롯으로 이동
             slot = Next(slot);
-            if (slot == leader)
+            if (slot == leader) // 시작점으로 돌아온 경우 break
             {
                 LoopLength = p + 1;
                 break;
@@ -382,18 +400,22 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
         }
     }
     GroupMemoryBarrierWithGroupSync();
+    
+    // 루프 내의 정점이 3개 미만이면 cap 생성 X
     if (LoopLength < 3)
         return;
     uint size = LoopLength;
 
-    // 연결 초기화 전의 Next 배열을 임시 저장소로 써 회전 원본의 덮어쓰기를 막는다.
+    // 루프의 p번째 정점이 Ring의 몇 번 슬롯인지 알려주는 테이블을 구성한다.
+    // 이때, Rotation 기준으로 시작하게 구성한다.
     if (Cached != 0)
     {
+        // 원본 덮어쓰기를 막으려고 아직 안 쓰는 CachedNext에 임시로 쓴다 
         for (uint cache = tid; cache < size; cache += CAP_THREADS)
             CachedNext[cache] = CachedSlot[(cache + Rotation) % size];
         GroupMemoryBarrierWithGroupSync();
     }
-    else if (Mapped != 0)
+    else if (Mapped != 0)  // 루프 내 정점이 1024개를 넘어서 group shared 캐시에 들어가지 않는 경우, Ring에 기록한다.
     {
         // loop 전용 scratch 구간에 canonical 순서와 Ring 슬롯 역방향 순위를 기록한다.
         if (tid == 0)
@@ -411,8 +433,10 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
         AllMemoryBarrierWithGroupSync();
     }
 
+    // ear clipping 과정에서 자주 읽을 캐시 값들을 채워준다.
     // 회전된 슬롯을 읽은 뒤 각 위치의 좌표와 연결 및 압축 플래그를 초기화한다.
     if (Cached != 0)
+    {
         for (uint cache = tid; cache < size; cache += CAP_THREADS)
         {
             uint src = CachedNext[cache];
@@ -422,57 +446,74 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
             CachedPrev[cache] = (cache + size - 1) % size;
             CachedFlags[cache] = 1;
         }
+    }
     GroupMemoryBarrierWithGroupSync();
 
-    // 활성 점 수와 방향을 구한다.
+    // 스레드 하나가 루프에 남은 정점 수와 루프의 감김 방향을 계산한다.
+    // 남은 점 수와 다각형 면적 → 감김 방향(Orientation). 면적 0이거나 4096 초과면 끝
     if (tid == 0)
     {
-        Remaining = 0;
+        Remaining = 0;      // 현재 라운드에서 루프에 남은 정점 수
         Removed = 0;
         float area = 0;
-        for (uint j = 0; j < size; j++)
+        for (uint j = 0; j < size; j++) // 남은 정점을 순회하면서 면적을 계산한다.
+        {
             if (Active(j) != 0)
             {
                 Remaining++;
                 area += Cross2(P2(j), P2(Nxt(j)));
             }
-        Orientation = area >= 0 ? 1 : -1;
+        }
+        Orientation = area >= 0 ? 1 : -1; // 면적의 부호에 따라 감김 방향을 확인
 
         // 아주 큰/퇴화한 단면은 surface 절단을 유지하고 cap만 생략한다.
         if (Remaining > 4096 || abs(area) < Epsilon * Epsilon)
             Remaining = 0;
     }
     GroupMemoryBarrierWithGroupSync();
+    
+    // 남은 정점이 3개 미만이면 return
     if (Remaining < 3)
         return;
 
-    // 모든 크기의 loop에 같은 교대 표시와 무진행 보호를 적용한다.
-    uint rounds = 0, markedSum = 0, removedSum = 0, zeroRounds = 0;
-    uint roundLimit = min(LoopLength, 4096u);
-    for (uint round = 0; round < roundLimit && Remaining > 3; round++)
+    
+    // ear clipping 라운드 반복
+    uint rounds = 0, markedSum = 0, removedSum = 0, zeroRounds = 0; // 진단용 지역 변수
+    uint roundLimit = min(LoopLength, 4096u);                       // 반복 상한
+    for (uint round = 0; round < roundLimit && Remaining > 3; round++)  // Remaining이 3개보다 많은 동안 round 상한 내에서 라운드를 반복
     {
+        
         // 검사점은 reflex/collinear 정점이다. 캐시는 bit4, 큰 loop는 별도 word에 보관한다.
         uint myTestCount = 0;
+        
+        // 각 스레드가 루프 내의 각 정점을 나눠서 볼록/오목을 판정
         for (uint reflex = tid; reflex < size; reflex += CAP_THREADS)
         {
+            // 정점 유효성 검사(이미 clipping된 정점 컬링)
             if (Active(reflex) == 0)
                 continue;
+            
+            // 외적으로 볼록/오목 판정
             float turn = Cross2(P2(reflex) - P2(Prv(reflex)), P2(Nxt(reflex)) - P2(reflex)) * Orientation;
             uint flag = turn <= 0 ? 1 : 0;
+            
+            // 작은 루프는 캐시에 저장
             if (Cached != 0)
             {
-                CachedFlags[reflex] = (CachedFlags[reflex] & ~16u) | (flag << 4);
-                myTestCount += AllPoints != 0 || flag != 0 ? 1 : 0;
+                CachedFlags[reflex] = (CachedFlags[reflex] & ~16u) | (flag << 4); // 볼록/(오목 or 일직선) 결과 저장
+                myTestCount += AllPoints != 0 || flag != 0 ? 1 : 0;               // TestList Size 계산
             }
+            // 큰 루프는 Ring에 저장
             else
                 Ring.Store(Slot(reflex) * 128 + 92, flag);
         }
 
-        // 캐시 경로의 모든 스레드가 검사 집합을 scan하고 각자 맡은 점을 목록에 쓴다.
+        // 앞에서 표시한 InTriangle 검사 대상 정점들을 TestList에 저장 
+        // Todo (정점의 개수가 많으면,, TestList를 구성하지 않고 그냥.. 전체 순회를 때려버린다.. 최적화 필요)
         if (Cached != 0)
         {
             uint total;
-            uint offset = BlockExclusiveSum(myTestCount, waveSlot, total);
+            uint offset = BlockExclusiveSum(myTestCount, waveSlot, total); // PrefixSum을 활용해 자신의 공간을 받는다.
             if (waveSlot == ZeroSlot)
                 TestCount = total;
             for (uint test = tid; test < size; test += CAP_THREADS)
@@ -481,7 +522,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
         }
         AllMemoryBarrierWithGroupSync();
 
-        // 작은 캐시와 큰 loop 매핑 모두 같은 경계 순서 scan 선택을 사용한다.
+        // 볼록한 정점을 번갈아가며 ear 후보로 선택한다.
         if (Cached != 0)
         {
             uint marked;
@@ -542,7 +583,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
             break;
     }
 
-    // loop 끝에서 한 번만 dispatch 공통 진단에 합산한다.
+    // loop 끝에서 한 번만 dispatch 공통 진단에 합산한다. 진단 카운터 합산, 마지막 삼각형 기록, 대표 슬롯 +84에 완료 표시
     if (tid == 0)
     {
         uint ignored;
