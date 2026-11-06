@@ -171,7 +171,7 @@ namespace Viewer
     }
 
     // revision Data와 section 행렬을 입력으로 요청의 소유·월드 배치를 고정한다.
-    bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
+    bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode, const CutCandidate* candidate)
     {
         // 합산 예산 대기만 후보를 다음 frame에 남기도록 구별한다.
         m_SubmissionDeferred = false;
@@ -224,8 +224,9 @@ namespace Viewer
         CommandLineArgs::GetInteger(L"cut-count-first", forceCount);
         const uint64_t retainedLimit = std::max(512ull * 1024 * 1024, m_MemoryLimitBytes);
 
-        // section 행렬과 Wc를 같은 제출 시점에 snapshot한다.
-        const Math::AffineTransform world = mesh->GetWorldTransform(object->GetTransform());
+        // 부착 입력은 요청 당시 프레임을 사용하고 나머지는 현재 Wc를 사용한다.
+        const Math::AffineTransform world = candidate && candidate->AttachmentSnapshot
+            ? Math::AffineTransform(candidate->World) : mesh->GetWorldTransform(object->GetTransform());
         std::vector<Math::Matrix4> sectionFrames;
         try
         {
@@ -266,7 +267,14 @@ namespace Viewer
             return false;
         }
 
-        // GPU 제출 전에 deque 슬롯과 snapshot을 확보해 예외 시 빈 슬롯을 제거한다.
+        // 할당이 실패해도 빈 슬롯이 남지 않도록 부착 snapshot을 슬롯 생성 전에 확보한다.
+        std::shared_ptr<const NodeAttachment> attachmentSnapshot;
+        if (candidate && candidate->AttachmentSnapshot)
+            attachmentSnapshot = candidate->AttachmentSnapshot;
+        else if (mesh->Attachment)
+            attachmentSnapshot = std::make_shared<const NodeAttachment>(*mesh->Attachment);
+
+        // GPU 제출 전에 deque 슬롯을 확보해 예외 시 빈 슬롯을 제거한다.
         m_Active.emplace_back();
         ActiveCut& active = m_Active.back();
         active.Owner = owner;
@@ -274,6 +282,7 @@ namespace Viewer
         active.Input = geometry;
         active.EditGeneration = mesh->GetEditGeneration();
         active.World = Math::Matrix4(world);
+        active.AttachmentSnapshot = std::move(attachmentSnapshot);
         active.Publish = publish;
         active.ReservedBytes = estimate;
         m_ReservedBytes += estimate;
@@ -365,17 +374,30 @@ namespace Viewer
                 m_StatusText = "Cancelled - cut target changed";
                 continue;
             }
+
+            // 부착 추종과 물리 이동은 허용하고 일반 편집 대상의 배치는 엄격히 비교한다.
             const Math::Matrix4 world(mesh->GetWorldTransform(object->GetTransform()));
-            // simulate 대상의 물리 이동은 허용하고 일반 편집 대상의 배치는 엄격히 비교한다.
-            if (!mesh->IsSimulating() && std::memcmp(&world,&candidate.World,sizeof(world)) != 0)
+            if (!candidate.AttachmentSnapshot && !mesh->IsSimulating() && std::memcmp(&world,&candidate.World,sizeof(world)) != 0)
             {
                 m_Pending.pop_front();
                 m_StatusText = "Cancelled - cut target moved";
                 continue;
             }
 
+            // local 입력을 요청 당시 월드 프레임으로 복원해 기존 GPU API에 전달한다.
+            auto plane = m_PendingPlane;
+            if (candidate.AttachmentSnapshot)
+            {
+                const auto inverse = Invert(candidate.World);
+                plane = candidate.LocalPlane;
+                plane.WorldPlane = Transpose(inverse) * candidate.LocalPlane.WorldPlane;
+                plane.WorldToPlane = candidate.LocalPlane.WorldToPlane * inverse;
+                for (size_t i = 0; i < 4; ++i)
+                    plane.WorldCorners[i] = Math::Vector3(candidate.World * Math::Vector4(candidate.LocalPlane.WorldCorners[i], 1));
+            }
+
             // 제출 경로 한 곳에서 count·용량 검사하며 합산 예산 대기만 후보를 유지한다.
-            Submit(candidate.Owner,candidate.Mesh,m_PendingPlane,true,1.0e-5f,m_PendingCapMode);
+            Submit(candidate.Owner,candidate.Mesh,plane,true,1.0e-5f,m_PendingCapMode,&candidate);
             if (m_SubmissionDeferred) break;
             m_Pending.pop_front();
         }
@@ -472,6 +494,7 @@ namespace Viewer
                 return false;
         }
 
+        // 완료된 GPU 작업의 진단 값과 기본 결과 상태를 모은다.
         LastGpuMs = job.GpuMilliseconds;
         LastReadyMs = job.ReadyMilliseconds;
         LastError = job.Status[0];
@@ -529,13 +552,30 @@ namespace Viewer
         if (hasInherited && DiagEmptySide >= 0)
             inherited[DiagEmptySide].ConvexElems.clear();
 
-        // 입력 자격을 다시 확인하고 현재 배치에 절단 결과를 게시한다.
+        // 부착 대상과 기준 행렬이 바뀌었으면 게시를 취소하고 짧은 로그를 남긴다.
         const char* failure = nullptr;
-        if (mesh && active.Publish && mesh->GetGeometry() == active.Input && mesh->GetEditGeneration() == active.EditGeneration)
+        bool attachmentCurrent = true;
+        if (mesh && active.AttachmentSnapshot)
+        {
+            const auto& snapshot = *active.AttachmentSnapshot;
+            const auto* current = mesh->Attachment.get();
+            attachmentCurrent = current && current->NodeId == snapshot.NodeId && current->SourceMesh == snapshot.SourceMesh &&
+                std::memcmp(&current->NodeWorldAtCut, &snapshot.NodeWorldAtCut, sizeof(snapshot.NodeWorldAtCut)) == 0 &&
+                std::memcmp(&current->PieceWorldAtCut, &snapshot.PieceWorldAtCut, sizeof(snapshot.PieceWorldAtCut)) == 0;
+            if (!attachmentCurrent)
+            {
+                m_StatusText = "Cancelled - cut attachment changed";
+                Utility::Printf("Static cut cancelled: attachment changed owner=%llu mesh=%llu\n",
+                    static_cast<unsigned long long>(active.Owner), static_cast<unsigned long long>(active.Mesh));
+            }
+        }
+
+        // 부착 snapshot이 같은 입력만 기존 편집 세대 검사와 게시 경로로 넘긴다.
+        if (attachmentCurrent && mesh && active.Publish && mesh->GetGeometry() == active.Input && mesh->GetEditGeneration() == active.EditGeneration)
         {
             const Math::Matrix4 current(mesh->GetWorldTransform(object->GetTransform()));
-            // 물리 이동은 로컬 결과를 무효화하지 않으며 현재 배치로 게시한다.
-            if (mesh->IsSimulating() || std::memcmp(&current, &active.World, sizeof(current)) == 0)
+            // 부착 추종과 물리 이동은 로컬 결과를 무효화하지 않으며 현재 배치로 게시한다.
+            if (active.AttachmentSnapshot || mesh->IsSimulating() || std::memcmp(&current, &active.World, sizeof(current)) == 0)
             {
                 std::array<std::shared_ptr<const GeometryRevision>, 2> results;
                 try

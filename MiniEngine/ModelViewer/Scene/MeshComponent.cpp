@@ -324,6 +324,20 @@ namespace Viewer
         return true;
     }
 
+    // 부착 추종의 유효한 월드 TRS만 적용하고 사용자 편집 세대는 유지한다.
+    void MeshComponent::SetAttachedWorld(const SceneTransform& world)
+    {
+        // 기존 배치 경로와 같은 정규화 검사를 통과한 값만 사용한다.
+        SceneTransform normalized = world;
+        if (!normalized.Normalize())
+            return;
+
+        // 추종은 편집이 아니므로 세대 증가 없이 렌더 준비 상태만 무효화한다.
+        m_Transform = normalized;
+        m_TransformMode = MeshTransformMode::WorldIndependent;
+        m_Ready = false;
+    }
+
     // 월드 TRS를 먼저 검증한 뒤 같은 화면 배치로 owner 종속만 해제한다.
     bool MeshComponent::MakeWorldIndependent(const SceneTransform& owner)
     {

@@ -6,6 +6,7 @@
 #include "../../Physics/PhysicsWorld.h"
 #include "../../MeshCutting/Geometry/CutPlane.h"
 #include <map>
+#include <memory>
 
 namespace Viewer
 {
@@ -18,6 +19,10 @@ namespace Viewer
         uint64_t EditGeneration;
         uint64_t PhysicsPoseGeneration;   // 물리 pose 기록용이며 절단 자격이나 stale 판정에는 쓰지 않는다.
         Math::Matrix4 World;
+        // snapshot 유무로 부착 입력을 구별하며 local 계수는 요청 당시 월드 거리 단위를 유지한다.
+        std::shared_ptr<const NodeAttachment> AttachmentSnapshot; // C++14: optional 대신 불변 snapshot을 공유한다.
+        MeshCutting::CutPlaneData LocalPlane{};
+        int32_t NodeSide = -1; // AR-2에서 부착 입력의 node 쪽을 판정한다.
     };
 
     // Scene의 collider 참조를 Jolt 조회 body에 연결하고 절단 후보 API를 제공한다.

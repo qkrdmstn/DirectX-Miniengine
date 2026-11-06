@@ -82,13 +82,14 @@ namespace Viewer
             ComponentId Mesh = InvalidComponentId;
             std::shared_ptr<const GeometryRevision> Input;
             Math::Matrix4 World;
+            std::shared_ptr<const NodeAttachment> AttachmentSnapshot; // C++14: optional 대신 불변 snapshot을 공유한다.
             uint64_t EditGeneration = 0;
             uint64_t ReservedBytes = 0;
             bool Publish = true;
         };
         // 단일 요청과 대기열 내부 제출이 공유하는 GPU 작업 시작 경로다.
         bool Submit(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane,
-            bool publish, float worldEpsilon, uint32_t capMode);
+            bool publish, float worldEpsilon, uint32_t capMode, const CutCandidate* candidate = nullptr);
         // 예외 원인을 소유 버퍼에 보존하고 대상·용량 진단을 할당 없이 기록한다.
         void RejectInput(ObjectId owner, ComponentId mesh, const GeometryRevision& geometry,
             uint64_t requestedWorking, const char* reason) noexcept;

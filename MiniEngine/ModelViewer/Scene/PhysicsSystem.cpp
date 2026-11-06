@@ -151,6 +151,7 @@ namespace Viewer
     // 평면 두께는 후보 검색에만 쓰며 GPU의 유한 영역 판정은 유지한다.
     std::vector<CutCandidate> PhysicsSystem::QueryCutCandidates(const MeshCutting::CutPlaneData& plane, float worldEpsilon) const
     {
+        // 유효한 두께와 요청 사각형으로 broadphase 검색 범위를 만든다.
         if (!std::isfinite(worldEpsilon) || worldEpsilon < 0) throw std::invalid_argument("Invalid query epsilon");
         MiniPhysics::QueryBounds rectangle;
         const auto minimum = Math::Min(Math::Min(plane.WorldCorners[0],plane.WorldCorners[1]),
@@ -165,6 +166,8 @@ namespace Viewer
             search.Minimum[i] = std::nextafter(rectangle.Minimum[i]-worldEpsilon,-std::numeric_limits<float>::max());
             search.Maximum[i] = std::nextafter(rectangle.Maximum[i]+worldEpsilon,std::numeric_limits<float>::max());
         }
+
+        // 조회 backend가 반환한 키를 정렬하고 중복을 제거한다.
         std::vector<Key> keys;
         const bool useIndex = m_UseJolt && search.IsValid();
         if (useIndex)
@@ -177,12 +180,31 @@ namespace Viewer
         else for (const auto& entry : m_Entries) keys.push_back(entry.first);
         std::sort(keys.begin(),keys.end());
         keys.erase(std::unique(keys.begin(),keys.end()),keys.end());
+
+        // 최종 후보의 부착 입력만 요청 시점 component-local 좌표로 고정한다.
         std::vector<CutCandidate> result;
         for (const auto& key : keys)
         {
             const auto& entry = m_Entries.at(key);
-            if (IsCurrent(entry) && Intersects(entry,plane,rectangle,worldEpsilon)) result.push_back(entry.Candidate);
+            if (!IsCurrent(entry) || !Intersects(entry,plane,rectangle,worldEpsilon))
+                continue;
+            CutCandidate candidate = entry.Candidate;
+            const auto* object = m_Scene.FindObject(candidate.Owner);
+            const auto* mesh = object->FindMeshComponent(candidate.Mesh);
+            if (mesh->Attachment)
+            {
+                candidate.AttachmentSnapshot = std::make_shared<const NodeAttachment>(*mesh->Attachment);
+                const auto inverse = Invert(candidate.World);
+                candidate.LocalPlane = plane;
+                candidate.LocalPlane.WorldPlane = Transpose(candidate.World) * plane.WorldPlane;
+                candidate.LocalPlane.WorldToPlane = plane.WorldToPlane * candidate.World;
+                for (size_t i = 0; i < 4; ++i)
+                    candidate.LocalPlane.WorldCorners[i] = Math::Vector3(inverse * Math::Vector4(plane.WorldCorners[i], 1));
+            }
+            result.push_back(std::move(candidate));
         }
+
+        // 진단 모드에서는 전수 검사와 후보 목록이 같은지 확인한다.
         if (ValidateQueries)
         {
             size_t expected = 0;

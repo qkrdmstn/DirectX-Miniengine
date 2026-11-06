@@ -87,6 +87,8 @@ namespace Viewer
         const DeformBinding& GetDeformBinding() const { return m_DeformBinding; }
         // 유효한 target TRS를 저장한다. WorldIndependent에서는 인수가 월드 TRS다.
         bool SetTransform(const SceneTransform& transform, MeshTransformMode mode);
+        // 부착 추종 월드를 적용하되 사용자 편집 세대는 유지한다.
+        void SetAttachedWorld(const SceneTransform& world);
         // 현재 월드 배치를 보존하며 owner에서 분리한다. TRS로 표현할 수 없으면 아무것도 바꾸지 않는다.
         bool MakeWorldIndependent(const SceneTransform& owner);
         // physics가 소유한 body에 연결된 동안 임시 owner 편집·절단 차단에 쓴다.

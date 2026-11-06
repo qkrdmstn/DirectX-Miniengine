@@ -277,7 +277,7 @@ namespace Viewer
                     SceneTransform world;
                     if (!SceneTransform::TryFromAffine(Math::AffineTransform(nodeWorld
                         * Invert(attachment.NodeWorldAtCut) * attachment.PieceWorldAtCut), world)) continue;
-                    mesh->SetTransform(world, MeshTransformMode::WorldIndependent);
+                    mesh->SetAttachedWorld(world);
                 }
 
                 // 부착 갱신 뒤 같은 프레임의 렌더 상수를 준비한다.
