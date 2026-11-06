@@ -26,12 +26,14 @@ struct VSOutput
 #endif
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
+    nointerpolation float3 overlayColor : COLOR0;
 };
 
-// 재질의 알파 검사·블렌딩을 유지하고 조명과 무관한 흰색 와이어를 출력한다.
+// 재질의 알파 검사·블렌딩을 유지하고 조명과 무관한 메시별 색상의 선을 출력한다.
 [RootSignature(Renderer_RootSig)]
 float4 main(VSOutput vsOutput) : SV_Target0
 {
+    // 원래 재질의 UV 선택과 알파 검사를 유지한다.
 #ifdef NO_SECOND_UV
     float2 uv = vsOutput.uv0;
 #else
@@ -40,6 +42,8 @@ float4 main(VSOutput vsOutput) : SV_Target0
     float alpha = baseColorTexture.Sample(baseColorSampler, uv).a * baseColorFactor.a;
     if ((flags & (1u << 6)) && alpha < f16tof32(flags >> 16))
         discard;
+
+    // 기존 premultiplied alpha 정책으로 메시 색상을 출력한다.
     alpha = (flags & (1u << 7)) ? alpha : 1.0;
-    return float4(float3(1.0, 1.0, 1.0) * alpha, alpha);
+    return float4(vsOutput.overlayColor * alpha, alpha);
 }

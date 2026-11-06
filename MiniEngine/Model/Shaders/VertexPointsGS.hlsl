@@ -19,6 +19,7 @@ struct PointInput
 #endif
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
+    nointerpolation float3 overlayColor : COLOR0;
 };
 
 struct PointOutput
@@ -26,16 +27,20 @@ struct PointOutput
     float4 position : SV_POSITION;
     float2 uv0 : TEXCOORD0;
     float2 uv1 : TEXCOORD1;
+    nointerpolation float3 overlayColor : COLOR0;
 };
 
-// 원래 VS의 clip 좌표를 실제 viewport 기준 3px 사각형으로 확장한다.
+// VS 색상을 보존하며 clip 좌표를 실제 viewport 기준 3px 사각형으로 확장한다.
 [RootSignature(Renderer_RootSig)]
 [maxvertexcount(4)]
 void main(point PointInput input[1], inout TriangleStream<PointOutput> stream)
 {
+    // 카메라 뒤쪽과 깊이 범위 밖의 정점은 제외한다.
     float4 center = input[0].position;
     if (center.w <= 0 || center.z < 0 || center.z > center.w)
         return;
+
+    // 같은 UV와 메시 색상을 사각형의 네 모서리에 전달한다.
     const float2 corners[4] = { float2(-1, 1), float2(1, 1), float2(-1, -1), float2(1, -1) };
     for (uint i = 0; i < 4; ++i)
     {
@@ -43,6 +48,7 @@ void main(point PointInput input[1], inout TriangleStream<PointOutput> stream)
         output.position = center;
         output.position.xy += corners[i] * 3.0 * InvViewportSize * center.w;
         output.uv0 = input[0].uv0;
+        output.overlayColor = input[0].overlayColor;
 #ifndef NO_SECOND_UV
         output.uv1 = input[0].uv1;
 #else
@@ -50,5 +56,7 @@ void main(point PointInput input[1], inout TriangleStream<PointOutput> stream)
 #endif
         stream.Append(output);
     }
+
+    // 다음 정점의 사각형과 스트립을 분리한다.
     stream.RestartStrip();
 }

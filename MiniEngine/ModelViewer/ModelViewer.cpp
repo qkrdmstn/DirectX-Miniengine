@@ -300,11 +300,16 @@ static std::string GetDeviceGpuName()
     return std::string(name) + " (" + std::to_string(desc.DedicatedVideoMemory >> 20) + " MB)";
 }
 
-// 모델·평면과 GPU 파이프라인을 준비하고 명시적 검증 옵션을 읽는다.
+// 모델·GPU 준비 전에 시연 옵션의 의존성을 검사하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
-    // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
+    // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
+    std::wstring unmaskValue;
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-unmask", unmaskValue) && !m_SkeletalBreakDemo)
+        throw std::invalid_argument("skeletal-break-demo-unmask requires skeletal-break-demo");
+
+    // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
     if (m_SkeletalBreakDemo)
     {
         std::wstring value;

@@ -25,11 +25,13 @@ __declspec(align(256)) struct MeshConstants
     Math::Matrix4 ObjectWorld;   // Posed local to world (node transform already applied)
     Math::Matrix3 ObjectWorldIT;
     uint32_t UsePosedVertices;
+    float OverlayColor[3];
 };
 static_assert(sizeof(MeshConstants) == 256, "Mesh CBV stride must remain 256 bytes");
 static_assert(offsetof(MeshConstants, ObjectWorld) == 112, "VS b0 c7");
 static_assert(offsetof(MeshConstants, ObjectWorldIT) == 176, "VS b0 c11");
 static_assert(offsetof(MeshConstants, UsePosedVertices) == 224, "VS b0 c14.x");
+static_assert(offsetof(MeshConstants, OverlayColor) == 228, "VS b0 c14.yzw");
 
 // The order of textures for PBR materials
 enum { kBaseColor, kMetallicRoughness, kOcclusion, kEmissive, kNormal, kNumTextures };

@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — BreakConstraint M1과 master `913031f3` 병합 검증; 다중 Static CutJob·cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30) |
 | [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749`, GPU 연결 `673b56b6`; 스켈레탈 겹침 클릭 깊이 판정은 `Fix cut plane picking near skinned meshes`에 포함 |
-| [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — `673b56b6` Compute pose 연결, 검증은 본문·GPU 설계 참조 |
+| [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — 본 부착 패치 선·점 초록색, D/R 빌드·두 모드 캡처 확인 (2026-11-06) |
 | [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `3dc5d6ba` 기반 조각 hull 선택·중심 기즈모·노란 선택 모서리 구현, CPU/실행 진단 통과; 수동 화면 미확인 |
 
 ## GPU — 후속 절단 설계·문헌

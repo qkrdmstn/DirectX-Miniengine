@@ -1,4 +1,4 @@
-상태: 완료 — Compute pose 렌더 연결은 `673b56b6` (2026-10-25). 기존 표시 정책과 아래 검증 이력을 유지하며 최신 pose 검증은 GPU 설계 11·14절, 생성 Static 절단 geometry 검증은 StaticCutImplementation.md 참조.
+상태: 완료 — 본 부착 패치 조각의 선·점 초록색 표시(base `b0f61524`, 2026-11-06): Debug/Release 빌드, Xbot `-skeletal-break-demo 1 -view 1/2` 캡처에서 패치 초록 확인, unmask 단독 시작 예외 확인. Compute pose 연결은 `673b56b6`; 기존 검증 이력을 유지하며 최신 pose 검증은 GPU 설계 11·14절, 생성 Static 절단 geometry 검증은 StaticCutImplementation.md 참조.
 
 # ModelViewer 표시 모드
 
@@ -9,7 +9,9 @@
 ## 렌더 계약
 
 - Solid는 원래 재질·조명·깊이 설정을 유지한다. 깊이·그림자는 모든 모드에서 solid다.
-- Wireframe은 공통 Compute pose·객체 TRS 및 기존 양면·알파 정책을 유지하고 흰색 선을 출력한다.
+- 본 부착 패치 조각(`MeshComponent::Attachment` 있음)은 cap을 포함해 Wireframe·Vertices에서 초록색 `(0.25, 1.0, 0.35)`이다.
+  `MeshComponent::Update`가 mesh b0 c14.yzw에 색을 기록하고 VS→PS 또는 VS→GS→PS로 전달한다. 원본·Static 절단 조각은 흰색이며 Solid는 그대로다.
+- Wireframe은 공통 Compute pose·객체 TRS 및 기존 양면·알파 정책을 유지하고 기본 흰색 선을 출력한다.
   `Renderer::GetPSO`의 선 PSO는 원래 인덱스 쌍을 공유하지만 둘 다 역 Z `GREATER_EQUAL`, 깊이 쓰기 금지다.
   선/면 커버리지·깊이 보간 차이를 보정하려고 DepthBias=2, SlopeScaledDepthBias=1, DepthBiasClamp=0.00001을 사용한다.
   큰 깊이 차이는 여전히 차폐되며, 이 허용치보다 가까운 면끼리는 선이 비칠 수 있다.
@@ -18,9 +20,9 @@
 - Vertices는 현재 원본/생성 section 인덱스가 참조하는 정점을 POINTLIST로 그리고 GS가 약 3px 사각형으로 확장한다.
   공통 Compute pose → VS 객체 TRS → ViewProj와 tangent/UV1별 GS 입력 레지스터를 사용한다.
   공통 b1(ALL)의 c11.zw에 viewport 역수를 전달하며 b0 메시 상수는 VS 전용이다.
-  점은 흰색, 역 Z `GREATER_EQUAL`, 깊이 쓰기 금지다. 경사진 면에서 사각형 일부가 잘리고 실루엣 밖으로 약 1.5px 나올 수 있다.
+  점은 기본 흰색, 역 Z `GREATER_EQUAL`, 깊이 쓰기 금지다. 경사진 면에서 사각형 일부가 잘리고 실루엣 밖으로 약 1.5px 나올 수 있다.
   중복 인덱스·UV seam 정점은 겹친다. Cube처럼 정점이 적은 모델의 면 내부는 대부분 검은 clear 색으로 남는다.
-- 두 흰색 PS는 base-color alpha×factor, alpha-test discard 및 premultiplied alpha blend를 보존한다.
+- 두 표시 PS는 base-color alpha×factor, alpha-test discard 및 premultiplied alpha blend를 보존한다.
   점의 alpha는 정점 UV의 mip 0 샘플로 근사한다. 반투명 메시는 기존 정렬을 유지하고 불투명 깊이에 대해서만 검사한다.
 - `ModelViewer::RenderScene`은 solid prepass 이후 skybox를 컬러 선·점보다 먼저 그린다.
   뒤에 skybox를 그리면 깊이를 쓰지 않은 실루엣 가장자리가 배경으로 덮인다.

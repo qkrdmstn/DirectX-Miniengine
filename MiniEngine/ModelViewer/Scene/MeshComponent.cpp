@@ -526,7 +526,7 @@ namespace Viewer
         return true;
     }
 
-    // CPU pose는 복제 평가하지 않고 source-to-component와 target 월드 변환을 분리한다.
+    // CPU pose와 월드 변환을 준비하고 본 부착 여부에 따른 선·점 색상을 업로드한다.
     void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner)
     {
         // 같은 명령 목록에서 마스크를 먼저 갱신한다.
@@ -538,6 +538,9 @@ namespace Viewer
         if (!pose.HasValidPose() || pose.GetModel() != m_Geometry->GetSource())
             return;
 
+        // 본 부착 조각은 초록색이며 원본과 Static 절단 조각은 흰색이다.
+        const float overlayColor[3] = { Attachment ? 0.25f : 1.0f, 1.0f, Attachment ? 0.35f : 1.0f };
+
         // 생성 조각의 월드 상수를 업로드하고 Data 디코드 결과를 렌더 입력으로 준비한다.
         if (m_Geometry->IsGenerated())
         {
@@ -547,6 +550,7 @@ namespace Viewer
             cb.World = cb.ObjectWorld = world;
             cb.WorldIT = cb.ObjectWorldIT = InverseTranspose(world.Get3x3());
             cb.UsePosedVertices = 1;
+            std::memcpy(cb.OverlayColor, overlayColor, sizeof(overlayColor));
             auto* mapped = static_cast<MeshConstants*>(m_ConstantsCPU.Map());
             mapped[0] = cb;
             m_ConstantsCPU.Unmap();
@@ -566,6 +570,8 @@ namespace Viewer
             m_Ready = true;
             return;
         }
+
+        // 원본 geometry는 공유 pose 또는 고정 snapshot을 사용한다.
         const Model& model = *pose.GetModel();
         const Matrix4* nodes = pose.GetNodeTransforms();
         const Joint* joints = pose.GetJoints();
@@ -596,8 +602,9 @@ namespace Viewer
             constants[i].WorldIT = InverseTranspose(nodeWorld.Get3x3());
             constants[i].ObjectWorld = world;
             constants[i].ObjectWorldIT = InverseTranspose(world.Get3x3());
-
+            std::memcpy(constants[i].OverlayColor, overlayColor, sizeof(overlayColor));
         }
+
         // 비음수 정규화 LBS는 본별 변환 구의 convex hull 안에 있다. 전체 팔레트 union은 느슨하지만 누락을 막는다.
         m_SectionBounds.clear();
         for (size_t i = 0; i < m_Geometry->GetSections().size(); ++i)
@@ -622,6 +629,8 @@ namespace Viewer
             }
             m_SectionBounds.push_back(bound);
         }
+
+        // 공통 pose 준비 결과와 메시 상수를 GPU에 반영한다.
         if (Renderer::UseComputePose)
             m_PosedGeometry->Update(context, model, localNodes.data(), joints);
         for (uint32_t i = 0; i < model.m_NumNodes; ++i)
