@@ -64,6 +64,19 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
     
+    // 변 i -> i+1이 평면을 엄격히 지나면 교차점을 한 번만 계산한다. (A, B 표면과 단면 선분이 같은 값을 공유)
+    bool crosses[3];
+    Vertex hit[3];
+    [unroll]
+    for (uint i = 0; i < 3; i++)
+    {
+        uint next = (i + 1) % 3;
+        crosses[i] = (d[i] > 0 && d[next] < 0) || (d[i] < 0 && d[next] > 0);
+        hit[i] = v[i];
+        if (crosses[i])
+            hit[i] = IntersectEdge(v[i], v[next], d[i], d[next]);
+    }
+
     // A, B side 나누기 0: A, 1: B
     [unroll]
     for (uint side = 0; side < 2; side++)
@@ -73,13 +86,12 @@ void main(uint3 id : SV_DispatchThreadID)
         [unroll]
         for (uint k = 0; k < 3; k++)
         {
-            uint p = (k + 2) % 3; // 세 정점 중 2개의 정점 인덱스 k, p를 선택
-            float a = side == 0 ? d[p] : -d[p]; // 현재 검사하는 side의 부호를 양수로
-            float b = side == 0 ? d[k] : -d[k];
-            
-            // 두 거리 값의 부호가 다르면 교차
-            if ((a > 0 && b < 0) || (a < 0 && b > 0))
-                poly[n++] = IntersectEdge(v[p], v[k], a, b);
+            uint p = (k + 2) % 3; // 세 정점 중 2개의 정점 인덱스 k, p를 선택 (변 p -> k)
+            float b = side == 0 ? d[k] : -d[k]; // 현재 검사하는 side의 부호를 양수로
+
+            // 변 p -> k가 평면을 지나면 미리 계산한 교차점을 넣는다.
+            if (crosses[p])
+                poly[n++] = hit[p];
             if (b >= 0)
                 poly[n++] = v[k];
         }
@@ -112,15 +124,21 @@ void main(uint3 id : SV_DispatchThreadID)
         // edge 선택 e, n
         uint n = (e + 1) % 3;
         
-        // 현재 edge가 평면을 지나가는지 확인하여 교차점 2개를 계산
+        // 현재 edge가 평면을 지나가는지 확인하여 교차점 2개를 고른다. (엄격한 교차는 공유 교차점, 평면 위 끝점은 직접 계산)
         if (d[e] <= 0 && d[n] > 0)
         {
-            enter = IntersectEdge(v[e], v[n], d[e], d[n]).P;
+            if (crosses[e])
+                enter = hit[e].P;
+            else
+                enter = IntersectEdge(v[e], v[n], d[e], d[n]).P;
             gotEnter = true;
         }
         if (d[e] > 0 && d[n] <= 0)
         {
-            exit = IntersectEdge(v[e], v[n], d[e], d[n]).P;
+            if (crosses[e])
+                exit = hit[e].P;
+            else
+                exit = IntersectEdge(v[e], v[n], d[e], d[n]).P;
             gotExit = true;
         }
     }
