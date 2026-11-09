@@ -31,17 +31,24 @@ namespace MeshCutting
         ComputePSO Pipelines[7];
         uint16_t CapTextureTable;
         // 실험 옵션은 첫 조회 때 한 번 읽고 이후 같은 값을 사용한다.
-        bool UseFlatSections()
+        uint32_t FlatSectionMode()
         {
             // 기본값 0을 유지하고 명시적으로 켠 경우에만 section 구분을 무시한다.
-            static const uint32_t enabled = []()
+            static const uint32_t mode = []()
             {
                 // 명령행 정수 값을 한 번만 파싱한다.
                 uint32_t value = 0;
                 CommandLineArgs::GetInteger(L"cut-flat-sections", value);
                 return value;
             }();
-            return enabled != 0;
+            return mode;
+        }
+
+        // 0 이외의 실험 모드에서는 section 구분을 무시한다.
+        bool UseFlatSections()
+        {
+            // 캐시된 모드로 기존 활성화 여부를 반환한다.
+            return FlatSectionMode() != 0;
         }
 
         // 공유 root로 clip·경계·cap 각 단계를 초기화한다.
@@ -111,6 +118,10 @@ namespace MeshCutting
             CutSection section = { mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
                 draw.startIndex, draw.baseVertex, triangles, 0, 0, 0, vertices, mesh.psoFlags,
                 0, 0, mesh.vbSize / mesh.vbStride, 0 };
+
+            // 모드 2에서는 GPU의 정점 인덱스 범위 검사를 우회한다.
+            if (FlatSectionMode() == 2)
+                section.VertexCount = 0xFFFFFFFFu;
 
             // 첫 section의 변환만 적용하고 전체 범위 분류 값은 0으로 둔다.
             SetSectionFrame(section, frame);
@@ -562,13 +573,18 @@ namespace MeshCutting
         // 실험 표면과 템플릿을 하나씩 만들고 최초 제출에만 작업량을 기록한다.
         if (UseFlatSections())
         {
+            // 검사하지 않은 인덱스로 부모 snapshot에 접근하는 CPU 진단은 허용하지 않는다.
+            if (FlatSectionMode() == 2 && snapshotDiagnostics)
+                throw std::invalid_argument("cut-flat-sections 2 cannot be combined with cut validation");
+
+            // count 결과가 있으면 단일 표면의 출력 용량에 적용한다.
             if (capacity && !capacity->SurfaceVertices.empty())
                 vertices = capacity->SurfaceVertices.at(0);
 
             // 합친 index 범위가 원본 Data 끝을 넘으면 CPU 진단의 범위 밖 읽기를 막기 위해 거절한다.
             const Mesh& first = job->Input->GetMesh(0);
             const uint64_t indexStride = first.ibFormat == DXGI_FORMAT_R32_UINT ? 4 : 2;
-            if (first.numDraws && first.ibOffset + (uint64_t(first.draw[0].startIndex) + total * 3) * indexStride > job->Input->GetDataBuffer().GetBufferSize())
+            if (snapshotDiagnostics && first.numDraws && first.ibOffset + (uint64_t(first.draw[0].startIndex) + total * 3) * indexStride > job->Input->GetDataBuffer().GetBufferSize())
                 throw std::length_error("Flat cut index range exceeds data buffer");
 
             // 첫 레이아웃의 단일 표면과 첫 mesh 템플릿을 추가한다.
@@ -579,7 +595,7 @@ namespace MeshCutting
             static bool logged = false;
             if (!logged)
             {
-                Utility::Printf("Cut flat sections experiment: draws=%u triangles=%u\n", flatDraws, uint32_t(total));
+                Utility::Printf("Cut flat sections experiment: mode=%u draws=%u triangles=%u\n", FlatSectionMode(), flatDraws, uint32_t(total));
                 logged = true;
             }
         }
