@@ -9,6 +9,7 @@
 #include "Texture.h"
 #include "GraphicsCommon.h"
 #include "Utility.h"
+#include "Util/CommandLineArg.h"
 #include "CompiledShaders/ClipTrianglesCS.h"
 #include "CompiledShaders/BoundaryKeysCS.h"
 #include "CompiledShaders/LinkBoundaryCS.h"
@@ -29,6 +30,20 @@ namespace MeshCutting
         RootSignature Root;
         ComputePSO Pipelines[7];
         uint16_t CapTextureTable;
+        // 실험 옵션은 첫 조회 때 한 번 읽고 이후 같은 값을 사용한다.
+        bool UseFlatSections()
+        {
+            // 기본값 0을 유지하고 명시적으로 켠 경우에만 section 구분을 무시한다.
+            static const uint32_t enabled = []()
+            {
+                // 명령행 정수 값을 한 번만 파싱한다.
+                uint32_t value = 0;
+                CommandLineArgs::GetInteger(L"cut-flat-sections", value);
+                return value;
+            }();
+            return enabled != 0;
+        }
+
         // 공유 root로 clip·경계·cap 각 단계를 초기화한다.
         void Initialize()
         {
@@ -84,6 +99,24 @@ namespace MeshCutting
             std::memcpy(section.NormalToComponent, &normal, sizeof(section.NormalToComponent));
         }
 
+        // 첫 section의 첫 draw 레이아웃으로 합쳐진 실험용 표면을 만든다.
+        CutSection MakeFlatSection(const GeometryRevision& input, const Matrix4& frame,
+            uint32_t triangles, uint32_t vertices)
+        {
+            // 첫 draw가 없는 입력은 레이아웃을 정할 수 없으므로 거절한다.
+            const Mesh& mesh = input.GetMesh(0);
+            if (!mesh.numDraws)
+                throw std::invalid_argument("Flat cut requires a first draw");
+            const auto& draw = mesh.draw[0];
+            CutSection section = { mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
+                draw.startIndex, draw.baseVertex, triangles, 0, 0, 0, vertices, mesh.psoFlags,
+                0, 0, mesh.vbSize / mesh.vbStride, 0 };
+
+            // 첫 section의 변환만 적용하고 전체 범위 분류 값은 0으로 둔다.
+            SetSectionFrame(section, frame);
+            return section;
+        }
+
         // GPU ordered-float 경계를 다시 실수로 복원한다.
         float Unorder(uint32_t value)
         {
@@ -124,6 +157,14 @@ namespace MeshCutting
             const Mesh& mesh = input.GetMesh(i);
             for (uint32_t d = 0; d < mesh.numDraws; ++d)
             {
+                // 실험에서는 모든 draw의 삼각형 수만 하나의 표면에 누적한다.
+                if (UseFlatSections())
+                {
+                    first += mesh.draw[d].primCount / 3;
+                    continue;
+                }
+
+                // 기본 경로는 기존 draw별 descriptor 구성을 유지한다.
                 if (sections.size() == 4096)
                     throw std::length_error("Cut count draw limit exceeded (4096)");
                 const auto& draw = mesh.draw[d];
@@ -134,6 +175,10 @@ namespace MeshCutting
                 first += draw.primCount / 3;
             }
         }
+
+        // count와 Submit이 동일한 첫 레이아웃과 단일 표면을 사용한다.
+        if (UseFlatSections())
+            sections.push_back(MakeFlatSection(input, sectionFrames[0], first, first * 6));
         sections.push_back({});
         SetSectionFrame(sections.back(), Matrix4(kIdentity));
 
@@ -174,6 +219,10 @@ namespace MeshCutting
         // CPU에는 작은 개수 배열만 읽고 오류나 불가능한 개수면 원본을 유지한다.
         std::memcpy(initial.data(), readback.Map(), initial.size() * 4);
         readback.Unmap();
+
+        // 실험 경로가 거절되면 GPU 오류 비트와 경계 개수를 남긴다.
+        if (UseFlatSections() && (initial[0] || initial[1] > first))
+            Utility::Printf("Cut flat sections count failed: errorBits=0x%x segments=%u triangles=%u\n", initial[0], initial[1], first);
         if (initial[0] || initial[1] > first)
             throw std::runtime_error("Cut capacity count failed");
         CutCapacityPlan plan;
@@ -220,8 +269,19 @@ namespace MeshCutting
                 if (drawTriangles > 1000000 - triangles)
                     throw std::length_error("Cut input triangle limit exceeded (1000000)");
                 triangles += drawTriangles;
-                surfaceVertices += capacity && !capacity->SurfaceVertices.empty() ? capacity->SurfaceVertices.at(capacityIndex++) : drawTriangles * 6;
+                surfaceVertices += !UseFlatSections() && capacity && !capacity->SurfaceVertices.empty() ? capacity->SurfaceVertices.at(capacityIndex++) : drawTriangles * 6;
                 ++sectionCount;
+            }
+        }
+
+        // 실험의 용량 계획은 모든 draw를 검증한 뒤 단일 항목으로 해석한다.
+        if (UseFlatSections())
+        {
+            sectionCount = 2;
+            if (capacity && !capacity->SurfaceVertices.empty())
+            {
+                surfaceVertices = capacity->SurfaceVertices.at(0);
+                capacityIndex = 1;
             }
         }
 
@@ -450,6 +510,7 @@ namespace MeshCutting
         job->Input = std::move(input);
         job->SectionFrames = sectionFrames;
         uint64_t total = 0, vertices = 0;
+        uint32_t flatDraws = 0;
         for (uint32_t i = 0; i < job->Input->GetSections().size(); ++i)
         {
             const Mesh& mesh = job->Input->GetMesh(i);
@@ -466,6 +527,17 @@ namespace MeshCutting
                     || uint64_t(mesh.ibOffset) + mesh.ibSize > job->Input->GetDataBuffer().GetBufferSize()
                     || draw.baseVertex > mesh.vbSize / mesh.vbStride)
                     throw std::invalid_argument("Invalid static draw range");
+
+                // 실제 draw의 검증은 유지하고 실험에서는 총량만 누적한다.
+                if (UseFlatSections())
+                {
+                    total += draw.primCount / 3;
+                    vertices += uint64_t(draw.primCount) * 2;
+                    ++flatDraws;
+                    continue;
+                }
+
+                // 기본 경로는 기존 draw별 출력 구간과 템플릿을 유지한다.
                 CutSection s = { mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
                     draw.startIndex, draw.baseVertex, draw.primCount / 3,
                     0, uint32_t(total), uint32_t(vertices),
@@ -486,6 +558,31 @@ namespace MeshCutting
         if (total > 1000000)
             throw std::length_error("Cut input triangle limit exceeded (1000000)");
         const uint64_t segments = capacity && !capacity->SurfaceVertices.empty() ? capacity->MaxSegments : total;
+
+        // 실험 표면과 템플릿을 하나씩 만들고 최초 제출에만 작업량을 기록한다.
+        if (UseFlatSections())
+        {
+            if (capacity && !capacity->SurfaceVertices.empty())
+                vertices = capacity->SurfaceVertices.at(0);
+
+            // 합친 index 범위가 원본 Data 끝을 넘으면 CPU 진단의 범위 밖 읽기를 막기 위해 거절한다.
+            const Mesh& first = job->Input->GetMesh(0);
+            const uint64_t indexStride = first.ibFormat == DXGI_FORMAT_R32_UINT ? 4 : 2;
+            if (first.numDraws && first.ibOffset + (uint64_t(first.draw[0].startIndex) + total * 3) * indexStride > job->Input->GetDataBuffer().GetBufferSize())
+                throw std::length_error("Flat cut index range exceeds data buffer");
+
+            // 첫 레이아웃의 단일 표면과 첫 mesh 템플릿을 추가한다.
+            job->Sections.push_back(MakeFlatSection(*job->Input, sectionFrames[0], uint32_t(total), uint32_t(vertices)));
+            job->Templates.push_back(job->Input->GetMesh(0));
+
+            // 같은 실험의 반복 제출로 로그가 중복되지 않게 한다.
+            static bool logged = false;
+            if (!logged)
+            {
+                Utility::Printf("Cut flat sections experiment: draws=%u triangles=%u\n", flatDraws, uint32_t(total));
+                logged = true;
+            }
+        }
 
         // cap도 독립 section이며 양쪽에서 같은 topology를 반대로 사용한다.
         CutSection cap{};
@@ -522,7 +619,7 @@ namespace MeshCutting
         for (size_t i = 0; i + 1 < job->Sections.size(); ++i)
         {
             auto& section = job->Sections[i];
-            if (section.SourceSection >= bounds.size())
+            if (UseFlatSections() || section.SourceSection >= bounds.size())
                 continue;
             const auto sphere = bounds[section.SourceSection];
             const float r = sphere.GetRadius();

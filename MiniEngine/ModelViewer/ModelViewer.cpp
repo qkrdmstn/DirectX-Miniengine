@@ -320,7 +320,7 @@ void ModelViewer::Startup( void )
             L"physics-sim-checks", L"physics-query-checks", L"physics-query-self-test",
             L"physics-cut-checks", L"physics-cut-scenario", L"cut", L"cut-benchmark",
             L"cut-benchmark-out", L"cut-scene", L"cut-transform-checks", L"cut-validate",
-            L"cut-expect-loops", L"cut-expect-publications", L"demo-tower" })
+            L"cut-expect-loops", L"cut-expect-publications", L"demo-tower", L"cut-flat-sections" })
         {
             if (CommandLineArgs::GetString(option, value))
                 throw std::invalid_argument("skeletal-break-demo cannot be combined with automatic checks, cuts or benchmarks");
