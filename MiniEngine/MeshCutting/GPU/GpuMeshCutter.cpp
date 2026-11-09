@@ -119,8 +119,8 @@ namespace MeshCutting
                 draw.startIndex, draw.baseVertex, triangles, 0, 0, 0, vertices, mesh.psoFlags,
                 0, 0, mesh.vbSize / mesh.vbStride, 0 };
 
-            // 모드 2에서는 GPU의 정점 인덱스 범위 검사를 우회한다.
-            if (FlatSectionMode() == 2)
+            // 모드 2 이상에서는 GPU의 정점 인덱스 범위 검사를 우회한다.
+            if (FlatSectionMode() >= 2)
                 section.VertexCount = 0xFFFFFFFFu;
 
             // 첫 section의 변환만 적용하고 전체 범위 분류 값은 0으로 둔다.
@@ -386,15 +386,25 @@ namespace MeshCutting
         }
     }
 
-    // fence가 끝난 뒤 cap 누적 진단을 포함한 metadata와 GPU timestamp만 읽는다.
+    // fence 완료 후 metadata와 GPU timestamp를 읽고 모드 3의 경계 오류 비트만 지운다.
     bool CutJob::Poll()
     {
+        // 이미 수집했거나 GPU 작업이 끝나지 않았으면 readback을 반복하지 않는다.
         if (Collected) return true;
         if (!Graphics::g_CommandManager.IsFenceComplete(Fence)) return false;
 
         // 기존 KDop 뒤에 추가한 다섯 DWORD까지 함께 읽는다.
         Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide + 6);
         std::memcpy(Status.data(), StatusReadback.Map(), Status.size() * 4);
+
+        // 모드 3에서는 원래 오류를 작업당 한 번 기록하고 경계 오류 비트만 지운다.
+        if (FlatSectionMode() == 3 && (Status[0] & 9u) != 0)
+        {
+            Utility::Printf("Cut flat sections masked errorBits=0x%x\n", Status[0]);
+            Status[0] &= ~9u;
+        }
+
+        // 복사한 상태를 사용하므로 readback 매핑을 해제한다.
         StatusReadback.Unmap();
 
         // section 수에 따른 진단 시작 위치에서 라운드·표시·실제 제거 합계를 해석한다.
@@ -574,8 +584,8 @@ namespace MeshCutting
         if (UseFlatSections())
         {
             // 검사하지 않은 인덱스로 부모 snapshot에 접근하는 CPU 진단은 허용하지 않는다.
-            if (FlatSectionMode() == 2 && snapshotDiagnostics)
-                throw std::invalid_argument("cut-flat-sections 2 cannot be combined with cut validation");
+            if (FlatSectionMode() >= 2 && snapshotDiagnostics)
+                throw std::invalid_argument("cut-flat-sections 2/3 cannot be combined with cut validation");
 
             // count 결과가 있으면 단일 표면의 출력 용량에 적용한다.
             if (capacity && !capacity->SurfaceVertices.empty())
