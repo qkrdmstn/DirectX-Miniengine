@@ -28,7 +28,7 @@
 | [CapParallelOptimization.md](GPU/CapParallelOptimization.md) | cap 그룹 크기·결정성·MX450 비교 측정 | 진행 중 — 단계 1·1b `6f328257`; 단계 3(CapScanMarking)으로 5060 Ti 1.70 ms, 목표 달성; 1c 미착수 |
 | [CapScanMarking.md](GPU/CapScanMarking.md) | cap 선택을 누적합 기반 교대 표시로 교체 | 진행 중 — S2 `1a7d77ed` 이후 전체 지원 loop MC 통일·해시 귀 선택 제거·D/R 검증 완료 `0553410b`; 5060 Ti Bunny 재측정 1.71 ms(회귀 없음); 기존 미캡핑 진단 잔존 |
 | [CapActiveTestList.md](GPU/CapActiveTestList.md) | cap 내부 점 검사(InTriangle) 대상을 라운드별 목록으로 압축 | 진행 중 — AL-1 `74f4940d`, AL-0·AL-1 각 41회 회귀 통과·대조 불일치 0; 5060 Ti cap 1.01→0.51 ms; attempt=1 미검증 (2026-11-02) |
-| [CapCacheLimit.md](GPU/CapCacheLimit.md) | Next·Prev·Flags 비트 묶음으로 cap 캐시 상한 1024→1536 | 진행 중 — CL-1 Release 회귀 checksum 동일, MX450 Dragon y=0.08 cap 21.7→3.5 ms; Debug·5060 Ti 미측정 (2026-11-10) |
+| [CapCacheLimit.md](GPU/CapCacheLimit.md) | Next·Prev·Flags 비트 묶음으로 cap 캐시 상한 1024→1536 | 진행 중 — CL-1 `983a8c9d`, Release 회귀 checksum 동일; Dragon y=0.08 cap 5060 Ti 18.48→1.89 ms·MX450 21.7→3.5 ms; Debug 미실시 (2026-11-10) |
 | [ConcurrentCutJobs.md](GPU/ConcurrentCutJobs.md) | 여러 Static CutJob 제출·작업별 snapshot·완료 게시 | 완료 — `f2138029` 기준 1단계, Debug/Release·20회 실행 검증 `1532fc60` |
 | [CutInputFromRevision.md](GPU/CutInputFromRevision.md) | Static 절단 입력을 PG에서 revision Data+section 행렬로 교체, GB::Pose 제거, 패치 조각 강체 유지 결정 | 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 `f7b0bb9c`, CI-4 `6bfa3092`, CI-5 GB::Pose 제거 D/R 검증 완료; 재절단 법선 오차 미측정 (2026-11-04) |
 | [SkeletalPatchCopyCut.md](GPU/SkeletalPatchCopyCut.md) | C 입력으로 영향 본 선택→패치 GPU 복사→정적 복사본 무한 절단 | 진행 중 — SP-7e 게시·부착 구현(미커밋, base `9400691f`); 경계 오차·강제 Stale·캡처 확장 진단 미완료 (2026-11-03) |

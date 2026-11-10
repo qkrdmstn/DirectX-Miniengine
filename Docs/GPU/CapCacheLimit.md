@@ -1,4 +1,4 @@
-상태: 진행 중 — CL-1 구현·Release 검증 완료 (base `f06d384e`), Debug 빌드·5060 Ti 측정 미실시 (2026-11-10)
+상태: 진행 중 — CL-1 `983a8c9d`, Release 검증 완료, 5060 Ti Dragon y=0.08 cap 18.48→1.89 ms·전체 20.98→4.06 ms; Debug 빌드 미실시 (2026-11-10)
 
 # cap 캐시 상한 확대 (1024 → 1536)
 
@@ -124,5 +124,6 @@ CPU 쪽 변경은 없다. Meta 진단(`capMaxLoop`, `capMappedLoops`) 위치도 
   - Dragon y=0.08 전체 GPU 중앙값은 약 42 ms에서 약 26 ms로 줄었다.
   - 1070 루프의 Cached cap(3.5 ms)은 459 루프(0.8 ms)보다 크다. 라운드마다 TestList 전체를 훑는 비용이 길이에 따라 커지는 것으로 본다.
   - Mapped가 없는 사례는 실행 간 편차 안에 있다. 이 사례들의 성능 차이는 주장하지 않는다.
-- 미실시: Debug 빌드(C: 여유 약 1 GB), 1536 초과 루프의 Mapped 경로 실행(해당 입력 없음), 5060 Ti 측정(사용자).
+- 5060 Ti(사용자 측정, `983a8c9d` Release) Dragon y=0.08: cap 18.48→1.89 ms, 전체 GPU 20.98→4.06 ms, mappedLoops 1→0. 전후 표는 [CutPerformanceComparison.md](CutPerformanceComparison.md) 7절.
+- 미실시: Debug 빌드(C: 여유 약 1 GB), 1536 초과 루프의 Mapped 경로 실행(해당 입력 없음).
 - 로그는 저장소 밖 `%TEMP%/cap-cl1/`에 있다.
