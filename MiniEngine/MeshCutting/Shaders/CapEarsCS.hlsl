@@ -6,6 +6,14 @@
 #define CAP_THREADS 256
 #endif
 
+// 루프 캐시 상한은 연결 위치의 11비트 범위로 제한한다.
+#ifndef CAP_CACHE
+#define CAP_CACHE 1536
+#endif
+#if CAP_CACHE > 2048
+#error CAP_CACHE exceeds the 11-bit link index range
+#endif
+
 // groupshared: 같은 스레드 그룹 안의 스레드들만 함께 쓰는 메모리 (공유 메모리)
 // 라운드 진행 상태
 groupshared uint Remaining, Removed, LastRemoved;
@@ -14,12 +22,13 @@ groupshared float Orientation;
 // 루프 정보
 groupshared uint Cached, Mapped, MapBase, LoopLeader, AllPoints, LoopLength, Rotation;
 
-// 루프 캐시(최대 1024개)
-groupshared float2 CachedPoints[1024];
-groupshared uint CachedNext[1024], CachedPrev[1024], CachedFlags[1024], CachedSlot[1024];
+// 루프 캐시(최대 CAP_CACHE개)
+groupshared float2 CachedPoints[CAP_CACHE];
+// Link: bit0 활성, bit1~2 종류, bit3 선택, bit4 reflex, bit5~15 Next, bit16~26 Prev.
+groupshared uint CachedLink[CAP_CACHE], CachedSlot[CAP_CACHE];
 
 // ear 검사 목록
-groupshared uint TestList[1024];
+groupshared uint TestList[CAP_CACHE];
 groupshared uint TestCount;
 
 // prefix sum 보조
@@ -90,12 +99,44 @@ float2 P2(uint i)
     return Cached != 0 ? CachedPoints[i] : Point2(Slot(i));
 }
 
+// 연결 word에서 다음 경계 위치를 읽는다.
+uint LinkNext(uint word)
+{
+    // 5~15비트의 Next 필드를 추출한다.
+    return (word >> 5) & 0x7FF;
+}
+
+// 연결 word에서 이전 경계 위치를 읽는다.
+uint LinkPrev(uint word)
+{
+    // 16~26비트의 Prev 필드를 추출한다.
+    return (word >> 16) & 0x7FF;
+}
+
+// 다른 필드를 보존하며 다음 경계 위치를 원자적으로 갱신한다.
+void SetLinkNext(uint i, uint next)
+{
+    // Next 필드만 지운 뒤 새 위치를 넣는다.
+    InterlockedAnd(CachedLink[i], ~(0x7FFu << 5));
+    InterlockedOr(CachedLink[i], next << 5);
+}
+
+// 다른 필드를 보존하며 이전 경계 위치를 원자적으로 갱신한다.
+void SetLinkPrev(uint i, uint prev)
+{
+    // Prev 필드만 지운 뒤 새 위치를 넣는다.
+    InterlockedAnd(CachedLink[i], ~(0x7FFu << 16));
+    InterlockedOr(CachedLink[i], prev << 16);
+}
+
 // 현재 경계의 다음 점을 읽는다.
 uint Nxt(uint i)
 {
-    // 캐시 위치 또는 원래 슬롯의 연결을 반환한다.
+    // 캐시 연결 word에서 다음 위치를 추출한다.
     if (Cached != 0)
-        return CachedNext[i];
+        return LinkNext(CachedLink[i]);
+
+    // 원래 슬롯의 다음 연결을 현재 경계 위치로 반환한다.
     uint slot = Next(Slot(i));
     return Mapped != 0 ? Ring.Load(slot * 128 + 112) : slot;
 }
@@ -103,9 +144,11 @@ uint Nxt(uint i)
 // 현재 경계의 이전 점을 읽는다.
 uint Prv(uint i)
 {
-    // 캐시 위치 또는 원래 슬롯의 연결을 반환한다.
+    // 캐시 연결 word에서 이전 위치를 추출한다.
     if (Cached != 0)
-        return CachedPrev[i];
+        return LinkPrev(CachedLink[i]);
+
+    // 원래 슬롯의 이전 연결을 현재 경계 위치로 반환한다.
     uint slot = Prev(Slot(i));
     return Mapped != 0 ? Ring.Load(slot * 128 + 112) : slot;
 }
@@ -114,28 +157,28 @@ uint Prv(uint i)
 uint Active(uint i)
 {
     // 활성 비트 또는 현재 loop의 슬롯 상태를 반환한다.
-    return Cached != 0 ? (CachedFlags[i] & 1) : (Ring.Load(Slot(i) * 128 + 48) == LoopLeader ? Ring.Load(Slot(i) * 128 + 80) : 0);
+    return Cached != 0 ? (CachedLink[i] & 1) : (Ring.Load(Slot(i) * 128 + 48) == LoopLeader ? Ring.Load(Slot(i) * 128 + 80) : 0);
 }
 
 // 현재 라운드의 귀/공선 후보를 읽는다.
 uint Kind(uint i)
 {
     // 후보 종류 두 비트 또는 슬롯의 후보 종류를 반환한다.
-    return Cached != 0 ? ((CachedFlags[i] >> 1) & 3) : Ring.Load(Slot(i) * 128 + 60);
+    return Cached != 0 ? ((CachedLink[i] >> 1) & 3) : Ring.Load(Slot(i) * 128 + 60);
 }
 
 // reflex 검사 또는 확정 제거 마스크를 읽는다.
 uint Selected(uint i)
 {
     // 선택 비트 또는 슬롯의 선택 상태를 반환한다.
-    return Cached != 0 ? ((CachedFlags[i] >> 3) & 1) : Ring.Load(Slot(i) * 128 + 88);
+    return Cached != 0 ? ((CachedLink[i] >> 3) & 1) : Ring.Load(Slot(i) * 128 + 88);
 }
 
 // 귀 검사용 reflex 플래그를 선택 상태와 분리해 읽는다.
 uint Reflex(uint i)
 {
     // 작은 캐시는 bit4, 큰 loop는 별도 슬롯 word에 reflex를 보관한다.
-    return Cached != 0 ? ((CachedFlags[i] >> 4) & 1) : Ring.Load(Slot(i) * 128 + 92);
+    return Cached != 0 ? ((CachedLink[i] >> 4) & 1) : Ring.Load(Slot(i) * 128 + 92);
 }
 
 // 경계에 닿는 점도 귀 안에 있다고 판정해 잘못된 대각선을 만들지 않는다.
@@ -188,7 +231,7 @@ uint SelectCached(uint waveSlot, uint round, uint zeroRounds, out uint marked)
                         }
                     }
             }
-            CachedFlags[v] = (CachedFlags[v] & ~8u) | (mark ? 8u : 0u);
+            CachedLink[v] = (CachedLink[v] & ~8u) | (mark ? 8u : 0u);
             passes += mark ? 1 : 0;
         }
 
@@ -203,7 +246,7 @@ uint SelectCached(uint waveSlot, uint round, uint zeroRounds, out uint marked)
             if (Selected(clear) != 0)
             {
                 if (rank >= limit)
-                    CachedFlags[clear] &= ~8u;
+                    CachedLink[clear] &= ~8u;
                 rank++;
             }
         return min(total, limit);
@@ -284,8 +327,7 @@ uint SelectMapped(uint waveSlot, uint round, uint zeroRounds, out uint marked)
 }
 
 
-// 루프마다 스레드 그룹 하나 할당
-// 루프 내부의 각 선분(슬롯) 마다 스레드 하나를 할당
+// 루프마다 스레드 그룹 하나를 할당하고 각 선분을 스레드에 나눈다.
 // 검사점 플래그와 후보 종류를 라운드마다 계산하고 귀 검사와 안전한 동시 제거를 수행한다.
 [numthreads(CAP_THREADS, 1, 1)]
 void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
@@ -322,7 +364,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
         AllPoints = (Ring.Load(leader * 128 + 52) & 2) != 0 ? 1 : 0;    // 접촉 위험(bad 2) 루프면 ear 검사 때 모든 점을 검사
         LoopLength = 0;                                                 // 루프 길이, 0 = 닫힌 루프 확인 실패 (순회 성공 시 갱신)
         Rotation = 0;                                                   // 시작 순번, 순회 중 좌표가 가장 작은 점으로 갱신 (매 실행마다 같은 순서, 디버깅용)
-        Mapped = 0;                                                     // 1024 초과 루프를 Ring에 펼쳐 처리하는지 (순회 후 결정)
+        Mapped = 0;                                                     // CAP_CACHE 초과 루프를 Ring에 펼쳐 처리하는지 (순회 후 결정)
         MapBase = 0;                                                    // Mapped일 때 Ring 전용 구간의 시작 위치 (순회 후 예약)
         
         // 루프 순회
@@ -336,7 +378,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
                 break;
             if (Ring.Load(slot * 128 + 48) != leader) // 다른 루프 선분으로 넘어간 경우
                 break;
-            if (p < 1024)
+            if (p < CAP_CACHE)
                 CachedSlot[p] = slot;
             
             // 순회하면서 Rotation 결정
@@ -357,8 +399,8 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
         }
 
         // 순회 실패는 그룹 전체가 cap을 생략하도록 전달한다.
-        Cached = LoopLength <= 1024 ? 1 : 0;
-        Mapped = LoopLength > 1024 ? 1 : 0;
+        Cached = LoopLength <= CAP_CACHE ? 1 : 0;
+        Mapped = LoopLength > CAP_CACHE ? 1 : 0;
 
         // 순회에 성공한 경계의 최대 길이를 기록하고 큰 loop 전용 scan 공간을 예약한다.
         if (LoopLength != 0)
@@ -383,12 +425,12 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
     // 이때, Rotation 기준으로 시작하게 구성한다.
     if (Cached != 0)
     {
-        // 원본 덮어쓰기를 막으려고 아직 안 쓰는 CachedNext에 임시로 쓴다 
+        // 원본 덮어쓰기를 막으려고 아직 안 쓰는 CachedLink에 슬롯 번호를 임시로 쓴다.
         for (uint cache = tid; cache < size; cache += CAP_THREADS)
-            CachedNext[cache] = CachedSlot[(cache + Rotation) % size];
+            CachedLink[cache] = CachedSlot[(cache + Rotation) % size];
         GroupMemoryBarrierWithGroupSync();
     }
-    else if (Mapped != 0)  // 루프 내 정점이 1024개를 넘어서 group shared 캐시에 들어가지 않는 경우, Ring에 기록한다.
+    else if (Mapped != 0)  // 루프 내 정점이 CAP_CACHE개를 넘어서 group shared 캐시에 들어가지 않는 경우, Ring에 기록한다.
     {
         // loop 전용 scratch 구간에 canonical 순서와 Ring 슬롯 역방향 순위를 기록한다.
         if (tid == 0)
@@ -412,12 +454,14 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
     {
         for (uint cache = tid; cache < size; cache += CAP_THREADS)
         {
-            uint src = CachedNext[cache];
+            // 같은 cache 칸의 임시 슬롯 번호를 읽어 슬롯과 좌표를 채운다.
+            uint src = CachedLink[cache];
             CachedSlot[cache] = src;
             CachedPoints[cache] = Point2(src);
-            CachedNext[cache] = (cache + 1) % size;
-            CachedPrev[cache] = (cache + size - 1) % size;
-            CachedFlags[cache] = 1;
+
+            // 읽기가 끝난 같은 cache 칸에 활성 비트와 양방향 연결을 채운다.
+            uint next = (cache + 1) % size, prev = (cache + size - 1) % size;
+            CachedLink[cache] = 1 | (next << 5) | (prev << 16);
         }
     }
     GroupMemoryBarrierWithGroupSync();
@@ -479,7 +523,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
             // 작은 루프는 캐시에 저장하고 선택 비트를 지우되 비활성 정점의 검사점 비트는 보존한다.
             if (Cached != 0)
             {
-                CachedFlags[reflex] = (CachedFlags[reflex] & ~(active != 0 ? 30u : 14u))
+                CachedLink[reflex] = (CachedLink[reflex] & ~(active != 0 ? 30u : 14u))
                     | (kind << 1) | (active != 0 ? flag << 4 : 0u); // 볼록/(오목 or 일직선) 결과 저장
                 if (active != 0)
                     myTestCount += AllPoints != 0 || flag != 0 ? 1 : 0; // TestList Size 계산
@@ -502,7 +546,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
             if (waveSlot == ZeroSlot)
                 TestCount = total;
             for (uint test = tid; test < size; test += CAP_THREADS)
-                if (Active(test) != 0 && (AllPoints != 0 || (CachedFlags[test] & 16) != 0))
+                if (Active(test) != 0 && (AllPoints != 0 || (CachedLink[test] & 16) != 0))
                     TestList[offset++] = test;
         }
         AllMemoryBarrierWithGroupSync();
@@ -534,12 +578,12 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
                 Ring.Store(Slot(v2) * 128 + 76, 1);
             }
 
-            // 이웃 연결은 각각 갱신하고 자기 위치의 활성 비트만 내린다.
+            // 이웃 연결과 자기 활성 비트를 원자적으로 갱신해 다른 필드를 보존한다.
             if (Cached != 0)
             {
-                CachedNext[a] = c;
-                CachedPrev[c] = a;
-                CachedFlags[v2] &= ~1u;
+                SetLinkNext(a, c);
+                SetLinkPrev(c, a);
+                InterlockedAnd(CachedLink[v2], ~1u);
             }
             else
             {
