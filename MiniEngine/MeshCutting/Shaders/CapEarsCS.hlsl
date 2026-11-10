@@ -8,7 +8,7 @@
 
 // 루프 캐시 상한은 연결 위치의 11비트 범위로 제한한다.
 #ifndef CAP_CACHE
-#define CAP_CACHE 1536
+#define CAP_CACHE 1976
 #endif
 #if CAP_CACHE > 2048
 #error CAP_CACHE exceeds the 11-bit link index range
@@ -25,7 +25,7 @@ groupshared uint Cached, Mapped, MapBase, LoopLeader, AllPoints, LoopLength, Rot
 // 루프 캐시(최대 CAP_CACHE개)
 groupshared float2 CachedPoints[CAP_CACHE];
 // Link: bit0 활성, bit1~2 종류, bit3 선택, bit4 reflex, bit5~15 Next, bit16~26 Prev.
-groupshared uint CachedLink[CAP_CACHE], CachedSlot[CAP_CACHE];
+groupshared uint CachedLink[CAP_CACHE];
 
 // ear 검사 목록
 groupshared uint TestList[CAP_CACHE];
@@ -83,13 +83,11 @@ uint BlockExclusiveSum(uint value, uint waveSlot, out uint total)
     return WarpTotal[wave] + prefix;
 }
 
-// 경계 위치를 캐시 또는 scan map의 원본 Ring 슬롯으로 변환한다.
+// 경계 위치를 VRAM 순서 테이블의 원본 Ring 슬롯으로 변환한다.
 uint Slot(uint i)
 {
-    // 캐시, 큰 loop 매핑 또는 원래 슬롯을 반환한다.
-    if (Cached != 0)
-        return CachedSlot[i];
-    return Mapped != 0 ? Ring.Load(HashLinksOffset + MaxSegments * 8 + (MapBase + i) * 4) : i;
+    // 캐시와 큰 loop는 순서 테이블을 읽고 나머지는 원래 슬롯을 반환한다.
+    return (Cached | Mapped) != 0 ? Ring.Load(HashLinksOffset + MaxSegments * 8 + (MapBase + i) * 4) : i;
 }
 
 // 현재 경계 위치의 투영 좌표를 읽는다.
@@ -365,7 +363,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
         LoopLength = 0;                                                 // 루프 길이, 0 = 닫힌 루프 확인 실패 (순회 성공 시 갱신)
         Rotation = 0;                                                   // 시작 순번, 순회 중 좌표가 가장 작은 점으로 갱신 (매 실행마다 같은 순서, 디버깅용)
         Mapped = 0;                                                     // CAP_CACHE 초과 루프를 Ring에 펼쳐 처리하는지 (순회 후 결정)
-        MapBase = 0;                                                    // Mapped일 때 Ring 전용 구간의 시작 위치 (순회 후 예약)
+        MapBase = 0;                                                    // 캐시와 Mapped용 Ring 전용 구간의 시작 위치 (순회 후 예약)
         
         // 루프 순회
         uint2 minKey = uint2(~0u, ~0u);                                 //
@@ -379,7 +377,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
             if (Ring.Load(slot * 128 + 48) != leader) // 다른 루프 선분으로 넘어간 경우
                 break;
             if (p < CAP_CACHE)
-                CachedSlot[p] = slot;
+                TestList[p] = slot;
             
             // 순회하면서 Rotation 결정
             uint2 key = asuint(Point2(slot));
@@ -402,16 +400,14 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
         Cached = LoopLength <= CAP_CACHE ? 1 : 0;
         Mapped = LoopLength > CAP_CACHE ? 1 : 0;
 
-        // 순회에 성공한 경계의 최대 길이를 기록하고 큰 loop 전용 scan 공간을 예약한다.
+        // 순회에 성공한 경계의 최대 길이를 기록하고 모든 loop의 순서 테이블 공간을 예약한다.
         if (LoopLength != 0)
         {
             uint ignored;
             Meta.InterlockedMax((61 + 2 * Sections) * 4, LoopLength, ignored);
+            Meta.InterlockedAdd((63 + 2 * Sections) * 4, LoopLength, MapBase);
             if (Mapped != 0)
-            {
                 Meta.InterlockedAdd((62 + 2 * Sections) * 4, 1, ignored);
-                Meta.InterlockedAdd((63 + 2 * Sections) * 4, LoopLength, MapBase);
-            }
         }
     }
     GroupMemoryBarrierWithGroupSync();
@@ -425,10 +421,17 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
     // 이때, Rotation 기준으로 시작하게 구성한다.
     if (Cached != 0)
     {
-        // 원본 덮어쓰기를 막으려고 아직 안 쓰는 CachedLink에 슬롯 번호를 임시로 쓴다.
+        // 임시 슬롯 목록을 회전해 VRAM 순서 테이블과 좌표 캐시를 채운다.
         for (uint cache = tid; cache < size; cache += CAP_THREADS)
-            CachedLink[cache] = CachedSlot[(cache + Rotation) % size];
-        GroupMemoryBarrierWithGroupSync();
+        {
+            uint slot = TestList[(cache + Rotation) % size];
+            Ring.Store(HashLinksOffset + MaxSegments * 8 + (MapBase + cache) * 4, slot);
+            CachedPoints[cache] = Point2(slot);
+
+            // 활성 비트와 양방향 연결을 초기화한다.
+            uint next = (cache + 1) % size, prev = (cache + size - 1) % size;
+            CachedLink[cache] = 1 | (next << 5) | (prev << 16);
+        }
     }
     else if (Mapped != 0)  // 루프 내 정점이 CAP_CACHE개를 넘어서 group shared 캐시에 들어가지 않는 경우, Ring에 기록한다.
     {
@@ -445,26 +448,10 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
                 slot = Next(slot);
             }
         }
-        AllMemoryBarrierWithGroupSync();
     }
 
-    // ear clipping 과정에서 자주 읽을 캐시 값들을 채워준다.
-    // 회전된 슬롯을 읽은 뒤 각 위치의 좌표와 연결 및 압축 플래그를 초기화한다.
-    if (Cached != 0)
-    {
-        for (uint cache = tid; cache < size; cache += CAP_THREADS)
-        {
-            // 같은 cache 칸의 임시 슬롯 번호를 읽어 슬롯과 좌표를 채운다.
-            uint src = CachedLink[cache];
-            CachedSlot[cache] = src;
-            CachedPoints[cache] = Point2(src);
-
-            // 읽기가 끝난 같은 cache 칸에 활성 비트와 양방향 연결을 채운다.
-            uint next = (cache + 1) % size, prev = (cache + size - 1) % size;
-            CachedLink[cache] = 1 | (next << 5) | (prev << 16);
-        }
-    }
-    GroupMemoryBarrierWithGroupSync();
+    // 순서 테이블과 캐시 준비를 끝내고 TestList를 라운드에서 재사용하기 전에 동기화한다.
+    AllMemoryBarrierWithGroupSync();
 
     // 스레드 하나가 루프에 남은 정점 수와 루프의 감김 방향을 계산한다.
     // 남은 점 수와 다각형 면적 → 감김 방향(Orientation). 면적 0이거나 4096 초과면 끝
