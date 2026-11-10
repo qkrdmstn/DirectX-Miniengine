@@ -14,6 +14,8 @@
 #include "CompiledShaders/LinkBoundaryCS.h"
 #include "CompiledShaders/RankBoundaryCS.h"
 #include "CompiledShaders/CapEarsCS.h"
+#include "CompiledShaders/CapEarsCS512.h"
+#include "CompiledShaders/CapEarsCS1024.h"
 #include "CompiledShaders/FinalizeCutCS.h"
 #include "CompiledShaders/CutBoundsCS.h"
 #include <algorithm>
@@ -29,13 +31,16 @@ namespace MeshCutting
         RootSignature Root;
         ComputePSO Pipelines[7];
         uint16_t CapTextureTable;
+        uint32_t CapThreads = 256;
+        bool Initialized = false;
         // 공유 root로 clip·경계·cap 각 단계를 초기화한다.
         void Initialize()
         {
-            // t0 revision과 t2 section만 등록하고 t1 입력은 제거한다.
-            static bool initialized = false;
-            if (initialized)
+            // 이미 준비된 파이프라인은 재생성하지 않는다.
+            if (Initialized)
                 return;
+
+            // t0 revision과 t2 section만 등록하고 t1 입력은 제거한다.
             Root.Reset(10);
             Root[0].InitAsConstantBuffer(0);
             Root[1].InitAsConstants(1, 1);
@@ -45,11 +50,17 @@ namespace MeshCutting
                 Root[i + 4].InitAsBufferUAV(i);
             Root.Finalize(L"Static cut");
 
+            // 설정에 맞는 단면 셰이더의 바이트코드와 크기를 함께 선택한다.
+            const void* capShader = CapThreads == 512 ? g_pCapEarsCS512 :
+                CapThreads == 1024 ? g_pCapEarsCS1024 : g_pCapEarsCS;
+            const size_t capSize = CapThreads == 512 ? sizeof(g_pCapEarsCS512) :
+                CapThreads == 1024 ? sizeof(g_pCapEarsCS1024) : sizeof(g_pCapEarsCS);
+
             // 모든 절단 단계에 같은 root signature를 적용한다.
             const void* shaders[] = { g_pClipTrianglesCS, g_pBoundaryKeysCS, g_pLinkBoundaryCS,
-                g_pRankBoundaryCS, g_pCapEarsCS, g_pFinalizeCutCS, g_pCutBoundsCS };
+                g_pRankBoundaryCS, capShader, g_pFinalizeCutCS, g_pCutBoundsCS };
             const size_t sizes[] = { sizeof(g_pClipTrianglesCS), sizeof(g_pBoundaryKeysCS), sizeof(g_pLinkBoundaryCS),
-                sizeof(g_pRankBoundaryCS), sizeof(g_pCapEarsCS), sizeof(g_pFinalizeCutCS), sizeof(g_pCutBoundsCS) };
+                sizeof(g_pRankBoundaryCS), capSize, sizeof(g_pFinalizeCutCS), sizeof(g_pCutBoundsCS) };
             for (uint32_t i = 0; i < 7; ++i)
             {
                 Pipelines[i].SetRootSignature(Root);
@@ -69,7 +80,7 @@ namespace MeshCutting
                 Graphics::GetDefaultTexture(Graphics::kDefaultNormalMap)};
             uint32_t count = kNumTextures, counts[kNumTextures] = {1,1,1,1,1};
             Graphics::g_Device->CopyDescriptors(1,&handles,&count,kNumTextures,textures,counts,D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            initialized = true;
+            Initialized = true;
         }
         // Math의 열 벡터 표현을 HLSL의 행 우선 3x4 ABI로 옮긴다.
         void SetSectionFrame(CutSection& section, const Matrix4& frame)
@@ -90,6 +101,26 @@ namespace MeshCutting
             const uint32_t bits = value & 0x80000000 ? value ^ 0x80000000 : ~value;
             float result; std::memcpy(&result, &bits, 4); return result;
         }
+    }
+
+    // 지원하는 단면 스레드 수만 허용하고 초기화 후 변경을 막는다.
+    void SetCapThreads(uint32_t threads)
+    {
+        // 지원 값과 이미 초기화된 파이프라인의 설정을 검사한다.
+        if (threads != 256 && threads != 512 && threads != 1024)
+            throw std::invalid_argument("Cap threads must be 256, 512 or 1024");
+        if (Initialized && threads != CapThreads)
+            throw std::logic_error("Cap threads cannot change after initialization");
+
+        // 다음 파이프라인 초기화에서 사용할 값을 보관한다.
+        CapThreads = threads;
+    }
+
+    // 벤치마크에 기록할 현재 단면 스레드 수를 반환한다.
+    uint32_t GetCapThreads()
+    {
+        // 기본값 또는 명시적으로 선택된 값을 반환한다.
+        return CapThreads;
     }
 
     // 계산 파이프라인과 cap 재질 descriptor를 게임플레이 전에 준비한다.

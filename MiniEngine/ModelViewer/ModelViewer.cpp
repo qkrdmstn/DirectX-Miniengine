@@ -304,6 +304,11 @@ static std::string GetDeviceGpuName()
 // 모델·GPU 준비 전에 시연 옵션의 의존성을 검사하고 명시적 검증 옵션을 읽는다.
 void ModelViewer::Startup( void )
 {
+    // 파이프라인 사전 준비보다 먼저 단면 스레드 그룹 크기를 적용한다.
+    uint32_t capThreads = 256;
+    CommandLineArgs::GetInteger(L"cap-threads", capThreads);
+    MeshCutting::SetCapThreads(capThreads);
+
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
     std::wstring unmaskValue;
@@ -452,7 +457,7 @@ void ModelViewer::Startup( void )
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
         L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask",
         L"capture", L"capture-frame", L"animation-step-ms",
-        L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out",
+        L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cap-threads",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
         L"cut-step-y", L"cut-gap", L"cut-expect-publications", L"physics-cut-checks",
         L"physics-cut-scenario", L"cut-transform-checks", L"cut-validate", L"cut-expect-loops", L"cap-mode" })
@@ -833,13 +838,13 @@ void ModelViewer::Update( float deltaT )
                     "Cut stages median ms: clip=%.4f boundary=%.4f cap=%.4f finalize=%.4f",
                     stageMedian[0], stageMedian[1], stageMedian[2], stageMedian[3]);
 
-                // 정렬된 cap 시간의 분포와 마지막 절단의 루프 진단을 남긴다.
+                // 정렬된 cap 시간의 분포와 루프 진단 및 스레드 수를 남긴다.
                 const std::vector<double>& capSamples = m_CutStageSamples[2];
                 const double p95Cap = capSamples[std::min(capSamples.size()-1, size_t(capSamples.size()*0.95))];
                 snprintf(m_BenchmarkCapText, sizeof(m_BenchmarkCapText),
-                    "Cut cap: medianMs=%.4f p95Ms=%.4f minMs=%.4f loops=%u maxLoop=%u mappedLoops=%u rounds=%u",
+                    "Cut cap: medianMs=%.4f p95Ms=%.4f minMs=%.4f loops=%u maxLoop=%u mappedLoops=%u rounds=%u threads=%u",
                     stageMedian[2], p95Cap, capSamples.front(), cutResult.Loops, cutResult.CapMaxLoop,
-                    cutResult.CapMappedLoops, cutResult.CapRounds);
+                    cutResult.CapMappedLoops, cutResult.CapRounds, MeshCutting::GetCapThreads());
 
                 // -cut-benchmark-out을 주면 화면과 같은 네 줄을 파일에 쓰고 종료를 요청한다.
                 if (!m_BenchmarkOutPath.empty())

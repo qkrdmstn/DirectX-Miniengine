@@ -53,7 +53,7 @@ for ($index = 0; $index -lt $caseList.Count; $index++)
         $text = Get-Content -LiteralPath (Join-Path $caseDir "run$run.txt") -Raw
         $gpu = [regex]::Match($text, '(?m)^Cut benchmark: samples=\d+ medianGpuMs=([\d.]+) p95GpuMs=([\d.]+) medianReadyMs=[\d.]+ error=0\r?$')
         $stages = [regex]::Match($text, '(?m)^Cut stages median ms: clip=([\d.]+) boundary=([\d.]+) cap=([\d.]+) finalize=([\d.]+)\r?$')
-        $cap = [regex]::Match($text, '(?m)^Cut cap: medianMs=([\d.]+) p95Ms=([\d.]+) minMs=([\d.]+) loops=(\d+) maxLoop=(\d+) mappedLoops=(\d+) rounds=(\d+)\r?$')
+        $cap = [regex]::Match($text, '(?m)^Cut cap: medianMs=([\d.]+) p95Ms=([\d.]+) minMs=([\d.]+) loops=(\d+) maxLoop=(\d+) mappedLoops=(\d+) rounds=(\d+)( threads=(\d+))?\r?$')
         $gpuName = [regex]::Match($text, '(?m)^GPU: (.+?)\r?$')
         if (-not ($gpu.Success -and $stages.Success -and $cap.Success -and $gpuName.Success)) { throw "Invalid result: $case run $run" }
         $caseRows += [pscustomobject]@{

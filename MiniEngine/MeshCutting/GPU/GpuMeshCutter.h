@@ -9,6 +9,11 @@
 
 namespace MeshCutting
 {
+    // 초기화 전에 단면 셰이더의 스레드 그룹 크기를 선택한다.
+    void SetCapThreads(uint32_t threads);
+    // 현재 선택한 단면 셰이더의 스레드 그룹 크기를 반환한다.
+    uint32_t GetCapThreads();
+
     // 작업이 GPU 입력/후보 결과를 소유한다. Scene 포인터는 보관하지 않는다.
     class CutJob
     {
