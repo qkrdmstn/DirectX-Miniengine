@@ -305,7 +305,7 @@ static std::string GetDeviceGpuName()
 void ModelViewer::Startup( void )
 {
     // 파이프라인 사전 준비보다 먼저 단면 스레드 그룹 크기를 적용한다.
-    uint32_t capThreads = 256;
+    uint32_t capThreads = 512;
     CommandLineArgs::GetInteger(L"cap-threads", capThreads);
     MeshCutting::SetCapThreads(capThreads);
 

@@ -31,7 +31,7 @@ namespace MeshCutting
         RootSignature Root;
         ComputePSO Pipelines[7];
         uint16_t CapTextureTable;
-        uint32_t CapThreads = 256;
+        uint32_t CapThreads = 512;  // 5060 Ti 측정(CutPerformanceComparison.md 8절)에서 모든 사례가 256보다 빠름
         bool Initialized = false;
         // 공유 root로 clip·경계·cap 각 단계를 초기화한다.
         void Initialize()

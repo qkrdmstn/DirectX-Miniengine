@@ -102,7 +102,7 @@ CPU cap 삼각분할 자체(0.7 ms)는 GPU cap 구간보다 짧았다. 조건이
 
 ## 8. cap 스레드 그룹 크기 256 / 512 / 1024 (RTX 5060 Ti, 2026-11-10)
 
-`-cap-threads N`(`e8242a1e`)으로 같은 빌드에서 CapEarsCS 그룹 크기만 바꿨다. 기본값은 256이다.
+`-cap-threads N`(`e8242a1e`)으로 같은 빌드에서 CapEarsCS 그룹 크기만 바꿨다. 측정 당시 기본값은 256이었고, 이 결과로 기본값을 512로 바꿨다.
 
 - 환경: NVIDIA GeForce RTX 5060 Ti (15962 MB), Release, 사용자 측정, 사례·크기마다 1회(20샘플).
 - 명령: `-debug 0 -model Models/<dragon|bunny>.glb -cut-benchmark 20 -cut-y <y> -cut-expect-publications 1 -cap-threads <N> -cut-benchmark-out <file>`.
