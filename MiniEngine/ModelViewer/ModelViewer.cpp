@@ -150,6 +150,7 @@ private:
     std::array<std::vector<double>, 4> m_CutStageSamples;
     char m_BenchmarkText[160] = {};
     char m_BenchmarkStageText[160] = {};
+    char m_BenchmarkCapText[256] = {};
     std::wstring m_BenchmarkOutPath;
     bool m_BenchmarkWritten = false;
     std::string m_GpuName;
@@ -832,11 +833,20 @@ void ModelViewer::Update( float deltaT )
                     "Cut stages median ms: clip=%.4f boundary=%.4f cap=%.4f finalize=%.4f",
                     stageMedian[0], stageMedian[1], stageMedian[2], stageMedian[3]);
 
-                // -cut-benchmark-out을 주면 화면과 같은 세 줄을 파일에 쓰고 종료를 요청한다.
+                // 정렬된 cap 시간의 분포와 마지막 절단의 루프 진단을 남긴다.
+                const std::vector<double>& capSamples = m_CutStageSamples[2];
+                const double p95Cap = capSamples[std::min(capSamples.size()-1, size_t(capSamples.size()*0.95))];
+                snprintf(m_BenchmarkCapText, sizeof(m_BenchmarkCapText),
+                    "Cut cap: medianMs=%.4f p95Ms=%.4f minMs=%.4f loops=%u maxLoop=%u mappedLoops=%u rounds=%u",
+                    stageMedian[2], p95Cap, capSamples.front(), cutResult.Loops, cutResult.CapMaxLoop,
+                    cutResult.CapMappedLoops, cutResult.CapRounds);
+
+                // -cut-benchmark-out을 주면 화면과 같은 네 줄을 파일에 쓰고 종료를 요청한다.
                 if (!m_BenchmarkOutPath.empty())
                 {
                     std::ofstream out(m_BenchmarkOutPath, std::ios::trunc);
-                    out << m_BenchmarkText << "\n" << m_BenchmarkStageText << "\nGPU: " << m_GpuName << "\n";
+                    out << m_BenchmarkText << "\n" << m_BenchmarkStageText << "\n" << m_BenchmarkCapText
+                        << "\nGPU: " << m_GpuName << "\n";
                     if (!out)
                         throw std::runtime_error("Failed to write cut benchmark output");
                     m_BenchmarkWritten = true;
@@ -1391,6 +1401,7 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     {
         text.DrawFormattedString("%s\n", m_BenchmarkText);
         text.DrawFormattedString("%s\n", m_BenchmarkStageText);
+        text.DrawFormattedString("%s\n", m_BenchmarkCapText);
         text.DrawFormattedString("GPU: %s\n", m_GpuName.c_str());
     }
 

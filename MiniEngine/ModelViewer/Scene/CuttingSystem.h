@@ -28,6 +28,7 @@ namespace Viewer
         double GpuMs = 0;
         double ReadyMs = 0;
         std::array<double, 4> StageMs{};  // clip, boundary, cap, finalize GPU ms
+        uint32_t Loops = 0, CapMaxLoop = 0, CapMappedLoops = 0, CapRounds = 0;  // cap 루프 크기와 Mapped 경로 진단
     };
 
     // Scene 변경은 완료된 GPU 작업을 프레임 입력 경계에서 게시할 때만 수행한다.
