@@ -1,4 +1,4 @@
-상태: 진행 중 — SV-1 구현, dxc 256/512/1024 컴파일·정적 리뷰 통과; Release 빌드·기하 검증·측정 미실시(디스크 부족) (2026-11-10)
+상태: 진행 중 — SV-1 `47d0edfa`, 5060 Ti Armadillo y=60 cap 66.31→3.62 ms(mappedLoops 1→0), Bunny·Dragon 변화 없음; -cut-validate 기하 검증 미보고 (2026-11-10)
 
 # cap 캐시 상한 확대 2 (1536 → 1976): CachedSlot을 VRAM으로
 
@@ -73,3 +73,19 @@ uint Slot(uint i)
 - 1976은 Armadillo(1953)보다 23 크다. 더 큰 루프는 여전히 Mapped다. 다음 후보는 `TestList`의 groupshared 풀 공유(크기별 배치)다.
 - `MapBase` 예약이 모든 루프로 늘어 Meta atomic이 루프당 1번 는다. 루프 수만큼이라 무시할 수준으로 본다.
 - `Slot()`이 VRAM 읽기가 된다. 귀 기록(출력 주소·삼각형 값·완료 플래그)과 마지막 삼각형 선택에서 추가 로드가 생기고, 실제 로드 수는 컴파일러 최적화에 따라 다르다. 성능은 실측으로 판단한다.
+
+## 8. 결과 (SV-1 `47d0edfa`)
+
+- dxc `cs_6_2 -HV 2021`: CAP_THREADS 256/512/1024 컴파일, groupshared 31,932 / 32,188 / 32,700 B.
+- 정적 리뷰(Codex, 새 실행): 문제없음. 이 PC(MX450)는 디스크 부족으로 Release 빌드·실행을 못 했다.
+- 5060 Ti(사용자 측정, Release, 512 threads, `-cut-benchmark 20`, 각 1회). 변경 전은 같은 GPU의 이전 측정(Armadillo는 `68a6c17b`, Bunny·Dragon은 CutPerformanceComparison.md 8절)이다.
+
+| 사례 | maxLoop | mappedLoops 전→후 | rounds | cap ms 전→후 | 전체 GPU ms 전→후 |
+| --- | ---: | --- | ---: | --- | --- |
+| Armadillo y=60 | 1953 | 1 → 0 | 70 | 66.31 → **3.62** (18.3배) | 68.90 → **4.92** |
+| Dragon y=0.08 | 1070 | 0 → 0 | 36 | 1.369 → 1.368 | 3.552 → 3.548 |
+| Bunny y=0 | 370 | 0 → 0 | 22 | 0.352 → 0.353 | 0.660 → 0.660 |
+
+- 상한 아래 루프(Bunny·Dragon)의 cap은 측정 변동 안에서 같다. rounds도 같다.
+- Armadillo finalize가 1.535 → 0.277 ms로 줄었다. 원인은 확인하지 않았다.
+- 남은 완료 조건: `-cut-validate 1` 기하 검증과 cap checksum 비교, `CAP_CACHE` 1000 임시 빌드의 혼합 경로, Debug 빌드. 길이 3 루프와 1976/1977 경계는 미검증이다.
