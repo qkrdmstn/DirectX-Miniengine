@@ -406,6 +406,14 @@ namespace Viewer
             return false;
         }
 
+        // 등록 직후 실제 sensor 상태를 owner별로 기록한다.
+        WriteRigPreloadLogSafely([&]
+        {
+            // 진단 문자열 할당도 예외 경계 안에서 수행한다.
+            return "RigPreload sensors owner=" + target->GetName() + " sensor=" +
+                std::to_string(skeletal.GetSensorCount(owner)) + "/" + std::to_string(asset.Bodies.size()) + "\n";
+        });
+
         // 겹침 측정 실패도 이미 등록된 rig의 성공 상태를 바꾸지 않는다.
         const double milliseconds = SystemTime::TicksToMillisecs(SystemTime::GetCurrentTick() - start);
         try

@@ -2,6 +2,7 @@
 #include "Utility.h"
 #include "SkeletalPhysicsFrames.h"
 #include "SkeletalPatchCopy.h"
+#include "SkeletalAutoRig.h"
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -398,6 +399,40 @@ namespace Viewer
                 // 실제 반환값으로 처리 수와 NotFound 수를 함께 기록한다.
                 const auto& request = pending.second;
                 const auto status = m_Skeletal.BreakConstraint(request);
+
+                // 적용 직후 owner의 Dynamic body와 실제 sensor 해제 수를 다시 읽는다.
+                if (status == BreakStatus::Applied)
+                {
+                    size_t dynamic = 0, sensorOff = 0;
+                    const auto& rig = m_Skeletal.m_Rigs.at(request.Owner);
+                    for (auto body : rig.Bodies)
+                    {
+                        MiniPhysics::BodyMotion motion;
+                        if (m_World.GetBodyMotion(body, motion) && motion == MiniPhysics::BodyMotion::Dynamic)
+                        {
+                            ++dynamic;
+                            if (!m_World.IsSensor(body)) ++sensorOff;
+                        }
+                    }
+                    const auto* object = m_Scene.FindObject(request.Owner);
+                    // 같은 break의 초기 겹침 쌍 수를 기존 진단 출력에 남긴다.
+                    WriteRigPreloadLogSafely([&]
+                    {
+                        // 진단 문자열 할당도 예외 경계 안에서 수행한다.
+                        return "RigSensor overlapIgnore owner=" + (object ? object->GetName() : std::to_string(request.Owner)) +
+                            " pairs=" + std::to_string(m_World.SensorOverlapCount()) + "\n";
+                    });
+
+                    // 같은 owner의 Dynamic body와 sensor 해제 수를 기록한다.
+                    WriteRigPreloadLogSafely([&]
+                    {
+                        // 진단 문자열 할당도 예외 경계 안에서 수행한다.
+                        return "RigSensor break owner=" + (object ? object->GetName() : std::to_string(request.Owner)) +
+                            " dynamic=" + std::to_string(dynamic) + " sensorOff=" + std::to_string(sensorOff) + "\n";
+                    });
+                }
+
+                // 기존 요청 결과와 진단 계수를 갱신한다.
                 if (pending.first) m_BreakResults.emplace(pending.first, status);
                 ++m_QueuedBreakDiagnostics.Processed;
                 if (status == BreakStatus::NotFound)

@@ -41,6 +41,7 @@ D3. kinematic body = sensor
 - `PhysicsWorld::Impl`이 Jolt `ContactListener`를 소유하고 `Initialize`의 `World.Init` 뒤 등록, `Shutdown`에서 해제한다. sensor가 낀 접촉 시작 수만 원자 카운터로 센다(진단 로그용, 로직 미사용).
 - `ApplyConstraintBreak`는 검증이 끝난 뒤, 쓰기 잠금 아래에서 전환 대상 body마다 `Body::SetIsSensor(false)`를 부르고, 그다음 Dynamic으로 바꾼다.
 - 결과: 떨어진 쪽은 몸 body를 통과하고 바닥·Static 조각·독립 조각과는 충돌한다. 같은 owner 필터와 인접 쌍 제외는 그대로 둔다.
+- 초기 겹침 무시(사용자 결정 2026-11-12): sensor인 몸 안에는 다른 Dynamic body가 들어와 머물 수 있다. break로 sensor를 끄는 순간 이미 겹친 Dynamic body가 있으면 강한 접촉 보정으로 튄다(R2 첫 구현에서 BC-12a가 tick 61 anchor 오차 0.277 m로 FAIL, 외부 Dynamic body 하나와의 겹침이 원인으로 확인). 그래서 sensor를 끄는 body마다 그 순간 겹친 Dynamic body 쌍을 기록하고, 두 body가 더 이상 겹치지 않을 때까지 그 쌍의 충돌을 끈다. 쌍 필터는 기존 `AdjacentPairFilter`의 제외 쌍 구조를 재사용하고, 분리 확인은 Step 뒤 쌍마다 수행한다.
 
 D4. Jolt 조회 + segment 최종 판정
 - `PhysicsWorld::CollideOrientedBox`: 유한 평면 사각형을 반두께 1 mm(convex radius 0)의 `BoxShape`로 만들어 `NarrowPhaseQuery::CollideShape`를 `SpecifiedBroadPhaseLayerFilter(Moving)`·`SpecifiedObjectLayerFilter(Moving)`로 부른다. 결과 BodyID를 simulation BodyHandle로 바꾸고 중복을 없앤다.

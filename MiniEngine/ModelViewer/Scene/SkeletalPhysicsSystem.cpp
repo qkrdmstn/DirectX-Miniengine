@@ -77,6 +77,7 @@ namespace Viewer
             desc.Position = bodyWorldFrames[i].Position;
             desc.Rotation = bodyWorldFrames[i].Rotation;
             desc.Motion = MiniPhysics::BodyMotion::Kinematic;
+            desc.Sensor = true;
 
             // 같은 owner에서 부착 해제된 조각과의 시작 겹침만 제외한다.
             desc.CollisionGroup = { owner, 0 };
@@ -409,6 +410,20 @@ namespace Viewer
         const auto found = m_Rigs.find(owner);
         if (found == m_Rigs.end() || bodyId >= found->second.Bodies.size()) return MiniPhysics::InvalidBody;
         return found->second.Bodies[bodyId];
+    }
+
+    // 등록 직후 진단에서 실제 Jolt sensor body 수를 읽는다.
+    size_t SkeletalPhysicsSystem::GetSensorCount(ObjectId owner) const
+    {
+        // 미등록 owner는 센서가 없다.
+        const auto found = m_Rigs.find(owner);
+        if (found == m_Rigs.end()) return 0;
+
+        // 각 body의 읽기 잠금은 조회 함수 안에서 끝난다.
+        size_t count = 0;
+        for (auto body : found->second.Bodies)
+            if (m_World.IsSensor(body)) ++count;
+        return count;
     }
 
     // 자산 joint ID에 대응하는 runtime handle을 읽는다.

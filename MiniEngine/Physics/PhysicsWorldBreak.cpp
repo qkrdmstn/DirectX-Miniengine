@@ -6,6 +6,16 @@ namespace MiniPhysics
 {
     namespace
     {
+        struct DynamicOverlapFilter final : JPH::IgnoreMultipleBodiesFilter
+        {
+            // 쿼리의 내부 잠금 아래에서 외부 Dynamic body만 허용한다.
+            bool ShouldCollideLocked(const JPH::Body& body) const override
+            {
+                // sensor와 정적 지형은 초기 접촉 보정 대상에서 제외한다.
+                return body.IsDynamic();
+            }
+        };
+
         struct ActivationSnapshot
         {
             BodyHandle Handle;
@@ -105,7 +115,7 @@ namespace MiniPhysics
         }
     }
 
-    // scene 스레드에서 전체 요청을 검증한 뒤 할당이나 실패 분기 없이 관절 분리를 게시한다.
+    // 전체 요청을 검증하고 sensor의 초기 겹침을 제외한 뒤 관절 분리를 게시한다.
     ConstraintBreakStatus PhysicsWorld::ApplyConstraintBreak(const ConstraintBreakDesc& desc)
     {
         // 기본 요청 값과 선택 관절의 수명을 검사한다.
@@ -173,13 +183,40 @@ namespace MiniPhysics
         const auto angular = impulseBody->Angular + inverseInertia.Multiply3x3(JPH::Vec3(point - center).Cross(impulse));
         if (!std::isfinite(linear.LengthSq()) || !std::isfinite(angular.LengthSq())) return ConstraintBreakStatus::InvalidInput;
 
-        // 선검증 이후에는 같은 scene 스레드의 저장 ID와 void Jolt 호출만 사용한다.
+        // subtree 전체를 쿼리에서 제외해 전환 순서에 따른 내부 쌍 생성을 막는다.
+        DynamicOverlapFilter overlapFilter;
+        for (const auto& snapshot : snapshots) overlapFilter.IgnoreBody(snapshot.Id);
+        auto& pairFilter = *m_Impl->PairFilter;
+        pairFilter.OverlapAdded = 0;
+        for (const auto& snapshot : snapshots)
+        {
+            if (!IsSensor(snapshot.Handle)) continue;
+            JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+            QueryBodyOverlaps(*m_Impl, snapshot.Id, snapshot.Position, snapshot.Rotation, overlapFilter, collector);
+            for (const auto& hit : collector.mHits)
+            {
+                // subshape 중복은 순서 없는 body 쌍 집합에서 한 번만 센다.
+                if (pairFilter.TemporaryPairs.insert(std::minmax(snapshot.Id.GetIndexAndSequenceNumber(),
+                    hit.mBodyID2.GetIndexAndSequenceNumber())).second) ++pairFilter.OverlapAdded;
+            }
+        }
+
+        // 쿼리가 끝난 뒤 같은 scene 스레드에서 관절 분리를 게시한다.
         auto& bodies = m_Impl->World.GetBodyInterface();
         m_Impl->World.RemoveConstraint(selected->second.Joint);
         m_Impl->Constraints.erase(selected);
         bodies.ActivateBody(parentSnapshot.Id);
         for (const auto& snapshot : snapshots)
         {
+            // 이미 Dynamic인 항목도 포함해 분리 대상의 sensor를 먼저 해제한다.
+            {
+                JPH::BodyLockWrite lock(m_Impl->World.GetBodyLockInterface(), snapshot.Id);
+                JPH_ASSERT(lock.Succeeded());
+                lock.GetBody().SetIsSensor(false);
+            }
+
+            // 쓰기 잠금을 놓은 뒤 내부 잠금을 쓰는 BodyInterface로 전환한다.
+            bodies.InvalidateContactCache(snapshot.Id);
             if (snapshot.Transition)
             {
                 bodies.SetPositionAndRotation(snapshot.Id, snapshot.Position, snapshot.Rotation, JPH::EActivation::DontActivate);

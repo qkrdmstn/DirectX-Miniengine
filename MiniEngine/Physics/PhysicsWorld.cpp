@@ -159,6 +159,7 @@ namespace MiniPhysics
         impl->OwnerTable->DisableCollision(0, 1);
         impl->PairFilter->OwnerTable = impl->OwnerTable;
         impl->World.Init(capacity, 0, capacity, capacity, impl->Layers, impl->Layers, impl->Layers);
+        impl->World.SetContactListener(&impl->Contacts);
 
         // R14 관통 한계 0.01 m의 절반을 위치 보정 허용치로 지정한다.
         constexpr float PenetrationSlop = 0.005f;
@@ -188,6 +189,9 @@ namespace MiniPhysics
     {
         // 살아 있는 PreparedBody가 해제된 world를 건드리지 않도록 소유 world 연결을 끊는다.
         if (m_Impl) for (auto* data : m_Impl->Prepared) data->Owner = nullptr;
+
+        // body 제거와 world 파괴 전에 listener 연결을 끊는다.
+        if (m_Impl) m_Impl->World.SetContactListener(nullptr);
 
         // 게시된 body를 비운다.
         Clear();
@@ -283,6 +287,34 @@ namespace MiniPhysics
         std::sort(result.begin(), result.end());
         result.erase(std::unique(result.begin(), result.end()), result.end());
         return result;
+    }
+
+    // simulation handle을 검증하고 읽기 잠금 아래 실제 sensor 상태를 읽는다.
+    bool PhysicsWorld::IsSensor(BodyHandle handle) const
+    {
+        // 무효 world와 handle은 sensor로 세지 않는다.
+        if (!m_Impl) return false;
+        const auto found = m_Impl->SimBodies.find(handle);
+        if (found == m_Impl->SimBodies.end()) return false;
+
+        // 잠금이 유효한 동안만 Jolt body를 읽는다.
+        const JPH::BodyLockRead lock(m_Impl->World.GetBodyLockInterface(), found->second);
+        return lock.Succeeded() && lock.GetBody().IsSensor();
+    }
+
+    // 작업 스레드에서 누적한 진단 횟수를 원자적으로 읽는다.
+    uint32_t PhysicsWorld::SensorContactCount() const
+    {
+        // 초기화 전이나 종료 후에는 이번 world의 접촉이 없다.
+        return m_Impl ? m_Impl->Contacts.Count.load(std::memory_order_relaxed) : 0;
+    }
+
+    // 직전 break의 초기 겹침 쌍 수와 누적 분리 해제 수를 진단에 전달한다.
+    uint32_t PhysicsWorld::SensorOverlapCount(bool released) const
+    {
+        // 초기화 전이나 종료 후에는 유효한 계수가 없다.
+        if (!m_Impl) return 0;
+        return released ? m_Impl->PairFilter->OverlapReleased : m_Impl->PairFilter->OverlapAdded;
     }
 
     // 디버그와 수명 검증용 등록 수를 반환한다.

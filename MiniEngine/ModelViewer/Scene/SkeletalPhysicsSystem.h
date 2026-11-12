@@ -111,6 +111,8 @@ namespace Viewer
         uint64_t GetRigGeneration(ObjectId owner) const;
         // 자산 body ID의 runtime handle을 읽으며 없으면 InvalidBody다.
         MiniPhysics::BodyHandle GetBodyHandle(ObjectId owner, uint32_t bodyId) const;
+        // 등록된 owner의 실제 sensor body 수를 센다.
+        size_t GetSensorCount(ObjectId owner) const;
         // 자산 joint ID의 runtime handle을 읽으며 없으면 InvalidConstraint다.
         MiniPhysics::ConstraintHandle GetConstraintHandle(ObjectId owner, uint32_t jointId) const;
         // 진단용 실패 주입점이다.

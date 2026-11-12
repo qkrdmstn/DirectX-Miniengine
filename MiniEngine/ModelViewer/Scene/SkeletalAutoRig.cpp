@@ -150,9 +150,28 @@ namespace Viewer
         }
 
         // 기존 진단 관행대로 debugger와 TEMP 파일에 같은 내용을 남긴다.
-        Utility::Print(log.str().c_str());
-        std::ofstream file(std::filesystem::temp_directory_path() / "RigPreload.log", std::ios::app);
-        file << log.str();
+        WriteRigPreloadLogSafely([&]
+        {
+            // 진단 문자열 할당도 예외 경계 안에서 수행한다.
+            return log.str();
+        });
+    }
+
+    // 모든 rig 진단을 기록하고 출력 실패의 예외는 내부에서 흡수한다.
+    void WriteRigPreloadLog(const std::string& text) noexcept
+    {
+        // 경로 조회와 파일 생성까지 같은 예외 경계에서 처리한다.
+        try
+        {
+            // 기존 출력 관행과 append 파일 경로를 공유한다.
+            Utility::Print(text.c_str());
+            std::ofstream file(std::filesystem::temp_directory_path() / "RigPreload.log", std::ios::app);
+            file << text;
+        }
+        catch (...)
+        {
+            // 진단 출력 실패가 호출자의 작업 흐름을 바꾸지 않게 한다.
+        }
     }
 
     // section E와 모델의 CPU 정점·inverse bind·팔레트·영향 플래그를 결합한다.

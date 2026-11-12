@@ -16,6 +16,10 @@
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Renderer/DebugRendererSimple.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <atomic>
 #include <set>
 #include <algorithm>
 #include "PhysicsWorld.h"
@@ -93,6 +97,8 @@ namespace MiniPhysics
     struct AdjacentPairFilter final : JPH::GroupFilter
     {
         std::set<std::pair<JPH::uint32, JPH::uint32>> Pairs;
+        std::set<std::pair<JPH::uint32, JPH::uint32>> TemporaryPairs;
+        uint32_t OverlapAdded = 0, OverlapReleased = 0;
         JPH::Ref<JPH::GroupFilterTable> OwnerTable;
         std::unordered_map<JPH::uint32, BodyCollisionGroup> OwnerGroups;
         // 명시적 pair와 같은 owner의 rig·부착 해제 조각 조합만 제외한다.
@@ -101,6 +107,7 @@ namespace MiniPhysics
             // 다른 필터와의 접촉은 기존 계층 규칙에 맡긴다.
             if (a.GetGroupFilter() != this || b.GetGroupFilter() != this) return true;
             if (Pairs.count(std::minmax(a.GetSubGroupID(), b.GetSubGroupID())) != 0) return false;
+            if (TemporaryPairs.count(std::minmax(a.GetSubGroupID(), b.GetSubGroupID())) != 0) return false;
 
             // 전체 owner ID를 비교해 하위 32비트가 겹치는 다른 owner도 구분한다.
             const auto first = OwnerGroups.find(a.GetSubGroupID());
@@ -114,12 +121,38 @@ namespace MiniPhysics
                 JPH::CollisionGroup(OwnerTable, owner, first->second.SubGroup),
                 JPH::CollisionGroup(OwnerTable, owner, second->second.SubGroup));
         }
+
+        // 월드에서 빠지는 body의 임시 쌍만 지워 영구 인접 쌍을 보존한다.
+        void RemoveTemporaryPairs(JPH::uint32 id)
+        {
+            // sequence를 포함한 ID로 수명이 끝난 쌍을 제거한다.
+            for (auto it = TemporaryPairs.begin(); it != TemporaryPairs.end();)
+            {
+                if (it->first == id || it->second == id) it = TemporaryPairs.erase(it);
+                else ++it;
+            }
+        }
     };
 
     struct ConstraintEntry
     {
         BodyHandle Parent, Child;
         JPH::Ref<JPH::SwingTwistConstraint> Joint;
+    };
+
+    // 작업 스레드에서는 sensor 접촉 시작 횟수만 원자적으로 기록한다.
+    struct SensorContactListener final : JPH::ContactListener
+    {
+        std::atomic<uint32_t> Count{ 0 };
+
+        // sensor가 하나라도 포함된 접촉 시작을 한 번 센다.
+        void OnContactAdded(const JPH::Body& first, const JPH::Body& second,
+            const JPH::ContactManifold&, JPH::ContactSettings&) override
+        {
+            // 다른 접촉 설정과 기본 검증에는 관여하지 않는다.
+            if (first.IsSensor() || second.IsSensor())
+                Count.fetch_add(1, std::memory_order_relaxed);
+        }
     };
 
     // PhysicsWorld의 Jolt 상태다. Bodies는 query handle만 담고 body handle과 섞지 않는다.
@@ -129,6 +162,7 @@ namespace MiniPhysics
         PhysicsLayers Layers;
         JPH::Ref<JPH::GroupFilterTable> OwnerTable = new JPH::GroupFilterTable(2);
         JPH::Ref<AdjacentPairFilter> PairFilter = new AdjacentPairFilter();
+        SensorContactListener Contacts;
         JPH::PhysicsSystem World;
         // Step 전용 자원이다. World 뒤에 선언해 World보다 먼저 파괴되며, JobSystem 파괴가 작업 스레드를 모두 정지시킨다.
         std::unique_ptr<JPH::TempAllocatorImpl> TempAllocator;
@@ -155,6 +189,10 @@ namespace MiniPhysics
         // 다음에 예약할 body handle 번호를 읽고 쓴다(고갈 시험용).
         static BodyHandle& NextBodyHandle(PhysicsWorld& world) { return world.m_NextBodyHandle; }
     };
+
+    // source 잠금을 놓은 뒤 목표 pose의 shape와 겹치는 Moving body를 조회한다.
+    void QueryBodyOverlaps(PhysicsWorldAccess::ImplType& impl, JPH::BodyID source,
+        JPH::RVec3Arg position, JPH::QuatArg rotation, const JPH::BodyFilter& filter, JPH::CollideShapeCollector& collector);
 
     // PreparedBody가 쥔 준비 상태다. Node는 Prepare에서 미리 할당해 Commit이 할당하지 않게 한다.
     struct PreparedBody::Data

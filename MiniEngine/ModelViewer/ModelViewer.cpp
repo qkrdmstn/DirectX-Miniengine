@@ -745,6 +745,15 @@ void ModelViewer::Cleanup( void )
     // 미게시 패치 작업과 출력 자원도 renderer 종료 전에 정리한다.
     m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
 
+    // world 종료 전에 sensor 접촉 누적 횟수를 두 진단 출력에 남긴다.
+    Viewer::WriteRigPreloadLogSafely([&]
+    {
+        // 진단 문자열 할당도 예외 경계 안에서 수행한다.
+        return "RigSensor contacts=" + std::to_string(m_Physics.SensorContactCount()) +
+            " overlapReleased=" + std::to_string(m_Physics.SensorOverlapReleasedCount()) + "\n";
+    });
+
+    // 절단과 물리 자원을 장면보다 먼저 정리한다.
     m_Cutting.Clear();
     m_CutScenario.Shutdown();
     m_CollisionDraw.PrintSummary();

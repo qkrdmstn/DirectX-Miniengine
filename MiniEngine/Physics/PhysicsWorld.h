@@ -89,6 +89,7 @@ namespace MiniPhysics
         float Friction = 0.7f;
         float Restitution = 0.3f;
         BodyCollisionGroup CollisionGroup;
+        bool Sensor = false;
     };
 
     // 준비만 되고 world에 올라가지 않은 body의 소유자다. 이동만 가능하며 CommitBody 없이 파괴되면 body와 용량 예약을 되돌린다.
@@ -187,6 +188,12 @@ namespace MiniPhysics
         bool SetBodyShape(BodyHandle handle, const MiniCollision::AggregateGeom& geometry, const std::array<double, 3>& scale, double massScale, std::string* error = nullptr);
         // 게시된 simulation body 수를 반환한다.
         size_t GetBodyCount() const;
+        // 실제 sensor 상태를 읽으며 무효 handle은 false다.
+        bool IsSensor(BodyHandle handle) const;
+        // 이번 world 수명의 sensor 접촉 시작 횟수를 읽는다.
+        uint32_t SensorContactCount() const;
+        // 직전 break의 초기 겹침 추가 수 또는 world 누적 분리 해제 수를 읽는다.
+        uint32_t SensorOverlapCount(bool released = false) const;
         // 조회 body, simulation body, 준비 중 body의 예약 합계를 반환한다. Initialize 용량을 넘지 않는다.
         size_t GetReservedCount() const;
 

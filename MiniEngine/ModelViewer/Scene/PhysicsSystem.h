@@ -93,6 +93,18 @@ namespace Viewer
         }
         // 진단: 조회·simulation·준비 중 body의 용량 예약 합계를 읽는다.
         size_t GetReservedBodyCount() const { return m_World.GetReservedCount(); }
+        // 종료 진단에 사용할 sensor 접촉 시작 횟수를 읽는다.
+        uint32_t SensorContactCount() const
+        {
+            // world가 닫히기 전에 누적 계수를 읽는다.
+            return m_World.SensorContactCount();
+        }
+        // 종료 로그에 사용할 초기 겹침 쌍의 누적 분리 해제 수를 읽는다.
+        uint32_t SensorOverlapReleasedCount() const
+        {
+            // world를 닫기 전에 분리 해제 계수를 전달한다.
+            return m_World.SensorOverlapCount(true);
+        }
         // 등록된 메시 body의 월드 질량 중심을 읽는다.
         bool GetSimulationCenterOfMass(ObjectId owner, ComponentId mesh, std::array<double, 3>& com) const;
         // 등록된 메시 body의 선속도와 각속도를 읽는다.

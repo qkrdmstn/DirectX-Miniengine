@@ -236,6 +236,7 @@ namespace MiniPhysics
                 desc.Motion == BodyMotion::Kinematic ? JPH::EMotionType::Kinematic :
                     (dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static),
                 dynamic ? ObjectLayers::Moving : ObjectLayers::Static);
+            settings.mIsSensor = desc.Sensor;
             settings.mFriction = desc.Friction;
             settings.mRestitution = desc.Restitution;
 
@@ -256,13 +257,11 @@ namespace MiniPhysics
             try
             {
                 // body ID로 기존 pair 필터와 owner의 논리 subgroup을 함께 식별한다.
+                const auto runtimeId = id.GetIndexAndSequenceNumber();
                 if (desc.CollisionGroup.Owner)
-                {
-                    const auto runtimeId = id.GetIndexAndSequenceNumber();
                     m_Impl->PairFilter->OwnerGroups.emplace(runtimeId, desc.CollisionGroup);
-                    body->SetCollisionGroup(JPH::CollisionGroup(m_Impl->PairFilter,
-                        static_cast<uint32_t>(desc.CollisionGroup.Owner), runtimeId));
-                }
+                body->SetCollisionGroup(JPH::CollisionGroup(m_Impl->PairFilter,
+                    static_cast<uint32_t>(desc.CollisionGroup.Owner), runtimeId));
 
                 // 게시에 필요한 노드와 예약을 준비한다.
                 auto data = std::make_unique<PreparedBody::Data>();
@@ -368,6 +367,7 @@ namespace MiniPhysics
         }
 
         // 인접 pair 제외는 재등록과 break 이후에도 유지한다.
+        m_Impl->PairFilter->RemoveTemporaryPairs(entry->second.GetIndexAndSequenceNumber());
         bodies.RemoveBody(entry->second);
         return true;
     }
@@ -403,6 +403,7 @@ namespace MiniPhysics
         }
         const auto id = entry->second.GetIndexAndSequenceNumber();
         m_Impl->PairFilter->OwnerGroups.erase(id);
+        m_Impl->PairFilter->RemoveTemporaryPairs(id);
         auto& pairs = m_Impl->PairFilter->Pairs;
         for (auto it = pairs.begin(); it != pairs.end();)
         {

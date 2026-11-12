@@ -1,8 +1,33 @@
 #include "PhysicsWorldInternal.h"
 #include <cmath>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
+#include <Jolt/Physics/Collision/CollisionDispatch.h>
 
 namespace MiniPhysics
 {
+    // source의 shape를 목표 pose에 놓고 중첩 body 잠금 없이 겹침을 검사한다.
+    void QueryBodyOverlaps(PhysicsWorldAccess::ImplType& impl, JPH::BodyID source,
+        JPH::RVec3Arg position, JPH::QuatArg rotation, const JPH::BodyFilter& filter, JPH::CollideShapeCollector& collector)
+    {
+        // 쿼리에서 다른 body를 잠그기 전에 source의 읽기 잠금을 해제한다.
+        JPH::RefConst<JPH::Shape> shape;
+        JPH::RMat44 transform;
+        {
+            const JPH::BodyLockRead lock(impl.World.GetBodyLockInterface(), source);
+            if (!lock.Succeeded() || !lock.GetBody().IsInBroadPhase()) return;
+            shape = lock.GetBody().GetShape();
+            transform = JPH::RMat44::sRotationTranslation(rotation, position + rotation * shape->GetCenterOfMass());
+        }
+
+        // 임시 충돌 제외 필터를 우회해 1 mm 여유까지 실제 겹침으로 취급한다.
+        JPH::CollideShapeSettings settings;
+        settings.mMaxSeparationDistance = 0.001f;
+        impl.World.GetNarrowPhaseQuery().CollideShape(shape, JPH::Vec3::sReplicate(1.0f), transform,
+            settings, transform.GetTranslation(), collector,
+            JPH::SpecifiedBroadPhaseLayerFilter(BroadPhaseLayers::Moving),
+            JPH::SpecifiedObjectLayerFilter(ObjectLayers::Moving), filter);
+    }
+
     // 올라간 body의 운동 방식을 읽고 Jolt 열거형은 외부로 전달하지 않는다.
     bool PhysicsWorld::GetBodyMotion(BodyHandle handle, BodyMotion& motion) const
     {
@@ -55,7 +80,7 @@ namespace MiniPhysics
         }
     }
 
-    // 충돌 step 1회로 simulation을 진행한다. OptimizeBroadPhase는 부르지 않는다. body를 하나씩 추가하는 규모에서는 증분 갱신으로 충분하고 호출 비용이 크다.
+    // 충돌 step을 진행하고 초기 겹침이 끝난 임시 제외 쌍을 해제한다.
     bool PhysicsWorld::Step(float deltaSeconds)
     {
         // 초기화 여부와 dt 유효성을 확인한다.
@@ -64,6 +89,40 @@ namespace MiniPhysics
 
         // 한 번 갱신하고 Jolt 오류는 false로 알리되 world는 계속 쓴다.
         const JPH::EPhysicsUpdateError error = m_Impl->World.Update(deltaSeconds, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
+
+        // 작업 스레드가 종료된 뒤 실제 shape가 떨어진 쌍만 다시 충돌시킨다.
+        auto& filter = *m_Impl->PairFilter;
+        for (auto it = filter.TemporaryPairs.begin(); it != filter.TemporaryPairs.end();)
+        {
+            const JPH::BodyID source(it->first), target(it->second);
+            const JPH::BodyID ids[] = { source, target };
+            const JPH::BodyLockMultiRead locks(m_Impl->World.GetBodyLockInterface(), ids, 2);
+            const auto* first = locks.GetBody(0);
+            const auto* second = locks.GetBody(1);
+            JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> collector;
+
+            // 지정된 두 shape만 같은 기준점으로 옮겨 검사하고 첫 겹침에서 멈춘다.
+            if (first && second && first->IsInBroadPhase() && second->IsInBroadPhase())
+            {
+                const auto base = first->GetCenterOfMassPosition();
+                JPH::CollideShapeSettings settings;
+                settings.mMaxSeparationDistance = 0.001f;
+                JPH::CollisionDispatch::sCollideShapeVsShape(first->GetShape(), second->GetShape(),
+                    JPH::Vec3::sReplicate(1.0f), JPH::Vec3::sReplicate(1.0f),
+                    first->GetCenterOfMassTransform().PostTranslated(-base).ToMat44(),
+                    second->GetCenterOfMassTransform().PostTranslated(-base).ToMat44(),
+                    JPH::SubShapeIDCreator(), JPH::SubShapeIDCreator(), settings, collector);
+            }
+
+            // 분리되었거나 사라진 body 쌍은 임시 제외에서 제거한다.
+            const bool overlaps = collector.HadHit();
+            if (overlaps) ++it;
+            else
+            {
+                it = filter.TemporaryPairs.erase(it);
+                ++filter.OverlapReleased;
+            }
+        }
         return error == JPH::EPhysicsUpdateError::None;
     }
 

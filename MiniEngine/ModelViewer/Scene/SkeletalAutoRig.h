@@ -26,6 +26,25 @@ namespace Viewer
         std::vector<uint8_t> Influencing;
     };
 
+    // debugger와 기존 TEMP 진단 파일에 같은 내용을 기록한다.
+    void WriteRigPreloadLog(const std::string& text) noexcept;
+
+    // 진단 문자열 생성과 출력의 예외를 호출자에게 전파하지 않는다.
+    template<typename BuildText>
+    void WriteRigPreloadLogSafely(const BuildText& buildText) noexcept
+    {
+        // 문자열 할당도 예외 경계 안에서 수행한다.
+        try
+        {
+            // 완성된 문자열을 공통 진단 출력으로 전달한다.
+            WriteRigPreloadLog(buildText());
+        }
+        catch (...)
+        {
+            // 진단 실패가 물리 처리와 자원 정리를 중단하지 않게 한다.
+        }
+    }
+
     // 등록 pose의 body 쌍 SAT 겹침과 비인접 상위 쌍을 진단 로그에 남긴다.
     void LogRigPreload(const std::string& ownerName, const SkeletalPoseSnapshot& pose,
         const MiniPhysics::SkeletalPhysicsAsset& asset, double milliseconds);
