@@ -61,6 +61,12 @@ D5. segment 없음 → 뼈 영역 Static 절단 (break 없음)
 D6. rig가 없는 owner
 - Jolt 조회는 등록된 rig만 본다. hit가 하나도 없으면 C 키는 rig가 없는 skin owner만 대상으로 현행 경계 구 + `SelectSegmentJoint` 경로(미등록이면 생성)를 쓴다. 물리 꺼짐이면 모든 owner가 여기에 해당해 현행 결과와 같다.
 
+D7. rig 디버그 뷰 = Jolt 기본 디버그 렌더러 (사용자 결정 2026-11-12)
+- 현재 Jolt CMake 캐시는 `DEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`라 `JPH_DEBUG_RENDERER`가 없다. 이 옵션을 켜고 Jolt를 다시 빌드하며, 엔진 쪽 Jolt 포함 프로젝트에도 같은 define을 넣는다(클래스 배치가 바뀌므로 반드시 일치).
+- `DebugRendererSimple`을 상속한 클래스가 `DrawLine`을 기존 `CollisionDebugDraw`의 선 overlay(근평면 자르기 포함)로 보내고, `DrawTriangle`은 세 모서리 선으로, `DrawText3D`는 무시한다.
+- H 키(`Viewer/Physics/ShowCollision`)가 켜져 있으면 `PhysicsSystem::DrawBodies`(wireframe, 모든 body)와 `DrawConstraints`를 같이 그린다. 기존 hull overlay는 그대로 둔다.
+- 이유: rig body·관절·sensor/Dynamic 상태를 Jolt가 보는 그대로 확인하고, R2~R4 검증에 쓴다.
+
 ## 4. 인터페이스 골격 (이름은 구현 단계에서 기존 규칙에 맞춰 조정 가능)
 
 ```cpp
@@ -87,6 +93,7 @@ struct RigSelection { ObjectId Owner; uint32_t NodeId; bool Segment; /* false = 
 | --- | --- | --- |
 | R1a | 기존 검사 기준선 기록(아래 공통 명령) + `RegisterAutoRig` 추출(동작 불변). | ≈ 30분 |
 | R1b | D1 Startup 사전 등록·진단 제외, D2 겹침·시간 로그. | ≈ 30분 |
+| R1c | D7 Jolt 디버그 렌더러: Jolt를 `JPH_DEBUG_RENDERER`로 재빌드, `DebugRendererSimple` 구현을 H 키 선 overlay에 연결. | ≈ 45분 |
 | R2 | D3 sensor 생성·ContactListener·break 시 해제. | ≈ 30분 |
 | R3a | D4 조회 API: `CollideOrientedBox`, `FindBody`, `BuildKinematicSegments`(호출자 없음 또는 진단 로그만). | ≈ 30분 |
 | R3b | D4·D6 선택: `Rig` 모드 기본값화, 진단 비교 로그. | ≈ 35분 |
@@ -106,6 +113,8 @@ struct RigSelection { ObjectId Owner; uint32_t NodeId; bool Segment; /* false = 
 - R1a에서 기록한 기준선 대비 회귀가 없어야 한다. 종료 코드만으로 판정하지 않고 PASS 줄을 확인한다. D3D12 ERROR 0.
 
 R1: 일반 실행 로드 로그에 owner별 body/joint 수(Xbot 52/51, CesiumMan 19/18), 생성·등록 ms, 인접/비인접 겹침 쌍 수가 한 번씩 찍힌다. C 입력이 등록된 rig를 재사용한다(두 번째 생성 로그 없음). BC-12b 실행에는 사전 등록 로그가 없다.
+
+R1c: Debug/Release 모두 `JPH_DEBUG_RENDERER`로 빌드된다(Jolt 라이브러리와 엔진 define 일치). 일반 실행에서 H 키를 누르면 Xbot·CesiumMan rig body와 관절이 화면에 선으로 보이고, 다시 누르면 꺼진다. 공통 검사 기준선 유지.
 
 R2: 로드 직후 rig body 전부 sensor, break 뒤 Dynamic subtree body 전부 sensor 아님을 진단 로그로 확인한다. sensor 접촉 수는 break 시연 뒤 값을 기록만 한다(0이어도 실패 아님: 같은 owner 필터·배치에 따라 겹침이 없을 수 있다). 공통 검사 기준선 유지.
 
