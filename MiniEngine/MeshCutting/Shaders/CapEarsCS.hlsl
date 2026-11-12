@@ -204,16 +204,18 @@ uint SelectCached(uint waveSlot, uint round, uint zeroRounds, out uint marked)
     for (uint attempt = 0; attempt < 2; attempt++)
     {
         uint index = start, passes = 0;
-        for (uint v = begin; v < end; v++)
+        for (uint v = begin; v < end; v++) // 각 스레드마다 k개의 정점을 검사
         {
             uint kind = Kind(v);
             bool mark = false;
             if (kind != 0)
             {
-                uint q = round & 1;
-                mark = attempt != 0 || ((index & 1) == q && !(q == 0 && (count & 1) != 0 && index == count - 1));
+                uint q = round & 1; // 이번 라운드가 짝수면 0, 홀수면 1
+                mark = attempt != 0 || ((index & 1) == q && !(q == 0 && (count & 1) != 0 && index == count - 1)); // 후보 정점인지 아닌지 표시
                 index++;
             }
+            
+            // 볼록 후보에 대해 InTriangle 검사
             if (mark)
             {
                 uint a = Prv(v), c = Nxt(v);
@@ -221,32 +223,41 @@ uint SelectCached(uint waveSlot, uint round, uint zeroRounds, out uint marked)
                     for (uint t = 0; t < TestCount; t++)
                     {
                         uint test = TestList[t];
-                        if (test != a && test != v && test != c
-                        && InTriangle(P2(test), P2(a), P2(v), P2(c), Orientation))
+                        if (test != a && test != v && test != c                     // test 정점이 삼각 분할 대상이 아니며,
+                        && InTriangle(P2(test), P2(a), P2(v), P2(c), Orientation))  // 삼각 분할 내부에 존재하지 않아야 한다.
                         {
                             mark = false;
                             break;
                         }
                     }
             }
+
+            // 삼각 분할 결과 기록
             CachedLink[v] = (CachedLink[v] & ~8u) | (mark ? 8u : 0u);
-            passes += mark ? 1 : 0;
+            passes += mark ? 1 : 0; // 통과한 후보 개수
         }
 
-        // 통과 후보를 다시 scan하여 경계 앞쪽부터 최대 Remaining-3개만 남긴다.
+        // 통과한 ear가 너무 많으면 루프 앞쪽부터 일부만 남긴다. (남은 정점이 3개 미만이면 마지막 삼각형을 만들 수 없기 때문)
         uint total;
-        uint rank = BlockExclusiveSum(passes, waveSlot, total);
-        marked += attempt != 0 ? count : count / 2;
-        if (total == 0 && zeroRounds != 0 && attempt == 0)
+        uint rank = BlockExclusiveSum(passes, waveSlot, total); // 통과한 ear에 루프 순서 번호를 매긴다. 
+        
+        marked += attempt != 0 ? count : count / 2; // 이번 검사 대상으로 표시한 후보 수
+        if (total == 0 && zeroRounds != 0 && attempt == 0) // 이번에 통과한 ear가 0개이고, 직전 라운드도 0개라면, attempt1(모든 후보 검사, 하나만 자르기)를 수행
             continue;
+        
+        // 이번에 자를 최대 개수를 현재 남은 정점의 개수-3로 설정 (최소 3개는 남긴다)
+        // attempt가 1이거나 SerialMode라면 하나만 자른다.
         uint limit = attempt != 0 || SerialMode != 0 ? min(1u, Remaining - 3) : Remaining - 3;
-        for (uint clear = begin; clear < end; clear++)
-            if (Selected(clear) != 0)
+        for (uint clear = begin; clear < end; clear++)  // 내 구간의 정점 순회
+        {
+            if (Selected(clear) != 0)   //
             {
                 if (rank >= limit)
                     CachedLink[clear] &= ~8u;
                 rank++;
             }
+        }
+        
         return min(total, limit);
     }
     return 0;
@@ -599,7 +610,7 @@ void main(uint3 group : SV_GroupID, uint tid : SV_GroupIndex)
             break;
     }
 
-    // loop 끝에서 한 번만 dispatch 공통 진단에 합산한다. 진단 카운터 합산, 마지막 삼각형 기록, 대표 슬롯 +84에 완료 표시
+    // cap 생성 끝에서 한 번만 dispatch 공통 진단에 합산한다. 진단 카운터 합산, 마지막 삼각형 기록, 대표 슬롯 +84에 완료 표시
     if (tid == 0)
     {
         uint ignored;
