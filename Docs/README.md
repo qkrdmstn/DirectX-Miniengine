@@ -51,6 +51,7 @@
 | [StaticPiecePhysics.md](Physics/StaticPiecePhysics.md) | Static 절단 조각별 rigid body 물리·바닥·요구사항 v4·구현 계획 | 진행 중 — 7a~7d 완료, `26302519` 기반 바닥 최소 1,000×1,000 m 확장; 8단계 전체 검증 미진행 (2026-10-28) |
 | [BreakConstraintDesign.md](Physics/BreakConstraintDesign.md) | UE5.3.2 관절 해제·Actor 유지·physics pose 반영 원리 | 설계안 — `5f56b93d` 재대조, 구현 계약은 아래 인계 문서 참조 (2026-10-28) |
 | [BreakConstraintImplementation.md](Physics/BreakConstraintImplementation.md) | Codex 구현용 파일·API·frame·상태·단계·테스트 | 완료 — M1(BC-00~BC-13a) `0c7fcaa7` (2026-10-30). 실제 큐6/6 NotFound 자동 검사, CPU 두 구성·Debug/Release 빌드·Debug 회귀 PASS, 결과 버리기 변형 FAIL·SHA-256 복구. 수명 리소스0·D3D12 ERROR0. BC-09/14 GPU 절단은 후속 (2026-10-30) |
+| [RagdollRigPreload.md](Physics/RagdollRigPreload.md) | 로드 시 래그돌 rig 생성, kinematic sensor, Jolt 조회·segment 뼈 선택, segment 없는 뼈 영역 Static 절단 | 설계안 — 사용자 결정 반영, 구현 전 (2026-11-12) |
 | [RagdollPartGizmo.md](Physics/RagdollPartGizmo.md) | break 후 떨어진 Dynamic 성분과 kinematic 몸의 개별 기즈모, owner 이동 비추종 | 설계안 — 사용자 결정 반영, 구현 전 (2026-11-06) |
 
 ## NDC — 기법 근거
