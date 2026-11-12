@@ -53,6 +53,7 @@
 #include "Scene/tests/EditDeleteChecks.h"
 #include "Scene/tests/RetiredResourceChecks.h"
 #include "Scene/tests/AttachedRecutChecks.h"
+#include "Scene/tests/RigBoneCutChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -78,16 +79,38 @@ public:
     int DiagnosticExitCode() const
     {
         // 중도 종료도 미완료 검사 실패로 처리한다.
-        if (!m_AttachedRecutChecks.Enabled) return 0;
+        if (m_RigBoneCutChecks.Enabled)
+        {
+            for (bool pass : m_RigBoneCutChecks.Passed)
+            {
+                if (!pass)
+                    return 1;
+            }
+
+            // 모든 판정 통과 후 완료 여부를 확인한다.
+            return m_RigBoneCutChecks.Done ? 0 : 1;
+        }
+
+        // 재절단 진단도 누락된 판정을 실패로 처리한다.
+        if (!m_AttachedRecutChecks.Enabled)
+            return 0;
         for (bool pass : m_AttachedRecutChecks.Passed)
-            if (!pass) return 1;
+        {
+            if (!pass)
+                return 1;
+        }
+
+        // 재절단 진단의 완료 여부를 종료 코드로 변환한다.
         return m_AttachedRecutChecks.Done ? 0 : 1;
     }
     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
     virtual bool IsDone() override
     {
         // 재절단 검사는 모든 판정을 기록한 뒤 기존 정리 경로로 종료한다.
-        if (m_AttachedRecutChecks.Enabled) return m_AttachedRecutChecks.Done;
+        if (m_RigBoneCutChecks.Enabled)
+            return m_RigBoneCutChecks.Done;
+        if (m_AttachedRecutChecks.Enabled)
+            return m_AttachedRecutChecks.Done;
 
         // 시연 요청 거절이나 게시 실패는 캡처를 기다리지 않고 정리 후 종료한다.
         if (m_SkeletalDemoFailed)
@@ -112,6 +135,7 @@ public:
 private:
 
     Viewer::AttachedRecutChecks m_AttachedRecutChecks;
+    Viewer::RigBoneCutChecks m_RigBoneCutChecks;
 
     uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0, m_SkeletalPatchCaptured = 0;
     uint32_t m_SkeletalMaskChecks = 0;
@@ -330,12 +354,21 @@ void ModelViewer::Startup( void )
     uint32_t attachedRecut = 0;
     CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut);
     m_AttachedRecutChecks.Enabled = attachedRecut != 0;
+
+    // 본 내부 절단 진단은 별도 실행으로 제한한다.
+    uint32_t rigBoneCut = 0;
+    CommandLineArgs::GetInteger(L"rig-bone-cut-checks", rigBoneCut);
+    m_RigBoneCutChecks.Enabled = rigBoneCut != 0;
+    if (rigBoneCut && attachedRecut)
+        throw std::invalid_argument("rig-bone-cut-checks cannot be combined with attached-recut-checks");
+
+    // 숨김 해제 옵션은 기존 시연의 실행 여부를 확인한다.
     std::wstring unmaskValue;
     if (CommandLineArgs::GetString(L"skeletal-break-demo-unmask", unmaskValue) && !m_SkeletalBreakDemo)
         throw std::invalid_argument("skeletal-break-demo-unmask requires skeletal-break-demo");
 
     // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
-    if (m_SkeletalBreakDemo || m_AttachedRecutChecks.Enabled)
+    if (m_SkeletalBreakDemo || m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
     {
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-patch-break-checks", L"skeletal-patch-checks",
@@ -353,7 +386,7 @@ void ModelViewer::Startup( void )
     }
 
     // 검사 전용 실행은 외부 demo·장면·캡처 옵션을 거절하고 demo 1 준비를 재사용한다.
-    if (m_AttachedRecutChecks.Enabled)
+    if (m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
     {
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
@@ -363,7 +396,10 @@ void ModelViewer::Startup( void )
             L"cut-empty-side", L"collision-log", L"demo-cut-sec" })
             if (CommandLineArgs::GetString(option, value))
                 throw std::invalid_argument("attached-recut-checks cannot be combined with diagnostics or demos");
-        m_SkeletalBreakDemo = 1;
+
+        // 부착 재절단 검사만 기존 break 시연 준비를 사용한다.
+        if (m_AttachedRecutChecks.Enabled)
+            m_SkeletalBreakDemo = 1;
     }
 
     // 자동 rig 진단 옵션을 읽고 기존 종료 프레임 경로를 사용한다.
@@ -473,7 +509,10 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
     if (m_SkeletalBreakDemo > 2) throw std::runtime_error("skeletal-break-demo must be 1 or 2");
     if (m_SkeletalBreakDemo) m_DemoTower = 0;
-    if (m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo) m_UsePhysicsSim = 1;
+
+    // 실제 절단과 낙하 진단에는 물리 시뮬레이션을 준비한다.
+    if (m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled)
+        m_UsePhysicsSim = 1;
 
     // 시작 모드를 검증하며 생략 시 Rig를 유지한다.
     std::wstring jointMode;
@@ -587,7 +626,7 @@ void ModelViewer::Startup( void )
     // 세 검사 옵션의 기본 실행 상태를 정하고 명시적인 시작 옵션을 우선 적용한다.
     uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active() || m_DemoTower != 0) ? 1u : 0u;
     CommandLineArgs::GetInteger(L"physics-running",physicsRunning);
-    g_PhysicsRunning = m_SkeletalBreakDemo || physicsRunning != 0;
+    g_PhysicsRunning = m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled || physicsRunning != 0;
 
     // 절단 대상의 변환 검사 옵션을 적용한다.
     uint32_t transformChecks = 0;
@@ -867,6 +906,7 @@ void ModelViewer::Update( float deltaT )
     {
         // 패치 결과는 Static publication·벤치마크·자동 재절단에서 제외한다.
         if (m_SkeletalPatchCopy.OnCutResult(m_Scene, m_Cutting, cutResult)) continue;
+        m_RigBoneCutChecks.OnResult(m_Scene, cutResult);
         m_AttachedRecutChecks.OnResult(m_Scene, cutResult);
         m_CutScenario.OnResult(m_Scene, m_Physics, cutResult, m_Publications);
         if (m_BenchmarkRemaining)
@@ -996,8 +1036,8 @@ void ModelViewer::Update( float deltaT )
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
     m_SkeletalChecks.BeforeStep(m_Physics);
     const unsigned steps = m_Physics.UpdateFrame(gfxContext,
-        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
-        m_SkeletalBreakDemo ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
+        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+        (m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
     m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
 
     // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
@@ -1009,6 +1049,9 @@ void ModelViewer::Update( float deltaT )
 
     gfxContext.Finish();
     m_Physics.SyncColliders();
+
+    // 전 프레임 D5 게시물은 메시와 collider 준비가 완료된 뒤에만 제출한다.
+    m_RigBoneCutChecks.Submit(m_Scene, m_Physics, m_Cutting, m_SkeletalPatchCopy);
     m_Cutting.SubmitPending();
     // active 완료와 마지막 pending 거절을 포함해 batch busy→idle 전환당 자동 요청 하나를 소비한다.
     if (wasCuttingBusy && !wasPatchCutting && !m_Cutting.IsBusy() && m_AutoCuts && !wasBenchmarkAtUpdateStart)
@@ -1047,6 +1090,7 @@ void ModelViewer::Update( float deltaT )
 
     // 부착 게시와 GPU 준비가 끝난 프레임에서 재절단 검사 상태를 진행한다.
     m_AttachedRecutChecks.Tick(m_Scene, m_Physics, m_Cutting, m_SkeletalPatchCopy.IsPending(), m_QueryFrame);
+    m_RigBoneCutChecks.Tick(m_Scene, m_Physics, m_SkeletalPatchCopy, m_QueryFrame);
 
     // 45도 blend-zone 결과를 모델·모드마다 한 장씩 캡처한 뒤 다음 case로 진행한다.
     const uint32_t captureChecks[] = { 9, 10, 19, 20 };

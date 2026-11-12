@@ -83,11 +83,15 @@ namespace Viewer
     struct CutResultEntry;
     // 현재 owner의 자동 rig를 등록하며 이미 등록되어 있으면 그대로 성공한다.
     bool RegisterAutoRig(const Scene& scene, ObjectId owner, SkeletalPhysicsSystem& skeletal);
+    // 실제 Rig 선택이 Head D5인 진단 평면을 구성한다.
+    bool BuildRigBoneCutPlane(const Scene& scene, PhysicsSystem& physics, MeshCutting::CutPlaneData& plane, bool joint);
     struct RigBoneCutPublication
     {
         ObjectId Owner = InvalidObjectId;
         ComponentId Component = InvalidComponentId;
         MeshCutting::CutPlaneData Plane;
+        uint64_t EditGeneration = 0, Revision = 0;
+        uint32_t Node = UINT32_MAX;
     };
 
     // 추출 요청의 배치 snapshot과 단 하나의 게시 owner를 소유한다.

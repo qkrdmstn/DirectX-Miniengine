@@ -24,11 +24,11 @@ namespace Viewer
         bool Follows = true, Body = false, Collision = false, NodePositive = false;
 
         // 각 판정과 요약을 debugger와 기존 패치 검사 파일에 함께 남긴다.
-        static void Log(const char* label, bool pass)
+        static void Log(const char* label, bool pass, bool verdict = true)
         {
             // 고정 길이 한 줄을 포맷하고 파일을 즉시 닫는다.
-            char line[200], path[MAX_PATH];
-            sprintf_s(line, "%s %s\n", label, pass ? "PASS" : "FAIL");
+            char line[1024], path[MAX_PATH];
+            sprintf_s(line, verdict ? "%s %s\n" : "%s\n", label, pass ? "PASS" : "FAIL");
             Utility::Print(line);
             FILE* file = nullptr;
             if (GetTempPathA(MAX_PATH, path))
@@ -117,6 +117,24 @@ namespace Viewer
             return false;
         }
 
+        // AR과 RBC가 같은 node 상대 원점 오차를 측정한다.
+        static float FollowError(Scene& scene, const GameObject& owner, const MeshComponent& mesh)
+        {
+            // 현재 node와 게시 snapshot으로 기대 월드 원점을 복원한다.
+            Math::Matrix4 node;
+            if (!mesh.Attachment || !scene.TryGetAttachmentNodeWorld(mesh, node)) return FLT_MAX;
+            const auto& snapshot = *mesh.Attachment;
+            const auto expected = node * Invert(snapshot.NodeWorldAtCut) * snapshot.PieceWorldAtCut;
+            return float(Math::Length(Math::Vector3(expected.GetW()) - mesh.GetWorldTransform(owner.GetTransform()).GetTranslation()));
+        }
+
+        // 두 진단의 KDOP 낙하 조건을 동일하게 적용한다.
+        static bool Falls(bool collision, bool body, bool attached, bool running, float drop)
+        {
+            // 기존 AR4의 1cm 기준과 필수 조건을 유지한다.
+            return collision && body && !attached && running && drop >= 0.01f;
+        }
+
         // DrainResults의 대상 ID와 실제 게시된 두 컴포넌트로 결과를 확인한다.
         void OnResult(Scene& scene, const CutResultEntry& result)
         {
@@ -190,15 +208,13 @@ namespace Viewer
                 Finish();
                 return;
             }
-            const auto& snapshot = *attached->Attachment;
-            const Matrix4 expected = node * Invert(snapshot.NodeWorldAtCut) * snapshot.PieceWorldAtCut;
-            const float error = float(Length(Vector3(expected.GetW()) - attached->GetWorldTransform(owner->GetTransform()).GetTranslation()));
+            const float error = FollowError(scene, *owner, *attached);
             Follows &= std::isfinite(error) && error <= 0.001f;
             Body |= physics.GetBodyState(Owner, Detached) != PhysicsSystem::BodyState::None;
             if (++Observe < 60) return;
             Passed[1] = Follows;
             const float drop = StartY - float(detached->GetWorldTransform(owner->GetTransform()).GetTranslation().GetY());
-            Passed[2] = Collision && Body && !detached->Attachment && physics.IsSimulationRunning() && drop >= 0.01f;
+            Passed[2] = Falls(Collision, Body, detached->Attachment != nullptr, physics.IsSimulationRunning(), drop);
 
             // 낙하 판정의 세부 조건을 실패 원인 구분용으로 남긴다.
             char detail[160];

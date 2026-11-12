@@ -324,6 +324,36 @@ namespace Viewer
         return result;
     }
 
+    // Head 영역 안쪽 평면이 실제 Rig 조회에서 D5인지 확인한다.
+    bool BuildRigBoneCutPlane(const Scene& scene, PhysicsSystem& physics, MeshCutting::CutPlaneData& plane, bool joint)
+    {
+        // Xbot DFS의 Head=8과 HeadTop_End=9로 현재 진단 중심을 만든다.
+        using namespace Math;
+        for (const auto& object : scene.GetObjects())
+        {
+            if (object->GetName() != "Xbot")
+                continue;
+            const auto& instance = *object->GetModelInstance();
+            if (SafeDiagnosticNodeName("Xbot", 8) != "mixamorig:Head")
+                return false;
+            const auto frame = JointFrameToWorld(instance, *object->GetMeshComponents().front(), object->GetTransform(), 0);
+            const Vector3 origin(frame * instance.GetNodeTransforms()[8].GetW());
+            const Vector3 inward = Normalize(Vector3(frame * instance.GetNodeTransforms()[9].GetW()) - origin) * 0.06f;
+
+            // Head 안쪽 3cm의 수평 평면과 원점을 지나는 수직 거절 평면을 만든다.
+            const Vector3 normal = joint ? Vector3(kXUnitVector) : Vector3(kYUnitVector);
+            const Vector3 x = Normalize(Cross(normal, joint ? Vector3(kYUnitVector) : Vector3(kXUnitVector)));
+            if (!MeshCutting::TryBuildCutPlaneData({ 0.6f, 0.6f }, AffineTransform(Matrix3(x, normal, Cross(x, normal)),
+                origin + inward - normal * float(Dot(normal, inward)) + normal * (joint ? 0.0f : 0.03f)), plane))
+                return false;
+
+            // 실제 조회가 Head의 D5일 때만 자동 C 요청에 사용한다.
+            const auto selection = SelectRigSegment(scene, physics, plane);
+            return selection.Reason == RigSelectionReason::D5 && selection.Owner == object->GetId() && selection.Selected.NodeId == 8;
+        }
+        return false;
+    }
+
     // break 진단과 시연에서 같은 본 쌍의 현재 중점·수직 평면을 재사용한다.
     MeshCutting::CutPlaneData BuildSkeletalBreakPlane(const GameObject& object, uint32_t index)
     {
@@ -1018,8 +1048,9 @@ namespace Viewer
             source->Update(masking, instance, owner->GetTransform());
             masking.Finish(true);
             const ComponentId id = piece->GetId();
+            m_BonePublication = { owner->GetId(), id, m_Plane, piece->GetEditGeneration(),
+                piece->GetGeometry()->GetId(), m_BoneAttachment.NodeId };
             owner->CommitMeshComponent(std::move(piece));
-            m_BonePublication = { owner->GetId(), id, m_Plane };
         }
         catch (...)
         {
@@ -1029,6 +1060,7 @@ namespace Viewer
                 if (hadMask) source->SetTriangleMask(previous);
                 else source->ClearTriangleMask();
             }
+            m_BonePublication = {};
             PatchLog("RigBoneCut rejected: publication failed\n");
             return;
         }

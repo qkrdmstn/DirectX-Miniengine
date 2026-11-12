@@ -332,5 +332,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Scene\tests\AttachedRecutChecks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scene\tests\RigBoneCutChecks.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>
