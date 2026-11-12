@@ -123,7 +123,7 @@ private:
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
     void FocusBreakCamera(const Vector3& center, bool demo);
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
-    Viewer::SkeletalJointMode m_SkeletalJointMode = Viewer::SkeletalJointMode::Parent;
+    Viewer::SkeletalJointMode m_SkeletalJointMode = Viewer::SkeletalJointMode::Rig;
     Camera m_Camera;
     unique_ptr<CameraController> m_CameraController;
 
@@ -475,13 +475,13 @@ void ModelViewer::Startup( void )
     if (m_SkeletalBreakDemo) m_DemoTower = 0;
     if (m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo) m_UsePhysicsSim = 1;
 
-    // 시작 모드를 검증하며 생략 시 Parent를 유지한다.
+    // 시작 모드를 검증하며 생략 시 Rig를 유지한다.
     std::wstring jointMode;
     if (CommandLineArgs::GetString(L"skeletal-joint-mode", jointMode))
     {
-        if (jointMode != L"parent" && jointMode != L"influence")
-            throw std::runtime_error("skeletal-joint-mode must be parent or influence");
-        m_SkeletalJointMode = jointMode == L"influence" ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent;
+        if (jointMode != L"rig" && jointMode != L"parent" && jointMode != L"influence")
+            throw std::runtime_error("skeletal-joint-mode must be rig, parent or influence");
+        m_SkeletalJointMode = jointMode == L"rig" ? Viewer::SkeletalJointMode::Rig : jointMode == L"influence" ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent;
     }
     bool diagnosticScene = false;
     std::wstring diagnosticValue;
@@ -830,8 +830,9 @@ void ModelViewer::Update( float deltaT )
     if (GameInput::IsFirstPressed(GameInput::kKey_j))
     {
         m_SkeletalJointMode = m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent
-            ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent;
-        Utility::Printf("Skeletal joint mode=%s\n", m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent ? "Parent" : "Influence");
+            ? Viewer::SkeletalJointMode::Influence : m_SkeletalJointMode == Viewer::SkeletalJointMode::Influence
+                ? Viewer::SkeletalJointMode::Rig : Viewer::SkeletalJointMode::Parent;
+        Utility::Printf("Skeletal joint mode=%s\n", m_SkeletalJointMode == Viewer::SkeletalJointMode::Rig ? "Rig" : m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent ? "Parent" : "Influence");
     }
 
     // 새 C는 모드를 기록하고 이전 복사본을 공통 삭제 경로로 무효화한다.
@@ -845,7 +846,7 @@ void ModelViewer::Update( float deltaT )
     // 허용된 C만 이전 준비물을 정리하고 Static 절단 경로로 전달한다.
     if (cutKey)
     {
-        Utility::Printf("Skeletal C mode=%s\n", m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent ? "Parent" : "Influence");
+        Utility::Printf("Skeletal C mode=%s\n", m_SkeletalJointMode == Viewer::SkeletalJointMode::Rig ? "Rig" : m_SkeletalJointMode == Viewer::SkeletalJointMode::Parent ? "Parent" : "Influence");
         m_SkeletalPatchCopy.Reset(m_Scene, m_Physics, m_Cutting);
     }
 

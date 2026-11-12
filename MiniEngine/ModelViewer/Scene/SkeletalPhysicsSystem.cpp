@@ -230,26 +230,32 @@ namespace Viewer
     }
 
     // Kinematic 목표와 같은 frame 기준으로 살아 있는 관절의 본 원점 선분을 만든다.
-    void SkeletalPhysicsSystem::BuildKinematicSegments(ObjectId owner, std::vector<RigSegment>& out) const
+    void SkeletalPhysicsSystem::BuildKinematicSegments(ObjectId owner, std::vector<RigSegment>& out,
+        std::vector<RigSegment>* unavailable) const
     {
         // 미등록 owner는 빈 목록을 반환한다.
         out.clear();
+        if (unavailable) unavailable->clear();
         const auto found = m_Rigs.find(owner);
         if (found == m_Rigs.end()) return;
         const auto& rig = found->second;
 
         // 각 body 목표에서 월드 미터 단위 offset을 제거해 현재 본 원점을 복원한다.
         std::vector<Math::Vector3> origins(rig.Bodies.size(), Math::Vector3(Math::kZero));
-        std::vector<bool> kinematic(rig.Bodies.size(), false);
+        std::vector<bool> kinematic(rig.Bodies.size(), false), valid(rig.Bodies.size(), false);
         for (size_t i = 0; i < rig.Bodies.size(); ++i)
         {
             MiniPhysics::BodyMotion motion;
             Math::Matrix4 node;
-            if (!m_World.GetBodyMotion(rig.Bodies[i], motion) || motion != MiniPhysics::BodyMotion::Kinematic ||
-                !SkeletalFrames::TryRestoreNodePose(rig.ModelToWorld, rig.Targets[i].Frame,
+            auto frame = rig.Targets[i].Frame;
+            if (!m_World.GetBodyMotion(rig.Bodies[i], motion)) continue;
+            if (motion != MiniPhysics::BodyMotion::Kinematic &&
+                (!unavailable || !m_World.GetBodyPose(rig.Bodies[i], frame.Position, frame.Rotation))) continue;
+            if (!SkeletalFrames::TryRestoreNodePose(rig.ModelToWorld, frame,
                     rig.Asset.Bodies[i].BoneFromBody, rig.Targets[i].Scale, node)) continue;
             origins[i] = Math::Vector3((rig.ModelToWorld * node).GetW());
-            kinematic[i] = true;
+            kinematic[i] = motion == MiniPhysics::BodyMotion::Kinematic;
+            valid[i] = true;
         }
 
         // 비활성 Kinematic 관절도 포함하되 제거된 관절과 Dynamic endpoint는 제외한다.
@@ -257,9 +263,11 @@ namespace Viewer
         {
             const auto& joint = rig.Asset.Joints[i];
             MiniPhysics::ConstraintState state;
-            if (!m_World.GetConstraintState(rig.Joints[i], state) ||
-                !kinematic[joint.ParentBody] || !kinematic[joint.ChildBody]) continue;
-            out.push_back({ rig.Asset.Bodies[joint.ParentBody].Node, rig.Asset.Bodies[joint.ChildBody].Node,
+            if (!valid[joint.ParentBody] || !valid[joint.ChildBody]) continue;
+            const bool live = m_World.GetConstraintState(rig.Joints[i], state) &&
+                kinematic[joint.ParentBody] && kinematic[joint.ChildBody];
+            auto* destination = live ? &out : unavailable;
+            if (destination) destination->push_back({ rig.Asset.Bodies[joint.ParentBody].Node, rig.Asset.Bodies[joint.ChildBody].Node,
                 i, origins[joint.ParentBody], origins[joint.ChildBody] });
         }
     }

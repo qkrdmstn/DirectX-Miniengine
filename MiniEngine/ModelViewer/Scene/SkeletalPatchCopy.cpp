@@ -100,6 +100,21 @@ namespace Viewer
             }
         }
 
+        // 패치 진단의 문자열 생성과 출력을 요청의 예외 경계에서 분리한다.
+        template<typename BuildText>
+        void WritePatchLogSafely(const BuildText& buildText) noexcept
+        {
+            // 기존 패치 로그 경로를 유지하며 진단 실패만 무시한다.
+            try
+            {
+                PatchLog("%s", buildText().c_str());
+            }
+            catch (...)
+            {
+                // 진단 예외가 실제 선택과 GPU 요청을 중단하지 않게 한다.
+            }
+        }
+
         // mini에 없는 이름은 진단에서만 원본 GLB의 DFS 순서로 복원한다.
         std::string DiagnosticNodeName(const std::string& model, uint32_t node)
         {
@@ -122,6 +137,24 @@ namespace Viewer
                 stack.insert(stack.end(), children.rbegin(), children.rend());
             }
             return "unavailable";
+        }
+
+        // 로그용 이름 조회가 실패하면 노드 번호로 대체한다.
+        std::string SafeDiagnosticNodeName(const std::string& model, uint32_t node)
+        {
+            // 파일과 JSON 오류는 진단 이름에만 영향을 준다.
+            try
+            {
+                const auto name = DiagnosticNodeName(model, node);
+                if (name != "unavailable") return name;
+            }
+            catch (...)
+            {
+                // 번호 문자열 생성은 호출자의 안전 로그 경계에서 보호한다.
+            }
+
+            // 이름이 없거나 조회에 실패한 노드를 번호로 식별한다.
+            return std::to_string(node);
         }
 
         // 투표·선택·추출 패스가 공유하는 root signature와 compute PSO를 준비한다.
@@ -169,112 +202,120 @@ namespace Viewer
         return SelectSegmentJoint(pose.GetPoseParents(), positions, palettes, plane, model.m_InfluencingJoints);
     }
 
-    // 기존 선택을 바꾸지 않고 유한 평면의 rig 조회와 선분 교차 결과를 비교 기록한다.
-    static void LogRigQuery(const Scene& scene, PhysicsSystem& physics, const MeshCutting::CutPlaneData& plane,
-        ObjectId legacyOwner, const SegmentJointSelection& legacy)
+    enum class RigSelectionReason { Selected, NoHits, NoCandidates, AlreadyBroken, D5 };
+    struct RigSelection
     {
-        // 진단 예외가 실제 선택과 절단을 중단하지 않게 한다.
-        WriteRigPreloadLogSafely([&]()
+        ObjectId Owner = InvalidObjectId;
+        SegmentJointSelection Selected;
+        bool HasHits = false, AlreadyBroken = false;
+        RigSelectionReason Reason = RigSelectionReason::NoHits;
+        std::map<ObjectId, std::set<uint32_t>> OriginalHits, DynamicNodes;
+        std::map<ObjectId, std::vector<RigSegment>> Unavailable;
+    };
+
+    // 유한 평면 hit에서 Kinematic 선분을 선택하고 재요청 거절 근거를 수집한다.
+    static RigSelection SelectRigSegment(const Scene& scene, PhysicsSystem& physics,
+        const MeshCutting::CutPlaneData& plane)
+    {
+        // 반두께 1 mm인 평면 상자로 등록 body를 조회한다.
+        using namespace Math;
+        RigSelection result;
+        const Vector3 center = (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f;
+        const Vector3 width = (plane.WorldCorners[1] - plane.WorldCorners[0]) * 0.5f;
+        const Vector3 height = (plane.WorldCorners[3] - plane.WorldCorners[0]) * 0.5f;
+        const Vector3 x = Normalize(width), y = Vector3(plane.WorldPlane), z = Normalize(Cross(x, y));
+        DirectX::XMFLOAT4 q;
+        DirectX::XMStoreFloat4(&q, Normalize(Quaternion(Matrix3(x, y, z))));
+        std::vector<MiniPhysics::BodyHandle> hits;
+        physics.CollideOrientedBox({ float(center.GetX()), float(center.GetY()), float(center.GetZ()) },
+            { q.x, q.y, q.z, q.w }, { float(Length(width)) + std::abs(float(Dot(height, x))),
+                0.001, std::abs(float(Dot(height, z))) }, hits);
+
+        // owner별 Kinematic hit를 모으고 D5 후보는 body 중심 거리로 고른다.
+        auto& skeletal = physics.GetSkeletalPhysics();
+        std::map<ObjectId, std::set<uint32_t>> nodes;
+        auto closest = std::make_tuple(FLT_MAX, InvalidObjectId, UINT32_MAX);
+        for (auto hit : hits)
         {
-            // 모서리에서 상자 기저와 반크기를 얻고 반두께는 월드 1 mm로 고정한다.
-            using namespace Math;
-            const Vector3 center = (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f;
-            const Vector3 width = (plane.WorldCorners[1] - plane.WorldCorners[0]) * 0.5f;
-            const Vector3 height = (plane.WorldCorners[3] - plane.WorldCorners[0]) * 0.5f;
-            const Vector3 x = Normalize(width), y = Vector3(plane.WorldPlane), z = Normalize(Cross(x, y));
-            DirectX::XMFLOAT4 q;
-            DirectX::XMStoreFloat4(&q, Normalize(Quaternion(Matrix3(x, y, z))));
-            std::vector<MiniPhysics::BodyHandle> hits;
-            physics.CollideOrientedBox({ float(center.GetX()), float(center.GetY()), float(center.GetZ()) },
-                { q.x, q.y, q.z, q.w }, { float(Length(width)) + std::abs(float(Dot(height, x))),
-                    0.001, std::abs(float(Dot(height, z))) }, hits);
+            ObjectId owner;
+            uint32_t body, node;
+            if (!skeletal.FindBody(hit, owner, body, node)) continue;
+            result.HasHits = true;
+            result.OriginalHits[owner].insert(node);
+            auto& hitNodes = nodes[owner];
+            SkeletalRigState state;
+            if (!skeletal.ReadDiagnosticState(owner, state) || body >= state.Bodies.size()) continue;
+            for (const auto& stateBody : state.Bodies)
+                if (stateBody.Motion == MiniPhysics::BodyMotion::Dynamic)
+                    result.DynamicNodes[owner].insert(stateBody.Node);
+            const auto& hitBody = state.Bodies[body];
+            if (hitBody.Motion == MiniPhysics::BodyMotion::Dynamic) continue;
+            hitNodes.insert(node);
+            const auto& c = hitBody.Frame.Position;
+            closest = std::min(closest, std::make_tuple(float(LengthSquare(
+                Vector3(float(c[0]), float(c[1]), float(c[2])) - center)), owner, node));
+        }
 
-            // owner별 hit node를 모으고 Dynamic endpoint는 선분 생성 단계에서 제외한다.
-            auto& skeletal = physics.GetSkeletalPhysics();
-            std::map<ObjectId, std::set<uint32_t>> nodes;
-            for (auto hit : hits)
+        // 엄격한 부호 교차와 실제 평면 사각형 조건을 모든 선분에 함께 적용한다.
+        const auto intersect = [&](const RigSegment& segment, Vector3& point)
+        {
+            // 월드 교점을 평면 로컬 사각형으로 옮겨 검사한다.
+            const float a = Dot(plane.WorldPlane, Vector4(segment.ParentWorld, 1));
+            const float b = Dot(plane.WorldPlane, Vector4(segment.ChildWorld, 1));
+            if (!((a < 0 && b > 0) || (a > 0 && b < 0))) return false;
+            point = segment.ParentWorld + (segment.ChildWorld - segment.ParentWorld) * (a / (a - b));
+            const Vector3 local(plane.WorldToPlane * Vector4(point, 1));
+            return std::abs(float(local.GetX())) <= plane.HalfWidth && std::abs(float(local.GetZ())) <= plane.HalfHeight;
+        };
+        auto best = std::make_tuple(FLT_MAX, InvalidObjectId, UINT32_MAX);
+        for (const auto& entry : nodes)
+        {
+            std::vector<RigSegment> segments, unavailable;
+            skeletal.BuildKinematicSegments(entry.first, segments, &unavailable);
+            result.Unavailable[entry.first] = unavailable;
+            for (const auto& segment : segments)
             {
-                ObjectId owner;
-                uint32_t body, node;
-                if (skeletal.FindBody(hit, owner, body, node)) nodes[owner].insert(node);
+                if (!entry.second.count(segment.ParentNode) && !entry.second.count(segment.ChildNode)) continue;
+                Vector3 point;
+                if (!intersect(segment, point)) continue;
+                const auto candidate = std::make_tuple(float(LengthSquare(point - center)), entry.first, segment.ParentNode);
+                if (candidate >= best) continue;
+                best = candidate;
+                result.Owner = entry.first;
+                result.Selected.NodeId = segment.ParentNode;
+                result.Selected.ChildNodeId = segment.ChildNode;
+                result.Selected.Kind = SegmentJointKind::Segment;
+                result.Selected.Intersection = point;
             }
 
-            // 이름은 기존 GLB reader로 읽고 실패하면 NodeId로 표시한다.
-            std::map<ObjectId, std::vector<std::string>> names;
-            const auto name = [&](ObjectId owner, uint32_t node)
+            // 원래 hit에 끝점이 포함된 끊김 또는 Dynamic 선분만 거절 근거로 쓴다.
+            for (const auto& segment : unavailable)
             {
-                // owner별로 한 번만 이름 목록을 읽고 범위 밖 번호도 기록한다.
-                if (!names.count(owner))
-                {
-                    try
-                    {
-                        const auto* object = scene.FindObject(owner);
-                        names[owner] = object ? ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb")
-                            : std::vector<std::string>{};
-                    }
-                    catch (...) { names[owner] = {}; }
-                }
-                const auto& list = names.at(owner);
-                return std::to_string(node) + ":" + (node < list.size() ? list[node] : "unnamed");
-            };
-
-            // hit endpoint 선분만 엄격한 부호 교차와 실제 로컬 사각형으로 검사한다.
-            size_t count = 0, crossing = 0;
-            auto best = std::make_tuple(FLT_MAX, InvalidObjectId, UINT32_MAX);
-            uint32_t bestChild = UINT32_MAX;
-            std::ostringstream owners, bodies;
-            for (const auto& entry : nodes)
-            {
-                if (owners.tellp() > 0) owners << ',';
-                owners << entry.first;
-                for (uint32_t node : entry.second) bodies << entry.first << '/' << name(entry.first, node) << ',';
-                std::vector<RigSegment> segments;
-                skeletal.BuildKinematicSegments(entry.first, segments);
-                for (const auto& segment : segments)
-                {
-                    if (!entry.second.count(segment.ParentNode) && !entry.second.count(segment.ChildNode)) continue;
-                    ++count;
-                    const float a = Dot(plane.WorldPlane, Vector4(segment.ParentWorld, 1));
-                    const float b = Dot(plane.WorldPlane, Vector4(segment.ChildWorld, 1));
-                    if (!((a < 0 && b > 0) || (a > 0 && b < 0))) continue;
-                    const Vector3 point = segment.ParentWorld + (segment.ChildWorld - segment.ParentWorld) * (a / (a - b));
-                    const Vector3 local(plane.WorldToPlane * Vector4(point, 1));
-                    if (std::abs(float(local.GetX())) > plane.HalfWidth || std::abs(float(local.GetZ())) > plane.HalfHeight) continue;
-                    ++crossing;
-                    const auto candidate = std::make_tuple(float(LengthSquare(point - center)), entry.first, segment.ParentNode);
-                    if (candidate < best)
-                    {
-                        best = candidate;
-                        bestChild = segment.ChildNode;
-                    }
-                }
+                const auto& original = result.OriginalHits.at(entry.first);
+                if (!original.count(segment.ParentNode) && !original.count(segment.ChildNode)) continue;
+                Vector3 point;
+                if (intersect(segment, point)) result.AlreadyBroken = true;
             }
+        }
 
-            // 거리와 owner 및 부모 NodeId 순서로 고른 결과와 현행 선택을 한 행에 남긴다.
-            std::ostringstream log;
-            log << "RigQuery hits=" << hits.size() << " owners=" << (nodes.empty() ? "none" : owners.str())
-                << " bodies=" << (nodes.empty() ? "none" : bodies.str()) << " segments=" << count
-                << " crossing=" << crossing << " best=";
-            if (bestChild == UINT32_MAX) log << "none";
-            else log << std::get<1>(best) << '/' << name(std::get<1>(best), std::get<2>(best))
-                << '/' << name(std::get<1>(best), bestChild);
-            log << " legacy=" << legacyOwner << '/' << name(legacyOwner, legacy.NodeId)
-                << '/' << name(legacyOwner, legacy.ChildNodeId);
+        // 선택 결과에 실패 근거를 보존하여 호출자가 같은 조회 결과를 비교한다.
+        result.Reason = result.Owner != InvalidObjectId ? RigSelectionReason::Selected
+            : !result.HasHits ? RigSelectionReason::NoHits
+            : result.AlreadyBroken ? RigSelectionReason::AlreadyBroken
+            : std::get<1>(closest) != InvalidObjectId ? RigSelectionReason::D5 : RigSelectionReason::NoCandidates;
 
-            // 불일치 시 현행 선분의 실제 Dynamic endpoint 여부를 함께 기록한다.
-            if (bestChild == UINT32_MAX)
+        // 선택 실패는 다음 단계의 D5 후보 이름만 안전하게 남기고 게시하지 않는다.
+        if (result.HasHits && result.Owner == InvalidObjectId && !result.AlreadyBroken)
+        {
+            const auto* object = scene.FindObject(std::get<1>(closest));
+            WritePatchLogSafely([&]
             {
-                SkeletalRigState state;
-                bool dynamic = false;
-                if (skeletal.ReadDiagnosticState(legacyOwner, state))
-                    for (const auto& body : state.Bodies)
-                        if ((body.Node == legacy.NodeId || body.Node == legacy.ChildNodeId) &&
-                            body.Motion == MiniPhysics::BodyMotion::Dynamic) dynamic = true;
-                log << " reason=" << (dynamic ? "legacy_dynamic_endpoint" : "no_live_hit_segment_crossing");
-            }
-            log << '\n';
-            return log.str();
-        });
+                // 이름 조회와 문자열 생성의 예외를 요청에서 격리한다.
+                return "RigSelect no segment node=" + (object
+                    ? SafeDiagnosticNodeName(object->GetName(), std::get<2>(closest)) : std::string("none")) + "\n";
+            });
+        }
+        return result;
     }
 
     // break 진단과 시연에서 같은 본 쌍의 현재 중점·수직 평면을 재사용한다.
@@ -324,6 +365,10 @@ namespace Viewer
             m_ForceStale = false;
             m_StaleStage = 1;
         }
+        // 명시적 Rig 옵션만 진단 입력 모드를 바꾸며 기본 Parent 진단은 유지한다.
+        std::wstring jointMode;
+        CommandLineArgs::GetString(L"skeletal-joint-mode", jointMode);
+        const auto checkMode = jointMode == L"rig" ? SkeletalJointMode::Rig : SkeletalJointMode::Parent;
         auto& skeletal = physics.GetSkeletalPhysics();
         const uint32_t nodes[] = { 14, 60, 8 }, joints[] = { 7, 43, 5 };
 
@@ -372,7 +417,7 @@ namespace Viewer
             }
 
             // 현재 segment에 수직인 평면으로 같은 C의 재절단 거절을 확인한다.
-            Request(scene, BuildSkeletalBreakPlane(*object, m_BreakCheck - 1), false, SkeletalJointMode::Parent, UINT32_MAX, &physics);
+            Request(scene, BuildSkeletalBreakPlane(*object, m_BreakCheck - 1), false, checkMode, UINT32_MAX, &physics);
             if (IsPending() || m_Incoming.Status != IncomingJointStatus::AlreadyBroken) throw std::runtime_error("SP7b second C submitted");
             PatchLog("SP7b second C AlreadyBroken PASS\n");
             m_CheckAwaiting = false;
@@ -394,11 +439,11 @@ namespace Viewer
             if (object->GetName() != (m_BreakCheck < 2 ? "Xbot" : "CesiumMan")) continue;
             const auto plane = BuildSkeletalBreakPlane(*object, m_BreakCheck);
             PhysicsSystem off(scene);
-            Request(scene, plane, false, SkeletalJointMode::Parent, UINT32_MAX, &off);
+            Request(scene, plane, false, checkMode, UINT32_MAX, &off);
             if (IsPending()) throw std::runtime_error("SP7b physics off submitted cut");
             PatchLog("SP7b physics off PASS\n");
             if (!m_BreakCheck) physics.SetSimulationRunning(false);
-            Request(scene, plane, true, SkeletalJointMode::Parent, UINT32_MAX, &physics);
+            Request(scene, plane, true, checkMode, UINT32_MAX, &physics);
             if (!m_BreakReady || m_Incoming.Status != IncomingJointStatus::Ok) throw std::runtime_error("SP7b C rejected");
             // 각 부위의 첫 시도만 generation 불일치를 주입하고 게시 전 상태를 저장한다.
             if (!m_OffsetCopy && !m_StaleStage)
@@ -549,10 +594,14 @@ namespace Viewer
         }
 
         // 새 C의 모드를 기록하고 대상 유무와 관계없이 이전 결과를 무효화한다.
-        if (m_RequestId) { PatchLog("SP7b C waiting RequestId=%llu\n", m_RequestId); return; }
+        if (m_RequestId)
+        {
+            PatchLog("SP7b C waiting RequestId=%llu\n", m_RequestId);
+            return;
+        }
         m_Mode = mode;
         m_DiagnosticCase = diagnosticCase;
-        PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
+        PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Rig ? "Rig" : mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
         m_Job.Cancel();
         m_Name.clear();
         m_Physics = physics;
@@ -578,10 +627,18 @@ namespace Viewer
         const Matrix4 planeToWorld = Invert(plane.WorldToPlane);
         const GameObject* target = nullptr;
         const MeshComponent* mesh = nullptr;
+        RigSelection rig;
+        const bool rigQuery = mode == SkeletalJointMode::Rig && physics && physics->IsSimulationEnabled();
+        if (mode != SkeletalJointMode::Influence && physics && physics->IsSimulationEnabled())
+            rig = SelectRigSegment(scene, *physics, plane);
         float nearest = FLT_MAX;
+        float legacyNearest = FLT_MAX;
+        const GameObject* legacyTarget = nullptr;
+        const MeshComponent* legacyMesh = nullptr;
         for (const auto& object : scene.GetObjects())
             for (const auto& component : object->GetMeshComponents())
             {
+                // 비교 대상은 등록 여부와 관계없이 기존 경계 구로 검사한다.
                 bool skin = false;
                 for (size_t section = 0; section < component->GetGeometry()->GetSections().size(); ++section)
                     skin |= component->GetGeometry()->GetMesh(section).numJoints != 0;
@@ -593,25 +650,138 @@ namespace Viewer
                     Clamp(float(local.GetX()), -plane.HalfWidth, plane.HalfWidth), 0,
                     Clamp(float(local.GetZ()), -plane.HalfHeight, plane.HalfHeight), 1));
                 const float distance = LengthSquare(bounds.GetCenter() - center);
-                if (float(LengthSquare(bounds.GetCenter() - closest)) > float(bounds.GetRadius() * bounds.GetRadius()) || distance >= nearest)
+                if (float(LengthSquare(bounds.GetCenter() - closest)) > float(bounds.GetRadius() * bounds.GetRadius()))
                     continue;
+                if (distance < legacyNearest)
+                {
+                    legacyNearest = distance;
+                    legacyTarget = object.get();
+                    legacyMesh = component.get();
+                }
+
+                // 실제 D6 요청은 미등록 owner만 기존 경계 구 후보로 유지한다.
+                if (rigQuery && !rig.HasHits && physics->GetSkeletalPhysics().IsRegistered(object->GetId())) continue;
+                if (distance >= nearest) continue;
                 nearest = distance;
                 target = object.get();
                 mesh = component.get();
             }
 
+        // 기존 선택을 한 번 계산하고 비교와 실제 요청에서 재사용한다.
+        const bool influence = mode == SkeletalJointMode::Influence;
+        auto legacy = influence || !legacyTarget ? SegmentJointSelection{}
+            : SelectSegmentJoint(*legacyTarget->GetModelInstance(), *legacyMesh, legacyTarget->GetTransform(), plane);
+        if (!influence && physics && physics->IsSimulationEnabled())
+            WritePatchLogSafely([&]
+            {
+                // 성공과 실패 모두 owner와 노드 쌍 및 incoming 관절을 한 줄로 기록한다.
+                auto& skeletal = physics->GetSkeletalPhysics();
+                const auto* rigOwner = scene.FindObject(rig.Owner);
+                const auto rigJoint = skeletal.FindIncomingJoint(rig.Owner, rig.Selected.NodeId);
+                const auto legacyJoint = skeletal.FindIncomingJoint(legacyTarget ? legacyTarget->GetId() : InvalidObjectId, legacy.NodeId);
+                const char* reasons[] = { "selected", "no_hits", "no_candidates", "AlreadyBroken", "D5" };
+                std::ostringstream line;
+                line << "RigSelect owner=" << (rigOwner ? rigOwner->GetName() : "none")
+                    << " parent=" << rig.Selected.NodeId << " child=" << rig.Selected.ChildNodeId << " joint=" << rigJoint.JointId
+                    << " result=" << reasons[unsigned(rig.Reason)]
+                    << " legacy=" << (legacyTarget ? legacyTarget->GetName() : "none") << ':' << legacy.NodeId << '/' << legacy.ChildNodeId
+                    << " joint=" << legacyJoint.JointId;
+                const bool same = rigOwner && legacyTarget && rig.Owner == legacyTarget->GetId()
+                    && legacy.Kind == SegmentJointKind::Segment && rig.Selected.NodeId == legacy.NodeId
+                    && rig.Selected.ChildNodeId == legacy.ChildNodeId && rigJoint.JointId == legacyJoint.JointId;
+                line << " compare=" << (same ? "match" : "mismatch");
+
+                // 불일치는 실제 hit와 body 상태 및 선택 거리로 설명한다.
+                if (!same)
+                {
+                    if (!rigOwner) line << " reason=rig_selection_none:" << reasons[unsigned(rig.Reason)];
+                    if (!legacyTarget || legacy.NodeId == UINT32_MAX) line << " reason=legacy_selection_none";
+                    else if (legacy.Kind != SegmentJointKind::Segment) line << " reason=legacy_leaf";
+                    else
+                    {
+                        const auto owner = legacyTarget->GetId();
+                        const auto hit = rig.OriginalHits.find(owner);
+                        if (hit == rig.OriginalHits.end() || (!hit->second.count(legacy.NodeId) && !hit->second.count(legacy.ChildNodeId)))
+                            line << " reason=legacy_segment_outside_hit";
+                        const auto dynamic = rig.DynamicNodes.find(owner);
+                        if (dynamic != rig.DynamicNodes.end() && (dynamic->second.count(legacy.NodeId) || dynamic->second.count(legacy.ChildNodeId)))
+                            line << " reason=legacy_endpoint_Dynamic";
+                        const auto unavailable = rig.Unavailable.find(owner);
+                        if (unavailable != rig.Unavailable.end())
+                            for (const auto& segment : unavailable->second)
+                                if (segment.ParentNode == legacy.NodeId && segment.ChildNode == legacy.ChildNodeId)
+                                    line << " reason=legacy_segment_unavailable";
+                        if (rigOwner)
+                        {
+                            const float rigDistance = LengthSquare(rig.Selected.Intersection - center);
+                            const float legacyDistance = LengthSquare(legacy.Intersection - center);
+                            line << " reason=" << (rigDistance == legacyDistance ? "distance_tie" : "distance_difference")
+                                << " rigDistance2=" << rigDistance << " legacyDistance2=" << legacyDistance;
+                        }
+                    }
+                }
+                line << '\n';
+                return line.str();
+            });
+
+        // 실패 비교를 남긴 뒤 기존 Rig 거절 동작을 적용한다.
+        if (rigQuery && rig.HasHits && rig.Owner == InvalidObjectId)
+        {
+            if (rig.AlreadyBroken)
+            {
+                m_Incoming.Status = IncomingJointStatus::AlreadyBroken;
+                PatchLog("SP7b rejected: incoming=%u (NoBody=1 RigRoot=2 AlreadyBroken=3 NotRegistered=4)\n", unsigned(m_Incoming.Status));
+            }
+            return;
+        }
+
+        // Rig hit는 legacy 경계 구가 닿지 않아도 선택 owner로 계속 진행한다.
+        const bool legacyAvailable = target != nullptr;
+        if (!target && rigQuery && rig.Owner != InvalidObjectId)
+        {
+            target = scene.FindObject(rig.Owner);
+            for (const auto& component : target->GetMeshComponents())
+                for (size_t section = 0; section < component->GetGeometry()->GetSections().size(); ++section)
+                    if (component->GetGeometry()->GetMesh(section).numJoints) mesh = component.get();
+        }
+
         // 선택 실패와 compute pose 거절을 구분한다.
-        if (!target || !Renderer::UseComputePose)
+        if (!target || !mesh || !Renderer::UseComputePose)
         {
             PatchLog("Skeletal patch rejected: %s\n", !target ? "no skin target" : "compute pose disabled");
             if (diagnostic) throw std::runtime_error("Skeletal patch diagnostic target rejected");
             return;
         }
-        const bool influence = mode == SkeletalJointMode::Influence;
-        const auto selected = influence ? SegmentJointSelection{}
+        auto selected = target == legacyTarget && mesh == legacyMesh ? std::move(legacy)
+            : influence || !legacyAvailable ? SegmentJointSelection{}
             : SelectSegmentJoint(*target->GetModelInstance(), *mesh, target->GetTransform(), plane);
-        // 물리가 활성인 요청에서만 조회를 비교하고 기존 선택 결과는 그대로 사용한다.
-        if (physics && physics->IsSimulationEnabled()) LogRigQuery(scene, *physics, plane, target->GetId(), selected);
+
+        // 실제 Rig 선택만 owner와 부모 마스크를 교체하고 Parent 진단 입력은 유지한다.
+        if (rigQuery && rig.HasHits)
+        {
+            target = scene.FindObject(rig.Owner);
+            for (const auto& component : target->GetMeshComponents())
+            {
+                bool skin = false;
+                for (size_t section = 0; section < component->GetGeometry()->GetSections().size(); ++section)
+                    skin |= component->GetGeometry()->GetMesh(section).numJoints != 0;
+                if (skin && component->HasPoseBounds())
+                {
+                    mesh = component.get();
+                    break;
+                }
+            }
+            selected = rig.Selected;
+            const auto& model = *target->GetModelInstance()->GetModel();
+            for (size_t section = 0; section < mesh->GetGeometry()->GetSections().size(); ++section)
+            {
+                const auto& part = mesh->GetGeometry()->GetMesh(section);
+                std::vector<uint32_t> mask(part.numJoints);
+                for (uint32_t i = 0; i < part.numJoints; ++i)
+                    mask[i] = model.m_JointIndices[part.startJoint + i] == selected.NodeId;
+                selected.PaletteMasks.push_back(std::move(mask));
+            }
+        }
 
         if ((!influence && selected.NodeId == UINT32_MAX) || !target->GetModelInstance()->HasValidPose()
             || mesh->GetDeformBinding().Pose != PoseMode::FollowModel)
@@ -624,7 +794,11 @@ namespace Viewer
         // Parent C는 현재 최종 pose로 최초 등록하고 incoming과 세대를 고정한다.
         if (physics && !influence)
         {
-            if (!physics->IsSimulationEnabled()) { PatchLog("SP7b rejected: physics off\n"); return; }
+            if (!physics->IsSimulationEnabled())
+            {
+                PatchLog("SP7b rejected: physics off\n");
+                return;
+            }
             auto& skeletal = physics->GetSkeletalPhysics();
             RegisterAutoRig(scene, target->GetId(), skeletal);
 
@@ -695,9 +869,17 @@ namespace Viewer
 
         // 모델 이름은 진단 파일 조회에만 사용하고 선택·추출 조건에는 사용하지 않는다.
         if (diagnostic && !influence)
-            PatchLog("Skeletal patch selected model=%s NodeId=%u name=%s kind=%s child=%u\n",
-                target->GetName().c_str(), selected.NodeId, DiagnosticNodeName(target->GetName(), selected.NodeId).c_str(),
-                selected.Kind == SegmentJointKind::Segment ? "segment" : "leaf", selected.ChildNodeId);
+            WritePatchLogSafely([&]
+            {
+                // 이름과 출력 예외가 Parent와 Rig 요청을 중단하지 않게 한다.
+                std::ostringstream line;
+                line << "Skeletal patch selected model=" << target->GetName() << " NodeId=" << selected.NodeId
+                    << " name=" << SafeDiagnosticNodeName(target->GetName(), selected.NodeId)
+                    << " kind=" << (selected.Kind == SegmentJointKind::Segment ? "segment" : "leaf")
+                    << " child=" << selected.ChildNodeId << '\n';
+                return line.str();
+            });
+
         // cutter와 같은 component-local 평면 변환을 사용한다.
         const Matrix4 world(mesh->GetWorldTransform(target->GetTransform()));
         auto local = plane;
@@ -1069,7 +1251,7 @@ namespace Viewer
             reason, components, caps, uncapped, error);
         if (m_Diagnostic)
             PatchLog("SP6 comparison case=%u model=%s mode=%s NodeId=%u name=%s patch/crossing/uncovered=%u/%u/%u GPU==CPU=PASS components/caps/uncapped/error=%zu/%u/%u/%u\n",
-                m_DiagnosticCase, m_ModelName.c_str(), m_Mode == SkeletalJointMode::Parent ? "Parent" : "Influence", m_SelectedNode,
+                m_DiagnosticCase, m_ModelName.c_str(), m_Mode == SkeletalJointMode::Rig ? "Rig" : m_Mode == SkeletalJointMode::Parent ? "Parent" : "Influence", m_SelectedNode,
                 DiagnosticNodeName(m_ModelName, m_SelectedNode).c_str(), m_Result.PatchTriangles, m_Result.CrossingTriangles,
                 m_Result.UncoveredCrossing, components, caps, uncapped, error);
         m_Completed = true;

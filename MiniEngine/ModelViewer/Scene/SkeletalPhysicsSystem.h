@@ -95,7 +95,8 @@ namespace Viewer
         // 등록된 runtime body를 owner와 자산 body 및 node 번호로 역조회한다.
         bool FindBody(MiniPhysics::BodyHandle body, ObjectId& owner, uint32_t& bodyId, uint32_t& nodeId) const;
         // 양 끝이 Kinematic이며 runtime 관절이 살아 있는 본 선분으로 출력을 교체한다.
-        void BuildKinematicSegments(ObjectId owner, std::vector<RigSegment>& out) const;
+        void BuildKinematicSegments(ObjectId owner, std::vector<RigSegment>& out,
+            std::vector<RigSegment>* unavailable = nullptr) const;
         // 실제 pose·COM·속도·양쪽 anchor를 읽으며 실패하면 출력 전체를 보존한다.
         bool ReadDiagnosticState(ObjectId owner, SkeletalRigState& output) const;
         // 현재 Dynamic body만 등록 배율을 복원한 model node override로 수집한다.

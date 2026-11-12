@@ -8,7 +8,7 @@
 
 namespace Viewer
 {
-    enum class SkeletalJointMode { Parent, Influence };
+    enum class SkeletalJointMode { Rig, Parent, Influence };
     // 모델 pose와 컴포넌트 section을 순수 선택 함수의 입력으로 바꾼다.
     SegmentJointSelection SelectSegmentJoint(const ModelInstance& pose, const MeshComponent& component,
         const SceneTransform& owner, const MeshCutting::CutPlaneData& plane);
@@ -91,7 +91,7 @@ namespace Viewer
         void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
         void Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
-            SkeletalJointMode mode = SkeletalJointMode::Parent, uint32_t diagnosticCase = UINT32_MAX,
+            SkeletalJointMode mode = SkeletalJointMode::Rig, uint32_t diagnosticCase = UINT32_MAX,
             PhysicsSystem* physics = nullptr);
         // 실제 C 경로로 두 모델의 break와 거절 조건을 순서대로 검증한다.
         bool RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
@@ -165,7 +165,7 @@ namespace Viewer
         SceneTransform m_World;
         std::string m_Name, m_ModelName;
         uint32_t m_SelectedNode = UINT32_MAX, m_DiagnosticCase = UINT32_MAX;
-        SkeletalJointMode m_Mode = SkeletalJointMode::Parent;
+        SkeletalJointMode m_Mode = SkeletalJointMode::Rig;
         float m_Offset = 0;
         bool m_Diagnostic = false;
     };
