@@ -4,7 +4,10 @@ DirectX 12 MiniEngine 위에서 **메시를 실시간으로 자르는 기능**�
 정점 데이터는 GPU 메모리에서만 절단하고, 단면(cap)도 GPU 컴퓨트 셰이더에서 채웁니다.
 절단 조각에는 Jolt 물리를 붙이고, 스켈레탈 메시는 관절 단위로 떼어 ragdoll로 넘기는 것이 목표입니다.
 
-📑 **발표 자료:** [Canva 슬라이드](https://canva.link/ycxk54ec6bttauh)
+📑 **발표 자료**
+
+- 3주차: [Canva 슬라이드](https://canva.link/ycxk54ec6bttauh)
+- 4주차: [Canva 슬라이드](https://canva.link/s9wl6s8f998jn9c)
 
 ## 주요 기능
 

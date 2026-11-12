@@ -64,7 +64,7 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
     
-    // 변 i -> i+1이 평면을 엄격히 지나면 교차점을 한 번만 계산한다. (A, B 표면과 단면 선분이 같은 값을 공유)
+    // 변 i -> i+1이 평면을 지나면 교차점을 계산한다. (A, B 표면과 단면 선분이 같은 값을 공유)
     bool crosses[3];
     Vertex hit[3];
     [unroll]
@@ -73,6 +73,8 @@ void main(uint3 id : SV_DispatchThreadID)
         uint next = (i + 1) % 3;
         crosses[i] = (d[i] > 0 && d[next] < 0) || (d[i] < 0 && d[next] > 0);
         hit[i] = v[i];
+        
+        // 교차점 계산
         if (crosses[i])
             hit[i] = IntersectEdge(v[i], v[next], d[i], d[next]);
     }

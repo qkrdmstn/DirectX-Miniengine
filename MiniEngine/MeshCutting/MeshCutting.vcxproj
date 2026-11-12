@@ -86,6 +86,8 @@
     <FxCompile Include="Shaders\LinkBoundaryCS.hlsl" />
     <FxCompile Include="Shaders\RankBoundaryCS.hlsl" />
     <FxCompile Include="Shaders\CapEarsCS.hlsl" />
+    <FxCompile Include="Shaders\CapEarsCS512.hlsl" />
+    <FxCompile Include="Shaders\CapEarsCS1024.hlsl" />
     <FxCompile Include="Shaders\FinalizeCutCS.hlsl" />
     <FxCompile Include="Shaders\CutBoundsCS.hlsl" />
   </ItemGroup>

@@ -67,7 +67,7 @@ bool Resolve(uint i, uint segmentCount)
                 float2 c = Point2(other), d = asfloat(Ring.Load2(other * 128 + 32)); // 이웃 셀에 포함된 선분의 시작점과 끝점
                 
                 // 선택한 이웃 선분이 실제로 그 셀에 있는지(해시 충돌 방지)
-                // 현재 선분과 짝을 이루는 이웃 선분인지 확인 (kind = 4에서의 같은 선분을 탐색)
+                // 현재 선분과 짝을 이루는 선분(반대편에 포함된 같은 선분)인지 확인 (kind = 4에서의 같은 선분을 탐색)
                 if (all(Cell((c + d) * 0.5) == neighbor) && SameEdge(a, b, c, d))
                 {
                     uint side = Ring.Load(other * 128 + 92);
@@ -143,7 +143,7 @@ void main(uint3 id : SV_DispatchThreadID)
             Ring.Store(HashOffset + bucketId * 4, 0);
     }
     
-    // 루프 선분의 양 끝점을 해시에 넣기 (스레드 = 끝점)
+    // 루프에 포함된 각 선분의 끝점을 해시에 넣기 (스레드 = 끝점)
     else
     {
         uint endpoint = id.x;
