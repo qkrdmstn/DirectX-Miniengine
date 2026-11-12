@@ -1,4 +1,4 @@
-상태: 진행 중 — AR-1 `a4d337b1`, AR-2 `1a017f5a`, AR-3 완료, AR-4 구현(미커밋); 빌드·실행 미수행 (2026-11-06)
+상태: 완료 — AR-1 `a4d337b1`, AR-2 `1a017f5a`, AR-3 완료, AR-4 `bb766e1b`; Debug/Release 빌드·실행 다섯 판정 PASS 확인 (2026-11-12)
 
 # 부착 패치 조각의 Static 재절단
 
@@ -121,7 +121,7 @@ AR-3 구현(미커밋): `CuttingSystem::UpdateOne`은 `Poll` 완료·`BuildResul
 bounds box로 대체하며, 예외 시 빈 충돌로 게시한다. `detached kdop` 이유를 보존해
 `PhysicsSystem::SyncBodies`가 등록 실패를 200자 이내로 기록한다. 빌드·실행은 사용자 지시로 미수행이다.
 
-AR-4 구현(미커밋): `AttachedRecutChecks::Tick`은 demo 1의 Xbot break를 프레임 60에 요청하고 부착 게시·준비 후 3프레임 기다린다. 실제 생성 정점의 월드 AABB 중심과 양쪽 정점을 갖는 법선으로 재절단하며 node 거리는 1 mm를 초과해야 한다. `OnResult`가 두 결과를 확인하고 60프레임 추종·body·1 cm 낙하를 판정한다. node를 통과하는 두 번째 요청의 모호한 측 거절 카운터·조각 수를 확인하고 독립 조각을 한 번 더 Static 절단한다. 다섯 판정과 요약은 `%TEMP%/SP6-SkeletalPatchChecks.log`에 남기며 정상 정리 뒤 모두 PASS는 0, 실패·미완료는 1을 반환한다. 1200프레임 초과는 FAIL이다. Debug/Release·D3D12 ERROR·기존 회귀·다른 joint 후 보존·기즈모 선택의 실행 검증은 사용자 지시로 미수행이다.
+AR-4 완료(`bb766e1b`): `AttachedRecutChecks::Tick`은 demo 1의 Xbot break를 프레임 60에 요청하고 부착 게시·준비 후 3프레임 기다린다. 실제 생성 정점의 월드 AABB 중심과 양쪽 정점을 갖는 법선으로 재절단하며 node 거리는 1 mm를 초과해야 한다. `OnResult`가 두 결과를 확인하고 60프레임 추종·body·1 cm 낙하를 판정한다. node를 통과하는 두 번째 요청의 모호한 측 거절 카운터·조각 수를 확인하고 독립 조각을 한 번 더 Static 절단한다. 다섯 판정과 요약은 `%TEMP%/SP6-SkeletalPatchChecks.log`에 남기며 정상 정리 뒤 모두 PASS는 0, 실패·미완료는 1을 반환한다. 1200프레임 초과는 FAIL이다. 호출자가 Debug/Release 빌드·실행의 다섯 판정 PASS를 확인했다(2026-11-12). 다른 joint 후 보존·기즈모 선택의 별도 실행 검증은 미수행이다.
 
 각 단계가 끝나면 로컬에서 커밋한다. 회귀 항목은 `-skeletal-patch-break-checks 1`, `-skeletal-break-demo 1/2`, 기존 Static 절단 사례다.
 

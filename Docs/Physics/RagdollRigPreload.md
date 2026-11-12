@@ -1,4 +1,4 @@
-상태: 설계안 — 사용자 결정(2026-11-12) 반영, Codex 리뷰 반영, 구현 전 (2026-11-12)
+상태: 완료 — 결정 `f447d0ab`·`bd985762`, R1a `b215bdee`, R1b `90343017`, R1c `31e62820`, R2 `c85d148b`, R3a `fbe1af9b`, R3b `03ff7a14`, R4a `f1e1c2f9`, R4b `dafd19ac`; R5 문서 동기화·호출자 단계별 Debug/Release 검증 반영 (2026-11-12)
 
 # 래그돌 rig 사전 생성과 Jolt 기반 뼈 선택
 
@@ -105,13 +105,14 @@ struct RigSelection { ObjectId Owner; uint32_t NodeId; bool Segment; /* false = 
 
 각 단계: 새 Codex 실행으로 구현 → 다른 새 Codex 실행으로 리뷰(기준 = §6) → Debug/Release 빌드·검사 → 로컬 커밋 → 다음 단계.
 
-## 6. 완료 조건
+## 6. 완료 조건과 실제 결과
 
 공통 명령(작업 디렉터리 `MiniEngine/ModelViewer`, Debug·Release, 각각 별도 프로세스, `-debug 1`):
 - `-skeletal-patch-offset-copy 1 -skeletal-patch-checks 1` → `%TEMP%/SP6-comparison.log` 이번 실행 20행 `GPU==CPU=PASS`
 - `-skeletal-patch-break-checks 1` → SP7b·SP7e PASS 줄
 - `-skeletal-break-checks 1` → `SkeletalPhysicsChecks.log`의 `BC-12a PASS`; `-skeletal-break-xbot 1` → `BC-12b PASS`
 - `-attached-recut-checks 1` → `%TEMP%/SP6-SkeletalPatchChecks.log`의 AR4 다섯 PASS
+- `-rig-bone-cut-checks 1` → `RigBoneCutChecks`의 RBC 판정 PASS
 - R1a에서 기록한 기준선 대비 회귀가 없어야 한다. 종료 코드만으로 판정하지 않고 PASS 줄을 확인한다. D3D12 ERROR 0.
 
 R1: 일반 실행 로드 로그에 owner별 body/joint 수(Xbot 52/51, CesiumMan 19/18), 생성·등록 ms, 인접/비인접 겹침 쌍 수가 한 번씩 찍힌다. C 입력이 등록된 rig를 재사용한다(두 번째 생성 로그 없음). BC-12b 실행에는 사전 등록 로그가 없다.
@@ -123,5 +124,17 @@ R2: 로드 직후 rig body 전부 sensor, break 뒤 Dynamic subtree body 전부 
 R3: `-skeletal-patch-break-checks 1`의 각 평면에서 `Rig` 선택과 `SelectSegmentJoint`(kind=segment인 경우)의 owner·부모/자식 NodeId·끊을 JointId를 함께 로그로 남기고 모두 같아야 한다. 다르면 이유(hit 누락, 끊긴 edge, 동률)를 로그로 남기고 보고한다. 물리 꺼짐에서는 D6 경로로 현행 결과와 같다.
 
 R4: `-rig-bone-cut-checks 1`이 Xbot 머리 중간 평면으로 다음을 판정한다. 관절 break 없음(BreakStatus 변화 없음). node 쪽 조각의 node 상대 변환 오차가 60프레임 동안 1 mm 이하(AR-4 추종 판정과 같은 정의). 반대쪽 KDOP body의 world Y가 게시 프레임 대비 60프레임 뒤 1 cm 이상 낮다. joint 원점 1 mm 이내 평면은 거절되고 component 수·마스크가 변하지 않는다. (b) 실패를 강제한 경우 부착 패치와 마스크가 남는다.
+
+실제 결과(2026-11-12, 호출자 단계별 Debug/Release 빌드·실행 확인):
+- R1a (`b215bdee`): `RegisterAutoRig` 추출, 공통 회귀 기준선 기록·유지.
+- R1b (`90343017`): Xbot body/joint 52/51, 인접 겹침 51/51·비인접 72/1275; CesiumMan 19/18, 18/18·7/153. `RefreshPreloadedRig`로 배율 변경 시 끊김 없는 rig 재등록.
+- R1c (`31e62820`): Jolt `JPH_DEBUG_RENDERER`·`DebugRendererSimple`의 body·관절 선을 `CollectDebugLines`로 H 키 충돌 overlay에 연결.
+- R2 (`c85d148b`): kinematic rig sensor 생성·break 시 sensor 해제, 이미 겹친 Dynamic 쌍은 분리될 때까지 임시 충돌 제외. BC-12a·BC-12b PASS.
+- R3a (`fbe1af9b`): `CollideOrientedBox`·`FindBody`·`BuildKinematicSegments` 조회 API와 진단 연결.
+- R3b (`03ff7a14`): C 기본 Rig·`SelectRigSegment` 연결, legacy segment 비교 6/6 일치, 재요청 `AlreadyBroken` 확인.
+- R4a (`f1e1c2f9`): segment 없는 hit는 `PublishRigBonePatch`로 break 없이 부착 패치·원본 마스크 게시, node 원점 1 mm 이내 모호 판정 거절. D5의 강체 부착 한계 유지.
+- R4b (`dafd19ac`): 후보 준비 뒤 AR 재절단 연결. RBC PASS: 추종 오차 0 mm(node 이동 3.5 cm/12.6도), 낙하 2.15 m, 강제 실패 시 부착 패치·마스크 보존.
+- R5: 공통 회귀 20행 `GPU==CPU=PASS`, SP7b·SP7e, BC-12a·BC-12b, AR4 다섯 판정, RBC PASS를 반영하고 관련 문서 동기화. AR-4는 기준선 `bb766e1b`에 이미 커밋됐고 Debug/Release 실행 PASS 확인.
+- 기준선 메모: `SP7e2 publish boundary <=1mm FAIL`은 작업 전 `bb766e1b`부터 있던 기존 실패이며 이번 변경의 회귀가 아니다.
 
 공통 코드 규칙: 새 함수 위 한글 주석 1~2줄, 함수 내부 기능 단락별 한글 주석, 단계당 약 300줄.

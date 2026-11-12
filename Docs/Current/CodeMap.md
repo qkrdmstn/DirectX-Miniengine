@@ -1,4 +1,4 @@
-상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); SP-5b 진단 복사본 절단 미커밋 동기화(2026-11-03); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료); SP-6 Parent/Influence 독립 리뷰·blend-zone 포함 20회 진단 완료(미커밋, base `329aec7b`); SP-7a `731c7005` + SP-7a2 CPU 정점 보존·D2 bounds 구현·D/R 진단 검증(미커밋, base `731c7005`); SP-7b 지연 등록·incoming·요청별 break 결과 D/R 검증 완료(미커밋, base `18848ec0`); SP-7c 컴포넌트 마스크·렌더 연결 D/R 검증 완료(미커밋, base `d10077bd`); SP-7d D3 제거 제외·D6 인접 진단 D/R 검증 완료(미커밋, base `f83ecf1e`); SP-7e 게시·부착 구현(미커밋, base `9400691f`), 확장 진단 후속; 연속 캡처 시연·unmask 후속 C 거절·실패 종료·진단 옵션 격리(미커밋, base `03b5c8a1`, 2026-11-06); AR-4 부착 패치 재절단 검사 구현(미커밋, 빌드·실행 미수행, 2026-11-06)
+상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); SP-5b 진단 복사본 절단 미커밋 동기화(2026-11-03); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료); SP-6 Parent/Influence 독립 리뷰·blend-zone 포함 20회 진단 완료(미커밋, base `329aec7b`); SP-7a `731c7005` + SP-7a2 CPU 정점 보존·D2 bounds 구현·D/R 진단 검증(미커밋, base `731c7005`); SP-7b 지연 등록·incoming·요청별 break 결과 D/R 검증 완료(미커밋, base `18848ec0`); SP-7c 컴포넌트 마스크·렌더 연결 D/R 검증 완료(미커밋, base `d10077bd`); SP-7d D3 제거 제외·D6 인접 진단 D/R 검증 완료(미커밋, base `f83ecf1e`); SP-7e 게시·부착 구현(미커밋, base `9400691f`), 확장 진단 후속; 연속 캡처 시연·unmask 후속 C 거절·실패 종료·진단 옵션 격리(미커밋, base `03b5c8a1`, 2026-11-06); AR-4 `bb766e1b` 완료, Debug/Release 실행 PASS(2026-11-12)
 
 # 현재 Scene과 유한 평면 코드 지도
 
@@ -12,11 +12,13 @@
 
 | 순서 | 함수 | 역할 |
 | --- | --- | --- |
-| 초기화 | `ModelViewer::Startup`, `CutPlaneSystem::CreatePlane` | Scene에 모델 객체와 원점의 4×4 XZ 평면을 만든다. 시작 선택은 없다. |
+| 초기화 | `ModelViewer::Startup`, `CutPlaneSystem::CreatePlane`, `RegisterAutoRig` | Scene에 모델 객체와 원점의 4×4 XZ 평면을 만든다. 최종 배치·pose 준비 뒤 skin owner의 rig를 사전 등록한다. 시작 선택은 없다. |
 | 갱신 | `Scene::Update`, `CutPlaneSystem::PruneStaleObjects` | 모델 자세를 갱신하고 일반 Scene 삭제로 남은 평면 설명을 정리한다. |
 | 선택 | `ModelViewer::PickAtCursor`, `PickObject`, `CutPlaneSystem::Pick` | 생성 조각 hull·원본 경계 구·유한 평면을 월드 거리로 비교한다. 스킨 메시 후보와 평면이 겹치면 `ReadCutPlanePickDepth`로 클릭 픽셀의 가림을 확인한다. |
 | 편집 | `TransformGizmo`, `GetEditTargetPivot`, `GizmoMath::KeepPivot` | 생성 Mesh의 경계 중심으로 기즈모를 표시·편집하고 노란 hull 모서리로 선택을 표시한다. 평면 크기 모드는 로컬 X/Z만 바꾼다. |
 | 스냅샷 | `CutPlaneSystem::BuildData`, `TryBuildCutPlaneData` | 평면 설명과 현재 GameObject TRS로 기하 데이터를 계산한다. |
+| C 키 Skeletal 선택 | `SkeletalPatchCopy::Request`, `SelectRigSegment` | 기본 Rig 모드로 Jolt hit의 kinematic segment를 고른다. segment가 없으면 break 없는 부착 패치 게시 뒤 AR 재절단을 요청한다. 경계 구 + `SelectSegmentJoint`는 rig 미등록 owner fallback·Parent 진단 모드로 남는다. |
+| H 키 충돌 표시 | `PhysicsWorld::CollectDebugLines`, `CollisionDebugDraw::Draw` | Jolt `DebugRendererSimple`의 body·관절 선을 기존 hull overlay와 함께 표시한다(`JPH_DEBUG_RENDERER`). |
 | cap·진단 | `CapEarsCS::main`, `CutJob::ValidateDiagnostics`, `PrintCapChecksum` | `CAP_THREADS` 기본 256으로 모든 지원 loop에 MC 교대 선택을 적용한다. 1024 이하 공유 캐시와 초과 전역 map은 저장 위치만 다르며 해시 귀 선택은 제거했다. 진단에서 위치 원시 비트와 winding을 보존하는 순서 무관 cap checksum을 출력한다. 현재 구현과 검증은 [MC 통일 기록](../GPU/CapScanMarking.md)을 따른다. |
 | 표시 | `Scene::Render`, `RenderCutPlanes` | 모델을 렌더하고 메인 투명 메시 뒤·후처리 전에 평면당 테두리·격자 22개 선을 그린다. 장면 깊이를 검사하며 깊이를 쓰지 않는다. |
 
@@ -28,16 +30,19 @@
 | --- | --- |
 | `ModelViewer/Scene/Scene.*`의 `Scene`, `GameObject` | Scene이 객체를 소유한다. GameObject는 TRS의 원본이며 모델 없이도 존재한다. 모델이 있으면 ModelInstance를 가진다. |
 | `ModelViewer/Scene/SkeletalPhysicsSystem.*` | 공통 PhysicsSystem의 world에서 owner별 rig를 등록·정리하고 Kinematic 목표, 동기 BreakConstraint, 배율을 복원한 Dynamic 본 override, 실제 상태 조회를 제공한다. |
+| `Physics/PhysicsWorldStep.cpp`, `ModelViewer/Scene/SkeletalPhysicsSystem.*` | `CollideOrientedBox`로 Moving body를 조회하고, `FindBody`로 owner·body·node를 찾으며, `BuildKinematicSegments`로 살아 있는 kinematic constraint의 world 끝점을 만든다. |
+| `ModelViewer/Scene/SkeletalPatchCopy.*`, `PhysicsSimulation.cpp` | `RegisterAutoRig`는 로드·C 입력 공용 등록이다. `RefreshPreloadedRig`는 배율 변경 시 끊김 없는 rig를 재등록한다. rig kinematic body는 sensor이며 break 시 해제하고, 이미 겹친 Dynamic 쌍은 분리까지 임시 충돌 제외한다. |
 | `ModelViewer/Scene/tests/SkeletalPhysicsChecks.h`의 `SkeletalPhysicsChecks` | fixture/Xbot을 실제 공통 fixed-step 경로로 구동하고 본·COM·관절 anchor overlay와 낙하·팔레트 수치 PASS/FAIL을 기록한다. |
 | `-skeletal-break-checks 1` / `-skeletal-break-xbot 1` | 각각 3-body fixture / 기존 Xbot 왼팔을 60 tick 뒤 분리하고 180 tick에 판정 후 정상 종료한다. |
-| `-attached-recut-checks 1` | `AttachedRecutChecks::Tick`·`OnResult`가 Xbot break 뒤 두 결과, 60프레임 추종·낙하, 모호한 node 측 거절, 독립 조각 추가 Static 절단을 검사하고 종료 코드 0/1을 반환한다(AR-4 구현, 미커밋·실행 미검증). |
+| `-attached-recut-checks 1` | `AttachedRecutChecks::Tick`·`OnResult`가 Xbot break 뒤 두 결과, 60프레임 추종·낙하, 모호한 node 측 거절, 독립 조각 추가 Static 절단을 검사하고 종료 코드 0/1을 반환한다(AR-4 `bb766e1b`, Debug/Release 다섯 판정 PASS, 2026-11-12). |
+| `-rig-bone-cut-checks 1` | `RigBoneCutChecks`가 break 없는 뼈 영역 절단·60프레임 추종·KDOP 낙하·1 mm 모호 거절·강제 실패 보존을 검사한다. Debug/Release RBC PASS(`dafd19ac`, 2026-11-12). |
 | `-skeletal-patch-break-checks 1` | `SkeletalPatchCopy::RunBreakChecks`가 실제 C 경로로 Xbot 전완·허벅지와 CesiumMan 팔의 JointId·Dynamic subtree·거절·pause를 검증한다. |
 | `ModelViewer/Scene/tests/MeshComponentChecks.h`의 `SkeletalLifetimeChecks` | `-component-checks 1`에서 Scene clear·owner 삭제·지연 break 거절과 body·관절·pair·예약 0을 검사한다. |
 | `ModelViewer/Scene/ObjectSelection.*`, `PickHit.h` | 원본 경계 구·생성 조각 hull 선택, 조각 중심 피벗, 객체/조각 ID와 월드 거리 비교를 제공한다. |
 | `ModelViewer/Scene/TransformGizmo.*`, `SceneTransform.h` | 객체 TRS 편집과 입력 처리를 담당한다. 조작·Undo 계약은 [Scene.md](Scene.md)를 따른다. |
 | `ModelViewer/Scene/CutPlaneSystem.*` | Scene을 참조하고 ObjectId별 `CutPlaneDesc`를 소유한다. 별도 평면 TRS를 보관하지 않는다. `Find`는 삭제된 객체를 거절한다. |
 | `Model/ModelLoader.cpp`의 `BuildInfluencingJoints`, `Model::m_InfluencingJoints`, `Model::m_SkinCpuSections`, `Model/SkinCpuData.h` | 로드 시 양수 weight 여부를 NodeId별로 캐시하고 skin section만 위치·joint·weight를 정점당 28 B로 보존한다. Static CPU 정점 복사본은 없다. |
-| `ModelViewer/Scene/SegmentJointSelection.h`, `SkeletalPatchCopy.*` | Parent의 영향 skin joint segment 부모·말단 선택과 Influence의 GPU 고정소수 투표·선택, GPU 패치 복사, 숨긴 A/B 준비·성공 후 원래 owner 게시, 본 부착 snapshot과 선택적 offset 진단을 담당한다. |
+| `ModelViewer/Scene/SegmentJointSelection.h`, `SkeletalPatchCopy.*` | 기본 Rig의 `SelectRigSegment`, Parent의 영향 skin joint segment 부모·말단 선택과 Influence의 GPU 고정소수 투표·선택, GPU 패치 복사, 숨긴 A/B 준비·성공 후 원래 owner 게시, 본 부착 snapshot과 선택적 offset 진단을 담당한다. `PublishRigBonePatch`는 segment 없는 hit를 break 없이 부착 게시·마스크 처리하고 후보 준비 뒤 AR 재절단에 연결한다([설계·결과](../Physics/RagdollRigPreload.md)). |
 | `ModelViewer/Scene/CuttingSystem.*` | 작업별 대상 snapshot과 `CutJob`을 보관하고 후보를 기본 2개까지 제출한다. 완료는 제출 순서대로 프레임당 하나씩 게시한다. [검증과 제한](../GPU/ConcurrentCutJobs.md) 참조. |
 | `MeshCutting/Geometry/CutPlane.*`의 `CutPlaneDesc` | 로컬 XZ, y=0 직사각형의 `Width`와 `Height`를 정의한다. |
 | `CutPlaneData` | `WorldPlane`은 정규화된 `Vector4(n, d)`이며 식은 n·x+d=0이다. `WorldToPlane`은 affine 역변환, `HalfWidth`·`HalfHeight`는 로컬 반크기, `WorldCorners`는 네 월드 모서리다. |

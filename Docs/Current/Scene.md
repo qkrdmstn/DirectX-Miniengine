@@ -1,4 +1,4 @@
-상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29); SP-6 `J` Parent/Influence 전환 완료(미커밋, base `329aec7b`, 2026-11-03); 스켈레탈 겹침 클릭 깊이 판정은 `Fix cut plane picking near skinned meshes`에 포함(2026-11-06); AR-4 부착 패치 재절단 검사 구현(미커밋, 빌드·실행 미수행, 2026-11-06)
+상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29); SP-6 `J` Parent/Influence 전환 완료(미커밋, base `329aec7b`, 2026-11-03); 스켈레탈 겹침 클릭 깊이 판정은 `Fix cut plane picking near skinned meshes`에 포함(2026-11-06); AR-4 `bb766e1b` 완료, Debug/Release 실행 PASS(2026-11-12)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -26,10 +26,10 @@ Xbot은 첫 번째 애니메이션 클립을 반복 재생한다. `GameObject::P
 | `R` | Local 크기: X/Y/Z 축 방향으로 드래그하면 해당 성분만 변경; 중앙 사각형은 위/아래로 세 성분 배율 변경 |
 | `L` | 이동·회전의 World / Local 축 전환 (크기는 항상 Local) |
 | `V` | Solid → Wireframe → Vertices → Solid 순환 (현재 모드 overlay 표시) |
-| `C` | 현재 유한 평면 영역의 Static 컴포넌트 후보를 조회하고 실제 분할만 게시. 처리 중 재입력은 Busy 안내 |
-| `J` | Skeletal 본 선택 Parent ↔ Influence 전환. 기본 Parent, 시작 옵션은 `-skeletal-joint-mode parent\|influence`. 전환과 매 C에 모드를 로그로 남긴다 |
+| `C` | 현재 유한 평면 영역의 Static 컴포넌트 절단과 Skeletal 기본 Rig 선택을 요청. segment가 없으면 break 없는 부착 패치 게시 뒤 AR 재절단. 처리 중 재입력은 Busy 안내 |
+| `J` | Skeletal 본 선택 Rig → Parent → Influence → Rig 순환. 기본 Rig, 시작 옵션은 `-skeletal-joint-mode rig\|parent\|influence`. 전환과 매 C에 모드를 로그로 남긴다 |
 | `P` | 물리 step 실행/일시정지. 디버그 UI `Viewer/Physics/Running`과 동일 상태. 기본 정지 상태로 시작한다 |
-| `H` | 조각별 충돌 convex hull 모서리와 물리 바닥 상자 표시 켜기/끄기(기본 꺼짐). 디버그 UI `Viewer/Physics/ShowCollision`과 동일 상태. 깨어 있음 초록·잠듦 파랑·body 없음 노랑·바닥 회색 |
+| `H` | 조각별 충돌 convex hull 모서리·물리 바닥 상자·Jolt body/관절 디버그 선 표시 켜기/끄기(기본 꺼짐). 디버그 UI `Viewer/Physics/ShowCollision`과 동일 상태. 깨어 있음 초록·잠듦 파랑·body 없음 노랑·바닥 회색 |
 | `Delete` | 드래그 밖에서 현재 편집 대상 삭제(Mesh는 조각만, Owner는 객체 전체). 바닥은 거절 |
 | 드래그 중 `Esc` | 시작 Transform으로 복구 |
 | `Ctrl+Z` | 마지막 완료 드래그 한 번 취소; 최근 128개 보관 |
@@ -87,7 +87,7 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 후속 GPU 절단은 대상 `MeshComponent::GetWorldTransform`(component 월드)을 로컬 좌표와 월드 좌표 사이의 계약으로 사용해야 한다.
 절단 평면과 입력 정점은 같은 공간으로 변환한 뒤 교차 계산해야 한다. 공유 원본
 `Model::m_DataBuffer`는 수정하지 않고, 절단 결과 GPU 버퍼는 대상 MeshComponent의 geometry로 소유하도록 연결한다.
-`-attached-recut-checks 1`은 Xbot break 뒤 부착 패치를 Static 재절단하고 node 쪽 부착 추종·반대쪽 `detached kdop` body 낙하를 60프레임 검사한다. 모호한 node 측 거절과 독립 조각 추가 절단까지 다섯 판정을 기록하고 종료 코드 0/1을 반환한다(AR-4 구현, 미커밋·실행 미검증).
+`-attached-recut-checks 1`은 Xbot break 뒤 부착 패치를 Static 재절단하고 node 쪽 부착 추종·반대쪽 `detached kdop` body 낙하를 60프레임 검사한다. 모호한 node 측 거절과 독립 조각 추가 절단까지 다섯 판정을 기록하고 종료 코드 0/1을 반환한다(AR-4 `bb766e1b`, Debug/Release 다섯 판정 PASS, 2026-11-12).
 
 현재 `GeometryRevision`은 공유 원본 section과 생성 GPU geometry를 모두 지원한다. Static 절단·cap·재절단의 최신 흐름과 진단은 [StaticCutImplementation.md](../GPU/StaticCutImplementation.md)를 따른다.
 

@@ -12,6 +12,8 @@
 
 NDC25 방식(영향 영역 복사→복사본 절단→원본 숨김)의 앞 두 단계를 눈으로 확인하는 진단 마일스톤이다. 원본 숨김·본 추종·BreakConstraint·물리는 하지 않는다.
 
+현재 C 키는 Rig 모드가 기본이며, 경계 구 + `SelectSegmentJoint`는 rig 미등록 owner fallback·Parent 진단 모드로 남는다([RagdollRigPreload.md](../Physics/RagdollRigPreload.md)).
+
 ## 2. 결정과 이유
 
 | # | 결정 | 이유 |

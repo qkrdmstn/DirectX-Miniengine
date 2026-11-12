@@ -30,6 +30,8 @@ C를 누르면 평면이 지나는 skin GameObject에 대해 다음을 처리한
 
 대상은 아래 D2 제약을 만족하는 모든 skeletal mesh다(사용자 결정 2026-11-03). 검증 모델은 Xbot 전신과 CesiumMan이다.
 
+현재 C 키는 Rig 모드가 기본이며, 경계 구 + `SelectSegmentJoint`는 rig 미등록 owner fallback·Parent 진단 모드로 남는다([RagdollRigPreload.md](../Physics/RagdollRigPreload.md)).
+
 ## 2. 결정과 이유
 
 ### D1. 끊을 constraint: P의 incoming constraint
