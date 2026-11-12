@@ -304,7 +304,7 @@ namespace Viewer
             : result.AlreadyBroken ? RigSelectionReason::AlreadyBroken
             : std::get<1>(closest) != InvalidObjectId ? RigSelectionReason::D5 : RigSelectionReason::NoCandidates;
 
-        // 선택 실패는 다음 단계의 D5 후보 이름만 안전하게 남기고 게시하지 않는다.
+        // 선분이 없는 경우 같은 조회에서 고른 D5 후보 이름을 안전하게 남긴다.
         if (result.HasHits && result.Owner == InvalidObjectId && !result.AlreadyBroken)
         {
             const auto* object = scene.FindObject(std::get<1>(closest));
@@ -314,6 +314,12 @@ namespace Viewer
                 return "RigSelect no segment node=" + (object
                     ? SafeDiagnosticNodeName(object->GetName(), std::get<2>(closest)) : std::string("none")) + "\n";
             });
+        }
+        // D5 요청도 선택된 owner와 node를 추출 입력으로 전달한다.
+        if (result.Reason == RigSelectionReason::D5)
+        {
+            result.Owner = std::get<1>(closest);
+            result.Selected.NodeId = std::get<2>(closest);
         }
         return result;
     }
@@ -606,6 +612,8 @@ namespace Viewer
         m_Name.clear();
         m_Physics = physics;
         m_BreakReady = false;
+        m_BonePending = false;
+        m_BonePublication = {};
 
         // 기존 offset 복사본은 명시적 진단 옵션에서만 허용한다.
         uint32_t offsetCopy = 0;
@@ -791,8 +799,37 @@ namespace Viewer
             return;
         }
 
+        // D5는 AR과 같은 월드 joint 원점 거리로 모호한 요청을 먼저 거절한다.
+        const bool boneCut = rigQuery && rig.Reason == RigSelectionReason::D5;
+        if (boneCut)
+        {
+            const auto& instance = *target->GetModelInstance();
+            size_t section = 0;
+            while (!mesh->GetGeometry()->GetMesh(section).numJoints) ++section;
+            const auto nodeWorld = JointFrameToWorld(instance, *mesh, target->GetTransform(), section)
+                * instance.GetNodeTransforms()[selected.NodeId];
+            if (std::abs(float(Dot(plane.WorldPlane, nodeWorld.GetW()))) <= 0.001f)
+            {
+                WritePatchLogSafely([&]
+                {
+                    // 진단 이름 조회 실패가 거절 동작을 바꾸지 않게 한다.
+                    return "RigBoneCut rejected ambiguous node="
+                        + SafeDiagnosticNodeName(target->GetName(), selected.NodeId) + "\n";
+                });
+                return;
+            }
+
+            // break snapshot과 분리하여 원본과 node 부착 배치를 저장한다.
+            m_BoneOwner = target->GetId();
+            m_SourceMesh = mesh->GetId();
+            m_SourceRevision = mesh->GetGeometry();
+            m_MaskRevision = mesh->GetTriangleMask() ? mesh->GetTriangleMask()->Revision : 0;
+            m_BoneAttachment = { selected.NodeId, m_SourceMesh, nodeWorld,
+                Matrix4(mesh->GetWorldTransform(target->GetTransform())) };
+        }
+
         // Parent C는 현재 최종 pose로 최초 등록하고 incoming과 세대를 고정한다.
-        if (physics && !influence)
+        if (physics && !influence && !boneCut)
         {
             if (!physics->IsSimulationEnabled())
             {
@@ -818,7 +855,7 @@ namespace Viewer
         }
 
         // 실제 절단은 등록 실패 시 원본과 화면을 그대로 보존한다.
-        if (!m_OffsetCopy && !m_BreakReady)
+        if (!m_OffsetCopy && !m_BreakReady && !boneCut)
         {
             PatchLog("SP7e rejected: no break target\n");
             return;
@@ -892,7 +929,9 @@ namespace Viewer
         m_Name = m_ModelName + "_SkeletalPatch";
         m_Diagnostic = diagnostic;
         m_Plane = plane;
-        if (!m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic, influence) && diagnostic)
+        const bool submitted = m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic, influence);
+        m_BonePending = boneCut && submitted;
+        if (!submitted && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
     }
 
@@ -902,6 +941,8 @@ namespace Viewer
         // 추출 완료를 기다려 임시 자원을 해제하고 미게시 배치 snapshot도 버린다.
         m_Job.Cancel();
         m_Name.clear();
+        m_BonePending = false;
+        m_BonePublication = {};
 
         // Renderer 종료 전에 원본 모델 참조를 끊어 텍스처 참조가 관리자보다 오래 남지 않게 한다.
         m_SourceRevision.reset();
@@ -920,9 +961,103 @@ namespace Viewer
         m_CopyOwner = 0;
     }
 
+    // 절단과 break를 제출하지 않고 같은 owner에 부착 패치와 제거 마스크를 게시한다.
+    void SkeletalPatchCopy::PublishRigBonePatch(Scene& scene, const SkeletalPatchResult& result,
+        const std::shared_ptr<SkeletalPatchBuffers>& patch)
+    {
+        // 원본 삭제와 다른 요청의 마스크 변경은 아무것도 게시하지 않고 거절한다.
+        auto* owner = scene.FindObject(m_BoneOwner);
+        auto* source = owner ? owner->FindMeshComponent(m_SourceMesh) : nullptr;
+        if (!result.PatchTriangles || !patch || !source || source->GetGeometry() != m_SourceRevision
+            || (source->GetTriangleMask() ? source->GetTriangleMask()->Revision : 0) != m_MaskRevision)
+        {
+            PatchLog("RigBoneCut rejected: empty patch or source changed\n");
+            return;
+        }
+
+        // 실패 복구를 위해 기존 마스크 유무와 제거 상태를 보존한다.
+        const bool hadMask = source->GetTriangleMask() != nullptr;
+        const auto previous = hadMask ? source->GetTriangleMask()->Pending : std::vector<uint32_t>{};
+        bool maskTouched = false;
+        try
+        {
+            // 기존 패치 id를 보존하며 새로 추출한 원본 삼각형만 제거한다.
+            uint32_t count = 0, patchId = 0;
+            for (size_t section = 0; section < m_SourceRevision->GetSections().size(); ++section)
+                for (uint32_t draw = 0; draw < m_SourceRevision->GetMesh(section).numDraws; ++draw)
+                    count += m_SourceRevision->GetMesh(section).draw[draw].primCount / 3;
+            auto removal = hadMask ? previous : std::vector<uint32_t>(count);
+            for (uint32_t value : removal) patchId = std::max(patchId, value & 65535u);
+            if (++patchId > 65535u) throw std::runtime_error("patch id exhausted");
+            for (uint32_t triangle : patch->Triangles) removal.at(triangle) = 0x80000000u | patchId;
+
+            // 준비 중인 컴포넌트는 아직 owner에 공개하지 않는다.
+            auto piece = owner->PrepareMeshComponent(GeometryRevision::FromGenerated(patch->Geometry));
+            piece->Attachment = std::make_unique<NodeAttachment>(m_BoneAttachment);
+            piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
+            const auto& instance = *owner->GetModelInstance();
+            size_t section = 0;
+            while (!source->GetGeometry()->GetMesh(section).numJoints) ++section;
+            const auto nodeWorld = JointFrameToWorld(instance, *source, owner->GetTransform(), section)
+                * instance.GetNodeTransforms()[m_BoneAttachment.NodeId];
+            SceneTransform world;
+            if (!SceneTransform::TryFromAffine(Math::AffineTransform(nodeWorld
+                * Invert(m_BoneAttachment.NodeWorldAtCut) * m_BoneAttachment.PieceWorldAtCut), world)
+                || !piece->SetTransform(world, MeshTransformMode::WorldIndependent))
+                throw std::runtime_error("invalid attached world");
+
+            // 현재 node 배치의 패치 렌더 자원을 먼저 준비한다.
+            auto& prepare = GraphicsContext::Begin(L"Prepare rig bone patch");
+            piece->Update(prepare, instance, owner->GetTransform());
+            prepare.Finish(true);
+
+            // replacement IB 준비 뒤 예약된 자리에 컴포넌트를 게시한다.
+            maskTouched = true;
+            if (!source->SetTriangleMask(removal)) throw std::runtime_error("invalid removal mask");
+            auto& masking = GraphicsContext::Begin(L"Hide rig bone patch source");
+            source->Update(masking, instance, owner->GetTransform());
+            masking.Finish(true);
+            const ComponentId id = piece->GetId();
+            owner->CommitMeshComponent(std::move(piece));
+            m_BonePublication = { owner->GetId(), id, m_Plane };
+        }
+        catch (...)
+        {
+            // 미게시 컴포넌트는 자동 해제하고 원본 마스크를 요청 전 상태로 되돌린다.
+            if (maskTouched)
+            {
+                if (hadMask) source->SetTriangleMask(previous);
+                else source->ClearTriangleMask();
+            }
+            PatchLog("RigBoneCut rejected: publication failed\n");
+            return;
+        }
+
+        // 이름 조회나 로그 실패가 완료된 게시를 되돌리지 않게 한다.
+        WritePatchLogSafely([&]
+        {
+            // 후속 단계가 사용할 owner와 컴포넌트 id 및 숨김 결과를 남긴다.
+            std::ostringstream line;
+            line << "RigBoneCut published owner=" << owner->GetName()
+                << " node=" << SafeDiagnosticNodeName(owner->GetName(), m_BoneAttachment.NodeId)
+                << " component=" << m_BonePublication.Component << " triangles=" << result.PatchTriangles << " hidden=1\n";
+            return line.str();
+        });
+    }
+
     // 복사본을 준비하고 Static batch가 비면 저장한 평면으로 절단한다.
     bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
+        // D5 추출 완료는 break 취소와 Stale 및 절단 제출 분기에 들어가지 않는다.
+        if (m_BonePending)
+        {
+            std::shared_ptr<SkeletalPatchBuffers> patch;
+            if (!m_Job.Poll(result, patch)) return false;
+            m_BonePending = false;
+            PublishRigBonePatch(scene, result, patch);
+            return true;
+        }
+
         // 게시 다음 Update부터 정확히 60번의 물리·애니메이션 프레임을 진행한다.
         if (m_BoundaryWait && !--m_BoundaryWait)
         {

@@ -83,6 +83,13 @@ namespace Viewer
     struct CutResultEntry;
     // 현재 owner의 자동 rig를 등록하며 이미 등록되어 있으면 그대로 성공한다.
     bool RegisterAutoRig(const Scene& scene, ObjectId owner, SkeletalPhysicsSystem& skeletal);
+    struct RigBoneCutPublication
+    {
+        ObjectId Owner = InvalidObjectId;
+        ComponentId Component = InvalidComponentId;
+        MeshCutting::CutPlaneData Plane;
+    };
+
     // 추출 요청의 배치 snapshot과 단 하나의 게시 owner를 소유한다.
     class SkeletalPatchCopy
     {
@@ -125,7 +132,23 @@ namespace Viewer
             // 결과를 소비하기 전까지 복사본의 단독 작업이다.
             return m_CutInFlight || !m_RetiredOwners.empty();
         }
+        // 후속 AR 단계가 준비된 부착 패치와 요청 평면을 한 번 가져간다.
+        bool TakeRigBoneCutPublication(RigBoneCutPublication& publication)
+        {
+            // 게시 결과는 Reset 또는 다음 요청 전까지 보존한다.
+            if (!m_BonePublication.Component) return false;
+            publication = m_BonePublication;
+            m_BonePublication = {};
+            return true;
+        }
     private:
+        // break 없이 추출된 패치를 원래 owner에 부착하고 원본 영역을 숨긴다.
+        void PublishRigBonePatch(Scene& scene, const SkeletalPatchResult& result,
+            const std::shared_ptr<SkeletalPatchBuffers>& patch);
+        bool m_BonePending = false;
+        ObjectId m_BoneOwner = InvalidObjectId;
+        NodeAttachment m_BoneAttachment{};
+        RigBoneCutPublication m_BonePublication{};
         // 원본 mask·부착 id·물리 상태를 비교 가능한 정수열로 읽는다.
         std::vector<uint64_t> ReadOriginalState(const Scene& scene, PhysicsSystem& physics) const;
         // 현재 프레임의 A/B 외곽 경계 최대 오차를 기록한다.

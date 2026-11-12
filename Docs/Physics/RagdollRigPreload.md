@@ -58,6 +58,7 @@ D5. segment 없음 → 뼈 영역 Static 절단 (break 없음)
 - (b) 게시 뒤 `Scene::PrepareMeshes` → `PhysicsSystem::SyncColliders`로 패치가 후보 조건을 갖춘 다음 프레임에, 같은 평면으로 그 패치에 `CuttingSystem::Request`를 보낸다. AR 경로가 node 쪽 부착·반대쪽 KDOP 독립 조각을 처리한다.
 - (b)가 실패·무분할·취소되면 (a)의 부착 패치와 마스크를 그대로 둔다(모습은 절단 전과 같다). 로그만 남긴다.
 - 이유: AR의 node 쪽 판정·부착 승계·KDOP·owner 필터를 그대로 재사용한다.
+- 한계(R4a 리뷰, 2026-11-12): (a)는 추출 시점 정점을 게시 시점에 N의 상대 변환만으로 옮긴다(SP-7 break 게시와 같은 강체 부착). N 외 뼈와 섞인 정점은 대기 프레임 동안의 자세 변화만큼 원본과 어긋날 수 있다. 부착 후 강체 패치가 스키닝과 달라지는 설계 한계와 같은 성질이라 이번 범위에서는 고치지 않는다.
 
 D6. rig가 없는 owner
 - Jolt 조회는 등록된 rig만 본다. hit가 하나도 없으면 C 키는 rig가 없는 skin owner만 대상으로 현행 경계 구 + `SelectSegmentJoint` 경로(미등록이면 생성)를 쓴다. 물리 꺼짐이면 모든 owner가 여기에 해당해 현행 결과와 같다.
