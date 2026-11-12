@@ -359,6 +359,52 @@ namespace Viewer
             m_BreakCheck, label, m_Boundary.size(), m_BoundaryPairs.size(), maximum);
     }
 
+    // 현재 owner의 최종 pose로 자동 rig를 등록하고 이미 등록된 rig는 재사용한다.
+    bool RegisterAutoRig(const Scene& scene, ObjectId owner, SkeletalPhysicsSystem& skeletal)
+    {
+        // 등록된 owner는 scene 조회와 asset 생성 없이 성공으로 처리한다.
+        if (skeletal.IsRegistered(owner)) return true;
+
+        // snapshot을 구성할 owner와 모델 인스턴스를 확인한다.
+        const auto* target = scene.FindObject(owner);
+        if (!target || !target->GetModelInstance()) return false;
+
+        // 미등록 owner만 현재 최종 pose와 section frame으로 asset을 만든다.
+        const auto& instance = *target->GetModelInstance();
+        const auto& model = *instance.GetModel();
+        SkeletalPoseSnapshot pose;
+        pose.Parents = instance.GetPoseParents();
+        pose.Nodes.assign(instance.GetNodeTransforms(), instance.GetNodeTransforms() + model.m_NumNodes);
+        for (const auto& component : target->GetMeshComponents())
+            for (size_t s = 0; s < component->GetGeometry()->GetSections().size(); ++s)
+                if (component->GetGeometry()->GetMesh(s).numJoints)
+                    pose.Sections.push_back({ JointFrameToWorld(instance, *component, target->GetTransform(), s), {} });
+        MiniPhysics::SkeletalPhysicsAsset asset;
+        bool supportedMeshFrame = true;
+        if (!BuildSkeletalPhysicsAsset(model, pose, asset))
+        {
+            PatchLog("SP7b rejected: auto asset; SP6 only (reason on stderr)\n");
+            return false;
+        }
+
+        // 물리 본에 종속된 mesh frame은 다음 writeback에서 지원하지 않는다.
+        for (const auto& component : target->GetMeshComponents())
+            for (size_t s = 0; s < component->GetGeometry()->GetSections().size(); ++s)
+                if (component->GetGeometry()->GetMesh(s).numJoints)
+                    for (uint32_t node = component->GetGeometry()->GetMesh(s).meshCBV;
+                        node != UINT32_MAX; node = pose.Parents[node])
+                        for (const auto& body : asset.Bodies) supportedMeshFrame &= body.Node != node;
+        if (!supportedMeshFrame || pose.Sections.empty() || !skeletal.RegisterFromPose(owner, asset,
+            pose.Parents, pose.Sections.front().E, pose.Nodes))
+        {
+            PatchLog("SP7b rejected: unsupported mesh frame/pose or registration resource failure; SP6 only\n");
+            return false;
+        }
+
+        // 등록까지 완료된 owner만 성공으로 반환한다.
+        return true;
+    }
+
     // 유한 평면 사각형에 닿는 가장 가까운 skin 대상을 선택하고 추출한다.
     void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
         SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics)
@@ -445,36 +491,7 @@ namespace Viewer
         {
             if (!physics->IsSimulationEnabled()) { PatchLog("SP7b rejected: physics off\n"); return; }
             auto& skeletal = physics->GetSkeletalPhysics();
-            if (!skeletal.IsRegistered(target->GetId()))
-            {
-                // 미등록 owner만 현재 최종 pose와 section frame으로 asset을 만든다.
-                const auto& instance = *target->GetModelInstance();
-                const auto& model = *instance.GetModel();
-                SkeletalPoseSnapshot pose;
-                pose.Parents = instance.GetPoseParents();
-                pose.Nodes.assign(instance.GetNodeTransforms(), instance.GetNodeTransforms() + model.m_NumNodes);
-                for (const auto& component : target->GetMeshComponents())
-                    for (size_t s = 0; s < component->GetGeometry()->GetSections().size(); ++s)
-                        if (component->GetGeometry()->GetMesh(s).numJoints)
-                            pose.Sections.push_back({ JointFrameToWorld(instance, *component, target->GetTransform(), s), {} });
-                MiniPhysics::SkeletalPhysicsAsset asset;
-                bool supportedMeshFrame = true;
-                if (!BuildSkeletalPhysicsAsset(model, pose, asset))
-                    PatchLog("SP7b rejected: auto asset; SP6 only (reason on stderr)\n");
-                else
-                {
-                    // 물리 본에 종속된 mesh frame은 다음 writeback에서 지원하지 않는다.
-                    for (const auto& component : target->GetMeshComponents())
-                        for (size_t s = 0; s < component->GetGeometry()->GetSections().size(); ++s)
-                            if (component->GetGeometry()->GetMesh(s).numJoints)
-                                for (uint32_t node = component->GetGeometry()->GetMesh(s).meshCBV;
-                                    node != UINT32_MAX; node = pose.Parents[node])
-                                    for (const auto& body : asset.Bodies) supportedMeshFrame &= body.Node != node;
-                    if (!supportedMeshFrame || pose.Sections.empty() || !skeletal.RegisterFromPose(target->GetId(), asset,
-                        pose.Parents, pose.Sections.front().E, pose.Nodes))
-                        PatchLog("SP7b rejected: unsupported mesh frame/pose or registration resource failure; SP6 only\n");
-                }
-            }
+            RegisterAutoRig(scene, target->GetId(), skeletal);
 
             // 등록된 rig의 incoming 관절과 C 시점 세대를 저장한다.
             if (skeletal.IsRegistered(target->GetId()))

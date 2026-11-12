@@ -81,6 +81,8 @@ namespace Viewer
     class PhysicsSystem;
     class CuttingSystem;
     struct CutResultEntry;
+    // 현재 owner의 자동 rig를 등록하며 이미 등록되어 있으면 그대로 성공한다.
+    bool RegisterAutoRig(const Scene& scene, ObjectId owner, SkeletalPhysicsSystem& skeletal);
     // 추출 요청의 배치 snapshot과 단 하나의 게시 owner를 소유한다.
     class SkeletalPatchCopy
     {
