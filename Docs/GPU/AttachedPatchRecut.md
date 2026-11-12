@@ -1,4 +1,4 @@
-상태: 진행 중 — AR-1 `a4d337b1`, AR-2 `1a017f5a`, AR-3 반대쪽 조각 KDOP 충돌·body 등록 경로 완료(D/R 빌드, break checks·cube 회귀 동일; 실제 낙하는 AR-4 검사로 확인 예정), AR-4 미착수 (2026-11-06)
+상태: 진행 중 — AR-1 `a4d337b1`, AR-2 `1a017f5a`, AR-3 완료, AR-4 구현(미커밋); 빌드·실행 미수행 (2026-11-06)
 
 # 부착 패치 조각의 Static 재절단
 
@@ -74,6 +74,9 @@ D5. **Attachment 승계.**
 - `CommitGeometryReplacement` 쪽(side 0)이 node 반대편이면 그 쪽의 Attachment를 해제한다. 새 조각 쪽이 node 쪽이면 snapshot을 설정한다.
 
 D6. **반대쪽 조각의 낙하.**
+- 같은 owner의 rig body와 부착 해제 조각만 충돌에서 제외한다(Jolt `GroupFilterTable`).
+- 관 모양 패치의 KDOP가 뼈 box를 포함해 시작부터 겹치므로 분리 충격으로 튀는 것을 막는다.
+- 기존 인접 pair 필터와 합성하며 같은 역할·다른 owner·지면·일반 Static 조각의 충돌은 유지한다.
 - Attachment를 해제하고, 게시 시점 최신 부착 월드를 `SetTransform(WorldIndependent)`로 고정한다.
 - 시작 속도는 0이다. node 속도는 상속하지 않는다(첫 범위).
 - collision을 새로 만든다.
@@ -117,6 +120,8 @@ AR-3 구현(미커밋): `CuttingSystem::UpdateOne`은 `Poll` 완료·`BuildResul
 `Finish(true)` 후 읽고 `GenerateKDop18`로 CPU 인덱스까지 생성한다. 퇴화 시 최소 두께 1 mm인
 bounds box로 대체하며, 예외 시 빈 충돌로 게시한다. `detached kdop` 이유를 보존해
 `PhysicsSystem::SyncBodies`가 등록 실패를 200자 이내로 기록한다. 빌드·실행은 사용자 지시로 미수행이다.
+
+AR-4 구현(미커밋): `AttachedRecutChecks::Tick`은 demo 1의 Xbot break를 프레임 60에 요청하고 부착 게시·준비 후 3프레임 기다린다. 실제 생성 정점의 월드 AABB 중심과 양쪽 정점을 갖는 법선으로 재절단하며 node 거리는 1 mm를 초과해야 한다. `OnResult`가 두 결과를 확인하고 60프레임 추종·body·1 cm 낙하를 판정한다. node를 통과하는 두 번째 요청의 모호한 측 거절 카운터·조각 수를 확인하고 독립 조각을 한 번 더 Static 절단한다. 다섯 판정과 요약은 `%TEMP%/SP6-SkeletalPatchChecks.log`에 남기며 정상 정리 뒤 모두 PASS는 0, 실패·미완료는 1을 반환한다. 1200프레임 초과는 FAIL이다. Debug/Release·D3D12 ERROR·기존 회귀·다른 joint 후 보존·기즈모 선택의 실행 검증은 사용자 지시로 미수행이다.
 
 각 단계가 끝나면 로컬에서 커밋한다. 회귀 항목은 `-skeletal-patch-break-checks 1`, `-skeletal-break-demo 1/2`, 기존 Static 절단 사례다.
 

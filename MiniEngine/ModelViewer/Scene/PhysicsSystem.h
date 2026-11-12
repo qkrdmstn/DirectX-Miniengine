@@ -114,6 +114,12 @@ namespace Viewer
         size_t GetFallbackCount() const;
         // 진단 모드에서 기존 전수 검사와 결과가 같은지 대조한다.
         bool ValidateQueries = false;
+        // 모호한 node 측으로 거절된 후보의 누적 수를 진단에서 확인한다.
+        uint64_t GetAmbiguousNodeSideCount() const
+        {
+            // 요청 전후의 차이로 실제 거절 분기 통과 여부를 확인한다.
+            return m_AmbiguousNodeSideCount;
+        }
         // 같은 world를 쓰는 skeletal rig 등록자다.
         // world 자체는 공개하지 않는다.
         SkeletalPhysicsSystem& GetSkeletalPhysics() { return m_Skeletal; }
@@ -168,6 +174,7 @@ namespace Viewer
         std::vector<Key> m_FallbackKeys;
         std::map<Key, BodyEntry> m_Bodies;
         bool m_UseJolt = true;
+        mutable uint64_t m_AmbiguousNodeSideCount = 0;
         bool m_SimulationEnabled = false;
         ObjectId m_FloorOwner = InvalidObjectId;
         ComponentId m_FloorMesh = InvalidComponentId;

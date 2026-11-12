@@ -1,4 +1,4 @@
-상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29); SP-6 `J` Parent/Influence 전환 완료(미커밋, base `329aec7b`, 2026-11-03); 스켈레탈 겹침 클릭 깊이 판정은 `Fix cut plane picking near skinned meshes`에 포함(2026-11-06)
+상태: 진행 중 — 3bee0b20 이후 BC-03b CPU pose/GPU 준비 분리 완료 (2026-10-29); SP-6 `J` Parent/Influence 전환 완료(미커밋, base `329aec7b`, 2026-11-03); 스켈레탈 겹침 클릭 깊이 판정은 `Fix cut plane picking near skinned meshes`에 포함(2026-11-06); AR-4 부착 패치 재절단 검사 구현(미커밋, 빌드·실행 미수행, 2026-11-06)
 
 # ModelViewer GameObject와 Gizmo
 
@@ -87,6 +87,8 @@ Gizmo는 깊이 검사 없는 overlay이며 축과 카메라가 거의 나란하
 후속 GPU 절단은 대상 `MeshComponent::GetWorldTransform`(component 월드)을 로컬 좌표와 월드 좌표 사이의 계약으로 사용해야 한다.
 절단 평면과 입력 정점은 같은 공간으로 변환한 뒤 교차 계산해야 한다. 공유 원본
 `Model::m_DataBuffer`는 수정하지 않고, 절단 결과 GPU 버퍼는 대상 MeshComponent의 geometry로 소유하도록 연결한다.
+`-attached-recut-checks 1`은 Xbot break 뒤 부착 패치를 Static 재절단하고 node 쪽 부착 추종·반대쪽 `detached kdop` body 낙하를 60프레임 검사한다. 모호한 node 측 거절과 독립 조각 추가 절단까지 다섯 판정을 기록하고 종료 코드 0/1을 반환한다(AR-4 구현, 미커밋·실행 미검증).
+
 현재 `GeometryRevision`은 공유 원본 section과 생성 GPU geometry를 모두 지원한다. Static 절단·cap·재절단의 최신 흐름과 진단은 [StaticCutImplementation.md](../GPU/StaticCutImplementation.md)를 따른다.
 
 ## CPU 검증

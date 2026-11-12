@@ -169,7 +169,11 @@ namespace MiniPhysics
         // 미게시 body를 파괴하고 예약을 반환한다. 고아(Owner 없음)면 world가 이미 body를 정리했으므로 아무것도 하지 않는다.
         void ReleasePrepared(PreparedBody::Data& data)
         {
+            // 준비 취소 시 owner 그룹도 body보다 먼저 제거한다.
             if (!data.Owner) return;
+            data.Owner->PairFilter->OwnerGroups.erase(data.Id.GetIndexAndSequenceNumber());
+
+            // 미게시 body와 예약을 함께 반환한다.
             data.Owner->World.GetBodyInterface().DestroyBody(data.Id);
             data.Owner->Prepared.erase(&data);
         }
@@ -207,6 +211,7 @@ namespace MiniPhysics
         if (m_Impl->Reserved() >= m_Impl->Capacity) return Fail(error, "Body capacity exhausted");
         if (m_NextBodyHandle == std::numeric_limits<BodyHandle>::max()) return Fail(error, "Body handle exhausted");
         if (!ValidateDesc(desc, error)) return false;
+        if (desc.CollisionGroup.Owner && desc.CollisionGroup.SubGroup > 1) return Fail(error, "Invalid collision subgroup");
 
         try
         {
@@ -250,6 +255,16 @@ namespace MiniPhysics
             // handle 맵 노드를 미리 할당하고 추적 목록에 올린다. 실패하면 body를 되돌린다.
             try
             {
+                // body ID로 기존 pair 필터와 owner의 논리 subgroup을 함께 식별한다.
+                if (desc.CollisionGroup.Owner)
+                {
+                    const auto runtimeId = id.GetIndexAndSequenceNumber();
+                    m_Impl->PairFilter->OwnerGroups.emplace(runtimeId, desc.CollisionGroup);
+                    body->SetCollisionGroup(JPH::CollisionGroup(m_Impl->PairFilter,
+                        static_cast<uint32_t>(desc.CollisionGroup.Owner), runtimeId));
+                }
+
+                // 게시에 필요한 노드와 예약을 준비한다.
                 auto data = std::make_unique<PreparedBody::Data>();
                 SimBodyMap holder;
                 holder.emplace(InvalidBody, id);
@@ -266,6 +281,8 @@ namespace MiniPhysics
             }
             catch (...)
             {
+                // 할당 실패 시 그룹과 body를 모두 되돌린다.
+                m_Impl->PairFilter->OwnerGroups.erase(id.GetIndexAndSequenceNumber());
                 bodies.DestroyBody(id);
                 throw;
             }
@@ -385,6 +402,7 @@ namespace MiniPhysics
             if (current->second.Parent == handle || current->second.Child == handle) RemoveConstraint(current->first);
         }
         const auto id = entry->second.GetIndexAndSequenceNumber();
+        m_Impl->PairFilter->OwnerGroups.erase(id);
         auto& pairs = m_Impl->PairFilter->Pairs;
         for (auto it = pairs.begin(); it != pairs.end();)
         {

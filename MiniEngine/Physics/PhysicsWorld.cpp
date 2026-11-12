@@ -74,6 +74,8 @@ namespace MiniPhysics
 
         // Jolt world를 만든다.
         auto impl = std::make_unique<Impl>();
+        impl->OwnerTable->DisableCollision(0, 1);
+        impl->PairFilter->OwnerTable = impl->OwnerTable;
         impl->World.Init(capacity, 0, capacity, capacity, impl->Layers, impl->Layers, impl->Layers);
 
         // R14 관통 한계 0.01 m의 절반을 위치 보정 허용치로 지정한다.

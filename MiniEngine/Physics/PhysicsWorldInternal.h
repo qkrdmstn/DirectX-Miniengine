@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <set>
 #include <algorithm>
@@ -89,12 +90,26 @@ namespace MiniPhysics
     struct AdjacentPairFilter final : JPH::GroupFilter
     {
         std::set<std::pair<JPH::uint32, JPH::uint32>> Pairs;
-        // 같은 world의 명시적 pair만 제외하고 타 owner와 지형은 허용한다.
+        JPH::Ref<JPH::GroupFilterTable> OwnerTable;
+        std::unordered_map<JPH::uint32, BodyCollisionGroup> OwnerGroups;
+        // 명시적 pair와 같은 owner의 rig·부착 해제 조각 조합만 제외한다.
         bool CanCollide(const JPH::CollisionGroup& a, const JPH::CollisionGroup& b) const override
         {
             // 다른 필터와의 접촉은 기존 계층 규칙에 맡긴다.
             if (a.GetGroupFilter() != this || b.GetGroupFilter() != this) return true;
-            return Pairs.count(std::minmax(a.GetSubGroupID(), b.GetSubGroupID())) == 0;
+            if (Pairs.count(std::minmax(a.GetSubGroupID(), b.GetSubGroupID())) != 0) return false;
+
+            // 전체 owner ID를 비교해 하위 32비트가 겹치는 다른 owner도 구분한다.
+            const auto first = OwnerGroups.find(a.GetSubGroupID());
+            const auto second = OwnerGroups.find(b.GetSubGroupID());
+            if (first == OwnerGroups.end() || second == OwnerGroups.end() ||
+                first->second.Owner != second->second.Owner || first->second.SubGroup == second->second.SubGroup) return true;
+
+            // 같은 역할끼리는 table에 넘기지 않아 기존 rig·조각 충돌을 보존한다.
+            const auto owner = a.GetGroupID() == JPH::CollisionGroup::cInvalidGroup ? 0 : a.GetGroupID();
+            return OwnerTable->CanCollide(
+                JPH::CollisionGroup(OwnerTable, owner, first->second.SubGroup),
+                JPH::CollisionGroup(OwnerTable, owner, second->second.SubGroup));
         }
     };
 
@@ -109,6 +124,7 @@ namespace MiniPhysics
     {
         std::shared_ptr<Runtime> RuntimeOwner = AcquireRuntime();
         PhysicsLayers Layers;
+        JPH::Ref<JPH::GroupFilterTable> OwnerTable = new JPH::GroupFilterTable(2);
         JPH::Ref<AdjacentPairFilter> PairFilter = new AdjacentPairFilter();
         JPH::PhysicsSystem World;
         // Step 전용 자원이다. World 뒤에 선언해 World보다 먼저 파괴되며, JobSystem 파괴가 작업 스레드를 모두 정지시킨다.

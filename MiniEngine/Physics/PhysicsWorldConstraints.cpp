@@ -183,8 +183,13 @@ namespace MiniPhysics
         const auto x = a->second.GetIndexAndSequenceNumber();
         const auto y = b->second.GetIndexAndSequenceNumber();
         m_Impl->PairFilter->Pairs.insert(std::minmax(x, y));
-        bodies.SetCollisionGroup(a->second, JPH::CollisionGroup(m_Impl->PairFilter, 0, x));
-        bodies.SetCollisionGroup(b->second, JPH::CollisionGroup(m_Impl->PairFilter, 0, y));
+        // owner 그룹이 있는 body는 생성 시 지정한 그룹을 유지한다.
+        if (!m_Impl->PairFilter->OwnerGroups.count(x))
+            bodies.SetCollisionGroup(a->second, JPH::CollisionGroup(m_Impl->PairFilter, 0, x));
+        if (!m_Impl->PairFilter->OwnerGroups.count(y))
+            bodies.SetCollisionGroup(b->second, JPH::CollisionGroup(m_Impl->PairFilter, 0, y));
+
+        // 새 제외 규칙을 기존 접촉에도 반영한다.
         bodies.InvalidateContactCache(a->second);
         bodies.InvalidateContactCache(b->second);
         return true;

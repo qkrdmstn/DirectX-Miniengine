@@ -47,6 +47,13 @@ namespace MiniPhysics
     // Static은 고정 지형 계층, Dynamic과 Kinematic은 simulation 계층에 들어간다.
     enum class BodyMotion { Static, Dynamic, Kinematic };
 
+    // Owner 0은 기본 충돌이며 역할은 rig 0, 부착 해제 조각 1이다.
+    struct BodyCollisionGroup
+    {
+        uint64_t Owner = 0;
+        uint32_t SubGroup = 0;
+    };
+
     // Kinematic body를 동기화할 목표이며 이미 Dynamic이면 실제 pose와 속도를 유지한다.
     struct BodyActivation
     {
@@ -81,6 +88,7 @@ namespace MiniPhysics
         double MassScale = 1.0;
         float Friction = 0.7f;
         float Restitution = 0.3f;
+        BodyCollisionGroup CollisionGroup;
     };
 
     // 준비만 되고 world에 올라가지 않은 body의 소유자다. 이동만 가능하며 CommitBody 없이 파괴되면 body와 용량 예약을 되돌린다.

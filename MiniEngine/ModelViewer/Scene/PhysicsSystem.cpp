@@ -206,6 +206,8 @@ namespace Viewer
                 const float distance = float(Math::Dot(plane.WorldPlane, nodeWorld.GetW()));
                 if (std::abs(distance) <= 0.001f)
                 {
+                    // 실제 거절 분기를 자동 검사가 구별할 수 있게 누적한다.
+                    ++m_AmbiguousNodeSideCount;
                     Utility::Printf("Static cut rejected: ambiguous node side owner=%llu mesh=%llu\n",
                         static_cast<unsigned long long>(candidate.Owner), static_cast<unsigned long long>(candidate.Mesh));
                     ++attachmentRejected;

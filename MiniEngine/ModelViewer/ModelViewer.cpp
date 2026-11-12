@@ -52,6 +52,7 @@
 #include "Scene/tests/EditApplyChecks.h"
 #include "Scene/tests/EditDeleteChecks.h"
 #include "Scene/tests/RetiredResourceChecks.h"
+#include "Scene/tests/AttachedRecutChecks.h"
 #include <cmath>
 
 using namespace GameCore;
@@ -73,9 +74,21 @@ public:
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
     virtual void RenderUI(GraphicsContext& context) override;
+    // 정상 종료 뒤 다섯 자동 판정의 성공 여부를 종료 코드로 바꾼다.
+    int DiagnosticExitCode() const
+    {
+        // 중도 종료도 미완료 검사 실패로 처리한다.
+        if (!m_AttachedRecutChecks.Enabled) return 0;
+        for (bool pass : m_AttachedRecutChecks.Passed)
+            if (!pass) return 1;
+        return m_AttachedRecutChecks.Done ? 0 : 1;
+    }
     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
     virtual bool IsDone() override
     {
+        // 재절단 검사는 모든 판정을 기록한 뒤 기존 정리 경로로 종료한다.
+        if (m_AttachedRecutChecks.Enabled) return m_AttachedRecutChecks.Done;
+
         // 시연 요청 거절이나 게시 실패는 캡처를 기다리지 않고 정리 후 종료한다.
         if (m_SkeletalDemoFailed)
             return true;
@@ -97,6 +110,8 @@ public:
     }
 
 private:
+
+    Viewer::AttachedRecutChecks m_AttachedRecutChecks;
 
     uint32_t m_SkeletalPatchChecks = 0, m_SkeletalPatchCheckIndex = 0, m_SkeletalPatchCaptured = 0;
     uint32_t m_SkeletalMaskChecks = 0;
@@ -177,7 +192,14 @@ private:
     ShadowCamera m_SunShadowCamera;
 };
 
-CREATE_APPLICATION( ModelViewer )
+// 정상 자원 정리가 끝난 뒤 재절단 검사 결과를 프로세스 종료 코드로 반환한다.
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
+{
+    // 엔진이 자원을 정리한 뒤 검사 전용 종료 코드를 반영한다.
+    ModelViewer app;
+    const int result = GameCore::RunApplication(app, L"ModelViewer", instance, show);
+    return result ? result : app.DiagnosticExitCode();
+}
 
 ExpVar g_SunLightIntensity("Viewer/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
 NumVar g_SunOrientation("Viewer/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f );
@@ -305,12 +327,15 @@ void ModelViewer::Startup( void )
 {
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
+    uint32_t attachedRecut = 0;
+    CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut);
+    m_AttachedRecutChecks.Enabled = attachedRecut != 0;
     std::wstring unmaskValue;
     if (CommandLineArgs::GetString(L"skeletal-break-demo-unmask", unmaskValue) && !m_SkeletalBreakDemo)
         throw std::invalid_argument("skeletal-break-demo-unmask requires skeletal-break-demo");
 
     // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
-    if (m_SkeletalBreakDemo)
+    if (m_SkeletalBreakDemo || m_AttachedRecutChecks.Enabled)
     {
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-patch-break-checks", L"skeletal-patch-checks",
@@ -325,6 +350,20 @@ void ModelViewer::Startup( void )
             if (CommandLineArgs::GetString(option, value))
                 throw std::invalid_argument("skeletal-break-demo cannot be combined with automatic checks, cuts or benchmarks");
         }
+    }
+
+    // 검사 전용 실행은 외부 demo·장면·캡처 옵션을 거절하고 demo 1 준비를 재사용한다.
+    if (m_AttachedRecutChecks.Enabled)
+    {
+        std::wstring value;
+        for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
+            L"capture", L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
+            L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
+            L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
+            L"cut-empty-side", L"collision-log", L"demo-cut-sec" })
+            if (CommandLineArgs::GetString(option, value))
+                throw std::invalid_argument("attached-recut-checks cannot be combined with diagnostics or demos");
+        m_SkeletalBreakDemo = 1;
     }
 
     // 자동 rig 진단 옵션을 읽고 기존 종료 프레임 경로를 사용한다.
@@ -793,6 +832,7 @@ void ModelViewer::Update( float deltaT )
     {
         // 패치 결과는 Static publication·벤치마크·자동 재절단에서 제외한다.
         if (m_SkeletalPatchCopy.OnCutResult(m_Scene, m_Cutting, cutResult)) continue;
+        m_AttachedRecutChecks.OnResult(m_Scene, cutResult);
         m_CutScenario.OnResult(m_Scene, m_Physics, cutResult, m_Publications);
         if (m_BenchmarkRemaining)
         {
@@ -969,6 +1009,9 @@ void ModelViewer::Update( float deltaT )
         // 새 geometry가 일반 프레임 준비 경로를 지난 뒤 캡처한다.
         m_CaptureFrame = 0;
     }
+
+    // 부착 게시와 GPU 준비가 끝난 프레임에서 재절단 검사 상태를 진행한다.
+    m_AttachedRecutChecks.Tick(m_Scene, m_Physics, m_Cutting, m_SkeletalPatchCopy.IsPending(), m_QueryFrame);
 
     // 45도 blend-zone 결과를 모델·모드마다 한 장씩 캡처한 뒤 다음 case로 진행한다.
     const uint32_t captureChecks[] = { 9, 10, 19, 20 };

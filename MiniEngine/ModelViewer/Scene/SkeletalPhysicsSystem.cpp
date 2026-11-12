@@ -77,6 +77,9 @@ namespace Viewer
             desc.Position = bodyWorldFrames[i].Position;
             desc.Rotation = bodyWorldFrames[i].Rotation;
             desc.Motion = MiniPhysics::BodyMotion::Kinematic;
+
+            // 같은 owner에서 부착 해제된 조각과의 시작 겹침만 제외한다.
+            desc.CollisionGroup = { owner, 0 };
             if (!m_World.PrepareBody(desc, prepared[i])) return false;
         }
 

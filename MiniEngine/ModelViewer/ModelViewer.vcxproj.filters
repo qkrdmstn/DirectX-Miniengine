@@ -330,4 +330,7 @@
     <ClInclude Include="Scene\SkeletalAutoRig.h" />
     <None Include="Scene\tests\SkeletalAutoRigTests.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Scene\tests\AttachedRecutChecks.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
 </Project>

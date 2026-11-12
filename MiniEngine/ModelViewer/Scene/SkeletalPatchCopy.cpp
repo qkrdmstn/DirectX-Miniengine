@@ -388,6 +388,8 @@ namespace Viewer
         // 시연은 정상 C 경로를 사용하고 unmask 비교는 원본 제거 상태 게시를 생략한다.
         uint32_t unmask = 0;
         CommandLineArgs::GetInteger(L"skeletal-break-demo", m_Demo);
+        uint32_t attachedRecut = 0;
+        if (CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut) && attachedRecut) m_Demo = 1;
         CommandLineArgs::GetInteger(L"skeletal-break-demo-unmask", unmask);
         m_DemoUnmask = m_Demo && unmask != 0;
         if (m_Demo) m_OffsetCopy = false;

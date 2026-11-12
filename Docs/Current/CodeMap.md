@@ -1,4 +1,4 @@
-상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); SP-5b 진단 복사본 절단 미커밋 동기화(2026-11-03); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료); SP-6 Parent/Influence 독립 리뷰·blend-zone 포함 20회 진단 완료(미커밋, base `329aec7b`); SP-7a `731c7005` + SP-7a2 CPU 정점 보존·D2 bounds 구현·D/R 진단 검증(미커밋, base `731c7005`); SP-7b 지연 등록·incoming·요청별 break 결과 D/R 검증 완료(미커밋, base `18848ec0`); SP-7c 컴포넌트 마스크·렌더 연결 D/R 검증 완료(미커밋, base `d10077bd`); SP-7d D3 제거 제외·D6 인접 진단 D/R 검증 완료(미커밋, base `f83ecf1e`); SP-7e 게시·부착 구현(미커밋, base `9400691f`), 확장 진단 후속; 연속 캡처 시연·unmask 후속 C 거절·실패 종료·진단 옵션 격리(미커밋, base `03b5c8a1`, 2026-11-06)
+상태: 완료 — BreakConstraint M1(BC-00~BC-13a)과 master `913031f3` 병합 `32cc650a`; `f2138029` 다중 Static CutJob·`1532fc60` cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); SP-5b 진단 복사본 절단 미커밋 동기화(2026-11-03); 전체 지원 loop MC 통일 `0553410b`(D/R 검증 완료); SP-6 Parent/Influence 독립 리뷰·blend-zone 포함 20회 진단 완료(미커밋, base `329aec7b`); SP-7a `731c7005` + SP-7a2 CPU 정점 보존·D2 bounds 구현·D/R 진단 검증(미커밋, base `731c7005`); SP-7b 지연 등록·incoming·요청별 break 결과 D/R 검증 완료(미커밋, base `18848ec0`); SP-7c 컴포넌트 마스크·렌더 연결 D/R 검증 완료(미커밋, base `d10077bd`); SP-7d D3 제거 제외·D6 인접 진단 D/R 검증 완료(미커밋, base `f83ecf1e`); SP-7e 게시·부착 구현(미커밋, base `9400691f`), 확장 진단 후속; 연속 캡처 시연·unmask 후속 C 거절·실패 종료·진단 옵션 격리(미커밋, base `03b5c8a1`, 2026-11-06); AR-4 부착 패치 재절단 검사 구현(미커밋, 빌드·실행 미수행, 2026-11-06)
 
 # 현재 Scene과 유한 평면 코드 지도
 
@@ -30,6 +30,7 @@
 | `ModelViewer/Scene/SkeletalPhysicsSystem.*` | 공통 PhysicsSystem의 world에서 owner별 rig를 등록·정리하고 Kinematic 목표, 동기 BreakConstraint, 배율을 복원한 Dynamic 본 override, 실제 상태 조회를 제공한다. |
 | `ModelViewer/Scene/tests/SkeletalPhysicsChecks.h`의 `SkeletalPhysicsChecks` | fixture/Xbot을 실제 공통 fixed-step 경로로 구동하고 본·COM·관절 anchor overlay와 낙하·팔레트 수치 PASS/FAIL을 기록한다. |
 | `-skeletal-break-checks 1` / `-skeletal-break-xbot 1` | 각각 3-body fixture / 기존 Xbot 왼팔을 60 tick 뒤 분리하고 180 tick에 판정 후 정상 종료한다. |
+| `-attached-recut-checks 1` | `AttachedRecutChecks::Tick`·`OnResult`가 Xbot break 뒤 두 결과, 60프레임 추종·낙하, 모호한 node 측 거절, 독립 조각 추가 Static 절단을 검사하고 종료 코드 0/1을 반환한다(AR-4 구현, 미커밋·실행 미검증). |
 | `-skeletal-patch-break-checks 1` | `SkeletalPatchCopy::RunBreakChecks`가 실제 C 경로로 Xbot 전완·허벅지와 CesiumMan 팔의 JointId·Dynamic subtree·거절·pause를 검증한다. |
 | `ModelViewer/Scene/tests/MeshComponentChecks.h`의 `SkeletalLifetimeChecks` | `-component-checks 1`에서 Scene clear·owner 삭제·지연 break 거절과 body·관절·pair·예약 0을 검사한다. |
 | `ModelViewer/Scene/ObjectSelection.*`, `PickHit.h` | 원본 경계 구·생성 조각 hull 선택, 조각 중심 피벗, 객체/조각 ID와 월드 거리 비교를 제공한다. |
@@ -69,4 +70,4 @@ SP-7c: `Scene/Shaders/TriangleMaskCS.hlsl`의 `main`·`Replacement`는 누적 `F
 
 SP-7d: `PatchExtractCS::main`·`ExtractPatchReference`는 전역 State의 제거 비트를 선택 조건에 반영하며 교차·미포함 카운터도 제거 삼각형을 제외한다. `SkeletalPatchJob::Submit`·`Poll`은 공유 정점 번호를 기준으로 인접 제거 삼각형을 소유 패치별로 집계·기록하며 `Validate`가 독립 CPU 집계와 비교한다. `CheckMaskedPatch`는 `RunSkeletalMaskChecks`에서 Xbot 부모 제거 후 자식 추출과 없음/0/해제 출력 바이트 불변·전체 제거의 빈 카운터를 검증한다.
 
-SP-7e: `SkeletalPatchCopy::Request`는 C snapshot·side를 보관하고 `OnCutResult`는 숨긴 A/B 준비 뒤 break를 요청한다. `Update`는 Applied·revision 일치 후 원본 mask와 원래 owner의 A/B를 함께 게시한다. `Reset`은 `PhysicsSystem::CancelBreak`로 미실행 요청도 취소한다. `Scene::PrepareMeshes`는 최종 node pose로 부착을 갱신한다. `PhysicsSystem::IsEligible`·`SyncBodies`는 부착 조각을 제외한다. `ResolveEditTarget`은 owner 선택을 유지한다. offset·B 간격은 `-skeletal-patch-offset-copy 1` 전용이다. 경계 오차·강제 Stale·캡처 진단은 미완료다.
+SP-7e: `SkeletalPatchCopy::Request`는 C snapshot·side를 보관하고 `OnCutResult`는 숨긴 A/B 준비 뒤 break를 요청한다. `Update`는 Applied·revision 일치 후 원본 mask와 원래 owner의 A/B를 함께 게시한다. `Reset`은 `PhysicsSystem::CancelBreak`로 미실행 요청도 취소한다. `Scene::PrepareMeshes`는 최종 node pose로 부착을 갱신한다. `PhysicsSystem::IsEligible`은 부착 조각도 Static 절단 후보로 허용하고 `SyncBodies`는 부착 조각의 body 등록을 제외한다. `ResolveEditTarget`은 owner 선택을 유지한다. offset·B 간격은 `-skeletal-patch-offset-copy 1` 전용이다. 경계 오차·강제 Stale·캡처 진단은 미완료다.

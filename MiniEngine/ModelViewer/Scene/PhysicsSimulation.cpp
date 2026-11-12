@@ -141,6 +141,9 @@ namespace Viewer
                 desc.Position = { p.x, p.y, p.z };
                 desc.Scale = { s.x, s.y, s.z };
                 desc.Rotation = { q.x, q.y, q.z, q.w };
+
+                // 부착 해제 조각만 같은 owner의 rig와 충돌을 제외한다.
+                if (detached) desc.CollisionGroup = { object->GetId(), 1 };
                 MiniPhysics::PreparedBody prepared;
                 std::string error;
                 if (!m_World.PrepareBody(desc, prepared, &error))
