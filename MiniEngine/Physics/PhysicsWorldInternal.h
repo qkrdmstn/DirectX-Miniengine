@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Renderer/DebugRendererSimple.h>
 #include <set>
 #include <algorithm>
 #include "PhysicsWorld.h"
@@ -75,6 +76,8 @@ namespace MiniPhysics
         Runtime();
         // Jolt 전역 등록을 해제한다.
         ~Runtime();
+        // Jolt가 전역 인스턴스 하나만 허용하므로 처음 수집할 때 만들어 모든 world가 재사용한다.
+        std::unique_ptr<JPH::DebugRendererSimple> DebugLines;
     };
 
     // 기존 world가 살아 있으면 동일 runtime을 재사용한다.

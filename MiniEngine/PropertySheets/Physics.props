@@ -6,6 +6,9 @@
     <JoltLibraryPath>$(MSBuildThisFileDirectory)..\Build\ThirdParty\Jolt\build\lib\$(JoltConfiguration)</JoltLibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>JPH_DEBUG_RENDERER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(JoltLibraryPath);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>MiniPhysics.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>

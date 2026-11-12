@@ -115,6 +115,13 @@ namespace MiniPhysics
         std::unique_ptr<Data> m_Data;
     };
 
+    // Jolt 디버그 렌더러가 만든 월드 선분과 정규화된 RGBA 색이다.
+    struct DebugLine
+    {
+        std::array<double, 3> From{}, To{};
+        std::array<float, 4> Color{};
+    };
+
     // Jolt 타입과 body 수명을 감춘다. 변경과 조회는 같은 장면 스레드에서 수행한다.
     class PhysicsWorld
     {
@@ -144,6 +151,8 @@ namespace MiniPhysics
         std::vector<ColliderHandle> QueryAabb(const QueryBounds& bounds) const;
         // 실제 등록된 조회 body 수를 읽는다.
         size_t GetColliderCount() const;
+        // Step이 끝난 같은 장면 스레드에서 이번 프레임의 body·관절 선으로 출력을 교체한다.
+        void CollectDebugLines(std::vector<DebugLine>& out, bool bodies, bool constraints) const;
 
         // 지오메트리를 cook해 world에 올리지 않은 body를 만든다. 실패하면 out을 비우고 false를 반환하며 아무것도 남기지 않는다.
         // 용량 예약 1개를 즉시 차지하며 PreparedBody가 파괴되거나 Commit될 때 정리된다.

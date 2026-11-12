@@ -19,6 +19,8 @@ namespace Viewer
         struct Stats
         {
             uint32_t Hulls = 0;
+            uint32_t JoltLines = 0;
+            uint32_t JoltDrawn = 0;
             uint32_t Extracted[ColorCount] = {};
             uint32_t Drawn[ColorCount] = {};
             double Milliseconds = 0.0;

@@ -68,7 +68,7 @@ namespace Viewer
         }
     }
 
-    // 충돌이 있는 메시와 바닥 상자의 모서리를 모아 한 번에 overlay 선으로 낸다.
+    // 충돌 hull·바닥 모서리와 Jolt body·관절을 모아 한 번에 overlay 선으로 낸다.
     void CollisionDebugDraw::Draw(GraphicsContext& context, const Scene& scene, const PhysicsSystem& physics,
         const Math::Camera& camera, float width, float height)
     {
@@ -126,6 +126,12 @@ namespace Viewer
             totalEdges += 12;
         }
 
+        // Jolt body·관절 선을 기존 hull과 함께 그릴 용량에 포함한다.
+        std::vector<MiniPhysics::DebugLine> joltLines;
+        physics.CollectDebugLines(joltLines);
+        m_Stats.JoltLines = uint32_t(joltLines.size());
+        totalEdges += joltLines.size();
+
         // 예상 선 수만큼 정점 용량을 먼저 잡고 hull 모서리를 낸다.
         GizmoDraw draw;
         draw.Reserve(totalEdges);
@@ -142,6 +148,16 @@ namespace Viewer
                         EmitSegment(draw, camera, corners[i], corners[i | bit], width, height, LineColor(Gray)))
                         ++m_Stats.Drawn[Gray];
 
+        // Jolt의 원래 색을 유지하며 동일한 근평면 자르기 경로를 쓴다.
+        for (const auto& line : joltLines)
+        {
+            const auto a = ToView(view, Math::Vector3(float(line.From[0]), float(line.From[1]), float(line.From[2])));
+            const auto b = ToView(view, Math::Vector3(float(line.To[0]), float(line.To[1]), float(line.To[2])));
+            if (EmitSegment(draw, camera, a, b, width, height,
+                Color(line.Color[0], line.Color[1], line.Color[2], line.Color[3])))
+                ++m_Stats.JoltDrawn;
+        }
+
         // 모은 선을 한 번에 그린다.
         draw.Render(context, width, height);
 
@@ -150,15 +166,17 @@ namespace Viewer
         ++m_DrawFrames;
         m_TotalMilliseconds += m_Stats.Milliseconds;
         m_MaxMilliseconds = std::max(m_MaxMilliseconds, m_Stats.Milliseconds);
-        bool changed = m_Stats.Hulls != m_LastLogged.Hulls;
+        bool changed = m_Stats.Hulls != m_LastLogged.Hulls || m_Stats.JoltLines != m_LastLogged.JoltLines
+            || m_Stats.JoltDrawn != m_LastLogged.JoltDrawn;
         for (int i = 0; i < ColorCount; ++i)
             changed |= m_Stats.Extracted[i] != m_LastLogged.Extracted[i] || m_Stats.Drawn[i] != m_LastLogged.Drawn[i];
         if (m_Logging && changed)
         {
-            Utility::Printf("Collision draw: frame=%llu hulls=%u extracted(g/b/y/gray)=%u/%u/%u/%u drawn=%u/%u/%u/%u ms=%.3f\n",
+            Utility::Printf("Collision draw: frame=%llu hulls=%u extracted(g/b/y/gray)=%u/%u/%u/%u drawn=%u/%u/%u/%u jolt=%u joltDrawn=%u ms=%.3f\n",
                 static_cast<unsigned long long>(m_DrawFrames), m_Stats.Hulls,
                 m_Stats.Extracted[Green], m_Stats.Extracted[Blue], m_Stats.Extracted[Yellow], m_Stats.Extracted[Gray],
-                m_Stats.Drawn[Green], m_Stats.Drawn[Blue], m_Stats.Drawn[Yellow], m_Stats.Drawn[Gray], m_Stats.Milliseconds);
+                m_Stats.Drawn[Green], m_Stats.Drawn[Blue], m_Stats.Drawn[Yellow], m_Stats.Drawn[Gray],
+                m_Stats.JoltLines, m_Stats.JoltDrawn, m_Stats.Milliseconds);
             m_LastLogged = m_Stats;
         }
     }

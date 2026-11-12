@@ -8,6 +8,84 @@
 
 namespace MiniPhysics
 {
+    namespace
+    {
+        class LineDebugRenderer final : public JPH::DebugRendererSimple
+        {
+        public:
+            // 이번 수집의 출력 벡터를 연결한다. 선 데이터는 호출자가 소유한다.
+            void SetOutput(std::vector<DebugLine>* lines)
+            {
+                m_Lines = lines;
+            }
+
+            // Jolt 월드 선분과 원래 색을 중립 자료형으로 수집한다.
+            void DrawLine(JPH::RVec3Arg from, JPH::RVec3Arg to, JPH::ColorArg color) override
+            {
+                // 출력이 연결되지 않은 호출은 버린다.
+                if (!m_Lines)
+                    return;
+
+                // 바이트 색을 overlay가 받는 정규화 RGBA로 바꾼다.
+                m_Lines->push_back({ { from.GetX(), from.GetY(), from.GetZ() },
+                    { to.GetX(), to.GetY(), to.GetZ() },
+                    { color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f } });
+            }
+
+            // 삼각형은 채우지 않고 세 모서리만 수집한다.
+            void DrawTriangle(JPH::RVec3Arg a, JPH::RVec3Arg b, JPH::RVec3Arg c,
+                JPH::ColorArg color, ECastShadow) override
+            {
+                // 각 모서리를 같은 색의 월드 선분으로 낸다.
+                DrawLine(a, b, color);
+                DrawLine(b, c, color);
+                DrawLine(c, a, color);
+            }
+
+            // 이 overlay는 3D 텍스트를 표시하지 않는다.
+            void DrawText3D(JPH::RVec3Arg, const JPH::string_view&, JPH::ColorArg, float) override
+            {
+                // 텍스트 요청은 무시한다.
+            }
+
+        private:
+            std::vector<DebugLine>* m_Lines = nullptr;
+        };
+    }
+
+    // Jolt가 보는 body 형상과 관절을 이번 프레임의 선분으로 수집한다.
+    void PhysicsWorld::CollectDebugLines(std::vector<DebugLine>& out, bool bodies, bool constraints) const
+    {
+        // 초기화 전에도 이전 프레임 선분이 남지 않게 한다.
+        out.clear();
+        if (!m_Impl || (!bodies && !constraints))
+            return;
+
+        // 도형 자료를 매 프레임 다시 만들지 않도록 runtime의 렌더러 하나를 재사용한다.
+        auto& shared = m_Impl->RuntimeOwner->DebugLines;
+        if (!shared)
+            shared = std::make_unique<LineDebugRenderer>();
+        LineDebugRenderer& renderer = static_cast<LineDebugRenderer&>(*shared);
+        renderer.SetOutput(&out);
+
+        // DrawBodies가 내부에서 모든 body를 잠그므로 외부 body 잠금을 중첩하지 않는다.
+        if (bodies)
+        {
+            JPH::BodyManager::DrawSettings settings;
+            settings.mDrawShape = true;
+            settings.mDrawShapeWireframe = true;
+            settings.mDrawBoundingBox = false;
+            m_Impl->World.DrawBodies(settings, &renderer);
+        }
+
+        // Step과 변경이 끝난 장면 스레드에서 읽으며 Jolt가 관절 목록 잠금을 담당한다.
+        if (constraints)
+            m_Impl->World.DrawConstraints(&renderer);
+
+        // 수집이 끝나면 호출자 벡터 연결을 끊는다.
+        renderer.SetOutput(nullptr);
+    }
+
     // 여러 조회 world가 같은 Jolt 등록 정보를 공유하도록 초기화한다.
     Runtime::Runtime()
     {
@@ -20,6 +98,10 @@ namespace MiniPhysics
     // 마지막 world가 사라진 뒤 전역 형식 등록을 해제한다.
     Runtime::~Runtime()
     {
+        // 디버그 렌더러의 도형 자료를 Jolt 등록 해제 전에 먼저 놓는다.
+        DebugLines.reset();
+
+        // 타입 등록과 Factory를 해제한다.
         JPH::UnregisterTypes();
         delete JPH::Factory::sInstance;
         JPH::Factory::sInstance = nullptr;

@@ -85,6 +85,12 @@ namespace Viewer
         bool IsFloorMesh(ObjectId owner, ComponentId mesh) const;
         // 바닥 Static Box의 중심과 반크기를 읽는다. 바닥 body가 없으면 false다.
         bool GetFloorBox(std::array<double, 3>& center, std::array<double, 3>& half) const;
+        // 공통 world의 body·관절 디버그 선을 현재 프레임 기준으로 수집한다.
+        void CollectDebugLines(std::vector<MiniPhysics::DebugLine>& out) const
+        {
+            // scene 갱신과 고정 step이 끝난 overlay 경로에서만 읽는다.
+            m_World.CollectDebugLines(out, true, true);
+        }
         // 진단: 조회·simulation·준비 중 body의 용량 예약 합계를 읽는다.
         size_t GetReservedBodyCount() const { return m_World.GetReservedCount(); }
         // 등록된 메시 body의 월드 질량 중심을 읽는다.
