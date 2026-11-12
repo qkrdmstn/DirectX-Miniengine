@@ -6,14 +6,17 @@
 #include "../../Model/json.hpp"
 #include <functional>
 #include <iomanip>
+#include <sstream>
+#include "Utility.h"
+#include "Util/CommandLineArg.h"
 
 namespace Viewer
 {
     // 원본 GLB의 이름을 ModelConvert::WalkGraph와 같은 깊이 우선 NodeId 순서로 읽는다.
-    static std::vector<std::string> ReadDiagnosticNodeNames(const std::string& modelName)
+    static std::vector<std::string> ReadDiagnosticNodeNames(const std::filesystem::path& modelPath)
     {
         // GLB JSON 청크를 읽어 기본 scene의 노드 계층을 확인한다.
-        std::ifstream source("Models/" + modelName + ".glb", std::ios::binary);
+        std::ifstream source(modelPath, std::ios::binary);
         uint32_t header[5]{};
         source.read(reinterpret_cast<char*>(header), sizeof(header));
         if (!source || header[0] != 0x46546C67 || header[4] != 0x4E4F534A)
@@ -36,6 +39,120 @@ namespace Viewer
         for (const auto& root : document.at("scenes").at(document.value("scene", 0)).at("nodes"))
             visit(root.get<unsigned>());
         return names;
+    }
+
+    struct RigPreloadBox
+    {
+        Math::Vector3 Center{ Math::kZero };
+        Math::Vector3 Axes[3];
+        std::array<double, 3> Half;
+    };
+
+    // OBB의 면 법선 6개와 모서리 외적 9개로 SAT를 검사하고 최대 축 침투를 반환한다.
+    static bool OverlapRigBoxes(const RigPreloadBox& a, const RigPreloadBox& b, double& maximumDepth)
+    {
+        // 거의 평행한 외적은 생략하고 나머지 후보 축은 단위 길이로 투영한다.
+        using namespace Math;
+        Vector3 axes[15] = { a.Axes[0], a.Axes[1], a.Axes[2], b.Axes[0], b.Axes[1], b.Axes[2] };
+        for (unsigned i = 0; i < 3; ++i)
+            for (unsigned j = 0; j < 3; ++j) axes[6 + i * 3 + j] = Cross(a.Axes[i], b.Axes[j]);
+        maximumDepth = 0;
+        for (const auto& candidate : axes)
+        {
+            const double length = float(Length(candidate));
+            if (length < 1e-6) continue;
+            const Vector3 axis = candidate / float(length);
+            double radius = 0;
+            for (unsigned i = 0; i < 3; ++i)
+                radius += a.Half[i] * std::abs(float(Dot(a.Axes[i], axis)))
+                    + b.Half[i] * std::abs(float(Dot(b.Axes[i], axis)));
+            const double depth = radius - std::abs(float(Dot(b.Center - a.Center, axis)));
+            if (depth <= 0) return false;
+            maximumDepth = (std::max)(maximumDepth, depth);
+        }
+
+        // 최대 축 침투를 겹침 순위 측정값으로 사용한다.
+        return true;
+    }
+
+    // 등록에 사용한 frame 변환과 미터 단위 반크기로 겹침 통계를 출력한다.
+    void LogRigPreload(const std::string& ownerName, const SkeletalPoseSnapshot& pose,
+        const MiniPhysics::SkeletalPhysicsAsset& asset, double milliseconds)
+    {
+        // RegisterFromPose와 같은 배율 분리 후 offset을 적용하며 반크기를 재확대하지 않는다.
+        using namespace Math;
+        std::vector<RigPreloadBox> boxes;
+        for (const auto& body : asset.Bodies)
+        {
+            MiniPhysics::SkeletalRigidFrame frame;
+            Matrix4 world;
+            float scale = 0;
+            if (!SkeletalFrames::TryBuildBodyFrame(pose.Sections.front().E, pose.Nodes[body.Node],
+                body.BoneFromBody, frame, scale) || !SkeletalFrames::TryRigidMatrix(frame, world))
+                throw std::runtime_error("RigPreload invalid registered frame");
+            boxes.push_back({ Vector3(world.GetW()),
+                { Vector3(world.GetX()), Vector3(world.GetY()), Vector3(world.GetZ()) }, body.HalfExtentMeters });
+        }
+
+        // constraint로 직접 연결된 쌍만 인접으로 분류하고 모든 body 쌍을 한 번씩 검사한다.
+        struct Pair { size_t A, B; double Depth; };
+        std::vector<Pair> overlaps;
+        size_t totals[2]{}, hits[2]{};
+        for (size_t a = 0; a < boxes.size(); ++a)
+            for (size_t b = a + 1; b < boxes.size(); ++b)
+            {
+                bool adjacent = false;
+                for (const auto& joint : asset.Joints)
+                    adjacent |= (joint.ParentBody == a && joint.ChildBody == b)
+                        || (joint.ParentBody == b && joint.ChildBody == a);
+                ++totals[adjacent];
+                double depth = 0;
+                if (!OverlapRigBoxes(boxes[a], boxes[b], depth)) continue;
+                ++hits[adjacent];
+                if (!adjacent) overlaps.push_back({ a, b, depth });
+            }
+
+        // GLB 이름을 loader 순서로 읽고 원본이 없으면 NodeId로 식별한다.
+        std::wstring customModel;
+        const std::filesystem::path modelPath = CommandLineArgs::GetString(L"model", customModel)
+            ? std::filesystem::path(customModel) : std::filesystem::path("Models/" + ownerName + ".glb");
+        std::vector<std::string> names;
+        try
+        {
+            names = ReadDiagnosticNodeNames(modelPath);
+            if (names.size() != pose.Nodes.size()) names.clear();
+        }
+        catch (const std::exception&)
+        {
+            names.clear();
+        }
+
+        // 최대 축 침투가 큰 비인접 쌍 다섯 개를 재현 가능한 동률 순서로 고른다.
+        std::stable_sort(overlaps.begin(), overlaps.end(), [](const Pair& a, const Pair& b)
+        {
+            // 동률이면 원래 body ID 순서를 유지한다.
+            return a.Depth > b.Depth;
+        });
+        std::ostringstream log;
+        log << std::fixed << std::setprecision(6);
+        log << "RigPreload owner=" << ownerName << " bodies=" << asset.Bodies.size()
+            << " joints=" << asset.Joints.size() << " create_register_ms=" << milliseconds << '\n';
+        log << "RigPreload owner=" << ownerName << " adjacent_overlap=" << hits[1] << '/' << totals[1]
+            << " nonadjacent_overlap=" << hits[0] << '/' << totals[0] << '\n';
+        for (size_t i = 0; i < (std::min)(size_t(5), overlaps.size()); ++i)
+        {
+            const auto& pair = overlaps[i];
+            const auto a = asset.Bodies[pair.A].Node, b = asset.Bodies[pair.B].Node;
+            log << "RigPreload owner=" << ownerName << " rank=" << i + 1
+                << " nodes=" << (names.empty() ? "Node" + std::to_string(a) : names[a]) << '[' << a << "] / "
+                << (names.empty() ? "Node" + std::to_string(b) : names[b]) << '[' << b << ']'
+                << " max_axis_penetration_m=" << pair.Depth << '\n';
+        }
+
+        // 기존 진단 관행대로 debugger와 TEMP 파일에 같은 내용을 남긴다.
+        Utility::Print(log.str().c_str());
+        std::ofstream file(std::filesystem::temp_directory_path() / "RigPreload.log", std::ios::app);
+        file << log.str();
     }
 
     // section E와 모델의 CPU 정점·inverse bind·팔레트·영향 플래그를 결합한다.
@@ -88,7 +205,7 @@ namespace Viewer
             if (object->GetName() != "Xbot" && object->GetName() != "CesiumMan") continue;
             ++checked;
             const auto model = object->GetModelInstance()->GetModel();
-            const auto names = ReadDiagnosticNodeNames(object->GetName());
+            const auto names = ReadDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
             if (names.size() != model->m_NumNodes) throw std::runtime_error("auto rig name count mismatch");
             ModelInstance animation(model);
             animation.PlayAnimation(0, true);

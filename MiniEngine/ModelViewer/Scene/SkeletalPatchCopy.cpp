@@ -18,6 +18,7 @@
 #include <fstream>
 #include <set>
 #include <tuple>
+#include "SystemTime.h"
 #include "../../Model/json.hpp"
 
 namespace Viewer
@@ -359,11 +360,14 @@ namespace Viewer
             m_BreakCheck, label, m_Boundary.size(), m_BoundaryPairs.size(), maximum);
     }
 
-    // 현재 owner의 최종 pose로 자동 rig를 등록하고 이미 등록된 rig는 재사용한다.
+    // 현재 owner의 최종 pose로 자동 rig를 등록하고 생성 시간과 초기 겹침을 기록한다.
     bool RegisterAutoRig(const Scene& scene, ObjectId owner, SkeletalPhysicsSystem& skeletal)
     {
         // 등록된 owner는 scene 조회와 asset 생성 없이 성공으로 처리한다.
         if (skeletal.IsRegistered(owner)) return true;
+
+        // 최초 생성부터 등록 완료까지의 시간만 측정한다.
+        const int64_t start = SystemTime::GetCurrentTick();
 
         // snapshot을 구성할 owner와 모델 인스턴스를 확인한다.
         const auto* target = scene.FindObject(owner);
@@ -383,7 +387,7 @@ namespace Viewer
         bool supportedMeshFrame = true;
         if (!BuildSkeletalPhysicsAsset(model, pose, asset))
         {
-            PatchLog("SP7b rejected: auto asset; SP6 only (reason on stderr)\n");
+            PatchLog("RigPreload owner=%s failed: auto asset; SP6 only (reason on stderr)\n", target->GetName().c_str());
             return false;
         }
 
@@ -397,11 +401,22 @@ namespace Viewer
         if (!supportedMeshFrame || pose.Sections.empty() || !skeletal.RegisterFromPose(owner, asset,
             pose.Parents, pose.Sections.front().E, pose.Nodes))
         {
-            PatchLog("SP7b rejected: unsupported mesh frame/pose or registration resource failure; SP6 only\n");
+            PatchLog("RigPreload owner=%s failed: unsupported mesh frame/pose or registration resource failure; SP6 only\n",
+                target->GetName().c_str());
             return false;
         }
 
-        // 등록까지 완료된 owner만 성공으로 반환한다.
+        // 겹침 측정 실패도 이미 등록된 rig의 성공 상태를 바꾸지 않는다.
+        const double milliseconds = SystemTime::TicksToMillisecs(SystemTime::GetCurrentTick() - start);
+        try
+        {
+            LogRigPreload(target->GetName(), pose, asset, milliseconds);
+        }
+        catch (const std::exception& error)
+        {
+            Utility::Printf("RigPreload owner=%s bodies=%zu joints=%zu create_register_ms=%.6f measurement_failed=%s\n",
+                target->GetName().c_str(), asset.Bodies.size(), asset.Joints.size(), milliseconds, error.what());
+        }
         return true;
     }
 

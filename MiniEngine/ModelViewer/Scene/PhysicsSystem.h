@@ -125,6 +125,8 @@ namespace Viewer
         SkeletalPhysicsSystem& GetSkeletalPhysics() { return m_Skeletal; }
 
     private:
+        // 끊긴 관절이 없는 rig의 공통 배율이 달라지면 현재 장면 pose로 다시 등록한다.
+        bool RefreshPreloadedRig(const GameObject& object);
         // 실제 스킨 section의 공통 E와 애니메이션 node pose를 검증한다.
         bool ReadSkeletalPose(const GameObject& object, Math::Matrix4& frame,
             std::vector<Math::Matrix4>& nodes) const;

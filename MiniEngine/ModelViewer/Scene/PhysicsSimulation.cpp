@@ -1,6 +1,7 @@
 ﻿#include "PhysicsSystem.h"
 #include "Utility.h"
 #include "SkeletalPhysicsFrames.h"
+#include "SkeletalPatchCopy.h"
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -221,6 +222,64 @@ namespace Viewer
         m_BreakResults.erase(requestId);
     }
 
+    // 모든 body가 Kinematic인 rig만 배율 변경 시 해제하고 현재 pose로 다시 등록한다.
+    bool PhysicsSystem::RefreshPreloadedRig(const GameObject& object)
+    {
+        // 모델 없는 fixture와 Dynamic body가 있는 rig는 기존 갱신 경로를 유지한다.
+        const auto* instance = object.GetModelInstance();
+        if (!instance) return true;
+        const auto& rig = m_Skeletal.m_Rigs.at(object.GetId());
+        for (const auto body : rig.Bodies)
+        {
+            MiniPhysics::BodyMotion motion;
+            if (!m_World.GetBodyMotion(body, motion) || motion != MiniPhysics::BodyMotion::Kinematic) return true;
+        }
+
+        // 등록과 같은 첫 skin section의 E로 배율을 비교한다.
+        for (const auto& component : object.GetMeshComponents())
+            for (size_t section = 0; section < component->GetGeometry()->GetSections().size(); ++section)
+            {
+                const auto& mesh = component->GetGeometry()->GetMesh(section);
+                if (!mesh.numJoints) continue;
+                if (mesh.meshCBV >= instance->GetModel()->m_NumNodes) return true;
+                const Math::Matrix4 frame = Math::Matrix4(component->GetWorldTransform(object.GetTransform())) *
+                    Math::Matrix4(Math::Invert(component->GetDeformBinding().SourceFrame.ToAffine())) *
+                    instance->GetNodeTransforms()[mesh.meshCBV];
+                MiniPhysics::SkeletalRigidFrame rigid;
+                float scale = 0;
+                if (SkeletalFrames::TrySplitUniformFrame(frame, rigid, scale) &&
+                    std::abs(scale - rig.FrameScale) <= rig.FrameScale * 1e-4f) return true;
+
+                // 비균일 배율도 등록을 시도하고 실패하면 해제 상태로 이번 owner 갱신을 건너뛴다.
+                DirectX::XMFLOAT3 ownerScale;
+                DirectX::XMStoreFloat3(&ownerScale, object.GetTransform().GetScale());
+                m_Skeletal.Unregister(object.GetId());
+                try
+                {
+                    // 기존 자동 등록 경로가 새 shape와 관절을 현재 배율로 생성한다.
+                    if (RegisterAutoRig(m_Scene, object.GetId(), m_Skeletal))
+                    {
+                        Utility::Printf("RigPreload re-register owner=%s scale=%.6f,%.6f,%.6f\n",
+                            object.GetName().c_str(), ownerScale.x, ownerScale.y, ownerScale.z);
+                        return true;
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    // 등록 도중 예외도 이 owner의 실패 로그로 남긴다.
+                    Utility::Printf("RigPreload re-register owner=%s exception=%s\n",
+                        object.GetName().c_str(), error.what());
+                }
+
+                // 실패한 rig가 writeback에서 다시 예외를 만들지 않도록 남은 등록도 정리한다.
+                m_Skeletal.Unregister(object.GetId());
+                Utility::Printf("RigPreload re-register owner=%s scale=%.6f,%.6f,%.6f failed; skip kinematic update\n",
+                    object.GetName().c_str(), ownerScale.x, ownerScale.y, ownerScale.z);
+                return false;
+            }
+        return true;
+    }
+
     // 실제 렌더 section에서 공통 E를 구하고 물리 본에 종속된 Nmesh는 거절한다.
     bool PhysicsSystem::ReadSkeletalPose(const GameObject& object, Math::Matrix4& frame,
         std::vector<Math::Matrix4>& nodes) const
@@ -322,6 +381,10 @@ namespace Viewer
             for (const auto& object : m_Scene.GetObjects())
                 if (m_Skeletal.IsRegistered(object->GetId()))
                 {
+                    // 사전 등록 뒤 편집된 배율을 반영하고 재등록 실패 owner는 건너뛴다.
+                    if (!RefreshPreloadedRig(*object)) continue;
+
+                    // 기존 frame 검증과 Kinematic 목표 갱신은 그대로 수행한다.
                     Math::Matrix4 frame(Math::kIdentity);
                     std::vector<Math::Matrix4> nodes;
                     if (!ReadSkeletalPose(*object, frame, nodes) ||

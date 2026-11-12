@@ -322,7 +322,7 @@ static std::string GetDeviceGpuName()
     return std::string(name) + " (" + std::to_string(desc.DedicatedVideoMemory >> 20) + " MB)";
 }
 
-// 모델·GPU 준비 전에 시연 옵션의 의존성을 검사하고 명시적 검증 옵션을 읽는다.
+// 시작 옵션과 모델·물리를 준비하고 최종 배치 pose로 skin owner의 rig를 사전 등록한다.
 void ModelViewer::Startup( void )
 {
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
@@ -712,6 +712,31 @@ void ModelViewer::Startup( void )
     if (m_PhysicsSimChecks) Viewer::RunPhysicsSimChecks(m_Scene, m_Physics);
     if (m_ViewDiagnosticPending)
         Utility::Printf("ModelViewer diagnostic: startup PSOs ready, view=%u\n", static_cast<unsigned>(m_RenderMode));
+
+    // 자체 rig 진단을 제외하고 모든 초기화·배치가 끝난 pose에서 owner당 한 번 등록한다.
+    if (m_Physics.IsSimulationEnabled() && !skeletalChecks && !skeletalXbot)
+    {
+        m_Scene.InitializePoses();
+        for (const auto& object : m_Scene.GetObjects())
+        {
+            bool hasSkin = false;
+            for (const auto& component : object->GetMeshComponents())
+                for (size_t s = 0; s < component->GetGeometry()->GetSections().size(); ++s)
+                    hasSkin |= component->GetGeometry()->GetMesh(s).numJoints != 0;
+            if (!hasSkin) continue;
+
+            // 한 owner의 생성 실패는 로그만 남기고 다음 owner로 진행한다.
+            try
+            {
+                if (!Viewer::RegisterAutoRig(m_Scene, object->GetId(), m_Physics.GetSkeletalPhysics()))
+                    Utility::Printf("RigPreload owner=%s failed: registration unavailable\n", object->GetName().c_str());
+            }
+            catch (const std::exception& error)
+            {
+                Utility::Printf("RigPreload owner=%s failed: %s\n", object->GetName().c_str(), error.what());
+            }
+        }
+    }
 }
 
 // GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.

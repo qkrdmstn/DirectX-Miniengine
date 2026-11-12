@@ -3,6 +3,7 @@
 #include "../../Model/SkinCpuData.h"
 #include <cstdio>
 #include <cfloat>
+#include <string>
 
 class Model;
 namespace Viewer
@@ -24,6 +25,10 @@ namespace Viewer
         std::vector<SkeletalSkinSection> Sections;
         std::vector<uint8_t> Influencing;
     };
+
+    // 등록 pose의 body 쌍 SAT 겹침과 비인접 상위 쌍을 진단 로그에 남긴다.
+    void LogRigPreload(const std::string& ownerName, const SkeletalPoseSnapshot& pose,
+        const MiniPhysics::SkeletalPhysicsAsset& asset, double milliseconds);
 
     // 실패 이유를 CPU 진단 스트림에 남긴다.
     inline bool RejectAutoRig(const char* reason)
