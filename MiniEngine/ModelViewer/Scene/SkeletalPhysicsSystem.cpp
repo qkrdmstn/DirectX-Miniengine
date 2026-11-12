@@ -211,6 +211,59 @@ namespace Viewer
         return true;
     }
 
+    // 등록된 body handle의 소유자와 자산 번호를 찾고 실패하면 출력을 보존한다.
+    bool SkeletalPhysicsSystem::FindBody(MiniPhysics::BodyHandle body, ObjectId& owner,
+        uint32_t& bodyId, uint32_t& nodeId) const
+    {
+        // handle 번호 공간이 유일하므로 최초 일치 항목을 반환한다.
+        if (body == MiniPhysics::InvalidBody) return false;
+        for (const auto& entry : m_Rigs)
+            for (uint32_t i = 0; i < entry.second.Bodies.size(); ++i)
+                if (entry.second.Bodies[i] == body)
+                {
+                    owner = entry.first;
+                    bodyId = i;
+                    nodeId = entry.second.Asset.Bodies[i].Node;
+                    return true;
+                }
+        return false;
+    }
+
+    // Kinematic 목표와 같은 frame 기준으로 살아 있는 관절의 본 원점 선분을 만든다.
+    void SkeletalPhysicsSystem::BuildKinematicSegments(ObjectId owner, std::vector<RigSegment>& out) const
+    {
+        // 미등록 owner는 빈 목록을 반환한다.
+        out.clear();
+        const auto found = m_Rigs.find(owner);
+        if (found == m_Rigs.end()) return;
+        const auto& rig = found->second;
+
+        // 각 body 목표에서 월드 미터 단위 offset을 제거해 현재 본 원점을 복원한다.
+        std::vector<Math::Vector3> origins(rig.Bodies.size(), Math::Vector3(Math::kZero));
+        std::vector<bool> kinematic(rig.Bodies.size(), false);
+        for (size_t i = 0; i < rig.Bodies.size(); ++i)
+        {
+            MiniPhysics::BodyMotion motion;
+            Math::Matrix4 node;
+            if (!m_World.GetBodyMotion(rig.Bodies[i], motion) || motion != MiniPhysics::BodyMotion::Kinematic ||
+                !SkeletalFrames::TryRestoreNodePose(rig.ModelToWorld, rig.Targets[i].Frame,
+                    rig.Asset.Bodies[i].BoneFromBody, rig.Targets[i].Scale, node)) continue;
+            origins[i] = Math::Vector3((rig.ModelToWorld * node).GetW());
+            kinematic[i] = true;
+        }
+
+        // 비활성 Kinematic 관절도 포함하되 제거된 관절과 Dynamic endpoint는 제외한다.
+        for (uint32_t i = 0; i < rig.Asset.Joints.size(); ++i)
+        {
+            const auto& joint = rig.Asset.Joints[i];
+            MiniPhysics::ConstraintState state;
+            if (!m_World.GetConstraintState(rig.Joints[i], state) ||
+                !kinematic[joint.ParentBody] || !kinematic[joint.ChildBody]) continue;
+            out.push_back({ rig.Asset.Bodies[joint.ParentBody].Node, rig.Asset.Bodies[joint.ChildBody].Node,
+                i, origins[joint.ParentBody], origins[joint.ChildBody] });
+        }
+    }
+
     // 저장한 body 목표와 COM 속도를 읽는다.
     bool SkeletalPhysicsSystem::GetBodyTarget(ObjectId owner, uint32_t bodyId, SkeletalBodyTarget& target) const
     {

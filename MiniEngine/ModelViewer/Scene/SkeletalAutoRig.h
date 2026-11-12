@@ -28,6 +28,8 @@ namespace Viewer
 
     // debugger와 기존 TEMP 진단 파일에 같은 내용을 기록한다.
     void WriteRigPreloadLog(const std::string& text) noexcept;
+    // 원본 GLB의 이름을 loader와 같은 NodeId 순서로 읽는다.
+    std::vector<std::string> ReadRigDiagnosticNodeNames(const std::string& modelPath);
 
     // 진단 문자열 생성과 출력의 예외를 호출자에게 전파하지 않는다.
     template<typename BuildText>

@@ -150,6 +150,9 @@ namespace MiniPhysics
         void Clear();
         // AABB와 겹칠 수 있는 collider handle을 반환한다. 정밀 교차 판정은 아니다.
         std::vector<ColliderHandle> QueryAabb(const QueryBounds& bounds) const;
+        // 회전 상자와 실제로 겹친 simulation body를 중복 없이 handle 오름차순으로 반환한다.
+        void CollideOrientedBox(const std::array<double, 3>& center, const std::array<double, 4>& rotation,
+            const std::array<double, 3>& halfExtents, std::vector<BodyHandle>& hits) const;
         // 실제 등록된 조회 body 수를 읽는다.
         size_t GetColliderCount() const;
         // Step이 끝난 같은 장면 스레드에서 이번 프레임의 body·관절 선으로 출력을 교체한다.

@@ -5,6 +5,45 @@
 
 namespace MiniPhysics
 {
+    // Moving 계층의 실제 shape를 회전 상자로 조회하고 결정적인 handle 목록을 만든다.
+    void PhysicsWorld::CollideOrientedBox(const std::array<double, 3>& center,
+        const std::array<double, 4>& rotation, const std::array<double, 3>& halfExtents,
+        std::vector<BodyHandle>& hits) const
+    {
+        // 이전 결과를 지우고 Jolt에 전달할 위치와 크기 및 회전을 검증한다.
+        hits.clear();
+        if (!m_Impl) return;
+        for (size_t i = 0; i < 3; ++i)
+            if (!std::isfinite(center[i]) || std::abs(center[i]) > MaxBodyPosition ||
+                !std::isfinite(halfExtents[i]) || halfExtents[i] <= 0 || halfExtents[i] > MaxBodyPosition) return;
+        double norm = 0;
+        for (double value : rotation)
+        {
+            if (!std::isfinite(value)) return;
+            norm += value * value;
+        }
+        if (!std::isfinite(norm) || norm < 1e-12) return;
+        const double inverseLength = 1.0 / std::sqrt(norm);
+        const JPH::Quat q(float(rotation[0] * inverseLength), float(rotation[1] * inverseLength),
+            float(rotation[2] * inverseLength), float(rotation[3] * inverseLength));
+
+        // 외부 body 잠금 없이 호출하여 NarrowPhaseQuery가 각 대상의 읽기 잠금을 맡게 한다.
+        const JPH::BoxShape shape(JPH::Vec3(float(halfExtents[0]), float(halfExtents[1]), float(halfExtents[2])), 0.0f);
+        const auto position = JPH::RVec3(float(center[0]), float(center[1]), float(center[2]));
+        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        m_Impl->World.GetNarrowPhaseQuery().CollideShape(&shape, JPH::Vec3::sReplicate(1.0f),
+            JPH::RMat44::sRotationTranslation(q, position), JPH::CollideShapeSettings(), position, collector,
+            JPH::SpecifiedBroadPhaseLayerFilter(BroadPhaseLayers::Moving),
+            JPH::SpecifiedObjectLayerFilter(ObjectLayers::Moving));
+
+        // compound shape의 중복 접촉을 제거하고 simulation 번호 공간만 외부에 전달한다.
+        std::unordered_set<JPH::uint32> ids;
+        for (const auto& hit : collector.mHits) ids.insert(hit.mBodyID2.GetIndexAndSequenceNumber());
+        for (const auto& entry : m_Impl->SimBodies)
+            if (ids.count(entry.second.GetIndexAndSequenceNumber())) hits.push_back(entry.first);
+        std::sort(hits.begin(), hits.end());
+    }
+
     // source의 shape를 목표 pose에 놓고 중첩 body 잠금 없이 겹침을 검사한다.
     void QueryBodyOverlaps(PhysicsWorldAccess::ImplType& impl, JPH::BodyID source,
         JPH::RVec3Arg position, JPH::QuatArg rotation, const JPH::BodyFilter& filter, JPH::CollideShapeCollector& collector)

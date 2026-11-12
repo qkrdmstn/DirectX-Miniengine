@@ -141,6 +141,13 @@ namespace Viewer
         // 같은 world를 쓰는 skeletal rig 등록자다.
         // world 자체는 공개하지 않는다.
         SkeletalPhysicsSystem& GetSkeletalPhysics() { return m_Skeletal; }
+        // 장면 스레드에서 공유 world의 Moving shape 조회만 전달한다.
+        void CollideOrientedBox(const std::array<double, 3>& center, const std::array<double, 4>& rotation,
+            const std::array<double, 3>& halfExtents, std::vector<MiniPhysics::BodyHandle>& hits) const
+        {
+            // world 소유권과 Jolt 타입은 공개하지 않는다.
+            m_World.CollideOrientedBox(center, rotation, halfExtents, hits);
+        }
 
     private:
         // 끊긴 관절이 없는 rig의 공통 배율이 달라지면 현재 장면 pose로 다시 등록한다.

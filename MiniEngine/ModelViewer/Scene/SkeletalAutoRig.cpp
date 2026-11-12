@@ -41,6 +41,13 @@ namespace Viewer
         return names;
     }
 
+    // C++14 호출자에게 filesystem 타입을 노출하지 않고 진단 이름 목록을 반환한다.
+    std::vector<std::string> ReadRigDiagnosticNodeNames(const std::string& modelPath)
+    {
+        // 기존 GLB 순회 구현을 공유한다.
+        return ReadDiagnosticNodeNames(modelPath);
+    }
+
     struct RigPreloadBox
     {
         Math::Vector3 Center{ Math::kZero };

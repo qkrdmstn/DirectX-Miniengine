@@ -18,6 +18,7 @@
 #include <fstream>
 #include <set>
 #include <tuple>
+#include <sstream>
 #include "SystemTime.h"
 #include "../../Model/json.hpp"
 
@@ -166,6 +167,114 @@ namespace Viewer
                     * Math::Vector4(Math::Vector3(pose.GetNodeTransforms()[node].GetW()), 1));
         }
         return SelectSegmentJoint(pose.GetPoseParents(), positions, palettes, plane, model.m_InfluencingJoints);
+    }
+
+    // 기존 선택을 바꾸지 않고 유한 평면의 rig 조회와 선분 교차 결과를 비교 기록한다.
+    static void LogRigQuery(const Scene& scene, PhysicsSystem& physics, const MeshCutting::CutPlaneData& plane,
+        ObjectId legacyOwner, const SegmentJointSelection& legacy)
+    {
+        // 진단 예외가 실제 선택과 절단을 중단하지 않게 한다.
+        WriteRigPreloadLogSafely([&]()
+        {
+            // 모서리에서 상자 기저와 반크기를 얻고 반두께는 월드 1 mm로 고정한다.
+            using namespace Math;
+            const Vector3 center = (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f;
+            const Vector3 width = (plane.WorldCorners[1] - plane.WorldCorners[0]) * 0.5f;
+            const Vector3 height = (plane.WorldCorners[3] - plane.WorldCorners[0]) * 0.5f;
+            const Vector3 x = Normalize(width), y = Vector3(plane.WorldPlane), z = Normalize(Cross(x, y));
+            DirectX::XMFLOAT4 q;
+            DirectX::XMStoreFloat4(&q, Normalize(Quaternion(Matrix3(x, y, z))));
+            std::vector<MiniPhysics::BodyHandle> hits;
+            physics.CollideOrientedBox({ float(center.GetX()), float(center.GetY()), float(center.GetZ()) },
+                { q.x, q.y, q.z, q.w }, { float(Length(width)) + std::abs(float(Dot(height, x))),
+                    0.001, std::abs(float(Dot(height, z))) }, hits);
+
+            // owner별 hit node를 모으고 Dynamic endpoint는 선분 생성 단계에서 제외한다.
+            auto& skeletal = physics.GetSkeletalPhysics();
+            std::map<ObjectId, std::set<uint32_t>> nodes;
+            for (auto hit : hits)
+            {
+                ObjectId owner;
+                uint32_t body, node;
+                if (skeletal.FindBody(hit, owner, body, node)) nodes[owner].insert(node);
+            }
+
+            // 이름은 기존 GLB reader로 읽고 실패하면 NodeId로 표시한다.
+            std::map<ObjectId, std::vector<std::string>> names;
+            const auto name = [&](ObjectId owner, uint32_t node)
+            {
+                // owner별로 한 번만 이름 목록을 읽고 범위 밖 번호도 기록한다.
+                if (!names.count(owner))
+                {
+                    try
+                    {
+                        const auto* object = scene.FindObject(owner);
+                        names[owner] = object ? ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb")
+                            : std::vector<std::string>{};
+                    }
+                    catch (...) { names[owner] = {}; }
+                }
+                const auto& list = names.at(owner);
+                return std::to_string(node) + ":" + (node < list.size() ? list[node] : "unnamed");
+            };
+
+            // hit endpoint 선분만 엄격한 부호 교차와 실제 로컬 사각형으로 검사한다.
+            size_t count = 0, crossing = 0;
+            auto best = std::make_tuple(FLT_MAX, InvalidObjectId, UINT32_MAX);
+            uint32_t bestChild = UINT32_MAX;
+            std::ostringstream owners, bodies;
+            for (const auto& entry : nodes)
+            {
+                if (owners.tellp() > 0) owners << ',';
+                owners << entry.first;
+                for (uint32_t node : entry.second) bodies << entry.first << '/' << name(entry.first, node) << ',';
+                std::vector<RigSegment> segments;
+                skeletal.BuildKinematicSegments(entry.first, segments);
+                for (const auto& segment : segments)
+                {
+                    if (!entry.second.count(segment.ParentNode) && !entry.second.count(segment.ChildNode)) continue;
+                    ++count;
+                    const float a = Dot(plane.WorldPlane, Vector4(segment.ParentWorld, 1));
+                    const float b = Dot(plane.WorldPlane, Vector4(segment.ChildWorld, 1));
+                    if (!((a < 0 && b > 0) || (a > 0 && b < 0))) continue;
+                    const Vector3 point = segment.ParentWorld + (segment.ChildWorld - segment.ParentWorld) * (a / (a - b));
+                    const Vector3 local(plane.WorldToPlane * Vector4(point, 1));
+                    if (std::abs(float(local.GetX())) > plane.HalfWidth || std::abs(float(local.GetZ())) > plane.HalfHeight) continue;
+                    ++crossing;
+                    const auto candidate = std::make_tuple(float(LengthSquare(point - center)), entry.first, segment.ParentNode);
+                    if (candidate < best)
+                    {
+                        best = candidate;
+                        bestChild = segment.ChildNode;
+                    }
+                }
+            }
+
+            // 거리와 owner 및 부모 NodeId 순서로 고른 결과와 현행 선택을 한 행에 남긴다.
+            std::ostringstream log;
+            log << "RigQuery hits=" << hits.size() << " owners=" << (nodes.empty() ? "none" : owners.str())
+                << " bodies=" << (nodes.empty() ? "none" : bodies.str()) << " segments=" << count
+                << " crossing=" << crossing << " best=";
+            if (bestChild == UINT32_MAX) log << "none";
+            else log << std::get<1>(best) << '/' << name(std::get<1>(best), std::get<2>(best))
+                << '/' << name(std::get<1>(best), bestChild);
+            log << " legacy=" << legacyOwner << '/' << name(legacyOwner, legacy.NodeId)
+                << '/' << name(legacyOwner, legacy.ChildNodeId);
+
+            // 불일치 시 현행 선분의 실제 Dynamic endpoint 여부를 함께 기록한다.
+            if (bestChild == UINT32_MAX)
+            {
+                SkeletalRigState state;
+                bool dynamic = false;
+                if (skeletal.ReadDiagnosticState(legacyOwner, state))
+                    for (const auto& body : state.Bodies)
+                        if ((body.Node == legacy.NodeId || body.Node == legacy.ChildNodeId) &&
+                            body.Motion == MiniPhysics::BodyMotion::Dynamic) dynamic = true;
+                log << " reason=" << (dynamic ? "legacy_dynamic_endpoint" : "no_live_hit_segment_crossing");
+            }
+            log << '\n';
+            return log.str();
+        });
     }
 
     // break 진단과 시연에서 같은 본 쌍의 현재 중점·수직 평면을 재사용한다.
@@ -501,6 +610,9 @@ namespace Viewer
         const bool influence = mode == SkeletalJointMode::Influence;
         const auto selected = influence ? SegmentJointSelection{}
             : SelectSegmentJoint(*target->GetModelInstance(), *mesh, target->GetTransform(), plane);
+        // 물리가 활성인 요청에서만 조회를 비교하고 기존 선택 결과는 그대로 사용한다.
+        if (physics && physics->IsSimulationEnabled()) LogRigQuery(scene, *physics, plane, target->GetId(), selected);
+
         if ((!influence && selected.NodeId == UINT32_MAX) || !target->GetModelInstance()->HasValidPose()
             || mesh->GetDeformBinding().Pose != PoseMode::FollowModel)
         {
