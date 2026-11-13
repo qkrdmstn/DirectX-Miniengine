@@ -14,7 +14,8 @@ namespace Viewer
     struct BoundaryPair
     {
         uint32_t Piece, Boundary;
-        Math::Vector3 Local;
+        uint32_t PieceSection, PieceVertex;
+        uint32_t OriginalSection, OriginalVertex;
     };
 
     // 두 조각의 baked pose를 읽어 C 시점 경계 정점과 같은 위치끼리 짝짓는다.

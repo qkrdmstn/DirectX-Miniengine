@@ -113,6 +113,12 @@ namespace Viewer
             PhysicsSystem* physics = nullptr);
         // 실제 C 경로로 두 모델의 break와 거절 조건을 순서대로 검증한다.
         bool RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
+        // SP7e2 실패 집계를 진단 프로세스의 종료 판정에 전달한다.
+        bool HasBoundaryCheckFailure() const
+        {
+            // case의 Reset 이후에도 보존한 실패 횟수를 읽는다.
+            return m_BoundaryFailed != 0;
+        }
         // 복사본을 준비하고 Static batch 뒤 절단하여 최종 완료를 반환한다.
         bool Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result);
         // 복사본 결과를 소비하여 Static 집계와 격리한다.
@@ -201,6 +207,7 @@ namespace Viewer
         uint32_t m_BoundaryPassed = 0, m_BoundaryFailed = 0, m_BoundaryNotApplicable = 0;
         std::vector<uint64_t> m_StaleBefore;
         std::vector<BoundaryVertex> m_Boundary;
+        std::vector<SkeletalPatchBuffers::BoundarySkin> m_BoundarySkins;
         std::vector<BoundaryPair> m_BoundaryPairs;
         ComponentId m_PieceIds[2]{};
         MeshCutting::CutPlaneData m_Plane;

@@ -75,9 +75,15 @@ public:
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
     virtual void RenderUI(GraphicsContext& context) override;
-    // 정상 종료 뒤 다섯 자동 판정의 성공 여부를 종료 코드로 바꾼다.
+    // 정상 종료 뒤 자동 판정과 SP7e2 실패 집계를 종료 코드로 바꾼다.
     int DiagnosticExitCode() const
     {
+        // break 진단의 경계 FAIL을 기존 자동 판정과 함께 종료 코드에 반영한다.
+        if (m_SkeletalPatchBreakChecks && m_SkeletalPatchCopy.HasBoundaryCheckFailure())
+        {
+            return 1;
+        }
+
         // 중도 종료도 미완료 검사 실패로 처리한다.
         if (m_RigBoneCutChecks.Enabled)
         {

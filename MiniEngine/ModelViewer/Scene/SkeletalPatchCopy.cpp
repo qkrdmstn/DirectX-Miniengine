@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <cstring>
 #include <fstream>
@@ -598,31 +599,69 @@ namespace Viewer
             diagnosticCase, side, frame, int(skinned), int(inBounds), pairCount, maximum, pass ? "PASS" : "FAIL");
     }
 
-    // 외곽 경계와 PS4를 측정하고 publish·after60 각각의 경계 결과를 집계한다.
+    // 외곽 경계와 PS4를 측정하고 양쪽 고정 weight 및 두 시점의 결과를 기록한다.
     void SkeletalPatchCopy::MeasureBoundaryAt(const Scene& scene, const char* label)
     {
         // 외곽 경계가 없는 case도 같은 타이밍 훅에서 A/B의 PS4를 측정한다.
         const auto* pieceOwner = scene.FindObject(m_Break.Owner);
         for (uint32_t side = 0; side < 2; ++side)
+        {
             MeasurePieceSkin(pieceOwner ? pieceOwner->FindMeshComponent(m_PieceIds[side]) : nullptr,
                 m_BreakCheck, side ? "B" : "A", label);
+        }
 
         // 일치하는 유지 경계가 없으면 PASS·FAIL 집계에서 제외한다.
         if (m_Boundary.empty())
         {
             ++m_BoundaryNotApplicable;
-            PatchLog("SP7e2 case=%u frame=%s result=N/A boundary=0 max_mm=N/A noCoincidentKeptBoundary=1\n",
-                m_BreakCheck, label);
+            PatchLog("SP7e2 case=%u frame=%s result=%s boundary=%zu paired=%zu max_mm=%.6f frozenWeightMax=%g reason=%s\n",
+                m_BreakCheck, label, "N/A", size_t(0), m_BoundaryPairs.size(),
+                std::numeric_limits<float>::quiet_NaN(), 0.0, "noCoincidentKeptBoundary");
             return;
         }
 
         // C에서 대응시킨 정점 번호를 유지해 이후 프레임에도 같은 경계를 비교한다.
         const auto* owner = scene.FindObject(m_Break.Owner);
-        const MeshComponent* pieces[] = { owner->FindMeshComponent(m_PieceIds[0]), owner->FindMeshComponent(m_PieceIds[1]) };
-        float error;
-        const bool measured = MeasureBoundary(*owner, *owner->FindMeshComponent(m_SourceMesh), pieces,
-            m_Boundary, m_BoundaryPairs, error);
+        const auto* source = owner ? owner->FindMeshComponent(m_SourceMesh) : nullptr;
+        const MeshComponent* pieces[] = { owner ? owner->FindMeshComponent(m_PieceIds[0]) : nullptr,
+            owner ? owner->FindMeshComponent(m_PieceIds[1]) : nullptr };
+        float error = std::numeric_limits<float>::quiet_NaN();
+        const bool measured = source && MeasureBoundary(*owner, *source, pieces, m_Boundary, m_BoundaryPairs, error);
         const float maximum = error * 1000;
+
+        // 각 조각에 실제 대응된 경계만 사용해 정규화한 고정 joint weight 합의 최댓값을 구한다.
+        float frozenWeightMax[2]{};
+        for (const auto& pair : m_BoundaryPairs)
+        {
+            if (pair.Piece >= m_SkinSnapshotCount || pair.Boundary >= m_BoundarySkins.size())
+            {
+                continue;
+            }
+            const auto& skin = m_BoundarySkins[pair.Boundary];
+            const auto& frozen = m_SkinSnapshots[pair.Piece].Frozen;
+            uint32_t total = 0;
+            uint32_t fixed = 0;
+            for (uint32_t slot = 0; slot < 4; ++slot)
+            {
+                total += skin.Weights[slot];
+                if (skin.Joints[slot] < frozen.size() && frozen[skin.Joints[slot]])
+                {
+                    fixed += skin.Weights[slot];
+                }
+            }
+            if (total)
+            {
+                frozenWeightMax[pair.Piece] = std::max(frozenWeightMax[pair.Piece], float(fixed) / total);
+            }
+        }
+
+        // 보조 로그에서 A/B별 측정 경로와 고정 weight를 구별하고 case 로그에는 양쪽 최댓값을 남긴다.
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            PatchLog("SP7e2 boundary side=%s case=%u frame=%s path=%s frozenWeightMax=%g\n",
+                side ? "B" : "A", m_BreakCheck, label, !pieces[side] ? "missing"
+                : (pieces[side]->HasSkinnedPatch() ? "skinnedPG_RAW40" : "rigidData_28B"), frozenWeightMax[side]);
+        }
 
         // 두 시점 모두 1 mm 초과, 비정상 거리, 짝 누락 또는 측정 불가를 실패로 센다.
         const bool pass = measured && std::isfinite(maximum) && maximum <= 1;
@@ -636,8 +675,9 @@ namespace Viewer
         }
         const char* reason = !measured ? "invalidDistanceOrMissingPairsOrReadbackUnavailable"
             : (!std::isfinite(maximum) ? "invalidDistance" : (pass ? "within1mm" : "over1mm"));
-        PatchLog("SP7e2 case=%u frame=%s result=%s boundary=%zu paired=%zu max_mm=%.6f reason=%s\n",
-            m_BreakCheck, label, pass ? "PASS" : "FAIL", m_Boundary.size(), m_BoundaryPairs.size(), maximum, reason);
+        PatchLog("SP7e2 case=%u frame=%s result=%s boundary=%zu paired=%zu max_mm=%.6f frozenWeightMax=%g reason=%s\n",
+            m_BreakCheck, label, pass ? "PASS" : "FAIL", m_Boundary.size(), m_BoundaryPairs.size(), maximum,
+            std::max(frozenWeightMax[0], frozenWeightMax[1]), reason);
     }
 
     // 현재 owner의 최종 pose로 자동 rig를 등록하고 생성 시간과 초기 겹침을 기록한다.
@@ -1758,7 +1798,11 @@ namespace Viewer
 
         // 같은 원본 재질을 쓰는 자동 생성 컴포넌트의 geometry만 교체한다.
         m_Result = result;
-        if (m_Diagnostic && !m_OffsetCopy) m_Boundary = patch->Boundary;
+        if (m_Diagnostic && !m_OffsetCopy)
+        {
+            m_Boundary = patch->Boundary;
+            m_BoundarySkins = patch->BoundarySkins;
+        }
 
         // 원본 전역 삼각형 번호로 기존 마스크를 보존하며 새 패치 id를 배정한다.
         if (!m_OffsetCopy)
