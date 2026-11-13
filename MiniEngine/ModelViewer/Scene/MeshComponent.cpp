@@ -316,12 +316,14 @@ namespace Viewer
     // 유효한 TRS와 변환 모드를 함께 적용한다.
     bool MeshComponent::SetTransform(const SceneTransform& transform, MeshTransformMode mode)
     {
+        // 새 편집 배치를 검증한 뒤 부착 월드 캐시를 해제한다.
         SceneTransform normalized = transform;
         if (!normalized.Normalize())
             return false;
         ++m_EditGeneration;
         m_Transform = normalized;
         m_TransformMode = mode;
+        m_PatchFallbackWorld = false;
         m_Ready = false;
         return true;
     }
@@ -337,6 +339,7 @@ namespace Viewer
         // 추종은 편집이 아니므로 세대 증가 없이 렌더 준비 상태만 무효화한다.
         m_Transform = normalized;
         m_TransformMode = MeshTransformMode::WorldIndependent;
+        m_PatchFallbackWorld = false;
         m_Ready = false;
     }
 
@@ -506,6 +509,7 @@ namespace Viewer
         m_Geometry = std::move(prepared.Geometry);
         m_Transform = prepared.Transform;
         m_TransformMode = prepared.Mode;
+        m_PatchFallbackWorld = false;
         m_DeformBinding = prepared.Binding;
         m_SectionBounds.clear();
         m_FrozenNodes.clear();
@@ -519,9 +523,14 @@ namespace Viewer
         m_CollisionRevisionId = m_Geometry->GetId();
     }
 
-    // 소유 객체와의 종속 모드에서만 owner Transform을 곱한다.
+    // 스키닝 조각은 준비된 W를 읽고 일반 메시에는 owner 종속 모드를 적용한다.
     AffineTransform MeshComponent::GetWorldTransform(const SceneTransform& owner) const
     {
+        // 스키닝 조각의 조회는 렌더와 같은 W를 사용하며 편집 세대는 바꾸지 않는다.
+        if (HasSkinnedPatch() || m_PatchFallbackWorld)
+            return m_PreparedWorld;
+
+        // 일반 메시와 강체 부착 조각은 기존 TRS 배치를 사용한다.
         return m_TransformMode == MeshTransformMode::Attached
             ? owner.ToAffine() * m_Transform.ToAffine() : m_Transform.ToAffine();
     }
@@ -565,8 +574,56 @@ namespace Viewer
         auto posed = std::make_unique<PosedGeometry>(PatchSkin->Vertices.Data,
             PatchSkin->Vertices.Stride, PatchSkin->Vertices.Flags, sections);
         m_PosedGeometry = std::move(posed);
+        const Matrix4& world = Attachment->PieceWorldAtCut;
+        m_PreparedWorld = AffineTransform((Vector3)world.GetX(), (Vector3)world.GetY(),
+            (Vector3)world.GetZ(), (Vector3)world.GetW());
         m_PatchSkinActive = true;
+        m_PatchFallbackWorld = false;
         m_Ready = false;
+    }
+
+    // 원본의 revision과 binding을 검사하고 불일치는 현재 월드를 기준으로 강체 부착으로 전환한다.
+    void MeshComponent::ValidatePatchSkinSource(const MeshComponent* source, const Matrix4* nodeWorld)
+    {
+        // 활성 조각만 snapshot과 비교하며 일시적인 pose 준비 실패는 비활성화하지 않는다.
+        if (!HasSkinnedPatch())
+            return;
+        const auto& snapshot = PatchSkin->Snapshot;
+        if (source && !source->GetGeometry()->IsGenerated()
+            && source->GetGeometry()->GetSource() == m_Geometry->GetSource()
+            && source->GetGeometry()->GetId() == snapshot.SourceRevision)
+        {
+            const auto& binding = source->GetDeformBinding();
+            const Matrix4 frame(binding.SourceFrame.ToAffine());
+            if (std::memcmp(&frame, &snapshot.SourceFrame, sizeof(frame)) == 0
+                && (binding.Pose == PoseMode::Frozen) == snapshot.SourceFrozen)
+                return;
+        }
+
+        // 기존 Data 강체 경로로 복귀하며 현재 월드와 현재 부착 노드를 새 기준으로 잡는다.
+        auto posed = std::make_unique<PosedGeometry>(*m_Geometry->GetGenerated());
+        SceneTransform world;
+        const bool hasWorldTRS = SceneTransform::TryFromAffine(m_PreparedWorld, world);
+        if (Attachment && nodeWorld)
+        {
+            Attachment->NodeWorldAtCut = *nodeWorld;
+            Attachment->PieceWorldAtCut = Matrix4(m_PreparedWorld);
+        }
+        m_PatchSkinActive = false;
+        m_PosedGeometry = std::move(posed);
+        if (hasWorldTRS)
+            SetAttachedWorld(world);
+        else
+        {
+            // 전단이 있는 월드는 TRS로 손실 변환하지 않고 마지막 정확한 W를 유지한다.
+            m_PatchFallbackWorld = true;
+            m_TransformMode = MeshTransformMode::WorldIndependent;
+            m_Ready = false;
+        }
+
+        // 활성 플래그를 내렸으므로 같은 조각의 호환성 실패 로그는 한 번만 나온다.
+        Utility::Printf("Patch skin deactivated: source revision/binding changed mesh=%llu\n",
+            static_cast<unsigned long long>(m_Id));
     }
 
     // 확정 CPU pose로 PG를 갱신하고 스키닝 조각에는 원본의 W와 N을 적용한다.
@@ -578,6 +635,8 @@ namespace Viewer
 
         // 최종 pose의 유효성을 검사한다.
         m_Ready = false;
+        m_RenderNodes = nullptr;
+        m_RenderJoints = nullptr;
         m_CutSectionFrames.clear();
         if (!pose.HasValidPose() || pose.GetModel() != m_Geometry->GetSource())
             return;
@@ -591,15 +650,31 @@ namespace Viewer
             // 스키닝 조각은 부착 월드 대신 원본의 현재 월드와 최종 pose를 사용한다.
             if (HasSkinnedPatch())
             {
-                if (!patchSource || patchSource->GetGeometry()->GetSource() != pose.GetModel()
+                if (!patchSource || !patchSource->GetPreparedNodes() || !patchSource->GetPreparedJoints()
                     || PatchSkin->Snapshot.MeshNode >= pose.GetModel()->m_NumNodes)
                     return;
                 std::vector<Joint> palette;
-                BuildPatchPalette(PatchSkin->Snapshot, pose.GetJoints(), pose.GetNodeTransforms(), palette);
+                BuildPatchPalette(PatchSkin->Snapshot, patchSource->GetPreparedJoints(), patchSource->GetPreparedNodes(), palette);
                 const Matrix4 sourceToComponent(Invert(patchSource->GetDeformBinding().SourceFrame.ToAffine()));
-                const Matrix4 node = sourceToComponent * pose.GetNodeTransforms()[PatchSkin->Snapshot.MeshNode];
+                const Matrix4 node = sourceToComponent * patchSource->GetPreparedNodes()[PatchSkin->Snapshot.MeshNode];
                 m_PosedGeometry->UpdateSkinnedGenerated(context, PatchSkin->Vertices.Data, palette, node);
                 m_PreparedWorld = patchSource->GetWorldTransform(owner);
+
+                // 원본과 같이 section bind 구를 전체 팔레트로 변환·합산하고 zero-weight 원점도 포함한다.
+                m_SectionBounds.clear();
+                for (const auto& section : m_Geometry->GetSections())
+                {
+                    const auto& rest = PatchSkin->Vertices.BindBounds.at(section.SourceMesh);
+                    BoundingSphere bound(kZero);
+                    for (const auto& joint : palette)
+                    {
+                        const Matrix4 skin = node * joint.posXform;
+                        const AffineTransform affine((Vector3)skin.GetX(), (Vector3)skin.GetY(),
+                            (Vector3)skin.GetZ(), (Vector3)skin.GetW());
+                        bound = bound.Union(TransformBoundingSphere(affine, rest));
+                    }
+                    m_SectionBounds.push_back(bound);
+                }
             }
             else
             {
@@ -623,10 +698,14 @@ namespace Viewer
                 m_ConstantsCPU.GetResource(), 0, sizeof(cb));
             context.TransitionResource(m_ConstantsGPU, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-            // 생성 Data의 경계를 유지하고 section 행렬은 component-local 단위 행렬로 기록한다.
-            m_SectionBounds.clear();
-            for (size_t i = 0; i < m_Geometry->GetSections().size(); ++i)
-                m_SectionBounds.emplace_back(reinterpret_cast<const XMFLOAT4*>(m_Geometry->GetMesh(i).bounds));
+            // 일반 생성 조각만 Data 경계를 쓰며 스키닝 조각은 위에서 계산한 현재 경계를 유지한다.
+            if (!HasSkinnedPatch())
+            {
+                m_SectionBounds.clear();
+                for (size_t i = 0; i < m_Geometry->GetSections().size(); ++i)
+                    m_SectionBounds.emplace_back(reinterpret_cast<const XMFLOAT4*>(m_Geometry->GetMesh(i).bounds));
+            }
+
             // 생성 데이터는 component-local이므로 node 변환을 다시 적용하지 않는다.
             m_CutSectionFrames.assign(m_Geometry->GetSections().size(), Matrix4(kIdentity));
             m_RenderJoints = nullptr;
@@ -652,6 +731,7 @@ namespace Viewer
 
         // Frozen 선택을 마친 node와 source 기준으로 PG 및 절단 행렬을 함께 만든다.
         m_RenderJoints = joints;
+        m_RenderNodes = nodes;
         const Matrix4 sourceToComponent(Invert(m_DeformBinding.SourceFrame.ToAffine()));
         m_PreparedWorld = GetWorldTransform(owner);
         const Matrix4 world(m_PreparedWorld);

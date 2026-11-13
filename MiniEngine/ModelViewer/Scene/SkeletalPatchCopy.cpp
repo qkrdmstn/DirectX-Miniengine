@@ -855,11 +855,14 @@ namespace Viewer
         const bool boneCut = rigQuery && rig.Reason == RigSelectionReason::D5;
         if (boneCut)
         {
-            const auto& instance = *target->GetModelInstance();
+            const auto* nodes = mesh->GetPreparedNodes();
+            if (!nodes)
+                return;
             size_t section = 0;
             while (!mesh->GetGeometry()->GetMesh(section).numJoints) ++section;
-            const auto nodeWorld = JointFrameToWorld(instance, *mesh, target->GetTransform(), section)
-                * instance.GetNodeTransforms()[selected.NodeId];
+            const auto nodeWorld = Matrix4(mesh->GetWorldTransform(target->GetTransform()))
+                * Invert(Matrix4(mesh->GetDeformBinding().SourceFrame.ToAffine()))
+                * nodes[mesh->GetGeometry()->GetMesh(section).meshCBV] * nodes[selected.NodeId];
             if (std::abs(float(Dot(plane.WorldPlane, nodeWorld.GetW()))) <= 0.001f)
             {
                 WritePatchLogSafely([&]
@@ -916,10 +919,15 @@ namespace Viewer
         {
             // D2가 보장하는 공통 skin frame을 사용하고 앞쪽 Static section은 건너뛴다.
             const auto& instance = *target->GetModelInstance();
+            const auto* nodes = mesh->GetPreparedNodes();
+            if (!nodes)
+                return;
             const auto& parents = instance.GetPoseParents();
             size_t section = 0;
             while (!mesh->GetGeometry()->GetMesh(section).numJoints) ++section;
-            const auto frame = JointFrameToWorld(instance, *mesh, target->GetTransform(), section);
+            const auto frame = Matrix4(mesh->GetWorldTransform(target->GetTransform()))
+                * Invert(Matrix4(mesh->GetDeformBinding().SourceFrame.ToAffine()))
+                * nodes[mesh->GetGeometry()->GetMesh(section).meshCBV];
             uint32_t sideNode = selected.NodeId;
             if (selected.Kind == SegmentJointKind::Leaf)
             {
@@ -932,9 +940,9 @@ namespace Viewer
                 PatchLog("SP7e rejected: no influencing ancestor\n");
                 return;
             }
-            const float side = Math::Dot(frame * instance.GetNodeTransforms()[sideNode].GetW(), plane.WorldPlane);
+            const float side = Math::Dot(frame * nodes[sideNode].GetW(), plane.WorldPlane);
             const uint32_t other = selected.Kind == SegmentJointKind::Segment ? selected.ChildNodeId : selected.NodeId;
-            const float opposite = Math::Dot(frame * instance.GetNodeTransforms()[other].GetW(), plane.WorldPlane);
+            const float opposite = Math::Dot(frame * nodes[other].GetW(), plane.WorldPlane);
             if (selected.Kind == SegmentJointKind::Leaf ? std::abs(side) <= 0.001f
                 : std::abs(side) <= 0.001f && std::abs(opposite) <= 0.001f)
             {
@@ -946,9 +954,9 @@ namespace Viewer
             m_SourceRevision = mesh->GetGeometry();
             m_MaskRevision = mesh->GetTriangleMask() ? mesh->GetTriangleMask()->Revision : 0;
             m_AttachA = { parents[selected.NodeId], m_SourceMesh,
-                frame * instance.GetNodeTransforms()[parents[selected.NodeId]], Math::Matrix4(mesh->GetWorldTransform(target->GetTransform())) };
+                frame * nodes[parents[selected.NodeId]], Math::Matrix4(mesh->GetWorldTransform(target->GetTransform())) };
             m_AttachB = { selected.NodeId, m_SourceMesh,
-                frame * instance.GetNodeTransforms()[selected.NodeId], m_AttachA.PieceWorldAtCut };
+                frame * nodes[selected.NodeId], m_AttachA.PieceWorldAtCut };
         }
 
         // 추출과 같은 최종 pose에서 A/B 또는 D5의 전체 팔레트와 고정 집합을 저장한다.
@@ -956,7 +964,10 @@ namespace Viewer
         {
             const auto& instance = *target->GetModelInstance();
             const auto& model = *instance.GetModel();
-            const auto* nodes = instance.GetNodeTransforms();
+            const auto* nodes = mesh->GetPreparedNodes();
+            const auto* joints = mesh->GetPreparedJoints();
+            if (!nodes || !joints)
+                return;
             const auto& parents = instance.GetPoseParents();
             const Matrix4 sourceInverse(Invert(mesh->GetDeformBinding().SourceFrame.ToAffine()));
             for (size_t s = 0; s < mesh->GetGeometry()->GetSections().size(); ++s)
@@ -971,12 +982,15 @@ namespace Viewer
             {
                 auto& snapshot = m_SkinSnapshots[side];
                 snapshot = {};
+                snapshot.SourceRevision = mesh->GetGeometry()->GetId();
+                snapshot.SourceFrame = Matrix4(mesh->GetDeformBinding().SourceFrame.ToAffine());
+                snapshot.SourceFrozen = mesh->GetDeformBinding().Pose == PoseMode::Frozen;
                 snapshot.AttachNode = boneCut || side ? selected.NodeId : parents[selected.NodeId];
                 snapshot.AttachAtCut = nodes[snapshot.AttachNode];
                 size_t firstSkin = 0;
                 while (!mesh->GetGeometry()->GetMesh(firstSkin).numJoints) ++firstSkin;
                 snapshot.MeshNodeAtCut = m_SkinSectionNodes[firstSkin];
-                snapshot.JointsAtCut.assign(instance.GetJoints(), instance.GetJoints() + model.m_NumJoints);
+                snapshot.JointsAtCut.assign(joints, joints + model.m_NumJoints);
                 snapshot.Frozen.resize(model.m_NumJoints);
                 for (uint32_t k = 0; k < model.m_NumJoints; ++k)
                 {
@@ -991,11 +1005,11 @@ namespace Viewer
                 if (m_SkinCheckCase)
                 {
                     std::vector<Joint> palette;
-                    BuildPatchPalette(snapshot, instance.GetJoints(), nodes, palette);
+                    BuildPatchPalette(snapshot, joints, nodes, palette);
                     for (uint32_t k = 0; k < model.m_NumJoints; ++k)
                     {
                         const Matrix4 actual[] = { palette[k].posXform, Matrix4(palette[k].nrmXform) };
-                        const Matrix4 expected[] = { instance.GetJoints()[k].posXform, Matrix4(instance.GetJoints()[k].nrmXform) };
+                        const Matrix4 expected[] = { joints[k].posXform, Matrix4(joints[k].nrmXform) };
                         for (uint32_t matrix = 0; matrix < 2; ++matrix)
                         {
                             DirectX::XMFLOAT4X4 a, b;

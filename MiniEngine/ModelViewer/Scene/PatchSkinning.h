@@ -11,12 +11,16 @@ namespace Viewer
     {
         ByteAddressBuffer Data;
         uint32_t Flags = 0, Stride = 0;
+        std::vector<Math::BoundingSphere> BindBounds;
     };
 
     struct PatchSkinSnapshot
     {
         uint32_t AttachNode = UINT32_MAX;
         uint32_t MeshNode = UINT32_MAX; // 공통 N을 제공한 실제 추출 section의 meshCBV다.
+        uint64_t SourceRevision = 0;
+        Math::Matrix4 SourceFrame{ Math::kIdentity };
+        bool SourceFrozen = false;
         Math::Matrix4 AttachAtCut{ Math::kIdentity };
         Math::Matrix4 MeshNodeAtCut{ Math::kIdentity };
         std::vector<Joint> JointsAtCut;

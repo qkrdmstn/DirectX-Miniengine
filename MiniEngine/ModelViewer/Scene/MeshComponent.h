@@ -83,6 +83,20 @@ namespace Viewer
         const PosedGeometry& GetPosedGeometry() const { return *m_PosedGeometry; }
         // 게시할 조각의 skin 입력으로 컴포넌트 소유 PG를 준비한다.
         void ActivatePatchSkin();
+        // 원본 revision·binding 변경 시 현재 월드에서 강체 부착으로 한 번 전환한다.
+        void ValidatePatchSkinSource(const MeshComponent* source, const Math::Matrix4* nodeWorld);
+        // 이번 프레임에 원본 PG가 실제 사용한 node와 joint 입력을 읽는다.
+        const Math::Matrix4* GetPreparedNodes() const
+        {
+            // 이번 프레임의 준비가 완료된 입력만 외부에 제공한다.
+            return m_Ready ? m_RenderNodes : nullptr;
+        }
+        // Frozen을 포함한 실제 원본 팔레트를 읽는다.
+        const Joint* GetPreparedJoints() const
+        {
+            // 이번 프레임의 준비가 완료된 팔레트만 외부에 제공한다.
+            return m_Ready ? m_RenderJoints : nullptr;
+        }
         // staging의 보관용 skin 입력과 실제 게시된 skinned PG를 구별한다.
         bool HasSkinnedPatch() const
         {
@@ -183,6 +197,7 @@ namespace Viewer
         std::shared_ptr<const GeometryRevision> m_Geometry;
         std::unique_ptr<PosedGeometry> m_PosedGeometry;
         bool m_PatchSkinActive = false;
+        bool m_PatchFallbackWorld = false;
         UploadBuffer m_ConstantsCPU;
         ByteAddressBuffer m_ConstantsGPU;
         Math::AffineTransform m_PreparedWorld{ Math::kIdentity };
@@ -191,6 +206,7 @@ namespace Viewer
         std::vector<Math::Matrix4> m_FrozenNodes;
         std::vector<Joint> m_FrozenJoints;
         const Joint* m_RenderJoints = nullptr;
+        const Math::Matrix4* m_RenderNodes = nullptr;
         bool m_Ready = false;
         bool m_Simulating = false;
         MiniCollision::AggregateGeom m_Collision;   // 컴포넌트 로컬(SourceFrame⁻¹ × model-local) 충돌

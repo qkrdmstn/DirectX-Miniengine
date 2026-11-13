@@ -3,6 +3,8 @@
 #include "CommandContext.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
+#include "ReadbackBuffer.h"
+#include <cstring>
 #include "CompiledShaders/PatchSkinBuildCS.h"
 #include <algorithm>
 
@@ -111,6 +113,11 @@ namespace Viewer
             compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
         }
 
+        // 생성 시 한 번 skin VB를 읽어 section별 bind 구를 만든다.
+        ReadbackBuffer readback;
+        readback.Create(L"Patch skin bind bounds", end, stride);
+        graphics.CopyBuffer(readback, out.Data);
+
         // 원본·조각 Data는 이후 VB/IB로도 묶이므로 다른 절단 작업처럼 GENERIC_READ로 되돌린다.
         for (uint32_t i = 0; i < 5; ++i)
             graphics.TransitionResource(*inputs[i], D3D12_RESOURCE_STATE_GENERIC_READ);
@@ -118,6 +125,27 @@ namespace Viewer
 
         // 호출자가 보관한 원본·출처·조각과 임시 descriptor는 완료 뒤에만 해제할 수 있다.
         graphics.Finish(true);
+
+        // 원본 경계 방식처럼 section 전체 구를 모든 joint에 공통 사용하며 K 위치도 그대로 포함한다.
+        const auto* bytes = static_cast<const uint8_t*>(readback.Map());
+        out.BindBounds.clear();
+        for (const auto& mesh : piece.Meshes)
+        {
+            Math::Vector3 minimum(Math::kZero);
+            Math::Vector3 maximum(Math::kZero);
+            for (uint32_t v = 0; v < mesh.vbSize / 28; ++v)
+            {
+                DirectX::XMFLOAT3 position;
+                std::memcpy(&position, bytes + (mesh.vbOffset / 28 + v) * stride, sizeof(position));
+                const Math::Vector3 point(position);
+                minimum = v ? Math::Min(minimum, point) : point;
+                maximum = v ? Math::Max(maximum, point) : point;
+            }
+            const auto center = (minimum + maximum) * 0.5f;
+            const float radius = std::max(float(Math::Length(maximum - minimum)) * 0.5f, 1.0e-6f);
+            out.BindBounds.emplace_back(center, Math::Scalar(radius));
+        }
+        readback.Unmap();
         return true;
     }
 

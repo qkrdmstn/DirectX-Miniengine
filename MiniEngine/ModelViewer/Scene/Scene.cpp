@@ -262,9 +262,13 @@ namespace Viewer
             // C snapshot과 같은 첫 skin section의 E와 확정 node pose를 사용한다.
             size_t section = 0;
             const auto& geometry = *source->GetGeometry();
+            if (geometry.GetSource() != instance->GetModel())
+                return false;
             while (section < geometry.GetSections().size() && !geometry.GetMesh(section).numJoints) ++section;
             if (section == geometry.GetSections().size()) return false;
-            const auto* nodes = instance->GetNodeTransforms();
+            const auto* nodes = source->GetPreparedNodes();
+            if (!nodes)
+                nodes = instance->GetNodeTransforms();
             nodeWorld = Math::Matrix4(source->GetWorldTransform(object->GetTransform()))
                 * Invert(Math::Matrix4(source->GetDeformBinding().SourceFrame.ToAffine()))
                 * nodes[geometry.GetMesh(section).meshCBV] * nodes[attachment.NodeId];
@@ -286,21 +290,24 @@ namespace Viewer
                 continue;
             for (const auto& mesh : object->m_MeshComponents)
             {
+                // 호환성 실패는 현재 부착 노드와 월드를 기준으로 한 번만 강체 전환한다.
+                const auto* source = mesh->Attachment
+                    ? object->FindMeshComponent(mesh->Attachment->SourceMesh) : nullptr;
+                Math::Matrix4 nodeWorld;
+                const bool hasNodeWorld = mesh->Attachment && TryGetAttachmentNodeWorld(*mesh, nodeWorld);
+                mesh->ValidatePatchSkinSource(source, hasNodeWorld ? &nodeWorld : nullptr);
+
                 // 확정된 원본 pose에서 Wc*E*Gnode를 구해 C snapshot의 상대 배치를 유지한다.
-                if (mesh->Attachment && !mesh->HasSkinnedPatch())
+                if (mesh->Attachment && !mesh->HasSkinnedPatch() && hasNodeWorld)
                 {
                     const auto& attachment = *mesh->Attachment;
-                    Math::Matrix4 nodeWorld;
-                    if (!TryGetAttachmentNodeWorld(*mesh, nodeWorld)) continue;
                     SceneTransform world;
-                    if (!SceneTransform::TryFromAffine(Math::AffineTransform(nodeWorld
-                        * Invert(attachment.NodeWorldAtCut) * attachment.PieceWorldAtCut), world)) continue;
-                    mesh->SetAttachedWorld(world);
+                    if (SceneTransform::TryFromAffine(Math::AffineTransform(nodeWorld
+                        * Invert(attachment.NodeWorldAtCut) * attachment.PieceWorldAtCut), world))
+                        mesh->SetAttachedWorld(world);
                 }
 
                 // 스키닝 조각의 부착 메타데이터는 보존하고 원본 컴포넌트만 조회한다.
-                const auto* source = mesh->HasSkinnedPatch() && mesh->Attachment
-                    ? object->FindMeshComponent(mesh->Attachment->SourceMesh) : nullptr;
                 mesh->Update(context, *object->m_ModelInstance, object->m_Transform, source);
             }
         }
