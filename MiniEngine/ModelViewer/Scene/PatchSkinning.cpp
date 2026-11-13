@@ -111,8 +111,12 @@ namespace Viewer
             compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
         }
 
+        // 원본·조각 Data는 이후 VB/IB로도 묶이므로 다른 절단 작업처럼 GENERIC_READ로 되돌린다.
+        for (uint32_t i = 0; i < 5; ++i)
+            graphics.TransitionResource(*inputs[i], D3D12_RESOURCE_STATE_GENERIC_READ);
+        graphics.TransitionResource(out.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
+
         // 호출자가 보관한 원본·출처·조각과 임시 descriptor는 완료 뒤에만 해제할 수 있다.
-        compute.TransitionResource(out.Data, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         graphics.Finish(true);
         return true;
     }

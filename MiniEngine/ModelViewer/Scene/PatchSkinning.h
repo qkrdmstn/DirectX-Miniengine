@@ -23,6 +23,19 @@ namespace Viewer
         bool SkinningAllowed = true;
     };
 
+    // 렌더 연결 전까지 조각의 skin 입력과 section별 유효 정점 범위를 함께 보관한다.
+    struct PatchSkinPublication
+    {
+        struct Section
+        {
+            uint32_t FirstVertex, VertexCount;
+        };
+        PatchSkinSnapshot Snapshot;
+        PatchSkinVertices Vertices;
+        std::vector<Section> Sections;
+        uint32_t VertexCount = 0;
+    };
+
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
         const Math::Matrix4* currentNodes, std::vector<Joint>& out);

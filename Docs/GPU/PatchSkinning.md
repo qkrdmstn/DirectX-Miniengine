@@ -1,4 +1,4 @@
-상태: 진행 중 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a 완료(빌드·리뷰, 2026-11-13). PS-2b 이후 미착수. 기준 master `f2b4d2ec`
+상태: 진행 중 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b 완료(Debug/Release 빌드·회귀, 2026-11-13). PS-3 이후 미착수. 기준 master `f2b4d2ec`
 
 # 스켈레탈 패치 조각 스키닝 (NDC25 "프로시저럴 메시 스키닝")
 
@@ -97,7 +97,7 @@ void BuildPatchPalette(const PatchSkinSnapshot& snap, const Joint* current,
 | PS-0 | SP7e2 경계 0개 N/A 분리, after60 FAIL 반영, NaN·누락 FAIL | 완료: Xbot 전완 publish·after60 N/A, 나머지 4건 FAIL 집계(강체 부착 기준선: 허벅지 1.04/2.56 mm, CesiumMan 36.4/249 mm), 다른 판정 불변 |
 | PS-1 | `PatchSkinSnapshot`, 고정 집합, `BuildPatchPalette`(CPU), N 공통성 검사 | 완료: 세 case A/B 팔레트 오차 ≤3.6e-7 PASS, skinningAllowed=1. 경계 고정 weight는 A/B 경계를 나누지 않아 최대 1로 나옴 → PS-5에서 조각별로 재측정 |
 | PS-2a | 출처 복원 + `PatchSkinBuildCS` skin VB 생성 셰이더·동기 생성 API(`BuildPatchSkinVertices`) | 완료: 빌드·리뷰(방향은 transpose(N)으로 되돌림), 호출 연결 전이라 실행 검증 없음 |
-| PS-2b | A/B·D5 결과 경로에서 skin VB 생성·보관, PS2 진단 | 진단: t_cut 팔레트로 CPU 스키닝한 위치와 Data 위치 최대 오차 ≤0.01 mm(component-local) |
+| PS-2b | A/B·D5 결과 경로에서 skin VB 생성·보관, PS2 진단 | 완료: A/B 세 case·D5 모두 PASS(최대 0.00024 mm, copied/split/cap 분류 확인), 생성 뒤 입력 상태 GENERIC_READ 복원 |
 | PS-3 | `PosedGeometry` skinned generated 생성·매 프레임 갱신 API | 진단 조각 하나 PG = PS-2 기대값 ≤0.01 mm |
 | PS-4 | A/B/D5 게시 전환(W·N·조각 팔레트), D7 bounds | 시각 확인, 조각 PG 전체 정점이 bounds 안, 테두리–cap 대응 정점 거리 ≤0.01 mm(60프레임 뒤) |
 | PS-5 | SP7e2 정점 식별자 짝·같은 프레임 PG 비교 | Xbot 허벅지·CesiumMan 팔 publish·after60 PASS; SP7e2 FAIL을 진단 종료 코드에 반영(PS-0 리뷰 후속) |

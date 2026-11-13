@@ -3,6 +3,7 @@
 #include "ComponentId.h"
 #include "SceneTransform.h"
 #include "GeometryRevision.h"
+#include "PatchSkinning.h"
 #include <string>
 
 namespace Viewer
@@ -65,6 +66,7 @@ namespace Viewer
     public:
         bool PublishVisible = true; // 미게시 절단 준비물은 모든 pass에서 숨긴다.
         std::unique_ptr<NodeAttachment> Attachment;
+        std::shared_ptr<PatchSkinPublication> PatchSkin; // PS-2에서는 보관만 하며 렌더 입력은 그대로 둔다.
         // 공유 원본 revision을 사용하되 GPU pose·렌더 상수는 새로 만든다.
         MeshComponent(ComponentId id, std::shared_ptr<const GeometryRevision> geometry);
         // 이전 프레임의 GPU 사용이 끝난 뒤 렌더 자원을 해제한다.

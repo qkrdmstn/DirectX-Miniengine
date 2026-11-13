@@ -659,6 +659,7 @@ namespace Viewer
         m_Job.Cancel();
         m_Name.clear();
         m_Physics = physics;
+        m_SkinPatch.reset();
         m_SkinSnapshotCount = 0;
         m_SkinCheckCase = 0;
         m_SkinSectionNodes.clear();
@@ -1116,12 +1117,127 @@ namespace Viewer
         }
     }
 
+    // 생성 skin VB를 절단 시점 팔레트로 CPU 스키닝하여 component-local Data와 비교한다.
+    void SkeletalPatchCopy::BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
+        SkeletalPatchBuffers& patch, uint32_t side)
+    {
+        // 원본 revision과 출처는 동기 API가 반환할 때까지 호출자가 보유한다.
+        const auto& snapshot = m_SkinSnapshots[side];
+        if (!snapshot.SkinningAllowed || !m_SourceRevision)
+            return;
+        auto skin = std::make_shared<PatchSkinPublication>();
+        skin->Snapshot = snapshot;
+        const bool built = BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources,
+            geometry, snapshot, skin->Vertices);
+        if (built)
+        {
+            for (const auto& section : piece.GetGeometry()->GetSections())
+            {
+                const auto& mesh = geometry.Meshes[section.SourceMesh];
+                const uint32_t count = mesh.vbSize / 28;
+                skin->Sections.push_back({ mesh.vbOffset / 28, count });
+                skin->VertexCount += count;
+            }
+            piece.PatchSkin = skin;
+        }
+
+        // 전체 VB readback과 CPU 비교는 요청된 자동 진단에서만 수행한다.
+        uint32_t checks = 0;
+        CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
+        if (m_SkinSnapshotCount == 1 && !checks)
+            CommandLineArgs::GetInteger(L"rig-bone-cut-checks", checks);
+        if (!checks || m_ForceStale)
+            return;
+        const char* label = m_SkinSnapshotCount == 1 ? "D5" : (side ? "B" : "A");
+        uint32_t vertices = 0;
+        uint32_t copied = 0;
+        uint32_t split = 0;
+        uint32_t cap = 0;
+        double maxError = built ? 0.0 : INFINITY;
+        if (built)
+        {
+            // 생성 API가 SRV로 둔 세 버퍼는 readback 뒤 같은 상태로 복원한다.
+            ReadbackBuffer readbacks[3];
+            GpuBuffer* buffers[] = { &skin->Vertices.Data, &const_cast<ByteAddressBuffer&>(geometry.Data),
+                &const_cast<ByteAddressBuffer&>(geometry.Provenance) };
+            auto& context = GraphicsContext::Begin(L"PS2 skin readback");
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                readbacks[i].Create(L"PS2 readback", buffers[i]->GetBufferSize(), 1);
+                context.CopyBuffer(readbacks[i], *buffers[i]);
+                context.TransitionResource(*buffers[i], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            context.Finish(true);
+
+            // 현재 pose 대신 실제 t_cut joint와 부착 node를 전달하여 고정 본과 K를 복원한다.
+            std::vector<Math::Matrix4> nodes(size_t(snapshot.AttachNode) + 1, Math::Matrix4(Math::kIdentity));
+            nodes[snapshot.AttachNode] = snapshot.AttachAtCut;
+            std::vector<Joint> palette;
+            BuildPatchPalette(snapshot, snapshot.JointsAtCut.data(), nodes.data(), palette);
+            const auto* bind = static_cast<const uint8_t*>(readbacks[0].Map());
+            const auto* data = static_cast<const uint8_t*>(readbacks[1].Map());
+            const auto* provenance = static_cast<const uint32_t*>(readbacks[2].Map());
+            for (const auto& section : skin->Sections)
+            {
+                for (uint32_t v = section.FirstVertex; v < section.FirstVertex + section.VertexCount; ++v)
+                {
+                    // stride 말미의 u16 joint와 weight를 PreparePoseCS와 같은 합으로 정규화한다.
+                    float position[3];
+                    float expected[3];
+                    uint16_t joints[4];
+                    uint16_t weights[4];
+                    const auto* input = bind + size_t(v) * skin->Vertices.Stride;
+                    std::memcpy(position, input, sizeof(position));
+                    std::memcpy(expected, data + size_t(v) * 28, sizeof(expected));
+                    std::memcpy(joints, input + skin->Vertices.Stride - 16, sizeof(joints));
+                    std::memcpy(weights, input + skin->Vertices.Stride - 8, sizeof(weights));
+                    const float total = float(std::max(1u, uint32_t(weights[0]) + weights[1] + weights[2] + weights[3]));
+                    const Math::Vector4 source(position[0], position[1], position[2], 1.0f);
+                    Math::Vector4 posed(Math::kZero);
+                    bool valid = true;
+                    for (uint32_t k = 0; k < 4; ++k)
+                    {
+                        if (joints[k] >= palette.size())
+                        {
+                            valid = false;
+                            continue;
+                        }
+                        posed = posed + (palette[joints[k]].posXform * source) * (float(weights[k]) / total);
+                    }
+
+                    // N(t_cut) 적용 뒤 미터를 mm로 바꾸며 비유한 값과 잘못된 joint는 FAIL로 남긴다.
+                    const Math::Vector3 actual(snapshot.MeshNodeAtCut * posed);
+                    const double error = double(float(Math::Length(actual
+                        - Math::Vector3(expected[0], expected[1], expected[2])))) * 1000.0;
+                    maxError = !valid || !std::isfinite(error) ? INFINITY : std::max(maxError, error);
+                    const auto* origin = provenance + size_t(v) * 8;
+                    if (origin[0] == UINT32_MAX)
+                        ++cap;
+                    else if (origin[2] == origin[3])
+                        ++copied;
+                    else
+                        ++split;
+                    ++vertices;
+                }
+            }
+            for (auto& readback : readbacks)
+                readback.Unmap();
+        }
+
+        // 생성 실패와 빈 결과도 오차 한계로 PASS가 되지 않게 같은 형식으로 기록한다.
+        if (!vertices)
+            maxError = INFINITY;
+        PatchLog("PS2 case=%u side=%s vertices=%u copied=%u split=%u cap=%u maxError_mm=%.6f result=%s\n",
+            m_SkinCheckCase, label, vertices, copied, split, cap, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
+    }
+
     // 다음 Static 후보 조회 전에 작업 무효화와 owner 삭제를 완료한다.
     void SkeletalPatchCopy::Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting)
     {
         // 추출 완료를 기다려 임시 자원을 해제하고 미게시 배치 snapshot도 버린다.
         m_Job.Cancel();
         m_Name.clear();
+        m_SkinPatch.reset();
         m_SkinSnapshotCount = 0;
         m_SkinSectionNodes.clear();
         m_SkinSnapshots[0] = {};
@@ -1179,6 +1295,22 @@ namespace Viewer
             // 준비 중인 컴포넌트는 아직 owner에 공개하지 않는다.
             auto piece = owner->PrepareMeshComponent(GeometryRevision::FromGenerated(patch->Geometry));
             piece->Attachment = std::make_unique<NodeAttachment>(m_BoneAttachment);
+
+            // D5는 cutter를 거치지 않으므로 추출 정점 자체를 복사 출처로 지정한다.
+            if (m_SkinSnapshotCount && m_SkinSnapshots[0].SkinningAllowed)
+            {
+                const uint32_t count = result.PatchTriangles * 3;
+                std::vector<uint32_t> origins(size_t(count) * 8, 0);
+                for (uint32_t v = 0; v < count; ++v)
+                {
+                    origins[size_t(v) * 8 + 2] = v;
+                    origins[size_t(v) * 8 + 3] = v;
+                }
+                patch->Geometry->Provenance.Create(L"D5 copied vertex provenance", count, 32, origins.data());
+                BuildPieceSkin(*piece, *patch->Geometry, *patch, 0);
+            }
+
+            // 기존 강체 부착과 렌더 준비는 skin 입력을 소비하지 않는다.
             piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
             const auto& instance = *owner->GetModelInstance();
             size_t section = 0;
@@ -1288,6 +1420,7 @@ namespace Viewer
                             throw std::runtime_error("SP7e invalid piece world");
                         piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
                         piece->Attachment = std::make_unique<NodeAttachment>(i == 0 ? m_AttachA : m_AttachB);
+                        piece->PatchSkin = staging->GetMeshComponents()[index]->PatchSkin;
                         if (m_BreakCheck && !m_ForceStale) m_PieceIds[i] = piece->GetId();
                         pieces.push_back(std::move(piece));
                     }
@@ -1388,6 +1521,7 @@ namespace Viewer
         std::shared_ptr<SkeletalPatchBuffers> patch;
         if (!m_Job.Poll(result, patch)) return false;
         CheckPatchSkin(*patch);
+        m_SkinPatch = m_SkinSnapshotCount ? patch : nullptr;
         m_SelectedNode = m_Job.SelectedNode();
         if (!result.PatchTriangles)
         {
@@ -1505,6 +1639,21 @@ namespace Viewer
             if (!m_OffsetCopy)
                 for (const auto& piece : scene.FindObject(m_CopyOwner)->GetMeshComponents()) piece->PublishVisible = false;
 
+            // cutter 출력과 추출 출처가 살아 있는 동안 A/B skin 입력을 동기로 생성한다.
+            if (m_SkinPatch && m_SkinSnapshotCount == 2)
+            {
+                auto* owner = scene.FindObject(m_CopyOwner);
+                const ComponentId ids[] = { m_PositiveA ? result.Mesh : result.Other,
+                    m_PositiveA ? result.Other : result.Mesh };
+                for (uint32_t side = 0; side < 2; ++side)
+                {
+                    auto* piece = owner->FindMeshComponent(ids[side]);
+                    if (piece && m_SkinSnapshots[side].SkinningAllowed)
+                        BuildPieceSkin(*piece, *piece->GetGeometry()->GetGenerated(), *m_SkinPatch, side);
+                }
+            }
+            m_SkinPatch.reset();
+
             // A/B 준비 성공 뒤에만 저장된 C 세대로 무충격 break를 요청한다.
             if (m_BreakReady)
             {
@@ -1553,7 +1702,12 @@ namespace Viewer
             PatchLog("Skeletal patch B gap world=%.6f delta=(%.6f,%.6f,%.6f)\n",
                 float(Math::Length(actual)), float(actual.GetX()), float(actual.GetY()), float(actual.GetZ()));
         }
-        else PatchLog("Skeletal patch B gap not applied: %s\n", reason);
+        else
+        {
+            // 실패한 절단은 더 이상 추출 출처를 사용하지 않는다.
+            m_SkinPatch.reset();
+            PatchLog("Skeletal patch B gap not applied: %s\n", reason);
+        }
         LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
 
         // 절단 자체가 실패하면 숨긴 준비물도 즉시 버린다.

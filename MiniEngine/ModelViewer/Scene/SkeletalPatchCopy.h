@@ -153,6 +153,10 @@ namespace Viewer
             return true;
         }
     private:
+        // 동기 skin VB 생성과 선택적 t_cut CPU 진단을 마친 뒤 조각에 입력을 보관한다.
+        void BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
+            SkeletalPatchBuffers& patch, uint32_t side);
+        std::shared_ptr<SkeletalPatchBuffers> m_SkinPatch;
         // 추출된 section의 공통 N을 확정하고 체크 실행에서만 PS-1 결과를 기록한다.
         void CheckPatchSkin(const SkeletalPatchBuffers& patch);
         PatchSkinSnapshot m_SkinSnapshots[2];
