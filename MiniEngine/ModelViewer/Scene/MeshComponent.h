@@ -196,6 +196,7 @@ namespace Viewer
         DeformBinding m_DeformBinding;
         std::shared_ptr<const GeometryRevision> m_Geometry;
         std::unique_ptr<PosedGeometry> m_PosedGeometry;
+        std::vector<Joint> m_PatchPalette;
         bool m_PatchSkinActive = false;
         bool m_PatchFallbackWorld = false;
         UploadBuffer m_ConstantsCPU;

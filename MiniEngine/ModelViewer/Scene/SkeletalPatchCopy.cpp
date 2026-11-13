@@ -532,9 +532,81 @@ namespace Viewer
         if (!pass) throw std::runtime_error("SP7e2 Stale changed original");
     }
 
-    // 외곽 경계 거리를 기록하고 publish·after60 각각의 PASS·FAIL·N/A를 집계한다.
+    // 현재 skinned PG 전체의 경계 포함 여부와 rim/cap 간격을 측정한다.
+    static void MeasurePieceSkin(const MeshComponent* piece, uint32_t diagnosticCase, const char* side,
+        const char* frame)
+    {
+        // 비활성 스킨이나 준비되지 않은 PG는 유효한 측정으로 인정하지 않는다.
+        const bool skinned = piece && piece->HasSkinnedPatch();
+        bool inBounds = false;
+        double maximum = INFINITY;
+        uint32_t pairCount = 0;
+        if (skinned && piece->HasPoseBounds() && piece->GetPosedGeometry().IsReady())
+        {
+            // 실제 프레임의 RAW40을 동기 복사하고 VB 겸용 버퍼의 읽기 상태를 복원한다.
+            const auto& skin = *piece->PatchSkin;
+            const auto& posed = piece->GetPosedGeometry();
+            auto& buffer = const_cast<ByteAddressBuffer&>(posed.GetBuffer());
+            ReadbackBuffer readback;
+            readback.Create(L"PS4 RAW40 readback", uint32_t(buffer.GetBufferSize()), 1);
+            auto& context = GraphicsContext::Begin(L"PS4 piece bounds and seam");
+            context.CopyBuffer(readback, buffer);
+            context.TransitionResource(buffer, D3D12_RESOURCE_STATE_GENERIC_READ);
+            context.Finish(true);
+
+            // PG와 section 구는 모두 component-local이므로 추가 변환 없이 비교한다.
+            const auto* bytes = static_cast<const uint8_t*>(readback.Map());
+            std::vector<Math::Vector3> positions(skin.Vertices.Data.GetBufferSize() / skin.Vertices.Stride);
+            inBounds = skin.VertexCount > 0;
+            for (size_t i = 0; i < skin.Sections.size(); ++i)
+            {
+                const auto& section = skin.Sections[i];
+                const auto bound = piece->GetLocalSectionBounds(i);
+                const float radius = float(bound.GetRadius());
+                for (uint32_t v = 0; v < section.VertexCount; ++v)
+                {
+                    float p[3];
+                    std::memcpy(p, bytes + posed.GetOffset(i) + size_t(v) * PosedGeometry::VertexStride, sizeof(p));
+                    const Math::Vector3 position(p[0], p[1], p[2]);
+                    positions.at(size_t(section.FirstVertex) + v) = position;
+                    const float distance = float(Math::Length(position - bound.GetCenter()));
+                    if (!std::isfinite(distance) || !std::isfinite(radius) || distance > radius + 1e-4f)
+                        inBounds = false;
+                }
+            }
+            readback.Unmap();
+
+            // 누락 cap과 비유한 거리는 실패로 남기며, 각 split–cap 간격이 t_cut 대비 얼마나 변했는지 mm로 잰다.
+            maximum = 0.0;
+            pairCount = uint32_t(skin.RimCapPairs.size());
+            for (const auto& pair : skin.RimCapPairs)
+            {
+                if (pair.Rim >= positions.size() || pair.Cap >= positions.size())
+                {
+                    maximum = INFINITY;
+                    continue;
+                }
+                const float distance = float(Math::Length(positions[pair.Rim] - positions[pair.Cap]));
+                const double change = std::abs(double(distance) - double(pair.DistanceAtCut)) * 1000.0;
+                maximum = std::isfinite(change) ? std::max(maximum, change) : INFINITY;
+            }
+        }
+
+        // 스키닝·전체 정점 경계·대응 쌍·0.01 mm 간격을 모두 만족해야 통과한다.
+        const bool pass = skinned && inBounds && pairCount > 0 && maximum <= 0.01;
+        PatchLog("PS4 case=%u side=%s frame=%s skinned=%d inBounds=%d rimCapPairs=%u rimCapChangeMax_mm=%.6f result=%s\n",
+            diagnosticCase, side, frame, int(skinned), int(inBounds), pairCount, maximum, pass ? "PASS" : "FAIL");
+    }
+
+    // 외곽 경계와 PS4를 측정하고 publish·after60 각각의 경계 결과를 집계한다.
     void SkeletalPatchCopy::MeasureBoundaryAt(const Scene& scene, const char* label)
     {
+        // 외곽 경계가 없는 case도 같은 타이밍 훅에서 A/B의 PS4를 측정한다.
+        const auto* pieceOwner = scene.FindObject(m_Break.Owner);
+        for (uint32_t side = 0; side < 2; ++side)
+            MeasurePieceSkin(pieceOwner ? pieceOwner->FindMeshComponent(m_PieceIds[side]) : nullptr,
+                m_BreakCheck, side ? "B" : "A", label);
+
         // 일치하는 유지 경계가 없으면 PASS·FAIL 집계에서 제외한다.
         if (m_Boundary.empty())
         {
@@ -1205,7 +1277,7 @@ namespace Viewer
             diagnosticCase, label, vertices, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
     }
 
-    // 생성 skin VB를 보관하고 진단 옵션에서 CPU 및 임시 PG를 Data와 비교한다.
+    // 생성 skin VB를 보관하고 진단 옵션에서 Data 비교와 rim/cap 대응 쌍 생성을 수행한다.
     void SkeletalPatchCopy::BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
         SkeletalPatchBuffers& patch, uint32_t side)
     {
@@ -1265,6 +1337,8 @@ namespace Viewer
             const auto* bind = static_cast<const uint8_t*>(readbacks[0].Map());
             const auto* data = static_cast<const uint8_t*>(readbacks[1].Map());
             const auto* provenance = static_cast<const uint32_t*>(readbacks[2].Map());
+            std::vector<uint32_t> rimVertices;
+            std::vector<uint32_t> capVertices;
             for (const auto& section : skin->Sections)
             {
                 for (uint32_t v = section.FirstVertex; v < section.FirstVertex + section.VertexCount; ++v)
@@ -1300,14 +1374,66 @@ namespace Viewer
                     maxError = !valid || !std::isfinite(error) ? INFINITY : std::max(maxError, error);
                     const auto* origin = provenance + size_t(v) * 8;
                     if (origin[0] == UINT32_MAX)
+                    {
                         ++cap;
+                        capVertices.push_back(v);
+                    }
                     else if (origin[2] == origin[3])
                         ++copied;
                     else
+                    {
                         ++split;
+                        rimVertices.push_back(v);
+                    }
                     ++vertices;
                 }
             }
+
+            // break 진단에서만 각 split을 t_cut Data에서 가장 가까운 cap과 대응시키고 그 거리를 기억한다.
+            // cutter의 cap 링은 테두리와 수십 μm 다를 수 있으므로, 진단은 t_cut 대비 간격 변화를 본다.
+            uint32_t seamChecks = 0;
+            CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", seamChecks);
+            if (seamChecks)
+            {
+                uint32_t unmatched = 0;
+                float nearestMax = 0.0f;
+                for (uint32_t rim : rimVertices)
+                {
+                    uint32_t match = UINT32_MAX;
+                    float nearest = INFINITY;
+                    float r[3];
+                    std::memcpy(r, data + size_t(rim) * 28, sizeof(r));
+                    for (uint32_t candidate : capVertices)
+                    {
+                        float c[3];
+                        std::memcpy(c, data + size_t(candidate) * 28, sizeof(c));
+                        const float distance = float(Math::Length(Math::Vector3(r[0], r[1], r[2]) - Math::Vector3(c[0], c[1], c[2])));
+                        if (distance < nearest)
+                        {
+                            nearest = distance;
+                            match = candidate;
+                        }
+                    }
+
+                    // 0.1 mm 안에 cap이 없는 split은 누락으로 남겨 진단에서 FAIL이 되게 한다.
+                    if (nearest > 1e-4f)
+                    {
+                        match = UINT32_MAX;
+                        ++unmatched;
+                    }
+                    else
+                    {
+                        nearestMax = std::max(nearestMax, nearest);
+                    }
+                    skin->RimCapPairs.push_back({ rim, match, nearest });
+                }
+
+                // split·cap 수, 누락 수, t_cut 최근접 거리 최댓값을 원인 조사용으로 남긴다.
+                PatchLog("PS4 seam pairs rim=%zu cap=%zu unmatched=%u nearestAtCutMax_mm=%.6f\n",
+                    rimVertices.size(), capVertices.size(), unmatched, double(nearestMax) * 1000.0);
+            }
+
+            // 동기 진단에서 사용한 세 버퍼의 매핑을 해제한다.
             for (auto& readback : readbacks)
                 readback.Unmap();
         }

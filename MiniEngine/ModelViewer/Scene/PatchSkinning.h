@@ -35,6 +35,12 @@ namespace Viewer
         {
             uint32_t FirstVertex, VertexCount;
         };
+        struct RimCapPair
+        {
+            uint32_t Rim, Cap; // Data 정점 번호이며 누락 cap은 UINT32_MAX다.
+            float DistanceAtCut; // t_cut Data에서 rim과 가장 가까운 cap 사이 거리(m).
+        };
+        std::vector<RimCapPair> RimCapPairs;
         PatchSkinSnapshot Snapshot;
         PatchSkinVertices Vertices;
         std::vector<Section> Sections;
