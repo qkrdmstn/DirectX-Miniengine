@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include "SkinCpuData.h"
 #include <array>
+#include <functional>
+#include <map>
 
 // DirectX 저장 순서의 affine 행렬이며 RestNodeTransform * IBM을 미리 합성한다.
 using LatticeRestTransform = std::array<float, 16>;
@@ -45,3 +47,21 @@ LatticeTopology BuildLatticeTopology(const std::vector<SkinCpuSection>& sections
     const std::vector<LatticeRestTransform>& restTransforms = {});
 // 점유 셀과 삼각형 간선으로 전체 연결 성분 수를 센다.
 uint32_t CountLatticeComponents(const LatticeTopology& topology);
+
+struct PatchIsland
+{
+    uint32_t Side = 0, Triangles = 0, Body = 0;
+    std::vector<double> Scores = { 0 };
+    std::map<uint32_t, double> JointScores; // 모델 팔레트 인덱스별 진단 근거
+};
+struct IslandLabels
+{
+    std::vector<std::array<uint32_t, 2>> TriangleSideBody; // 없는 side는 UINT32_MAX
+    std::vector<PatchIsland> Islands;
+    uint32_t IslandCount = 0;
+    uint32_t SideDefault[2] = {}; // 해당 side의 삼각형 수 다수결, 동점 A
+};
+// 패치 삼각형의 같은 반공간 셀을 연결하고 bind weight 다수결로 몸체를 정한다.
+IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vector<SkinCpuSection>& sections,
+    const std::vector<std::array<uint32_t, 2>>& triangles, const std::vector<std::vector<int8_t>>& signs,
+    const std::function<uint32_t(uint32_t)>& jointGroup);

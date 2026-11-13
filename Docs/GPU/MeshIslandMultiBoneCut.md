@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1 구현·CPU 테스트·Debug/Release·CesiumMan 로드 검증 완료(base `2a1620cd`); MI-2~5 미구현 (2026-11-13).
+상태: 진행 중 — MI-1·MI-2 아일랜드 라벨 진단 및 MI-2 리뷰 3건 수정 완료, CPU 테스트·Debug/Release 빌드·Release 회귀 PASS(base `432ff0c5`); MI-3~5 미구현 (2026-11-13).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -78,7 +78,7 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | 단계 | 내용 | 완료 조건 |
 | --- | --- | --- |
 | MI-1 | 격자 토폴로지 맵: CPU 인덱스 보관, `BuildLatticeTopology`, 로드 시 생성, union-find | 단위 테스트(분리된 두 삼각형 띠=2 성분, 같은 위치 중복 정점=1 성분, 평면 절단 시 성분 증가) PASS; CesiumMan 로드 로그에 Dim·셀 수·전체 성분 수 |
-| MI-2 | 아일랜드 라벨 진단: Poll에서 TriangleSources 읽기, 반공간 예측, `LabelPatchIslands`, 로그만 | CesiumMan 위팔 데모 로그에 아일랜드 ≥2, 허리 아일랜드 → 몸체 A; 동작·출력 불변, 회귀 PASS |
+| MI-2 | 완료(base `432ff0c5`): Poll의 기존 TriangleSources readback 재사용, 제출 포즈 반공간 예측, `LabelPatchIslands`, 로그·표 보관만 | 리뷰 3건 수정 후 CPU 테스트·D/R 빌드·Release 회귀 PASS; 위팔 P7에서 아일랜드 3개, 허리 90 tris → A; GPU 출력 불변 |
 | MI-3 | GPU 분리: 절단 출력 삼각형을 몸체 표로 A/B에 재배치(cap 포함), 단일 관절 유지 | 위팔 캡처에서 허리 삼각형이 원본에 남음; SP7e2·PS 회귀 PASS |
 | MI-4 | 다중 본: 교차 최상위 joint 집합, 합집합 선택, 몸체 n+1 게시, `BreakConstraint` n회 | 몸통/허벅지 평면에서 끊은 관절 수만큼 B 몸체; AlreadyBroken·Stale 거절 유지; 회귀 PASS |
 | MI-5 | CesiumMan 시험·기록 | 위팔·허벅지·몸통 평면 캡처, 결과를 아래 "시험 결과"에 기록 |
@@ -97,4 +97,22 @@ MI-1: `BuildInfluencingJoints`가 R16/R32 draw의 startIndex/baseVertex를 반�
 Release를 ModelViewer 작업 디렉터리에서 `-debug 1 -skeletal-break-demo 2 -physics-query-exit 180`으로 실행: MX450/591.86, 약 19.7초·종료 코드 0, A/B 게시 완료. CesiumMan: `LatticeTopology: Dim=14x49x64 cells=1360 edges=4075 components=1`.
 실행 로그 `%TEMP%/MI1-CesiumMan-debug.log`에는 DXGI 출력 어댑터 오류 #80과 D3D12 리소스 전환 경고도 있다. 이 단계에서는 절단 회귀 전체를 실행하지 않았다.
 
-(MI-5에서 기록)
+MI-2(base `432ff0c5`, 리뷰 수정 포함, 2026-11-13): `SkeletalPatchJob::Submit`은 `GetPreparedJoints`·`GetPreparedNodes`·SourceFrame·컴포넌트 world와 부모 계층을 고정한다.
+`Poll`은 기존 TriangleSources readback의 section/draw/triangle을 CPU skin section 연속 삼각형 번호로 바꾼다.
+`SkeletalPatchCopy::Update`의 실제 복사본 평면 확대 뒤 `DiagnoseIslands`가 패치 삼각형이 참조한 정점만 중복 없이 CPU 스키닝하고 dot 부호(허용오차 1e-5)를 계산한다.
+미계산 부호는 2로 표시하고, 팔레트 joint→A/B1 표는 요청당 한 번 만들어 투표 때 부모 계층을 다시 탐색하지 않는다.
+`LabelPatchIslands`의 연결 판정과 점수 누적을 분리했다. 유효한 (패치 삼각형, side)는 원본 세 꼭짓점 전체의 정규화 bind weight를 그룹별로 누적하며 반대 부호 꼭짓점도 포함한다.
+`ClipTrianglesCS`의 완전 공면 side0 특례, 엄격한 부호 교차, 다각형 꼭짓점 수 분기를 확인했다. `{0,-1,-1}`의 side0은 점, `{0,0,-1}`의 side0은 선분만 남으므로 두 경우 모두 side1에만 소속한다.
+없는 side는 삼각형 소속·투표·SideDefault에서 제외하고 `TriangleSideBody`를 `UINT32_MAX`로 유지한다. 평면 위 정점은 유효한 양쪽 side 연결에 계속 참여한다.
+동점은 A, side 기본 몸체는 패치 삼각형 수 다수결이다. 결과는 `SkeletalPatchBuffers::Islands`와 job에 다음 요청까지 보관하며 GPU 절단·게시·마스크에는 적용하지 않는다.
+CPU 테스트 PASS(컴파일·실행 6.3초): 기존 MI-1/MI-2 조건과 전체 꼭짓점 투표(A=1/B=2 양쪽 동일), 점·선분 접촉의 side0 제외·side1 투표·기본 몸체, 양쪽 동점=A를 검증했다.
+Debug 24.3초·Release 29.5초 증분 빌드 성공(각 오류 0, 기존 경고 6). 로그: `%TEMP%/MI2-fix-{Debug,Release}-build.log`, CPU 산출물: `%TEMP%/MI2-fix-LatticeTopologyTests.exe`, `%TEMP%/MI2-fix-unit.log`.
+Release를 ModelViewer 작업 디렉터리에서 `-debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone Skeleton_arm_joint_L__4_ -physics-query-exit 180`으로 실행했다. 최종 실행 11.5초, 종료 0; A/B components=2, caps=2, uncapped=0, error=0.
+위팔 결과: `MI2 islands=3 reassigned=1 side0Default=1 side1Default=0`.
+허리: `MI2 island side=0 tris=90 scoreA=252.476424 scoreB=17.523576 body=A representative=2 name=Skeleton_torso_joint_1 weight=175.691257`.
+나머지는 side1 몸통 350 tris(A=849.309642/B=200.690358, A), side0 팔 145 tris(A=4.831554/B=430.168446, B1). 전체 꼭짓점 투표로 점수가 바뀌어도 허리 A는 유지된다.
+실행 로그: `%TEMP%/MI2-fix-UpperArm-patch.log`, `%TEMP%/MI2-fix-UpperArm-exit.log`.
+지정 `regress.sh Release`의 6개 실행 모두 종료 0(12/13/14/10/8/9초, 총 66.0초). SP6 비교 로그 누적 46행 PASS·FAIL 0, BC-12a/b·AR4·Rig PASS.
+SP7e2 case=1 publish/after60은 기존 N/A(noCoincidentKeptBoundary), case=2/3은 PASS. 회귀 로그: `%TEMP%/MI2-fix-Release-regress.log`.
+
+(MI-5에서 추가 기록)

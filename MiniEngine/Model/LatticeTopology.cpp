@@ -154,3 +154,93 @@ uint32_t CountLatticeComponents(const LatticeTopology& topology)
     for (const auto& edge : topology.Edges) components.Unite(edge[0], edge[1]);
     return components.Count();
 }
+
+// 평면 위 꼭짓점은 양쪽 연결에 쓰며 완전 공면 삼각형은 GPU처럼 side0에만 둔다.
+IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vector<SkinCpuSection>& sections,
+    const std::vector<std::array<uint32_t, 2>>& triangles, const std::vector<std::vector<int8_t>>& signs,
+    const std::function<uint32_t(uint32_t)>& jointGroup)
+{
+    // 삼각형별 side 대표를 보관하고 같은 side의 꼭짓점 셀만 병합한다.
+    LatticeUnionFind links(topology.CellCount * 2);
+    std::vector<std::array<uint32_t, 2>> nodes(triangles.size(), { UINT32_MAX, UINT32_MAX });
+    for (size_t t = 0; t < triangles.size(); ++t)
+    {
+        const uint32_t s = triangles[t][0], tri = triangles[t][1];
+        const auto& indices = topology.Indices.at(s);
+        bool positive = false, negative = false;
+        for (uint32_t k = 0; k < 3; ++k)
+        {
+            const int sign = signs.at(s).at(indices.at(tri * 3 + k));
+            positive |= sign > 0;
+            negative |= sign < 0;
+        }
+
+        // GPU의 공면 특례를 따르고 점·선분만 남는 side는 소속에서 제외한다.
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            if (side == 0 ? !positive && negative : !negative) continue;
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                const uint32_t v = indices.at(tri * 3 + k);
+                const int sign = signs.at(s).at(v);
+                if (side == 0 ? sign < 0 : sign > 0) continue;
+                const uint32_t node = LatticeSideNode(topology.VertexCell.at(s).at(v), side);
+                if (nodes[t][side] != UINT32_MAX) links.Unite(nodes[t][side], node);
+                nodes[t][side] = node;
+            }
+        }
+    }
+
+    // 활성 대표만 아일랜드로 만들고 소속된 원본 삼각형의 세 꼭짓점 weight를 누적한다.
+    IslandLabels result;
+    std::map<uint32_t, uint32_t> islands;
+    for (size_t t = 0; t < triangles.size(); ++t)
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            if (nodes[t][side] == UINT32_MAX) continue;
+            const uint32_t root = links.Find(nodes[t][side]);
+            const auto entry = islands.emplace(root, uint32_t(result.Islands.size()));
+            if (entry.second) result.Islands.emplace_back();
+            nodes[t][side] = entry.first->second;
+            auto& island = result.Islands[nodes[t][side]];
+            island.Side = side;
+            ++island.Triangles;
+            const uint32_t s = triangles[t][0], tri = triangles[t][1];
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                const uint32_t v = topology.Indices.at(s).at(tri * 3 + k);
+                const auto& vertex = sections.at(s).at(v);
+                uint32_t sum = 0;
+                for (uint32_t weight : vertex.Weights) sum += weight;
+                for (uint32_t j = 0; j < 4; ++j)
+                {
+                    if (!vertex.Weights[j]) continue;
+                    const uint32_t joint = sections[s].StartJoint + vertex.Joints[j];
+                    const uint32_t group = jointGroup(joint);
+                    if (island.Scores.size() <= group) island.Scores.resize(size_t(group) + 1);
+                    const double weight = double(vertex.Weights[j]) / sum;
+                    island.Scores[group] += weight;
+                    island.JointScores[joint] += weight;
+                }
+            }
+        }
+
+    // 동점에는 A를 우선하고 side 기본 몸체는 원본 패치 삼각형 수로 정한다.
+    std::map<uint32_t, uint32_t> counts[2];
+    result.IslandCount = uint32_t(result.Islands.size());
+    for (auto& island : result.Islands)
+    {
+        for (uint32_t group = 1; group < island.Scores.size(); ++group)
+            if (island.Scores[group] > island.Scores[island.Body]) island.Body = group;
+        if (std::count(island.Scores.begin(), island.Scores.end(), island.Scores[island.Body]) > 1) island.Body = 0;
+        counts[island.Side][island.Body] += island.Triangles;
+    }
+    for (uint32_t side = 0; side < 2; ++side)
+        for (const auto& count : counts[side])
+            if (count.second > counts[side][result.SideDefault[side]]) result.SideDefault[side] = count.first;
+    result.TriangleSideBody = nodes;
+    for (auto& bodies : result.TriangleSideBody)
+        for (auto& body : bodies)
+            if (body != UINT32_MAX) body = result.Islands[body].Body;
+    return result;
+}

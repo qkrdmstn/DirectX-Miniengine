@@ -1178,7 +1178,8 @@ namespace Viewer
         m_Name = m_ModelName + "_SkeletalPatch";
         m_Diagnostic = diagnostic;
         m_Plane = plane;
-        const bool submitted = m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic, influence);
+        const bool submitted = m_Job.Submit(*mesh, local, selected.PaletteMasks, world,
+            selected.NodeId, diagnostic, influence, target->GetModelInstance()->GetPoseParents());
         m_BonePending = boneCut && submitted;
         if (!submitted && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
@@ -1955,6 +1956,9 @@ namespace Viewer
         PatchLog("Skeletal patch infinite cut rectangle=(%.6f,%.6f) worldMargin=%.6f offset=%.6f\n",
             width, height, margin, m_Offset);
 
+        // 실제 절단 요청과 같은 평면으로 라벨을 보관하며 기존 절단 출력은 그대로 둔다.
+        m_Job.DiagnoseIslands(*patch, m_Plane, m_Offset, m_PositiveA, m_ModelName);
+
         // 생성 geometry의 pose와 bounds를 준비한 뒤 다음 프레임의 절단 요청을 허용한다.
         scene.InitializePoses();
         if (!scene.FinalizeObjectPose(m_CopyOwner, nullptr, 0))
@@ -2200,11 +2204,17 @@ namespace Viewer
         m_Output.reset();
         m_Input.reset();
         m_PoseOffsets.clear();
+        m_Parents.clear();
+        m_IslandJoints.clear();
+        m_IslandFrames.clear();
+        m_SkinSections.clear();
+        m_IslandLabels = {};
     }
 
     // 컴포넌트 제거 상태를 반영해 GPU 선택·추출과 기존 패치 인접 집계를 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
-        const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world, uint32_t node, bool diagnostic, bool influence)
+        const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
+        uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents)
     {
         // 준비되지 않았거나 생성된 입력은 이 단계의 skeletal 추출 대상이 아니다.
         Cancel();
@@ -2244,6 +2254,25 @@ namespace Viewer
         m_Plane = plane; m_Node = node; m_Diagnostic = diagnostic;
         m_Influence = influence;
         m_SourceWorld = world;
+        // GPU가 사용한 준비 팔레트와 node/source/world 합성을 제출 시점에 고정한다.
+        const auto& model = *input.GetSource();
+        m_Parents = parents;
+        m_IslandJoints.assign(source.GetPreparedJoints(), source.GetPreparedJoints() + model.m_NumJoints);
+        const uint8_t* meshData = model.m_MeshData.get();
+        std::vector<uint32_t> skinSections(model.m_NumMeshes, UINT32_MAX);
+        uint32_t skin = 0;
+        for (uint32_t s = 0; s < model.m_NumMeshes; ++s)
+        {
+            const auto& mesh = *reinterpret_cast<const Mesh*>(meshData);
+            if (mesh.numJoints) skinSections[s] = skin++;
+            meshData += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
+        }
+        for (uint32_t s = 0; s < input.GetSections().size(); ++s)
+        {
+            m_SkinSections.push_back(skinSections.at(input.GetSections()[s].SourceMesh));
+            m_IslandFrames.push_back(Invert(Math::Matrix4(source.GetDeformBinding().SourceFrame.ToAffine()))
+                * source.GetPreparedNodes()[input.GetMesh(s).meshCBV]);
+        }
         m_Output = std::make_shared<SkeletalPatchBuffers>();
         m_Output->Geometry = std::make_shared<GeometryBuffers>();
         auto& geometry = *m_Output->Geometry;
@@ -2413,6 +2442,11 @@ namespace Viewer
                 for (uint32_t d = 0; d < m_Input->GetMesh(s).numDraws; ++d)
                     if (s < origins[t * 3] || d < origins[t * 3 + 1]) first += m_Input->GetMesh(s).draw[d].primCount / 3;
             m_Output->Triangles.push_back(first + origins[t * 3 + 2]);
+            // draw별 번호를 MI-1이 보존한 skin section 연속 삼각형 번호로 바꾼다.
+            uint32_t local = origins[t * 3 + 2];
+            for (uint32_t d = 0; d < origins[t * 3 + 1]; ++d)
+                local += m_Input->GetMesh(origins[t * 3]).draw[d].primCount / 3;
+            m_Output->IslandSources.push_back({ m_SkinSections.at(origins[t * 3]), local });
         }
         m_OriginsReadback.Unmap();
         if (m_Diagnostic) Validate(result);
@@ -2456,6 +2490,91 @@ namespace Viewer
         patch = std::move(m_Output);
         m_Fence = 0;
         return true;
+    }
+
+    // 제출 포즈를 CPU 스키닝해 실제 절단 평면의 부호와 아일랜드 다수결 근거를 남긴다.
+    void SkeletalPatchJob::DiagnoseIslands(SkeletalPatchBuffers& patch, const MeshCutting::CutPlaneData& plane,
+        float offset, bool positiveA, const std::string& modelName)
+    {
+        // skin section별 제출 프레임을 찾고 아직 계산하지 않은 부호를 표시한다.
+        const auto& model = *m_Input->GetSource();
+        std::vector<std::vector<int8_t>> signs(model.m_SkinCpuSections.size());
+        std::vector<uint32_t> frames(signs.size(), UINT32_MAX);
+        for (size_t s = 0; s < m_SkinSections.size(); ++s)
+        {
+            const uint32_t skin = m_SkinSections[s];
+            if (skin == UINT32_MAX) continue;
+            frames.at(skin) = uint32_t(s);
+        }
+
+        // 패치 삼각형이 참조하는 정점만 중복 없이 PreparePoseCS와 같은 방식으로 스키닝한다.
+        for (const auto& source : patch.IslandSources)
+        {
+            const uint32_t skin = source[0];
+            const auto& section = model.m_SkinCpuSections.at(skin);
+            if (signs[skin].empty()) signs[skin].resize(section.size(), 2);
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                const uint32_t v = model.m_LatticeTopology.Indices.at(skin).at(source[1] * 3 + k);
+                if (signs[skin][v] != 2) continue;
+                const auto& vertex = section.at(v);
+                Math::Vector4 skinned(Math::kZero);
+                uint32_t sum = 0;
+                for (uint32_t weight : vertex.Weights) sum += weight;
+                for (uint32_t j = 0; j < 4; ++j)
+                    if (vertex.Weights[j]) skinned = skinned + (m_IslandJoints.at(section.StartJoint + vertex.Joints[j]).posXform
+                        * Math::Vector4(vertex.Position[0], vertex.Position[1], vertex.Position[2], 1))
+                        * (float(vertex.Weights[j]) / std::max(sum, 1u));
+                const Math::Vector3 local(m_IslandFrames.at(frames.at(skin)) * skinned);
+                const Math::Vector3 world(m_SourceWorld * Math::Vector4(local, 1));
+                const float distance = Math::Dot(plane.WorldPlane,
+                    Math::Vector4(world + Math::Vector3(offset, 0, 0), 1));
+                signs[skin][v] = std::abs(distance) <= 1e-5f ? 0 : distance > 0 ? 1 : -1;
+            }
+        }
+
+        // 요청당 한 번 팔레트 joint의 부모 계층을 따라 A/B1 그룹 표를 만든다.
+        std::vector<uint32_t> jointGroups(model.m_NumJoints, 0);
+        for (uint32_t joint = 0; joint < model.m_NumJoints; ++joint)
+        {
+            for (uint32_t node = model.m_JointIndices[joint]; node != UINT32_MAX; node = m_Parents.at(node))
+                if (node == m_Node)
+                {
+                    jointGroups[joint] = 1;
+                    break;
+                }
+        }
+
+        // 투표 중에는 계층을 다시 탐색하지 않고 그룹 표만 조회한다.
+        const auto group = [&](uint32_t joint)
+        {
+            // 팔레트 인덱스에 대응하는 사전 계산 그룹을 반환한다.
+            return jointGroups.at(joint);
+        };
+        patch.Islands = m_IslandLabels = LabelPatchIslands(model.m_LatticeTopology, model.m_SkinCpuSections,
+            patch.IslandSources, signs, group);
+        uint32_t reassigned = 0;
+        for (const auto& island : patch.Islands.Islands)
+            reassigned += island.Body != uint32_t(island.Side == 0 ? !positiveA : positiveA);
+        PatchLog("MI2 islands=%u reassigned=%u side0Default=%u side1Default=%u\n", patch.Islands.IslandCount,
+            reassigned, patch.Islands.SideDefault[0], patch.Islands.SideDefault[1]);
+
+        // 최대 기여 joint 이름과 점수로 허리 등 떨어진 아일랜드의 소속 근거를 보인다.
+        for (const auto& island : patch.Islands.Islands)
+        {
+            uint32_t joint = UINT32_MAX;
+            double score = 0;
+            for (const auto& entry : island.JointScores)
+                if (entry.second > score)
+                {
+                    joint = entry.first;
+                    score = entry.second;
+                }
+            const uint32_t node = joint == UINT32_MAX ? UINT32_MAX : model.m_JointIndices[joint];
+            PatchLog("MI2 island side=%u tris=%u scoreA=%.6f scoreB=%.6f body=%s representative=%u name=%s weight=%.6f\n",
+                island.Side, island.Triangles, island.Scores[0], island.Scores.size() > 1 ? island.Scores[1] : 0,
+                island.Body ? "B1" : "A", node, SafeDiagnosticNodeName(modelName, node).c_str(), score);
+        }
     }
 
     // 제출 프레임의 제거 상태와 GPU 입력으로 CPU 개수와 압축 출처 순서를 검사한다.

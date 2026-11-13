@@ -2,6 +2,8 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
+MI-2(base `432ff0c5`, 2026-11-13): `SkeletalPatchJob::Poll`이 기존 TriangleSources readback을 재사용한다. `Submit`의 준비 포즈 snapshot과 실제 확대 평면으로 `DiagnoseIslands`가 패치 참조 정점만 중복 없이 스키닝하고 joint→그룹 표를 요청당 한 번 만든다. `LabelPatchIslands`는 출력 없는 side를 제외하고 (셀, side) 연결과 원본 세 꼭짓점 전체의 bind weight 투표를 분리해 몸체 표를 job/패치에 보관한다. GPU 출력에는 적용하지 않는다. CPU 테스트·D/R 빌드·Release 회귀 PASS; CesiumMan 위팔 P7에서 3개 아일랜드 중 허리 90 tris가 A로 재배치되는 라벨을 확인했다([결정·로그](../GPU/MeshIslandMultiBoneCut.md)).
+
 MI-1(base `2a1620cd`, 2026-11-13): `BuildInfluencingJoints`는 skin section에 draw 로컬 삼각형 인덱스를 보존한다. `BuildLatticeTopology`가 bind 최장축 64칸의 점유 셀·삼각형 간선을 생성해 `Model::m_LatticeTopology`에 보관한다. `LatticeUnionFind`·`CountLatticeComponents`는 순수 CPU 연결 성분 계산이며 절단 출력은 변경하지 않는다([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).
 
 스켈레탈 연속 캡처 시연 옵션 추가(미커밋, base `03b5c8a1`, 2026-11-06): `ModelViewer::Update`가 `BuildSkeletalBreakPlane`을 재사용해 Xbot P60(`-skeletal-break-demo 1`) 또는 CesiumMan P8(`2`)을 정상 C 요청한다. `FocusBreakCamera`로 한 번 근접 배치하고 Applied 게시부터 20프레임 간격으로 HDR/post 8장을 저장한다. `-skeletal-break-demo-unmask 1`은 `SetTriangleMask`를 생략하므로 첫 게시 후 수동 C를 포함한 후속 요청을 거절한다. 요청 거절·게시 실패는 오류 로그 후 종료하며 자동 검사·벤치 옵션 동시 지정은 Startup에서 거절한다. 호출자 Release 관찰은 [SP-7 문서](../GPU/SkeletalPatchBreak.md)에 기록했고 이번 수정은 빌드·실행하지 않았다.

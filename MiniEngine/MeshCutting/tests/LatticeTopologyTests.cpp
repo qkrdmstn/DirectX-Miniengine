@@ -105,10 +105,79 @@ int main()
             && split.Find(LatticeSideNode(shared, 0)) == split.Find(LatticeSideNode(fine.VertexCell[0][3], 0)),
             "same sides across cells unite");
 
+        // 반대 반공간의 떨어진 띠는 작은 B 기여가 있어도 몸통 A 다수결을 따른다.
+        for (auto& vertex : strip)
+        {
+            vertex.Weights[0] = 60000;
+            vertex.Weights[1] = 5535;
+            vertex.Joints[1] = 1;
+        }
+        distant = strip;
+        for (auto& vertex : distant) vertex.Position[1] += 4;
+        const std::vector<SkinCpuSection> strips = { strip, distant };
+        const std::vector<std::array<uint32_t, 2>> patch = { {0,0}, {0,1}, {1,0}, {1,1} };
+        const auto groups = [](uint32_t joint) { return joint; };
+        const auto labels = LabelPatchIslands(BuildLatticeTopology(strips), strips, patch,
+            { {1,1,1,1}, {-1,-1,-1,-1} }, groups);
+        Require(labels.IslandCount == 2 && labels.Islands[1].Body == 0
+            && labels.Islands[1].Scores[0] > labels.Islands[1].Scores[1]
+            && labels.TriangleSideBody[2][1] == 0 && labels.TriangleSideBody[2][0] == UINT32_MAX,
+            "opposite waist strip belongs to A");
+
+        // 평면을 가로지르는 띠는 양쪽 아일랜드와 삼각형별 몸체 표를 만든다.
+        const auto cut = LabelPatchIslands(BuildLatticeTopology({strip}), {strip}, {{0,0}, {0,1}},
+            {{-1,1,-1,1}}, groups);
+        Require(cut.IslandCount == 2 && cut.Islands[0].Side != cut.Islands[1].Side
+            && cut.Islands[0].Triangles == 2 && cut.Islands[1].Triangles == 2, "crossing strip islands");
+        const auto onPlane = LabelPatchIslands(BuildLatticeTopology({strip}), {strip}, {{0,0}, {0,1}},
+            {{0,0,0,0}}, groups);
+        Require(onPlane.IslandCount == 1 && onPlane.TriangleSideBody[0][1] == UINT32_MAX, "coplanar side0");
+        // 반대 부호의 두 꼭짓점도 양쪽 투표에 포함되어 같은 B 다수결을 만든다.
+        SkinCpuSection voting = strip;
+        for (uint32_t v = 0; v < 3; ++v)
+        {
+            voting[v].Weights[0] = v == 0 ? 100 : 0;
+            voting[v].Weights[1] = v == 0 ? 0 : 100;
+        }
+        const auto fullVote = LabelPatchIslands(BuildLatticeTopology({voting}), {voting}, {{0,0}},
+            {{1,-1,-1,1}}, groups);
+        Require(fullVote.IslandCount == 2 && fullVote.TriangleSideBody[0][0] == 1
+            && fullVote.TriangleSideBody[0][1] == 1, "opposite sign vertices vote on both sides");
+        for (const auto& island : fullVote.Islands)
+            Require(island.Scores[0] == 1 && island.Scores[1] == 2, "all three bind weights per side");
+
+        // GPU에서 점이나 선분만 남는 side0은 소속·투표·기본 몸체에서 빠진다.
+        const auto pointTouch = LabelPatchIslands(BuildLatticeTopology({voting}), {voting}, {{0,0}},
+            {{0,-1,-1,1}}, groups);
+        const auto edgeTouch = LabelPatchIslands(BuildLatticeTopology({voting}), {voting}, {{0,0}},
+            {{0,0,-1,1}}, groups);
+        for (const auto* touch : { &pointTouch, &edgeTouch })
+        {
+            Require(touch->IslandCount == 1 && touch->Islands[0].Side == 1
+                && touch->Islands[0].Triangles == 1 && touch->Islands[0].Scores[0] == 1
+                && touch->Islands[0].Scores[1] == 2, "touch only votes on side1");
+            Require(touch->TriangleSideBody[0][0] == UINT32_MAX && touch->TriangleSideBody[0][1] == 1
+                && touch->SideDefault[0] == 0 && touch->SideDefault[1] == 1, "touch excludes empty side0");
+        }
+
+        // 세 꼭짓점 모두 동점이면 양쪽에서 A를 우선한다.
+        for (auto& vertex : strip) vertex.Weights[0] = vertex.Weights[1] = 100;
+        const auto tie = LabelPatchIslands(BuildLatticeTopology({strip}), {strip}, {{0,0}}, {{1,-1,-1,1}}, groups);
+        Require(tie.TriangleSideBody[0][0] == 0 && tie.TriangleSideBody[0][1] == 0, "weight tie chooses A");
+        const auto tiedBodies = LabelPatchIslands(BuildLatticeTopology({strip}), {strip}, {{0,0}},
+            {{1,-1,-1,1}}, [](uint32_t joint) { return joint + 1; });
+        Require(tiedBodies.TriangleSideBody[0][0] == 0, "B1 B2 tie chooses A");
+
+        // 평면 위 정점은 교차 띠의 양쪽 연결에 참여하며 두 side는 합쳐지지 않는다.
+        const auto zeroCrossing = LabelPatchIslands(BuildLatticeTopology({strip}), {strip}, {{0,0}, {0,1}},
+            {{0,-1,1,0}}, groups);
+        Require(zeroCrossing.IslandCount == 2 && zeroCrossing.Islands[0].Triangles == 2
+            && zeroCrossing.Islands[1].Triangles == 2, "on-plane vertices join both sides");
+
         // 빈 입력과 점 크기 bounds도 유효한 결과를 낸다.
         Require(CountLatticeComponents(BuildLatticeTopology({})) == 0, "empty");
         Require(BuildLatticeTopology({ SkinCpuSection{ strip[0], strip[0] } }).CellCount == 1, "point bounds");
-        std::puts("LatticeTopologyTests: PASS (separate=2, seam=1, rest-weld=1, zero-weight, shared-cell split=2, empty, point)");
+        std::puts("LatticeTopologyTests: PASS (MI1 topology, MI2 waist=A, full triangle votes, point/edge touch=side1, crossing=2, coplanar=side0, tie=A)");
         return 0;
     }
     catch (const std::exception& error)

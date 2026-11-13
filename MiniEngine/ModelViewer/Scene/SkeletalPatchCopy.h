@@ -41,6 +41,8 @@ namespace Viewer
         ByteAddressBuffer LocalBounds; // counts 0..8, local AABB 12..32, source world X min/max 36..40
         float SourceWorldWidth = 0;
         std::vector<uint32_t> Triangles;
+        std::vector<std::array<uint32_t, 2>> IslandSources; // skin CPU section, section 로컬 삼각형
+        IslandLabels Islands; // MI-3용 진단 표이며 GPU 출력에는 아직 적용하지 않는다.
         std::vector<BoundaryVertex> Boundary; // 진단에서만 채우는 C 시점 바깥 경계 정점
         std::vector<BoundarySkin> BoundarySkins;
     };
@@ -54,7 +56,11 @@ namespace Viewer
         // component-local 평면과 section별 팔레트로 GPU 선택·추출을 제출한다.
         bool Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
             const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
-            uint32_t node = UINT32_MAX, bool diagnostic = false, bool influence = false);
+            uint32_t node = UINT32_MAX, bool diagnostic = false, bool influence = false,
+            const std::vector<NodeId>& parents = {});
+        // 확대된 실제 복사본 평면으로 제출 포즈의 부호를 예측하고 진단 표만 보관한다.
+        void DiagnoseIslands(SkeletalPatchBuffers& patch, const MeshCutting::CutPlaneData& plane,
+            float offset, bool positiveA, const std::string& modelName);
         // fence 완료 후 카운터·로컬 경계와 GPU 출력을 수집하고 진단 모드에서 CPU 기준과 비교한다.
         bool Poll(SkeletalPatchResult& result, std::shared_ptr<SkeletalPatchBuffers>& patch);
         // 이전 작업을 무효화하고 제출 자원의 GPU 사용 완료를 보장한다.
@@ -84,6 +90,11 @@ namespace Viewer
         std::shared_ptr<const GeometryRevision> m_Input;
         MeshCutting::CutPlaneData m_Plane;
         std::vector<uint32_t> m_PoseOffsets;
+        std::vector<NodeId> m_Parents;
+        std::vector<Joint> m_IslandJoints;
+        std::vector<Math::Matrix4> m_IslandFrames;
+        std::vector<uint32_t> m_SkinSections;
+        IslandLabels m_IslandLabels; // 출력 버퍼 해제 뒤에도 다음 요청까지 결과를 보관한다.
         uint32_t m_Node = UINT32_MAX;
         bool m_Diagnostic = false;
         uint64_t m_Fence = 0;
