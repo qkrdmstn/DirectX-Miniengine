@@ -1050,7 +1050,7 @@ namespace Viewer
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
     }
 
-    // 실제 추출 section의 N 일치 여부와 저장된 t_cut 팔레트 및 경계 weight를 확인한다.
+    // 실제 추출 section의 공통 N과 그 node 식별자를 저장하고 팔레트 및 경계 weight를 확인한다.
     void SkeletalPatchCopy::CheckPatchSkin(const SkeletalPatchBuffers& patch)
     {
         // 추출 전역 삼각형 목록을 section 범위로 나누어 실제 걸친 N만 비교한다.
@@ -1059,6 +1059,7 @@ namespace Viewer
         uint32_t first = 0;
         bool found = false;
         bool allowed = true;
+        uint32_t meshNode = UINT32_MAX;
         Math::Matrix4 common(Math::kIdentity);
         for (size_t s = 0; s < m_SkinSectionNodes.size(); ++s)
         {
@@ -1069,7 +1070,12 @@ namespace Viewer
             const auto triangle = triangles.lower_bound(first);
             if (triangle != triangles.end() && *triangle < first + count)
             {
-                if (!found) common = m_SkinSectionNodes[s];
+                // 공통 N의 첫 실제 추출 section을 매 프레임 재계산할 기준으로 보존한다.
+                if (!found)
+                {
+                    common = m_SkinSectionNodes[s];
+                    meshNode = mesh.meshCBV;
+                }
                 found = true;
                 DirectX::XMFLOAT4X4 relative;
                 DirectX::XMStoreFloat4x4(&relative, Math::Invert(common) * m_SkinSectionNodes[s]);
@@ -1086,6 +1092,7 @@ namespace Viewer
         {
             auto& snapshot = m_SkinSnapshots[side];
             snapshot.SkinningAllowed = found && allowed;
+            snapshot.MeshNode = meshNode;
             if (found) snapshot.MeshNodeAtCut = common;
             if (!m_SkinCheckCase || m_ForceStale) continue;
             uint32_t frozen = 0;
@@ -1335,7 +1342,7 @@ namespace Viewer
         m_CopyOwner = 0;
     }
 
-    // 절단과 break를 제출하지 않고 같은 owner에 부착 패치와 제거 마스크를 게시한다.
+    // 절단과 break 없이 같은 owner에 스키닝 가능한 패치와 제거 마스크를 게시한다.
     void SkeletalPatchCopy::PublishRigBonePatch(Scene& scene, const SkeletalPatchResult& result,
         const std::shared_ptr<SkeletalPatchBuffers>& patch)
     {
@@ -1383,7 +1390,8 @@ namespace Viewer
                 BuildPieceSkin(*piece, *patch->Geometry, *patch, 0);
             }
 
-            // 기존 강체 부착과 렌더 준비는 skin 입력을 소비하지 않는다.
+            // 게시할 D5만 스키닝 PG를 소유하며 부착 메타데이터와 충돌 정책은 보존한다.
+            piece->ActivatePatchSkin();
             piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
             const auto& instance = *owner->GetModelInstance();
             size_t section = 0;
@@ -1396,9 +1404,9 @@ namespace Viewer
                 || !piece->SetTransform(world, MeshTransformMode::WorldIndependent))
                 throw std::runtime_error("invalid attached world");
 
-            // 현재 node 배치의 패치 렌더 자원을 먼저 준비한다.
+            // 확정된 owner pose와 원본 W 및 N으로 게시할 렌더 자원을 먼저 준비한다.
             auto& prepare = GraphicsContext::Begin(L"Prepare rig bone patch");
-            piece->Update(prepare, instance, owner->GetTransform());
+            piece->Update(prepare, instance, owner->GetTransform(), source);
             prepare.Finish(true);
 
             // replacement IB 준비 뒤 예약된 자리에 컴포넌트를 게시한다.
@@ -1437,7 +1445,7 @@ namespace Viewer
         });
     }
 
-    // 복사본을 준비하고 Static batch가 비면 저장한 평면으로 절단한다.
+    // 복사본을 절단하고 break 성공 시 A/B의 전용 스키닝 PG를 게시한다.
     bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
         // D5 추출 완료는 break 취소와 Stale 및 절단 제출 분기에 들어가지 않는다.
@@ -1494,6 +1502,7 @@ namespace Viewer
                         piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
                         piece->Attachment = std::make_unique<NodeAttachment>(i == 0 ? m_AttachA : m_AttachB);
                         piece->PatchSkin = staging->GetMeshComponents()[index]->PatchSkin;
+                        piece->ActivatePatchSkin();
                         if (m_BreakCheck && !m_ForceStale) m_PieceIds[i] = piece->GetId();
                         pieces.push_back(std::move(piece));
                     }

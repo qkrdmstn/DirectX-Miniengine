@@ -439,6 +439,7 @@ namespace Viewer
             : std::make_unique<PosedGeometry>(*geometry->GetSource());
         m_PosedGeometry.reset();
         m_PosedGeometry = std::move(posed);
+        m_PatchSkinActive = false;
 
         // revision을 교체하고 경계·준비 상태를 무효화한다.
         ++m_EditGeneration;
@@ -497,6 +498,7 @@ namespace Viewer
         // pose 버퍼를 교체하되 이전 버퍼의 해제는 함수 끝으로 미룬다.
         std::unique_ptr<PosedGeometry> previous = std::move(m_PosedGeometry);
         m_PosedGeometry = std::move(prepared.Posed);
+        m_PatchSkinActive = false;
 
         // SetGeometry·SetTransform·SetDeformBinding과 같은 세대 증가와 캐시 무효화를 적용한다.
         ClearTriangleMask();
@@ -547,8 +549,29 @@ namespace Viewer
         return true;
     }
 
-    // CPU pose와 월드 변환을 준비하고 본 부착 여부에 따른 선·점 색상을 업로드한다.
-    void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner)
+    // 실제 게시 시에만 보관된 skin 입력으로 컴포넌트 전용 PG를 교체한다.
+    void MeshComponent::ActivatePatchSkin()
+    {
+        // 스키닝을 허용하지 않은 조각은 기존 강체 경로를 유지한다.
+        if (!PatchSkin || !PatchSkin->Snapshot.SkinningAllowed)
+            return;
+        if (!m_Geometry->IsGenerated() || !Attachment || PatchSkin->Snapshot.MeshNode == UINT32_MAX)
+            throw std::runtime_error("Invalid patch skin publication");
+
+        // section 순서를 렌더 offset과 일치시키며 게시 전 PG를 할당한다.
+        std::vector<PosedGeometry::VertexRange> sections;
+        for (const auto& section : PatchSkin->Sections)
+            sections.push_back({ section.FirstVertex, section.VertexCount });
+        auto posed = std::make_unique<PosedGeometry>(PatchSkin->Vertices.Data,
+            PatchSkin->Vertices.Stride, PatchSkin->Vertices.Flags, sections);
+        m_PosedGeometry = std::move(posed);
+        m_PatchSkinActive = true;
+        m_Ready = false;
+    }
+
+    // 확정 CPU pose로 PG를 갱신하고 스키닝 조각에는 원본의 W와 N을 적용한다.
+    void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner,
+        const MeshComponent* patchSource)
     {
         // 같은 명령 목록에서 마스크를 먼저 갱신한다.
         UpdateTriangleMask(context);
@@ -565,7 +588,27 @@ namespace Viewer
         // 생성 조각의 월드 상수를 업로드하고 Data 디코드 결과를 렌더 입력으로 준비한다.
         if (m_Geometry->IsGenerated())
         {
-            m_PreparedWorld = GetWorldTransform(owner);
+            // 스키닝 조각은 부착 월드 대신 원본의 현재 월드와 최종 pose를 사용한다.
+            if (HasSkinnedPatch())
+            {
+                if (!patchSource || patchSource->GetGeometry()->GetSource() != pose.GetModel()
+                    || PatchSkin->Snapshot.MeshNode >= pose.GetModel()->m_NumNodes)
+                    return;
+                std::vector<Joint> palette;
+                BuildPatchPalette(PatchSkin->Snapshot, pose.GetJoints(), pose.GetNodeTransforms(), palette);
+                const Matrix4 sourceToComponent(Invert(patchSource->GetDeformBinding().SourceFrame.ToAffine()));
+                const Matrix4 node = sourceToComponent * pose.GetNodeTransforms()[PatchSkin->Snapshot.MeshNode];
+                m_PosedGeometry->UpdateSkinnedGenerated(context, PatchSkin->Vertices.Data, palette, node);
+                m_PreparedWorld = patchSource->GetWorldTransform(owner);
+            }
+            else
+            {
+                // 일반 생성 조각은 기존 Data 디코드와 자체 배치를 유지한다.
+                m_PosedGeometry->UpdateGenerated(context, *m_Geometry->GetGenerated());
+                m_PreparedWorld = GetWorldTransform(owner);
+            }
+
+            // 모든 생성 조각은 PG 위치에 렌더 월드를 한 번만 곱한다.
             const Matrix4 world(m_PreparedWorld);
             MeshConstants cb{};
             cb.World = cb.ObjectWorld = world;
@@ -579,7 +622,6 @@ namespace Viewer
             context.GetCommandList()->CopyBufferRegion(m_ConstantsGPU.GetResource(), 0,
                 m_ConstantsCPU.GetResource(), 0, sizeof(cb));
             context.TransitionResource(m_ConstantsGPU, D3D12_RESOURCE_STATE_GENERIC_READ);
-            m_PosedGeometry->UpdateGenerated(context, *m_Geometry->GetGenerated());
 
             // 생성 Data의 경계를 유지하고 section 행렬은 component-local 단위 행렬로 기록한다.
             m_SectionBounds.clear();

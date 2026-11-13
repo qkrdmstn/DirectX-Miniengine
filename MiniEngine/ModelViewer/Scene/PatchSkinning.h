@@ -16,6 +16,7 @@ namespace Viewer
     struct PatchSkinSnapshot
     {
         uint32_t AttachNode = UINT32_MAX;
+        uint32_t MeshNode = UINT32_MAX; // 공통 N을 제공한 실제 추출 section의 meshCBV다.
         Math::Matrix4 AttachAtCut{ Math::kIdentity };
         Math::Matrix4 MeshNodeAtCut{ Math::kIdentity };
         std::vector<Joint> JointsAtCut;

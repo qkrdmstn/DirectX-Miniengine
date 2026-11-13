@@ -1,4 +1,4 @@
-상태: 진행 중 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 완료(Debug/Release 빌드·회귀, 2026-11-13). PS-4 이후 미착수. 기준 master `f2b4d2ec`
+상태: 진행 중 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 `cfffd37f`, PS-4a 완료(Debug/Release 빌드·회귀, 2026-11-13). PS-4b 이후 미착수. 기준 master `f2b4d2ec`
 
 # 스켈레탈 패치 조각 스키닝 (NDC25 "프로시저럴 메시 스키닝")
 
@@ -99,7 +99,8 @@ void BuildPatchPalette(const PatchSkinSnapshot& snap, const Joint* current,
 | PS-2a | 출처 복원 + `PatchSkinBuildCS` skin VB 생성 셰이더·동기 생성 API(`BuildPatchSkinVertices`) | 완료: 빌드·리뷰(방향은 transpose(N)으로 되돌림), 호출 연결 전이라 실행 검증 없음 |
 | PS-2b | A/B·D5 결과 경로에서 skin VB 생성·보관, PS2 진단 | 완료: A/B 세 case·D5 모두 PASS(최대 0.00024 mm, copied/split/cap 분류 확인), 생성 뒤 입력 상태 GENERIC_READ 복원 |
 | PS-3 | `PosedGeometry` skinned generated 생성·매 프레임 갱신 API | 완료: GPU 갱신 결과(RAW40) = Data, A/B 세 case 최대 0.00025 mm PASS, 기존 model·generated PG 동작 불변 |
-| PS-4 | A/B/D5 게시 전환(W·N·조각 팔레트), D7 bounds | 시각 확인, 조각 PG 전체 정점이 bounds 안, 테두리–cap 대응 정점 거리 ≤0.01 mm(60프레임 뒤) |
+| PS-4a | A/B/D5 게시 전환(W·N·조각 팔레트), 매 프레임 skinned PG 갱신 | 완료: 회귀 6종 유지. 한계(PS-4b·PS-6에서 해결): 조회용 world·bounds가 게시 시점 값, source Frozen/revision 변경 미검사, AR 재절단은 t_cut Data를 자름 |
+| PS-4b | D7 조각 bind bounds·매 프레임 bounds, 게시·60프레임 뒤 PS4 bounds·rim/cap 진단 | 조회용 world = W(t), source가 실제 쓴 팔레트 사용·revision 변경 시 스키닝 해제, D7 bounds. 확인: 조각 PG 전체 정점이 bounds 안, 테두리–cap 대응 정점 거리 ≤0.01 mm 확인 예정 |
 | PS-5 | SP7e2 정점 식별자 짝·같은 프레임 PG 비교 | Xbot 허벅지·CesiumMan 팔 publish·after60 PASS; SP7e2 FAIL을 진단 종료 코드에 반영(PS-0 리뷰 후속) |
 | PS-6 | AR 후보 static 노출, 후보 시점 bake·영구 강체 전환 | AR4 다섯 PASS, `Rig bone cut checks PASS` |
 

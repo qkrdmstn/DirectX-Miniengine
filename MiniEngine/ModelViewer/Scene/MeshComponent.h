@@ -66,7 +66,7 @@ namespace Viewer
     public:
         bool PublishVisible = true; // 미게시 절단 준비물은 모든 pass에서 숨긴다.
         std::unique_ptr<NodeAttachment> Attachment;
-        std::shared_ptr<PatchSkinPublication> PatchSkin; // PS-2에서는 보관만 하며 렌더 입력은 그대로 둔다.
+        std::shared_ptr<PatchSkinPublication> PatchSkin; // 게시 전에는 입력만 보관하고 게시 시 PG를 활성화한다.
         // 공유 원본 revision을 사용하되 GPU pose·렌더 상수는 새로 만든다.
         MeshComponent(ComponentId id, std::shared_ptr<const GeometryRevision> geometry);
         // 이전 프레임의 GPU 사용이 끝난 뒤 렌더 자원을 해제한다.
@@ -81,6 +81,14 @@ namespace Viewer
         const std::shared_ptr<const GeometryRevision>& GetGeometry() const { return m_Geometry; }
         // 이 컴포넌트에만 속한 현재 자세 버퍼를 읽는다.
         const PosedGeometry& GetPosedGeometry() const { return *m_PosedGeometry; }
+        // 게시할 조각의 skin 입력으로 컴포넌트 소유 PG를 준비한다.
+        void ActivatePatchSkin();
+        // staging의 보관용 skin 입력과 실제 게시된 skinned PG를 구별한다.
+        bool HasSkinnedPatch() const
+        {
+            // 현재 revision에 활성화한 skin 입력만 사용한다.
+            return m_PatchSkinActive && PatchSkin && PatchSkin->Snapshot.SkinningAllowed;
+        }
         // 편집할 target TRS를 읽는다.
         const SceneTransform& GetTransform() const { return m_Transform; }
         // owner 종속 여부를 읽는다.
@@ -140,8 +148,9 @@ namespace Viewer
         Math::BoundingSphere GetLocalSectionBounds(size_t section) const { return m_SectionBounds.at(section); }
         // 현재 geometry의 보수적인 월드 경계 구를 반환한다.
         Math::BoundingSphere GetBoundingSphere(const SceneTransform& owner) const;
-        // 공유 CPU pose를 읽어 컴포넌트별 GPU 정점과 렌더 상수를 준비한다.
-        void Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner);
+        // 확정 CPU pose를 읽고 스키닝 조각은 원본 컴포넌트의 W와 N으로 준비한다.
+        void Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner,
+            const MeshComponent* patchSource = nullptr);
         // 원본 삼각형 순서의 상태를 저장하고 다음 GPU 준비에서 반영한다.
         bool SetTriangleMask(const std::vector<uint32_t>& state);
         // 제출된 GPU 사용이 끝난 뒤 마스크를 해제하여 원래 IB로 복귀한다.
@@ -173,6 +182,7 @@ namespace Viewer
         DeformBinding m_DeformBinding;
         std::shared_ptr<const GeometryRevision> m_Geometry;
         std::unique_ptr<PosedGeometry> m_PosedGeometry;
+        bool m_PatchSkinActive = false;
         UploadBuffer m_ConstantsCPU;
         ByteAddressBuffer m_ConstantsGPU;
         Math::AffineTransform m_PreparedWorld{ Math::kIdentity };

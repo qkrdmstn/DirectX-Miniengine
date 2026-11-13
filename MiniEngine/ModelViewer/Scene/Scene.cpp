@@ -273,7 +273,7 @@ namespace Viewer
         return false;
     }
 
-    // CPU pose를 다시 평가하지 않고 각 컴포넌트의 GPU geometry를 준비한다.
+    // 물리 writeback까지 확정된 CPU pose로 원본과 스키닝 조각의 GPU geometry를 준비한다.
     void Scene::PrepareMeshes(GraphicsContext& context)
     {
         // substep 수와 독립적인 GPU 준비 호출 수를 기록한다.
@@ -287,7 +287,7 @@ namespace Viewer
             for (const auto& mesh : object->m_MeshComponents)
             {
                 // 확정된 원본 pose에서 Wc*E*Gnode를 구해 C snapshot의 상대 배치를 유지한다.
-                if (mesh->Attachment)
+                if (mesh->Attachment && !mesh->HasSkinnedPatch())
                 {
                     const auto& attachment = *mesh->Attachment;
                     Math::Matrix4 nodeWorld;
@@ -298,8 +298,10 @@ namespace Viewer
                     mesh->SetAttachedWorld(world);
                 }
 
-                // 부착 갱신 뒤 같은 프레임의 렌더 상수를 준비한다.
-                mesh->Update(context, *object->m_ModelInstance, object->m_Transform);
+                // 스키닝 조각의 부착 메타데이터는 보존하고 원본 컴포넌트만 조회한다.
+                const auto* source = mesh->HasSkinnedPatch() && mesh->Attachment
+                    ? object->FindMeshComponent(mesh->Attachment->SourceMesh) : nullptr;
+                mesh->Update(context, *object->m_ModelInstance, object->m_Transform, source);
             }
         }
     }
