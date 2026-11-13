@@ -86,6 +86,8 @@
     <ClInclude Include="GeometryRevision.h" />
     <ClInclude Include="GeometryBuffers.h" />
     <ClCompile Include="GeometryBuffers.cpp" />
+    <ClCompile Include="LatticeTopology.cpp" />
+    <ClInclude Include="LatticeTopology.h" />
     <ClInclude Include="TransformBounds.h" />
     <ClInclude Include="ModelPose.h" />
     <ClInclude Include="SkeletonPose.h" />

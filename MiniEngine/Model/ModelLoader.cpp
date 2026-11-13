@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <unordered_map>
 
 using namespace Renderer;
@@ -290,7 +291,7 @@ static void BuildMeshCollision(Model& model, const std::vector<uint8_t>& geometr
     }
 }
 
-// skin 정점의 최소 CPU 복사본과 NodeId별 양수 weight 여부를 모델에 보관한다.
+// skin 정점·로컬 삼각형 인덱스와 NodeId별 양수 weight 여부를 보관한다.
 static void BuildInfluencingJoints(Model& model, const std::vector<uint8_t>& geometry)
 {
     // skin 정점의 마지막 16바이트는 uint16 joint 네 개와 unorm16 weight 네 개다.
@@ -303,9 +304,33 @@ static void BuildInfluencingJoints(Model& model, const std::vector<uint8_t>& geo
         if (!mesh.numJoints) continue;
         model.m_SkinCpuSections.emplace_back();
         auto& vertices = model.m_SkinCpuSections.back();
+        vertices.StartJoint = mesh.startJoint;
+        vertices.NumJoints = mesh.numJoints;
         if (mesh.vbStride < 28 || mesh.vbSize % mesh.vbStride || uint64_t(mesh.vbOffset) + mesh.vbSize > geometry.size())
             continue;
         vertices.resize(mesh.vbSize / mesh.vbStride);
+
+        // R16/R32 draw 범위를 해석해 section VB 기준의 인덱스로 보존한다.
+        const uint32_t indexSize = mesh.ibFormat == DXGI_FORMAT_R16_UINT ? 2 : 4;
+        if ((mesh.ibFormat != DXGI_FORMAT_R16_UINT && mesh.ibFormat != DXGI_FORMAT_R32_UINT) ||
+            uint64_t(mesh.ibOffset) + mesh.ibSize > geometry.size())
+            throw std::runtime_error("skin index buffer");
+        for (uint32_t d = 0; d < mesh.numDraws; ++d)
+        {
+            const auto& draw = mesh.draw[d];
+            if (draw.primCount % 3 || (uint64_t(draw.startIndex) + draw.primCount) * indexSize > mesh.ibSize)
+                throw std::runtime_error("skin draw indices");
+            for (uint32_t index = 0; index < draw.primCount; ++index)
+            {
+                uint32_t local = 0;
+                std::memcpy(&local, geometry.data() + mesh.ibOffset +
+                    (size_t(draw.startIndex) + index) * indexSize, indexSize);
+                const int64_t vertex = int64_t(local) + int32_t(draw.baseVertex);
+                if (vertex < 0 || uint64_t(vertex) >= vertices.size())
+                    throw std::runtime_error("skin local index");
+                vertices.Indices.push_back(uint32_t(vertex));
+            }
+        }
 
         // 양수 합으로 나눈 weight의 양수 여부는 저장된 정수 weight의 양수 여부와 같다.
         for (uint32_t v = 0; v < mesh.vbSize / mesh.vbStride; ++v)
@@ -488,6 +513,33 @@ std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool fo
 
     // C 경로에서 정점을 읽지 않도록 모델 로드 시 영향 joint를 확정한다.
     BuildInfluencingJoints(*model, geometryBytes);
+
+    // skin이 있는 모델은 bind 격자를 한 번 만들고 연결 통계를 기록한다.
+    if (!model->m_SkinCpuSections.empty())
+    {
+        // 기본 node 계층을 기존 pose 평가기로 계산하고 각 skin의 IBM을 합성한다.
+        std::vector<Matrix4> restNodes(model->m_NumNodes);
+        if (!EvaluateModelPose(model->m_SceneGraph.get(), model->m_NumNodes, restNodes.data()))
+            throw std::runtime_error("lattice rest node graph");
+        std::vector<LatticeRestTransform> restTransforms(model->m_NumJoints);
+        for (uint32_t joint = 0; joint < model->m_NumJoints; ++joint)
+        {
+            // 같은 node를 참조해도 skin마다 다른 IBM과 팔레트 항목을 보존한다.
+            if (model->m_JointIndices[joint] >= model->m_NumNodes)
+                throw std::runtime_error("lattice rest joint node");
+            const Matrix4 transform = restNodes[model->m_JointIndices[joint]] * model->m_JointIBMs[joint];
+            DirectX::XMFLOAT4X4 stored;
+            DirectX::XMStoreFloat4x4(&stored, transform);
+            std::memcpy(restTransforms[joint].data(), &stored, sizeof(stored));
+        }
+
+        // 원본 mesh-local 위치는 유지하고 공통 모델 공간 rest 위치만 격자에 쓴다.
+        model->m_LatticeTopology = BuildLatticeTopology(model->m_SkinCpuSections, 64, restTransforms);
+        const auto& lattice = model->m_LatticeTopology;
+        Utility::Printf("LatticeTopology: Dim=%ux%ux%u cells=%u edges=%u components=%u\n",
+            lattice.Dim[0], lattice.Dim[1], lattice.Dim[2], lattice.CellCount,
+            uint32_t(lattice.Edges.size()), CountLatticeComponents(lattice));
+    }
 
     // 파일을 모두 읽은 뒤 업로드 전에 메시별 충돌을 CPU에서 계산한다.
     BuildMeshCollision(*model, geometryBytes, model->m_CurveData ? header.numAnimationCurves : 0);

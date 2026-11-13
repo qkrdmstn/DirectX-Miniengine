@@ -2,6 +2,8 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
+MI-1(base `2a1620cd`, 2026-11-13): `BuildInfluencingJoints`는 skin section에 draw 로컬 삼각형 인덱스를 보존한다. `BuildLatticeTopology`가 bind 최장축 64칸의 점유 셀·삼각형 간선을 생성해 `Model::m_LatticeTopology`에 보관한다. `LatticeUnionFind`·`CountLatticeComponents`는 순수 CPU 연결 성분 계산이며 절단 출력은 변경하지 않는다([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).
+
 스켈레탈 연속 캡처 시연 옵션 추가(미커밋, base `03b5c8a1`, 2026-11-06): `ModelViewer::Update`가 `BuildSkeletalBreakPlane`을 재사용해 Xbot P60(`-skeletal-break-demo 1`) 또는 CesiumMan P8(`2`)을 정상 C 요청한다. `FocusBreakCamera`로 한 번 근접 배치하고 Applied 게시부터 20프레임 간격으로 HDR/post 8장을 저장한다. `-skeletal-break-demo-unmask 1`은 `SetTriangleMask`를 생략하므로 첫 게시 후 수동 C를 포함한 후속 요청을 거절한다. 요청 거절·게시 실패는 오류 로그 후 종료하며 자동 검사·벤치 옵션 동시 지정은 Startup에서 거절한다. 호출자 Release 관찰은 [SP-7 문서](../GPU/SkeletalPatchBreak.md)에 기록했고 이번 수정은 빌드·실행하지 않았다.
 
 현재 구현은 객체 선택·TRS 편집, 유한 평면의 기하·격자 표시와 Static GPU 절단·cap·재절단을 포함한다. 유한 영역을 넘는 교차는 후보 전체를 거절한다. 원본 Skeletal 절단은 SP-7e 게시·부착 단계이며 경계 확장 진단과 교차 미리보기는 미완료다. SP-5b(미커밋)는 영향 패치의 정적 복사본만 무한 평면으로 절단하고 B를 월드 0.1 m 분리한다([설계·검증](../GPU/SkeletalPatchCopyCut.md)). 과거 CPU 패치 추출·슬라이스·cap 경로는 현행 코드에 없다.

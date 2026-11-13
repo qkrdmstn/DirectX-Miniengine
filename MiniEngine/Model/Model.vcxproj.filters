@@ -94,6 +94,8 @@
     <ClInclude Include="GeometryRevision.h" />
     <ClInclude Include="GeometryBuffers.h" />
     <ClCompile Include="GeometryBuffers.cpp" />
+    <ClCompile Include="LatticeTopology.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="LatticeTopology.h"><Filter>Source Files</Filter></ClInclude>
     <ClInclude Include="Model.h">
       <Filter>Source Files</Filter>
     </ClInclude>

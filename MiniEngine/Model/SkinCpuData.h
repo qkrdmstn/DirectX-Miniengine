@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <cstdint>
 #include <vector>
 
@@ -10,4 +10,10 @@ struct SkinCpuVertex
     uint16_t Weights[4];
 };
 static_assert(sizeof(SkinCpuVertex) == 28, "minimal CPU skin vertex");
-using SkinCpuSection = std::vector<SkinCpuVertex>;
+struct SkinCpuSection : std::vector<SkinCpuVertex>
+{
+    using std::vector<SkinCpuVertex>::vector;
+    uint32_t StartJoint = 0; // 모델 전체 본 팔레트에서 이 section의 시작 위치
+    uint32_t NumJoints = 0;
+    std::vector<uint32_t> Indices; // baseVertex를 반영한 section 로컬 삼각형 인덱스
+};
