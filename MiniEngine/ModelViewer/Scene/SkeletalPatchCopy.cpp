@@ -1327,6 +1327,7 @@ namespace Viewer
             return;
         auto skin = std::make_shared<PatchSkinPublication>();
         skin->Snapshot = snapshot;
+        skin->Side = m_SkinSnapshotCount == 1 ? "D5" : (side ? "B" : "A");
         const bool built = BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources,
             geometry, snapshot, skin->Vertices);
         if (built)

@@ -125,6 +125,9 @@
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>
+    <FxCompile Include="Scene\Shaders\PatchSkinBakeCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
     <FxCompile Include="Scene\Shaders\GizmoVS.hlsl">
       <ShaderType>Vertex</ShaderType>
     </FxCompile>

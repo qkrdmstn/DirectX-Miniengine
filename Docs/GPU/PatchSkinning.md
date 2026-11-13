@@ -1,4 +1,4 @@
-상태: 진행 중 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 `cfffd37f`, PS-4a `cfd3e682`, PS-4b `84e95a1d`, PS-4c `2c2b2d71`, PS-5 완료(SP7e2 PASS, 2026-11-13). PS-6 미착수. 기준 master `f2b4d2ec`
+상태: 진행 중 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 `cfffd37f`, PS-4a `cfd3e682`, PS-4b `84e95a1d`, PS-4c `2c2b2d71`, PS-5 `21be6675`, PS-6 완료(Debug/Release 빌드·회귀, 2026-11-13). 남은 것: 완료 조건 6 비용 측정. 기준 master `f2b4d2ec`
 
 # 스켈레탈 패치 조각 스키닝 (NDC25 "프로시저럴 메시 스키닝")
 
@@ -103,7 +103,7 @@ void BuildPatchPalette(const PatchSkinSnapshot& snap, const Joint* current,
 | PS-4b | 조회용 world = W(t), source가 실제 쓴 팔레트 사용·revision/binding 변경 시 스키닝 해제, D7 조각 bind bounds·매 프레임 bounds | 완료: 회귀 6종 유지. 알려진 한계: 전단 있는 world 폴백은 기존 강체 경로와 같은 제약, weight 합 0 정점은 원본 bounds와 같은 동작 |
 | PS-4c | 게시·60프레임 뒤 PS4 bounds·rim/cap 진단, 조각 팔레트 매 프레임 할당 제거 | 완료: 세 case A/B publish·after60 inBounds=1, 테두리–cap 간격의 t_cut 대비 변화 0 mm PASS. cutter cap 링은 t_cut부터 테두리와 최대 0.064 mm 떨어져 있어(기존 cutter 동작) 짝은 0.1 mm 안 최근접 cap으로 잡는다 |
 | PS-5 | SP7e2 정점 식별자 짝·같은 프레임 PG 비교 | 완료: Xbot 허벅지·CesiumMan 팔 publish·after60 모두 0.000 mm PASS(강체 기준선 1.04/2.56, 36.4/249 mm), Xbot 전완 N/A. 조각별 경계 고정 weight 0. SP7e2 FAIL 시 종료 코드 1 |
-| PS-6 | AR 후보 static 노출, 후보 시점 bake·영구 강체 전환, 스키닝 해제 폴백 시 진행 중 AR 무효화 | AR4 다섯 PASS, `Rig bone cut checks PASS` |
+| PS-6 | AR 후보 static 노출, 후보 시점 bake·영구 강체 전환, 스키닝 해제 폴백 시 진행 중 AR 무효화 | 완료: PS6 bake D5 0.0011 mm·AR A 0.0014 mm PASS, AR4 다섯 PASS, Rig bone cut PASS. 전단·모호 node side 후보는 bake 전 거절 |
 
 시간 예상: 단계마다 구현 Codex 10~20분, 리뷰 Codex 2~5분, Debug+Release 빌드 2~4분, 회귀 6종 5~10분. 300줄을 넘기면 단계를 나눈다.
 

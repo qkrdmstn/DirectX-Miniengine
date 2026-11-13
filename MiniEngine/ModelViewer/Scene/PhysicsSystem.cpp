@@ -150,8 +150,9 @@ namespace Viewer
         return true;
     }
 
-    // 평면 두께는 후보 검색에만 쓰며 GPU의 유한 영역 판정은 유지한다.
-    std::vector<CutCandidate> PhysicsSystem::QueryCutCandidates(const MeshCutting::CutPlaneData& plane, float worldEpsilon) const
+    // 평면 후보의 활성 skin을 굽고 같은 프레임의 부착 snapshot을 고정한다.
+    std::vector<CutCandidate> PhysicsSystem::QueryCutCandidates(const MeshCutting::CutPlaneData& plane,
+        float worldEpsilon, ObjectId targetOwner, ComponentId targetMesh) const
     {
         // 유효한 두께와 요청 사각형으로 broadphase 검색 범위를 만든다.
         if (!std::isfinite(worldEpsilon) || worldEpsilon < 0) throw std::invalid_argument("Invalid query epsilon");
@@ -186,14 +187,20 @@ namespace Viewer
         // 최종 후보의 부착 입력만 요청 시점 component-local 좌표로 고정한다.
         std::vector<CutCandidate> result;
         size_t attachmentRejected = 0;
+        size_t bakedCandidates = 0;
         for (const auto& key : keys)
         {
+            // 단일 요청 때문에 같은 평면의 다른 조각까지 영구 강체로 바꾸지 않는다.
+            if (targetMesh && (key.first != targetOwner || key.second != targetMesh))
+                continue;
+
+            // 현재 collider가 교차하는 대상만 snapshot 준비를 시작한다.
             const auto& entry = m_Entries.at(key);
             if (!IsCurrent(entry) || !Intersects(entry,plane,rectangle,worldEpsilon))
                 continue;
             CutCandidate candidate = entry.Candidate;
-            const auto* object = m_Scene.FindObject(candidate.Owner);
-            const auto* mesh = object->FindMeshComponent(candidate.Mesh);
+            auto* object = m_Scene.FindObject(candidate.Owner);
+            auto* mesh = object->FindMeshComponent(candidate.Mesh);
             if (mesh->Attachment)
             {
                 // 요청 순간 node 원점의 월드 거리로 결과 side를 고정한다.
@@ -212,6 +219,19 @@ namespace Viewer
                         static_cast<unsigned long long>(candidate.Owner), static_cast<unsigned long long>(candidate.Mesh));
                     ++attachmentRejected;
                     continue;
+                }
+                // 모호 후보를 제외한 뒤 snapshot보다 먼저 현재 PG를 영구 강체로 굽는다.
+                if (mesh->HasSkinnedPatch())
+                {
+                    if (!mesh->BakePatchSkin(nodeWorld))
+                    {
+                        ++attachmentRejected;
+                        continue;
+                    }
+                    ++bakedCandidates;
+                    candidate.Geometry = mesh->GetGeometry();
+                    candidate.EditGeneration = mesh->GetEditGeneration();
+                    candidate.World = Math::Matrix4(mesh->GetWorldTransform(object->GetTransform()));
                 }
                 candidate.NodeSide = distance > 0.0f ? 0 : 1;
 
@@ -232,13 +252,14 @@ namespace Viewer
         {
             size_t expected = 0;
             for (const auto& entry : m_Entries)
-                if (IsCurrent(entry.second) && Intersects(entry.second,plane,rectangle,worldEpsilon))
+                if ((!targetMesh || (entry.first.first == targetOwner && entry.first.second == targetMesh))
+                    && IsCurrent(entry.second) && Intersects(entry.second,plane,rectangle,worldEpsilon))
                 {
                     ++expected;
                     if (!std::binary_search(keys.begin(),keys.end(),entry.first))
                         throw std::runtime_error("Jolt cut query missed a bounds candidate");
                 }
-            if (expected != result.size() + attachmentRejected) throw std::runtime_error("Jolt cut query candidate mismatch");
+            if (expected + bakedCandidates != result.size() + attachmentRejected) throw std::runtime_error("Jolt cut query candidate mismatch");
             Utility::Printf("Physics cut query validation passed: candidates=%zu indexed=%zu fallback=%zu\n",
                 result.size(),GetColliderCount(),GetFallbackCount());
         }

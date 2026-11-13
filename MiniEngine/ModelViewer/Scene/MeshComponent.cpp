@@ -7,6 +7,9 @@
 #include "RootSignature.h"
 #include "PipelineState.h"
 #include "CompiledShaders/TriangleMaskCS.h"
+#include "CompiledShaders/PatchSkinBakeCS.h"
+#include "ReadbackBuffer.h"
+#include <cstdio>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -585,6 +588,176 @@ namespace Viewer
         m_Ready = false;
     }
 
+    // 후보 시점의 PG를 불변 Data revision으로 게시하고 실패 복구 없는 강체 부착으로 전환한다.
+    bool MeshComponent::BakePatchSkin(const Matrix4& nodeWorld)
+    {
+        // 활성 조각의 준비된 PG와 손실 없는 강체 배치만 허용한다.
+        if (!HasSkinnedPatch())
+            return true;
+        SceneTransform world;
+        if (!Attachment || !m_Ready || !m_PosedGeometry->IsReady()
+            || !SceneTransform::TryFromAffine(AffineTransform(nodeWorld * Invert(nodeWorld)
+                * Matrix4(m_PreparedWorld)), world))
+            return false;
+
+        // 기존 GPU 메타데이터와 보수적 현재 경계를 새 revision에 보존한다.
+        const auto parent = m_Geometry->GetGenerated();
+        auto buffers = std::make_shared<GeometryBuffers>();
+        buffers->Source = parent->Source;
+        buffers->Parent = m_Geometry;
+        buffers->Generation = parent->Generation;
+        buffers->UncappedSegments = parent->UncappedSegments;
+        buffers->Meshes = parent->Meshes;
+        for (size_t s = 0; s < m_Geometry->GetSections().size(); ++s)
+        {
+            const auto& bound = m_SectionBounds.at(s);
+            auto& mesh = buffers->Meshes.at(m_Geometry->GetSections()[s].SourceMesh);
+            DirectX::XMStoreFloat4(reinterpret_cast<DirectX::XMFLOAT4*>(mesh.bounds),
+                Vector4(bound.GetCenter(), bound.GetRadius()));
+        }
+        ByteAddressBuffer* targets[] = { &buffers->Data, &buffers->Provenance, &buffers->CapMaterial };
+        const ByteAddressBuffer* sources[] = { &parent->Data, &parent->Provenance, &parent->CapMaterial };
+        uint64_t bytes = 0;
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            const uint32_t size = uint32_t(sources[i]->GetBufferSize());
+            if (size)
+                targets[i]->Create(L"PS6 baked geometry", size, 1);
+            bytes += size;
+        }
+        buffers->LineageBytes = parent->LineageBytes + bytes;
+        const auto revision = GeometryRevision::FromGenerated(buffers);
+        auto posed = std::make_unique<PosedGeometry>(*buffers);
+
+        // 재사용 파이프라인은 RAW40 입력과 복사한 28 B Data만 바인딩한다.
+        static RootSignature root;
+        static ComputePSO pso(L"Bake patch skin");
+        static bool initialized = false;
+        if (!initialized)
+        {
+            root.Reset(3);
+            root[0].InitAsConstants(0, 5);
+            root[1].InitAsBufferSRV(0);
+            root[2].InitAsBufferUAV(0);
+            root.Finalize(L"Patch skin bake");
+            pso.SetRootSignature(root);
+            pso.SetComputeShader(g_pPatchSkinBakeCS, sizeof(g_pPatchSkinBakeCS));
+            pso.Finalize();
+            initialized = true;
+        }
+
+        // 전체 Data 복사 뒤 현재 PG 속성만 덮어쓰고 VB 입력 상태를 복원한다.
+        auto& context = GraphicsContext::Begin(L"PS6 bake");
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            if (!sources[i]->GetBufferSize())
+                continue;
+            context.CopyBuffer(*targets[i], const_cast<ByteAddressBuffer&>(*sources[i]));
+            context.TransitionResource(const_cast<ByteAddressBuffer&>(*sources[i]), D3D12_RESOURCE_STATE_GENERIC_READ);
+            context.TransitionResource(*targets[i], D3D12_RESOURCE_STATE_GENERIC_READ);
+        }
+        auto& raw = const_cast<ByteAddressBuffer&>(m_PosedGeometry->GetBuffer());
+        auto& compute = context.GetComputeContext();
+        compute.SetRootSignature(root);
+        compute.SetPipelineState(pso);
+        compute.TransitionResource(raw, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.TransitionResource(buffers->Data, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.SetBufferSRV(1, raw);
+        compute.SetBufferUAV(2, buffers->Data);
+        for (const auto& section : m_Geometry->GetSections())
+        {
+            const auto& mesh = buffers->Meshes[section.SourceMesh];
+            const uint32_t count = mesh.vbSize / 28;
+            const uint32_t constants[] = { m_PosedGeometry->GetOffset(section.SourceMesh),
+                mesh.vbOffset, mesh.vbDepthOffset, count, (mesh.psoFlags & PSOFlags::kAlphaTest) ? 16u : 12u };
+            compute.SetConstantArray(0, 5, constants);
+            if (!count)
+                continue;
+            const uint32_t groups = (count + 63) / 64;
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+        }
+        context.TransitionResource(buffers->Data, D3D12_RESOURCE_STATE_GENERIC_READ);
+        context.TransitionResource(raw, D3D12_RESOURCE_STATE_GENERIC_READ);
+        posed->UpdateGenerated(context, *buffers);
+
+        // 진단 옵션에서만 동일 프레임의 베이크 결과와 원래 PG를 동기 비교한다.
+        uint32_t rigChecks = 0;
+        uint32_t recutChecks = 0;
+        CommandLineArgs::GetInteger(L"rig-bone-cut-checks", rigChecks);
+        CommandLineArgs::GetInteger(L"attached-recut-checks", recutChecks);
+        ReadbackBuffer bakedReadback;
+        ReadbackBuffer rawReadback;
+        if (rigChecks || recutChecks)
+        {
+            bakedReadback.Create(L"PS6 Data readback", uint32_t(buffers->Data.GetBufferSize()), 1);
+            rawReadback.Create(L"PS6 PG readback", uint32_t(raw.GetBufferSize()), 1);
+            context.CopyBuffer(bakedReadback, buffers->Data);
+            context.CopyBuffer(rawReadback, raw);
+            context.TransitionResource(buffers->Data, D3D12_RESOURCE_STATE_GENERIC_READ);
+            context.TransitionResource(raw, D3D12_RESOURCE_STATE_GENERIC_READ);
+        }
+        context.Finish(true);
+
+        // 강체 경로의 재구성 월드와 같은 프레임 원본 월드로 모든 위치를 비교한다.
+        if (rigChecks || recutChecks)
+        {
+            const auto* baked = static_cast<const uint8_t*>(bakedReadback.Map());
+            const auto* original = static_cast<const uint8_t*>(rawReadback.Map());
+            const Matrix4 rigidWorld(world.ToAffine());
+            const Matrix4 skinWorld(m_PreparedWorld);
+            double maxError = 0.0;
+            uint32_t vertices = 0;
+            for (const auto& section : m_Geometry->GetSections())
+            {
+                const auto& mesh = buffers->Meshes[section.SourceMesh];
+                for (uint32_t v = 0; v < mesh.vbSize / 28; ++v)
+                {
+                    DirectX::XMFLOAT3 a;
+                    DirectX::XMFLOAT3 b;
+                    std::memcpy(&a, baked + mesh.vbOffset + v * 28, sizeof(a));
+                    std::memcpy(&b, original + m_PosedGeometry->GetOffset(section.SourceMesh) + v * 40, sizeof(b));
+                    const float error = float(Length(Vector3(rigidWorld * Vector4(Vector3(a), 1))
+                        - Vector3(skinWorld * Vector4(Vector3(b), 1)))) * 1000.0f;
+                    maxError = std::isfinite(error) ? std::max(maxError, double(error)) : INFINITY;
+                    ++vertices;
+                }
+            }
+            bakedReadback.Unmap();
+            rawReadback.Unmap();
+            if (!vertices)
+                maxError = INFINITY;
+            char line[256];
+            sprintf_s(line, "PS6 bake side=%s vertices=%u maxError_mm=%.6f result=%s\n",
+                PatchSkin->Side, vertices, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
+            Utility::Print(line);
+            char path[MAX_PATH];
+            FILE* file = nullptr;
+            if (GetTempPathA(MAX_PATH, path))
+            {
+                strcat_s(path, "SP6-SkeletalPatchChecks.log");
+                if (!fopen_s(&file, path, "a"))
+                {
+                    fputs(line, file);
+                    fclose(file);
+                }
+            }
+        }
+
+        // 제출 완료된 새 PG를 게시하고 기존 skin 입력은 다음 프레임까지 보관한다.
+        Attachment->NodeWorldAtCut = nodeWorld;
+        Attachment->PieceWorldAtCut = Matrix4(m_PreparedWorld);
+        SetAttachedWorld(world);
+        m_PatchSkinActive = false;
+        m_RetiredPatchSkin = std::move(PatchSkin);
+        m_RetiredPatchPose = std::move(m_PosedGeometry);
+        m_PosedGeometry = std::move(posed);
+        m_Geometry = revision;
+        ++m_EditGeneration;
+        m_Ready = true;
+        SetInheritedCollision({}, revision->GetId(), "node attached");
+        return true;
+    }
+
     // 원본의 revision과 binding을 검사하고 불일치는 현재 월드를 기준으로 강체 부착으로 전환한다.
     void MeshComponent::ValidatePatchSkinSource(const MeshComponent* source, const Matrix4* nodeWorld)
     {
@@ -613,6 +786,7 @@ namespace Viewer
             Attachment->PieceWorldAtCut = Matrix4(m_PreparedWorld);
         }
         m_PatchSkinActive = false;
+        ++m_EditGeneration;
         m_PosedGeometry = std::move(posed);
         if (hasWorldTRS)
             SetAttachedWorld(world);
@@ -633,6 +807,15 @@ namespace Viewer
     void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner,
         const MeshComponent* patchSource)
     {
+        // 이전 프레임까지 제출된 skin 입력은 queue fence를 통해 지연 해제한다.
+        if (m_RetiredPatchSkin)
+        {
+            Graphics::g_CommandManager.RetireResource(m_RetiredPatchSkin->Vertices.Data.GetResource());
+            m_RetiredPatchSkin.reset();
+            m_RetiredPatchPose.reset();
+            m_PatchPalette.clear();
+        }
+
         // 같은 명령 목록에서 마스크를 먼저 갱신한다.
         UpdateTriangleMask(context);
 

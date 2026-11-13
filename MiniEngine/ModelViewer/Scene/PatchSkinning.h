@@ -45,6 +45,7 @@ namespace Viewer
         PatchSkinVertices Vertices;
         std::vector<Section> Sections;
         uint32_t VertexCount = 0;
+        const char* Side = "D5";
     };
 
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.

@@ -121,9 +121,9 @@ namespace Viewer
         bool CreateFloor(std::shared_ptr<const Model> model);
         // 준비된 Static 메시 경계를 등록·갱신하고 삭제된 body를 정리한다.
         void SyncColliders();
-        // 최신 SyncColliders 뒤 유한 평면 후보를 반환한다. 실제 split은 GPU가 결정한다.
+        // 요청 대상만 현재 PG로 굽고 유한 평면 후보를 반환한다. 대상 생략 시 전부 조회한다.
         std::vector<CutCandidate> QueryCutCandidates(const MeshCutting::CutPlaneData& plane,
-            float worldEpsilon = 1.0e-5f) const;
+            float worldEpsilon = 1.0e-5f, ObjectId targetOwner = 0, ComponentId targetMesh = 0) const;
         // 남은 Scene 참조와 SDK world를 정리한다.
         void Clear();
         // 실제 Jolt body 수를 읽는다.

@@ -83,6 +83,8 @@ namespace Viewer
         const PosedGeometry& GetPosedGeometry() const { return *m_PosedGeometry; }
         // 게시할 조각의 skin 입력으로 컴포넌트 소유 PG를 준비한다.
         void ActivatePatchSkin();
+        // 후보 snapshot 전에 현재 PG를 새 Data로 굽고 영구 강체 부착으로 전환한다.
+        bool BakePatchSkin(const Math::Matrix4& nodeWorld);
         // 원본 revision·binding 변경 시 현재 월드에서 강체 부착으로 한 번 전환한다.
         void ValidatePatchSkinSource(const MeshComponent* source, const Math::Matrix4* nodeWorld);
         // 이번 프레임에 원본 PG가 실제 사용한 node와 joint 입력을 읽는다.
@@ -198,6 +200,8 @@ namespace Viewer
         std::unique_ptr<PosedGeometry> m_PosedGeometry;
         std::vector<Joint> m_PatchPalette;
         bool m_PatchSkinActive = false;
+        std::shared_ptr<PatchSkinPublication> m_RetiredPatchSkin;
+        std::unique_ptr<PosedGeometry> m_RetiredPatchPose;
         bool m_PatchFallbackWorld = false;
         UploadBuffer m_ConstantsCPU;
         ByteAddressBuffer m_ConstantsGPU;

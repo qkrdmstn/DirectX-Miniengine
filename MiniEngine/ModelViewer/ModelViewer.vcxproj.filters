@@ -327,6 +327,7 @@
     <FxCompile Include="Scene\Shaders\TriangleMaskCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\PatchSkinBakeCS.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Scene\SkeletalAutoRig.cpp" />

@@ -182,7 +182,7 @@ namespace Viewer
         const auto* mesh = object ? object->FindMeshComponent(meshId) : nullptr;
         if (mesh && mesh->Attachment)
         {
-            const auto candidates = m_Physics.QueryCutCandidates(plane, worldEpsilon);
+            const auto candidates = m_Physics.QueryCutCandidates(plane, worldEpsilon, owner, meshId);
             for (const auto& candidate : candidates)
                 if (candidate.Owner == owner && candidate.Mesh == meshId)
                     return Submit(owner, meshId, plane, publish, worldEpsilon, capMode, &candidate);
