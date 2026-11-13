@@ -179,7 +179,9 @@ namespace Viewer
         uint32_t m_BreakCheck = 0;
         bool m_BreakReady = false, m_CheckAwaiting = false;
         uint32_t m_StaleStage = 0, m_BoundaryWait = 0, m_CaptureRequest = 0;
-        bool m_ForceStale = false, m_BoundaryFailed = false;
+        bool m_ForceStale = false;
+        // 경계 측정의 PASS·FAIL·N/A 횟수는 다음 case의 Reset 이후에도 유지한다.
+        uint32_t m_BoundaryPassed = 0, m_BoundaryFailed = 0, m_BoundaryNotApplicable = 0;
         std::vector<uint64_t> m_StaleBefore;
         std::vector<BoundaryVertex> m_Boundary;
         std::vector<BoundaryPair> m_BoundaryPairs;

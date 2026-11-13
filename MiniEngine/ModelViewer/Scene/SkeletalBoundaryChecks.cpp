@@ -2,7 +2,9 @@
 #include "ReadbackBuffer.h"
 #include "CommandContext.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace Viewer
 {
@@ -75,14 +77,39 @@ namespace Viewer
         return std::all_of(matched.begin(), matched.end(), [](bool value) { return value; });
     }
 
-    // 현재 프레임의 원본 pose와 부착 A/B의 외곽 경계 최대 거리를 잰다.
+    // 현재 프레임의 외곽 경계 최대 거리를 재고 짝 누락과 비정상 거리를 거절한다.
     bool MeasureBoundary(const GameObject& owner, const MeshComponent& source, const MeshComponent* const pieces[2],
         const std::vector<BoundaryVertex>& boundary, const std::vector<BoundaryPair>& pairs,
         float& maxError)
     {
+        // 측정 실패 시 유효한 거리로 오인하지 않도록 결과를 초기화한다.
+        maxError = std::numeric_limits<float>::quiet_NaN();
+        if (boundary.empty() || pairs.size() < boundary.size())
+        {
+            return false;
+        }
+
+        // 중복 짝이 누락을 가리지 않도록 모든 경계 정점의 대응 여부를 확인한다.
+        std::vector<bool> matched(boundary.size(), false);
+        for (const auto& pair : pairs)
+        {
+            if (pair.Boundary >= boundary.size() || pair.Piece >= 2)
+            {
+                return false;
+            }
+            matched[pair.Boundary] = true;
+        }
+        if (!std::all_of(matched.begin(), matched.end(), [](bool value) { return value; }))
+        {
+            return false;
+        }
+
         // 같은 프레임의 원본 pose 전체를 읽고 각 mesh의 시작 위치를 구한다.
         const auto& posed = source.GetPosedGeometry();
-        if (!posed.IsReady()) return false;
+        if (!posed.IsReady())
+        {
+            return false;
+        }
         const auto positions = ReadPositions(posed.GetBuffer(), 40, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         const auto& geometry = *source.GetGeometry();
         const Math::Matrix4 sourceWorld(source.GetWorldTransform(owner.GetTransform()));
@@ -90,7 +117,7 @@ namespace Viewer
         // 조각별 월드 변환을 현재 부착 결과에서 읽는다.
         const Math::Matrix4 pieceWorld[2] = { Math::Matrix4(pieces[0]->GetWorldTransform(owner.GetTransform())),
             Math::Matrix4(pieces[1]->GetWorldTransform(owner.GetTransform())) };
-        maxError = 0;
+        float maximum = 0;
 
         // 짝마다 조각 정점과 원본 경계 정점의 월드 거리를 비교한다.
         for (const auto& pair : pairs)
@@ -100,8 +127,16 @@ namespace Viewer
                 + size_t(vertex.Index) * 40;
             const Math::Vector3 original(sourceWorld * Math::Vector4(positions.at(offset / 40), 1));
             const Math::Vector3 piece(pieceWorld[pair.Piece] * Math::Vector4(pair.Local, 1));
-            maxError = std::max(maxError, float(Math::Length(original - piece)));
+            const float distance = float(Math::Length(original - piece));
+            if (!std::isfinite(distance))
+            {
+                return false;
+            }
+            maximum = std::max(maximum, distance);
         }
+
+        // 모든 짝의 거리가 유효할 때만 최댓값을 측정 결과로 전달한다.
+        maxError = maximum;
         return true;
     }
 }

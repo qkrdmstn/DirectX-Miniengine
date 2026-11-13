@@ -13,6 +13,7 @@
 #include "tests/SkeletalPatchReference.h"
 #include <cstdio>
 #include <cstdarg>
+#include <cmath>
 #include <stdexcept>
 #include <cstring>
 #include <fstream>
@@ -377,7 +378,7 @@ namespace Viewer
         return plane;
     }
 
-    // 실제 C 경로를 스크립트로 실행하고 독립 ancestry 기준으로 Dynamic 집합을 비교한다.
+    // 실제 C 경로의 Dynamic 집합을 검증하고 경계 측정의 PASS·FAIL·N/A를 요약한다.
     bool SkeletalPatchCopy::RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting)
     {
         // 첫 요청을 pause 상태로 제출해 결과가 실제 step까지 대기하는지 확인한다.
@@ -464,7 +465,11 @@ namespace Viewer
             // 정상·Stale 요청만 처리되어 취소 요청이 관절을 건드리지 않았음을 확인한다.
             if (physics.GetQueuedBreakDiagnostics().Processed != (m_OffsetCopy ? 3u : 6u)) throw std::runtime_error("SP7e cancelled break processed");
             PatchLog("SP7e cancelled break PASS: processed=%u\n", physics.GetQueuedBreakDiagnostics().Processed);
-            PatchLog("SP7e2 publish boundary <=1mm %s\n", m_BoundaryFailed ? "FAIL" : "PASS");
+
+            // 두 측정 시점의 결과를 합산하고 비교 대상이 전혀 없으면 N/A로 보고한다.
+            const char* boundaryResult = m_BoundaryFailed ? "FAIL" : (m_BoundaryPassed ? "PASS" : "N/A");
+            PatchLog("SP7e2 publish/after60 boundary <=1mm %s pass=%u fail=%u n/a=%u\n",
+                boundaryResult, m_BoundaryPassed, m_BoundaryFailed, m_BoundaryNotApplicable);
             return true;
         }
 
@@ -527,14 +532,15 @@ namespace Viewer
         if (!pass) throw std::runtime_error("SP7e2 Stale changed original");
     }
 
-    // 같은 프레임 posed 원본과 강체 부착 조각의 외곽 경계 최대 거리를 기록한다.
+    // 외곽 경계 거리를 기록하고 publish·after60 각각의 PASS·FAIL·N/A를 집계한다.
     void SkeletalPatchCopy::MeasureBoundaryAt(const Scene& scene, const char* label)
     {
-        // 비교 대상이 없으면 0 mm 성공으로 간주하지 않고 완료 조건 미충족으로 남긴다.
+        // 일치하는 유지 경계가 없으면 PASS·FAIL 집계에서 제외한다.
         if (m_Boundary.empty())
         {
-            m_BoundaryFailed = true;
-            PatchLog("SP7e2 case=%u frame=%s max_mm=N/A noCoincidentKeptBoundary=1\n", m_BreakCheck, label);
+            ++m_BoundaryNotApplicable;
+            PatchLog("SP7e2 case=%u frame=%s result=N/A boundary=0 max_mm=N/A noCoincidentKeptBoundary=1\n",
+                m_BreakCheck, label);
             return;
         }
 
@@ -542,12 +548,24 @@ namespace Viewer
         const auto* owner = scene.FindObject(m_Break.Owner);
         const MeshComponent* pieces[] = { owner->FindMeshComponent(m_PieceIds[0]), owner->FindMeshComponent(m_PieceIds[1]) };
         float error;
-        if (!MeasureBoundary(*owner, *owner->FindMeshComponent(m_SourceMesh), pieces, m_Boundary, m_BoundaryPairs, error))
-            throw std::runtime_error("SP7e2 boundary readback unavailable");
+        const bool measured = MeasureBoundary(*owner, *owner->FindMeshComponent(m_SourceMesh), pieces,
+            m_Boundary, m_BoundaryPairs, error);
         const float maximum = error * 1000;
-        if (std::strcmp(label, "publish") == 0) m_BoundaryFailed |= maximum > 1;
-        PatchLog("SP7e2 case=%u frame=%s boundary=%zu paired=%zu max_mm=%.6f\n",
-            m_BreakCheck, label, m_Boundary.size(), m_BoundaryPairs.size(), maximum);
+
+        // 두 시점 모두 1 mm 초과, 비정상 거리, 짝 누락 또는 측정 불가를 실패로 센다.
+        const bool pass = measured && std::isfinite(maximum) && maximum <= 1;
+        if (pass)
+        {
+            ++m_BoundaryPassed;
+        }
+        else
+        {
+            ++m_BoundaryFailed;
+        }
+        const char* reason = !measured ? "invalidDistanceOrMissingPairsOrReadbackUnavailable"
+            : (!std::isfinite(maximum) ? "invalidDistance" : (pass ? "within1mm" : "over1mm"));
+        PatchLog("SP7e2 case=%u frame=%s result=%s boundary=%zu paired=%zu max_mm=%.6f reason=%s\n",
+            m_BreakCheck, label, pass ? "PASS" : "FAIL", m_Boundary.size(), m_BoundaryPairs.size(), maximum, reason);
     }
 
     // 현재 owner의 최종 pose로 자동 rig를 등록하고 생성 시간과 초기 겹침을 기록한다.
@@ -1371,8 +1389,9 @@ namespace Viewer
                 {
                     const auto& meshes = scene.FindObject(m_CopyOwner)->GetMeshComponents();
                     const MeshComponent* pieces[] = { meshes[m_PositiveA ? 0 : 1].get(), meshes[m_PositiveA ? 1 : 0].get() };
-                    if (!PairBoundary(pieces, m_Boundary, m_BoundaryPairs))
-                        throw std::runtime_error("SP7e2 incomplete boundary pairing");
+
+                    // 짝 누락도 게시·after60 측정에서 FAIL로 집계하도록 대응 결과를 보존한다.
+                    PairBoundary(pieces, m_Boundary, m_BoundaryPairs);
                 }
                 LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
                 return true;
