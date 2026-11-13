@@ -4,6 +4,7 @@
 #include "SkeletalPhysicsSystem.h"
 #include "ReadbackBuffer.h"
 #include "SkeletalBoundaryChecks.h"
+#include "PatchSkinning.h"
 #include "../../MeshCutting/Geometry/CutPlane.h"
 
 namespace Viewer
@@ -27,12 +28,18 @@ namespace Viewer
 
     struct SkeletalPatchBuffers
     {
+        struct BoundarySkin
+        {
+            uint32_t Joints[4];
+            uint16_t Weights[4];
+        };
         std::shared_ptr<GeometryBuffers> Geometry;
         ByteAddressBuffer TriangleSources; // section, draw, triangle; 12 bytes per triangle
         ByteAddressBuffer LocalBounds; // counts 0..8, local AABB 12..32, source world X min/max 36..40
         float SourceWorldWidth = 0;
         std::vector<uint32_t> Triangles;
         std::vector<BoundaryVertex> Boundary; // 진단에서만 채우는 C 시점 바깥 경계 정점
+        std::vector<BoundarySkin> BoundarySkins;
     };
 
     // 단일 제출 작업이다. 호출자는 UpdateFrame/Finish 후 component-local 평면을 전달한다.
@@ -146,6 +153,12 @@ namespace Viewer
             return true;
         }
     private:
+        // 추출된 section의 공통 N을 확정하고 체크 실행에서만 PS-1 결과를 기록한다.
+        void CheckPatchSkin(const SkeletalPatchBuffers& patch);
+        PatchSkinSnapshot m_SkinSnapshots[2];
+        std::vector<Math::Matrix4> m_SkinSectionNodes;
+        float m_SkinPaletteErrors[2]{};
+        uint32_t m_SkinSnapshotCount = 0, m_SkinCheckCase = 0;
         // break 없이 추출된 패치를 원래 owner에 부착하고 원본 영역을 숨긴다.
         void PublishRigBonePatch(Scene& scene, const SkeletalPatchResult& result,
             const std::shared_ptr<SkeletalPatchBuffers>& patch);
