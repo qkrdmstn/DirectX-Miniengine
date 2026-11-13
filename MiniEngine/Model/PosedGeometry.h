@@ -17,6 +17,16 @@ public:
     explicit PosedGeometry(const Model& model);
     // 생성 Data의 메시별 정점 수로 컴포넌트 전용 출력 공간을 만든다.
     explicit PosedGeometry(const GeometryBuffers& geometry);
+    struct VertexRange
+    {
+        uint32_t FirstVertex, VertexCount;
+    };
+    // 원본 모델 레이아웃의 skin VB와 section 범위로 RAW40 출력을 할당한다.
+    PosedGeometry(const ByteAddressBuffer& skinVertices, uint32_t stride, uint32_t flags,
+        const std::vector<VertexRange>& sections);
+    // 전역 joint 팔레트 전체와 호출자의 N(t)로 조각을 매 프레임 갱신한다.
+    void UpdateSkinnedGenerated(GraphicsContext& context, const ByteAddressBuffer& skinVertices,
+        const std::vector<Joint>& palette, const Math::Matrix4& nodeMatrix);
     // component-local Data를 단위 행렬과 skin 없는 경로로 한 번 디코드한다.
     void UpdateGenerated(GraphicsContext& context, const GeometryBuffers& geometry);
     // GPU 출력 자원의 암묵적 공유 복사를 금지한다.
@@ -41,5 +51,8 @@ private:
     ByteAddressBuffer m_Buffer;
     std::vector<uint32_t> m_Offsets;
     std::vector<Math::Matrix4> m_LastNodeTransforms;
+    std::vector<VertexRange> m_SkinSections;
+    uint32_t m_SkinStride = 0;
+    uint32_t m_SkinFlags = 0;
     bool m_Valid = false;
 };

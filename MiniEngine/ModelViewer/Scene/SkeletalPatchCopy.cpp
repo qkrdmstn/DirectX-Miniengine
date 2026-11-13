@@ -1117,7 +1117,74 @@ namespace Viewer
         }
     }
 
-    // 생성 skin VB를 절단 시점 팔레트로 CPU 스키닝하여 component-local Data와 비교한다.
+    // 임시 스키닝 PG를 절단 시점에 한 번 갱신하여 component-local Data와 비교한다.
+    static void ValidatePieceSkinPose(const PatchSkinPublication* skin, const GeometryBuffers& geometry,
+        uint32_t diagnosticCase, const char* label)
+    {
+        // 생성 실패와 빈 결과는 PASS로 집계하지 않는다.
+        double maxError = INFINITY;
+        uint32_t vertices = 0;
+        if (skin && skin->VertexCount)
+        {
+            // 보관된 section 범위와 t_cut 팔레트로 진단 전용 PG를 준비한다.
+            std::vector<PosedGeometry::VertexRange> sections;
+            for (const auto& section : skin->Sections)
+                sections.push_back({ section.FirstVertex, section.VertexCount });
+            const auto& snapshot = skin->Snapshot;
+            std::vector<Math::Matrix4> nodes(size_t(snapshot.AttachNode) + 1, Math::Matrix4(Math::kIdentity));
+            nodes[snapshot.AttachNode] = snapshot.AttachAtCut;
+            std::vector<Joint> palette;
+            BuildPatchPalette(snapshot, snapshot.JointsAtCut.data(), nodes.data(), palette);
+            PosedGeometry posed(skin->Vertices.Data, skin->Vertices.Stride, skin->Vertices.Flags, sections);
+
+            // 실제 PreparePoseCS 출력을 읽고 VB 겸용 Data의 읽기 상태를 복원한다.
+            ReadbackBuffer actualReadback;
+            ReadbackBuffer expectedReadback;
+            auto& context = GraphicsContext::Begin(L"PS3 skinned generated pose check");
+            posed.UpdateSkinnedGenerated(context, skin->Vertices.Data, palette, snapshot.MeshNodeAtCut);
+            auto& output = const_cast<ByteAddressBuffer&>(posed.GetBuffer());
+            auto& reference = const_cast<ByteAddressBuffer&>(geometry.Data);
+            actualReadback.Create(L"PS3 RAW40 readback", uint32_t(output.GetBufferSize()), 1);
+            expectedReadback.Create(L"PS3 Data readback", uint32_t(reference.GetBufferSize()), 1);
+            context.CopyBuffer(actualReadback, output);
+            context.CopyBuffer(expectedReadback, reference);
+            context.TransitionResource(output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            context.TransitionResource(reference, D3D12_RESOURCE_STATE_GENERIC_READ);
+            context.Finish(true);
+
+            // section별 RAW40 offset과 원래 Data의 28바이트 정점 위치를 대응시킨다.
+            const auto* actual = static_cast<const uint8_t*>(actualReadback.Map());
+            const auto* expected = static_cast<const uint8_t*>(expectedReadback.Map());
+            maxError = 0.0;
+            for (uint32_t i = 0; i < sections.size(); ++i)
+            {
+                const auto& section = sections[i];
+                for (uint32_t v = 0; v < section.VertexCount; ++v)
+                {
+                    float a[3];
+                    float b[3];
+                    std::memcpy(a, actual + posed.GetOffset(i) + size_t(v) * PosedGeometry::VertexStride, sizeof(a));
+                    std::memcpy(b, expected + (size_t(section.FirstVertex) + v) * 28, sizeof(b));
+                    const double dx = double(a[0]) - b[0];
+                    const double dy = double(a[1]) - b[1];
+                    const double dz = double(a[2]) - b[2];
+                    const double error = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
+                    maxError = std::isfinite(error) ? std::max(maxError, error) : INFINITY;
+                    ++vertices;
+                }
+            }
+
+            // 동기 완료 뒤 매핑을 닫고 범위를 벗어나며 진단 PG를 폐기한다.
+            actualReadback.Unmap();
+            expectedReadback.Unmap();
+        }
+
+        // 지정된 mm 허용치와 로그 형식으로 case별 A/B 결과를 기록한다.
+        PatchLog("PS3 case=%u side=%s vertices=%u maxError_mm=%.6f result=%s\n",
+            diagnosticCase, label, vertices, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
+    }
+
+    // 생성 skin VB를 보관하고 진단 옵션에서 CPU 및 임시 PG를 Data와 비교한다.
     void SkeletalPatchCopy::BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
         SkeletalPatchBuffers& patch, uint32_t side)
     {
@@ -1156,7 +1223,7 @@ namespace Viewer
         double maxError = built ? 0.0 : INFINITY;
         if (built)
         {
-            // 생성 API가 SRV로 둔 세 버퍼는 readback 뒤 같은 상태로 복원한다.
+            // VB 겸용 버퍼는 readback 뒤에도 GENERIC_READ로 복원한다.
             ReadbackBuffer readbacks[3];
             GpuBuffer* buffers[] = { &skin->Vertices.Data, &const_cast<ByteAddressBuffer&>(geometry.Data),
                 &const_cast<ByteAddressBuffer&>(geometry.Provenance) };
@@ -1165,7 +1232,7 @@ namespace Viewer
             {
                 readbacks[i].Create(L"PS2 readback", buffers[i]->GetBufferSize(), 1);
                 context.CopyBuffer(readbacks[i], *buffers[i]);
-                context.TransitionResource(*buffers[i], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                context.TransitionResource(*buffers[i], D3D12_RESOURCE_STATE_GENERIC_READ);
             }
             context.Finish(true);
 
@@ -1229,6 +1296,12 @@ namespace Viewer
             maxError = INFINITY;
         PatchLog("PS2 case=%u side=%s vertices=%u copied=%u split=%u cap=%u maxError_mm=%.6f result=%s\n",
             m_SkinCheckCase, label, vertices, copied, split, cap, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
+
+        // PS3 동기 GPU 진단은 break 검사에서만 수행하며 게시 경로에는 연결하지 않는다.
+        uint32_t poseChecks = 0;
+        CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", poseChecks);
+        if (poseChecks)
+            ValidatePieceSkinPose(built ? piece.PatchSkin.get() : nullptr, geometry, m_SkinCheckCase, label);
     }
 
     // 다음 Static 후보 조회 전에 작업 무효화와 owner 삭제를 완료한다.

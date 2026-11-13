@@ -174,6 +174,26 @@ namespace
             throw std::runtime_error("Generated PG decode validation failed");
     }
 
+    // 모델과 스키닝 조각에 같은 section 디코드 상수와 node 변환을 적용한다.
+    void DispatchPoseSection(ComputeContext& compute, ByteAddressBuffer& output, uint32_t outputOffset,
+        uint32_t sourceOffset, uint32_t stride, uint32_t count, uint32_t flags,
+        const Math::Matrix4& nodeMatrix)
+    {
+        // 정점 레이아웃과 section 출력 구간을 기존 루트 시그니처에 연결한다.
+        const uint32_t constants[] = { sourceOffset, stride, count, flags };
+        compute.SetConstantArray(0, 4, constants);
+        compute.SetBufferUAV(3, output, outputOffset);
+        MeshConstants nodeConstants{};
+        nodeConstants.World = nodeMatrix;
+        nodeConstants.WorldIT = Math::InverseTranspose(nodeConstants.World.Get3x3());
+        compute.SetDynamicConstantBufferView(4, sizeof(nodeConstants), &nodeConstants);
+
+        // 기존 모델 경로와 같은 2차원 dispatch로 큰 정점 범위도 처리한다.
+        const uint32_t groups = (count + 63) / 64;
+        if (groups > 0)
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+    }
+
     // 원본 RAW SRV와 본 팔레트에서 객체별 RAW UAV를 만드는 파이프라인을 준비한다.
     void InitializePosePipeline()
     {
@@ -238,6 +258,7 @@ PosedGeometry::~PosedGeometry()
 void PosedGeometry::Update(GraphicsContext& context, const Model& model,
     const Math::Matrix4* nodeTransforms, const Joint* joints)
 {
+    // 빈 출력과 변하지 않은 static pose는 기존 결과를 재사용한다.
     if (m_Buffer.GetBufferSize() == 0)
         return;
     if (m_Valid && model.m_NumJoints == 0
@@ -245,6 +266,7 @@ void PosedGeometry::Update(GraphicsContext& context, const Model& model,
             model.m_NumNodes * sizeof(Math::Matrix4)) == 0)
         return;
 
+    // 원본 입력과 팔레트를 바인딩하고 공통 section dispatch로 pose를 기록한다.
     InitializePosePipeline();
     auto& compute = context.GetComputeContext();
     compute.SetRootSignature(s_PoseRootSignature);
@@ -256,22 +278,16 @@ void PosedGeometry::Update(GraphicsContext& context, const Model& model,
     {
         const Mesh& mesh = *reinterpret_cast<const Mesh*>(meshData);
         const uint32_t count = mesh.vbSize / mesh.vbStride;
-        const uint32_t constants[] = { mesh.vbOffset, mesh.vbStride, count, mesh.psoFlags };
-        compute.SetConstantArray(0, 4, constants);
         if (mesh.numJoints > 0)
             compute.SetDynamicSRV(2, sizeof(Joint) * mesh.numJoints, joints + mesh.startJoint);
         else
             compute.SetBufferSRV(2, model.m_DataBuffer);
-        compute.SetBufferUAV(3, m_Buffer, m_Offsets[i]);
-        MeshConstants nodeConstants{};
-        nodeConstants.World = nodeTransforms[mesh.meshCBV];
-        nodeConstants.WorldIT = Math::InverseTranspose(nodeConstants.World.Get3x3());
-        compute.SetDynamicConstantBufferView(4, sizeof(nodeConstants), &nodeConstants);
-        const uint32_t groups = (count + 63) / 64;
-        if (groups > 0)
-            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+        DispatchPoseSection(compute, m_Buffer, m_Offsets[i], mesh.vbOffset, mesh.vbStride,
+            count, mesh.psoFlags, nodeTransforms[mesh.meshCBV]);
         meshData += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
     }
+
+    // 완료된 출력 상태와 static pose 캐시를 이전 경로와 동일하게 보관한다.
     compute.TransitionResource(m_Buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     m_LastNodeTransforms.assign(nodeTransforms, nodeTransforms + model.m_NumNodes);
     m_Valid = true;
@@ -338,5 +354,77 @@ void PosedGeometry::UpdateGenerated(GraphicsContext& context, const GeometryBuff
     compute.TransitionResource(m_Buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     compute.TransitionResource(source, D3D12_RESOURCE_STATE_GENERIC_READ);
     ValidateGeneratedPose(context, m_Buffer, m_Offsets, geometry);
+    m_Valid = true;
+}
+
+// skin VB의 합집합 레이아웃과 section 범위를 검증하고 연속 RAW40 출력을 만든다.
+PosedGeometry::PosedGeometry(const ByteAddressBuffer& skinVertices, uint32_t stride, uint32_t flags,
+    const std::vector<VertexRange>& sections)
+{
+    // 기존 모델의 packed 속성 뒤에 skin 16바이트가 오는 계약을 확인한다.
+    const uint32_t expectedStride = 32 + ((flags & PSOFlags::kHasTangent) ? 4 : 0)
+        + ((flags & PSOFlags::kHasUV0) ? 4 : 0) + ((flags & PSOFlags::kHasUV1) ? 4 : 0);
+    if (!(flags & PSOFlags::kHasSkin) || stride != expectedStride
+        || skinVertices.GetBufferSize() % stride != 0)
+        throw std::runtime_error("Unsupported skinned generated pose input");
+
+    // section 순서의 출력 offset을 만들고 입력 및 출력의 32비트 주소 범위를 검사한다.
+    uint64_t size = 0;
+    for (const auto& section : sections)
+    {
+        const uint64_t end = (uint64_t(section.FirstVertex) + section.VertexCount) * stride;
+        if (end > skinVertices.GetBufferSize() || end > UINT32_MAX)
+            throw std::runtime_error("Skinned generated pose section exceeds input");
+        m_Offsets.push_back(static_cast<uint32_t>(size));
+        size += uint64_t(section.VertexCount) * VertexStride;
+        if (size > UINT32_MAX)
+            throw std::runtime_error("Skinned generated pose exceeds 4 GiB");
+    }
+
+    // 입력 자원을 소유하지 않고 레이아웃과 범위만 보관한다.
+    m_SkinSections = sections;
+    m_SkinStride = stride;
+    m_SkinFlags = flags;
+    if (size > 0)
+        m_Buffer.Create(L"Skinned generated component pose", static_cast<uint32_t>(size), 1);
+}
+
+// 조각의 전역 joint 팔레트 전체와 N(t)를 기존 PreparePoseCS에 전달한다.
+void PosedGeometry::UpdateSkinnedGenerated(GraphicsContext& context, const ByteAddressBuffer& skinVertices,
+    const std::vector<Joint>& palette, const Math::Matrix4& nodeMatrix)
+{
+    // 추가 슬롯 K까지 u16으로 접근할 수 있는 팔레트와 생성자 계약을 확인한다.
+    if (!m_SkinStride || palette.empty() || palette.size() > 65536)
+        throw std::runtime_error("Invalid skinned generated pose palette or layout");
+    for (const auto& section : m_SkinSections)
+    {
+        if ((uint64_t(section.FirstVertex) + section.VertexCount) * m_SkinStride > skinVertices.GetBufferSize())
+            throw std::runtime_error("Skinned generated pose input changed size");
+    }
+    if (!m_Buffer.GetBufferSize())
+        return;
+
+    // startJoint = 0으로 전체 팔레트를 한 번 바인딩하고 출력 UAV를 준비한다.
+    InitializePosePipeline();
+    auto& compute = context.GetComputeContext();
+    auto& source = const_cast<ByteAddressBuffer&>(skinVertices);
+    compute.SetRootSignature(s_PoseRootSignature);
+    compute.SetPipelineState(s_PosePSO);
+    compute.TransitionResource(source, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    compute.TransitionResource(m_Buffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    compute.SetBufferSRV(1, source);
+    compute.SetDynamicSRV(2, sizeof(Joint) * palette.size(), palette.data());
+
+    // section별 원본 VB 구간을 연속 RAW40 구간으로 변환한다.
+    for (size_t i = 0; i < m_SkinSections.size(); ++i)
+    {
+        const auto& section = m_SkinSections[i];
+        DispatchPoseSection(compute, m_Buffer, m_Offsets[i], section.FirstVertex * m_SkinStride,
+            m_SkinStride, section.VertexCount, m_SkinFlags, nodeMatrix);
+    }
+
+    // VB로도 쓰는 입력은 GENERIC_READ로 돌리고 다음 프레임에도 다시 갱신한다.
+    compute.TransitionResource(source, D3D12_RESOURCE_STATE_GENERIC_READ);
+    compute.TransitionResource(m_Buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     m_Valid = true;
 }
