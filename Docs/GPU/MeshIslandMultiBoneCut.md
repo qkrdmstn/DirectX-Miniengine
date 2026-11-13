@@ -79,8 +79,28 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | --- | --- | --- |
 | MI-1 | 격자 토폴로지 맵: CPU 인덱스 보관, `BuildLatticeTopology`, 로드 시 생성, union-find | 단위 테스트(분리된 두 삼각형 띠=2 성분, 같은 위치 중복 정점=1 성분, 평면 절단 시 성분 증가) PASS; CesiumMan 로드 로그에 Dim·셀 수·전체 성분 수 |
 | MI-2 | 완료(base `432ff0c5`): Poll의 기존 TriangleSources readback 재사용, 제출 포즈 반공간 예측, `LabelPatchIslands`, 로그·표 보관만 | 리뷰 3건 수정 후 CPU 테스트·D/R 빌드·Release 회귀 PASS; 위팔 P7에서 아일랜드 3개, 허리 90 tris → A; GPU 출력 불변 |
-| MI-3 | GPU 분리: 절단 출력 삼각형을 몸체 표로 A/B에 재배치(cap 포함), 단일 관절 유지 | 위팔 캡처에서 허리 삼각형이 원본에 남음; SP7e2·PS 회귀 PASS |
-| MI-4 | 다중 본: 교차 최상위 joint 집합, 합집합 선택, 몸체 n+1 게시, `BreakConstraint` n회 | 몸통/허벅지 평면에서 끊은 관절 수만큼 B 몸체; AlreadyBroken·Stale 거절 유지; 회귀 PASS |
+| MI-3a | 라벨 GPU 업로드, 출력 삼각형 몸체 판정(provenance `TriangleId`→`TriangleSideBody`) | 세 정점 ID 일치, invalid/fallback 로그; 출력 불변 |
+| MI-3b | body×section count/scatter 압축 셰이더 | 합성 두-side 입력에서 정점·provenance 보존, overflow 검사 |
+| MI-3c | 압축 C++ job·메모리·fence·메타데이터(게시 미연결) | body 합계=입력 합계, material/depth/IB/bounds 검증 |
+| MI-3d | 단일 관절 재배치 게시 연결(`OnCutResult`·`BuildPieceSkin(body)`), cap은 SideDefault | 위팔 허리 90 tris가 A에 남음, A/B 각 1회 게시, 캡처 |
+| MI-3e | `ClipTrianglesCS` segment 출처 → cap loop 몸체 보조 전달 | 다중 loop cap 귀속·충돌/fallback 진단 |
+| MI-3f | cap loop 귀속 연결 | 위팔 publish/after60 캡처, SP7e2 ≤1mm, PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 |
+| MI-4a | 무한 평면 교차 세그먼트 집합·조상 제거 함수 | 형제 2개/조상+자손/부호 반전 fixture 로그 |
+| MI-4b | joint 집합 팔레트 합집합 선택(`PatchExtractCS::Selected` 재사용) | 중복 삼각형 0, GPU==CPU |
+| MI-4c | 그룹 일반화·몸체별 snapshot/attachment 배열 | n=1 동등, 형제 n=2 Frozen 팔레트 검증 |
+| MI-4d | 압축·게시 준비물 n+1 배열화(break 미연결) | 같은 side B1/B2 cap 분리, 빈 몸체 로그 |
+| MI-4e | `ApplyConstraintBreak` 검증/commit 분리 | 단일 break 회귀·거절 무변경 |
+| MI-4f | `SkeletalPhysicsSystem` batch 사전 검증·세대 계약 | 두 번째 실패 시 첫 constraint도 보존(CPU 검사) |
+| MI-4g | `QueueBreak` batch·결과 수집 | pause·Stale·AlreadyBroken·Reset 전체 무변경 |
+| MI-4h | batch 성공 후 mask 1회 + n+1 게시 | 허벅지/몸통 캡처, constraint n개 감소, 회귀 |
+
+### MI-3·MI-4 추가 결정 (Claude 판단, 2026-11-13; 근거 Codex 계획 메모 `%TEMP%/MI3-plan.md`)
+
+- 재배치는 절단 후 body×section 압축(새 Scene compute pass)으로 한다. 절단 전 패치에서 빼는 방식은 교차 삼각형·B_i↔B_j 분배·cap을 풀지 못해 쓰지 않는다.
+- 출력 삼각형 몸체 = provenance `TriangleId`(패치 삼각형)와 출력 side로 `TriangleSideBody` 조회. cap은 loop 단위 몸체(MI-3e까지는 SideDefault).
+- 원본 mask는 합집합 패치 전체를 한 번 숨기고 patch id 하나를 유지한다.
+- 다중 본 A의 강체 부착 node = 모든 `P_i` 부모의 최소 공통 조상(n=1이면 현재와 같다).
+- 다중 break는 전부 성공 아니면 전부 거절(사전 검증 후 순차 commit). 부분 성공은 허용하지 않는다.
 | MI-5 | CesiumMan 시험·기록 | 위팔·허벅지·몸통 평면 캡처, 결과를 아래 "시험 결과"에 기록 |
 
 - 단계마다 Debug·Release 빌드, 회귀(`-skeletal-patch-break-checks 1`, `-skeletal-patch-checks 1`, `-attached-recut-checks 1`, 기존 Static 절단), 로컬 커밋.
