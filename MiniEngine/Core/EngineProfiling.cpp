@@ -22,6 +22,7 @@
 #include <vector>
 #include <unordered_map>
 #include <array>
+#include <cmath>
 
 using namespace Graphics;
 using namespace GraphRenderer;
@@ -37,28 +38,39 @@ namespace EngineProfiling
 class StatHistory
 {
 public:
+    // 첫 수집 전에 조회하더라도 모든 통계는 0에서 시작한다.
     StatHistory()
     {
+        // 두 길이의 이력 버퍼를 초기화한다.
         for (uint32_t i = 0; i < kHistorySize; ++i)
             m_RecentHistory[i] = 0.0f;
         for (uint32_t i = 0; i < kExtendedHistorySize; ++i)
             m_ExtendedHistory[i] = 0.0f;
+
+        // 최근 값과 요약 통계를 초기화한다.
+        m_Recent = 0.0f;
         m_Average = 0.0f;
         m_Minimum = 0.0f;
         m_Maximum = 0.0f;
     }
 
+    // 확정된 표본과 수집 프레임을 저장하고 최근 이력의 요약을 갱신한다.
     void RecordStat( uint32_t FrameIndex, float Value )
     {
+        // 저장한 프레임으로 미수집 값과 오래된 값을 구별한다.
+        m_CollectedFrame = FrameIndex;
+        m_HasSample = true;
         m_RecentHistory[FrameIndex % kHistorySize] = Value;
         m_ExtendedHistory[FrameIndex % kExtendedHistorySize] = Value;
         m_Recent = Value;
 
+        // 양수인 최근 표본으로 요약 통계를 계산한다.
         uint32_t ValidCount = 0;
         m_Minimum = FLT_MAX;
         m_Maximum = 0.0f;
         m_Average = 0.0f;
 
+        // 최근 이력의 양수 표본에서 합계와 최솟값 및 최댓값을 구한다.
         for (float val : m_RecentHistory)
         {
             if (val > 0.0f)
@@ -70,6 +82,7 @@ public:
             }
         }
 
+        // 유효 표본이 없으면 최소값도 0으로 되돌린다.
         if (ValidCount > 0)
             m_Average /= (float)ValidCount;
         else
@@ -77,6 +90,12 @@ public:
     }
 
     float GetLast(void) const { return m_Recent; }
+    // 현재 프레임에 실제 수집한 값만 진단 표본으로 허용한다.
+    bool HasSample(uint32_t FrameIndex) const
+    {
+        // 첫 수집 전이나 프로파일러 일시 정지 중의 재사용을 막는다.
+        return m_HasSample && m_CollectedFrame == FrameIndex;
+    }
     float GetMax(void) const { return m_Maximum; }
     float GetMin(void) const { return m_Minimum; }
     float GetAvg(void) const { return m_Average; }
@@ -93,6 +112,8 @@ private:
     float m_Average;
     float m_Minimum;
     float m_Maximum;
+    uint32_t m_CollectedFrame = 0;
+    bool m_HasSample = false;
 };
 
 class StatPlot
@@ -356,6 +377,59 @@ public:
         GraphRenderer::Update(XMFLOAT2(TotalCpuTime, TotalGpuTime), 0, GraphType::Global);
     }
 
+    // 이름이 같은 scope의 최근 확정 시간을 트리 전체에서 합산한다.
+    static bool GetLastBlockTimes(const wstring& name, float& cpuMs, float& gpuMs,
+        const NestedTimingTree* node = nullptr)
+    {
+        // 최초 호출에서 합계를 초기화하고 루트부터 탐색한다.
+        if (!node)
+        {
+            cpuMs = 0.0f;
+            gpuMs = 0.0f;
+            node = &sm_RootScope;
+        }
+
+        // 현재 수집한 유한한 비음수 값만 사용하며 별도 GPU 대기는 하지 않는다.
+        bool found = false;
+        if (node->m_Name == name)
+        {
+            const uint32_t frame = (uint32_t)Graphics::GetFrameCount();
+            const float cpu = node->m_CpuTime.GetLast();
+            const float gpu = node->m_GpuTime.GetLast();
+            if (!node->m_CpuTime.HasSample(frame) || !node->m_GpuTime.HasSample(frame)
+                || !std::isfinite(cpu) || !std::isfinite(gpu) || cpu < 0.0f || gpu < 0.0f)
+            {
+                cpuMs = -1.0f;
+                gpuMs = -1.0f;
+                return false;
+            }
+            cpuMs += cpu;
+            gpuMs += gpu;
+            found = true;
+        }
+
+        // 같은 키가 다른 부모 아래 있더라도 모든 자식의 유효성을 확인한다.
+        for (const auto* child : node->m_Children)
+        {
+            float childCpu = 0.0f;
+            float childGpu = 0.0f;
+            const bool childFound = GetLastBlockTimes(name, childCpu, childGpu, child);
+            if (!childFound && (childCpu < 0.0f || childGpu < 0.0f
+                || !std::isfinite(childCpu) || !std::isfinite(childGpu)))
+            {
+                cpuMs = -1.0f;
+                gpuMs = -1.0f;
+                return false;
+            }
+            cpuMs += childCpu;
+            gpuMs += childGpu;
+            found = found || childFound;
+        }
+
+        // 누적 중 범위를 벗어난 값도 호출자가 평균에서 제외하도록 알린다.
+        return found && std::isfinite(cpuMs) && std::isfinite(gpuMs);
+    }
+
     static float GetTotalCpuTime(void) { return s_TotalCpuTime.GetAvg(); }
     static float GetTotalGpuTime(void) { return s_TotalGpuTime.GetAvg(); }
     static float GetFrameDelta(void) { return s_FrameDelta.GetAvg(); }
@@ -393,8 +467,8 @@ private:
     NestedTimingTree* m_Parent;
     vector<NestedTimingTree*> m_Children;
     unordered_map<wstring, NestedTimingTree*> m_LUT;
-    int64_t m_StartTick;
-    int64_t m_EndTick;
+    int64_t m_StartTick = 0;
+    int64_t m_EndTick = 0;
     StatHistory m_CpuTime;
     StatHistory m_GpuTime;
     bool m_IsExpanded;
@@ -444,6 +518,13 @@ namespace EngineProfiling
     void EndBlock(CommandContext* Context)
     {
         NestedTimingTree::PopProfilingMarker(Context);
+    }
+
+    // 진단 호출자에게 기존 프로파일러가 마지막으로 수집한 ms 값을 전달한다.
+    bool GetLastBlockTimes(const wstring& name, float& cpuMs, float& gpuMs)
+    {
+        // GPU 쿼리 버퍼를 다시 매핑하지 않고 저장된 통계를 조회한다.
+        return NestedTimingTree::GetLastBlockTimes(name, cpuMs, gpuMs);
     }
 
     bool IsPaused()

@@ -3,6 +3,7 @@
 #include "Renderer.h"
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
+#include "EngineProfiling.h"
 #include "Util/CommandLineArg.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
@@ -839,10 +840,28 @@ namespace Viewer
                 if (!patchSource || !patchSource->GetPreparedNodes() || !patchSource->GetPreparedJoints()
                     || PatchSkin->Snapshot.MeshNode >= pose.GetModel()->m_NumNodes)
                     return;
+
+                // break 검사에서만 조각별 팔레트 생성과 GPU pose 갱신을 Release에서도 측정한다.
+                // 실행 옵션을 한 번 읽어 진단 타이머의 활성 여부를 결정한다.
+                static const uint32_t skinChecks = []
+                {
+                    // 실행 중 변하지 않는 진단 옵션은 최초 갱신에서 한 번만 읽는다.
+                    uint32_t checks = 0;
+                    CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
+                    return checks;
+                }();
+                if (skinChecks && !PatchSkinTimingName.empty())
+                    EngineProfiling::BeginBlock(PatchSkinTimingName, &context);
+
+                // 조각 팔레트 생성과 GPU 스키닝 명령 기록을 함께 측정한다.
                 BuildPatchPalette(PatchSkin->Snapshot, patchSource->GetPreparedJoints(), patchSource->GetPreparedNodes(), m_PatchPalette);
                 const Matrix4 sourceToComponent(Invert(patchSource->GetDeformBinding().SourceFrame.ToAffine()));
                 const Matrix4 node = sourceToComponent * patchSource->GetPreparedNodes()[PatchSkin->Snapshot.MeshNode];
                 m_PosedGeometry->UpdateSkinnedGenerated(context, PatchSkin->Vertices.Data, m_PatchPalette, node);
+                if (skinChecks && !PatchSkinTimingName.empty())
+                    EngineProfiling::EndBlock(&context);
+
+                // 측정 구간 뒤에서 원본 월드와 조각 bounds를 준비한다.
                 m_PreparedWorld = patchSource->GetWorldTransform(owner);
 
                 // 원본과 같이 section bind 구를 전체 팔레트로 변환·합산하고 zero-weight 원점도 포함한다.

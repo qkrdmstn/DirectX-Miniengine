@@ -25,6 +25,9 @@ namespace EngineProfiling
     void BeginBlock(const std::wstring& name, CommandContext* Context = nullptr);
     void EndBlock(CommandContext* Context = nullptr);
 
+    // 현재 프레임에 수집한 유효 CPU/GPU 시간을 ms로 합산하고 성공 여부를 반환한다.
+    bool GetLastBlockTimes(const std::wstring& name, float& cpuMs, float& gpuMs);
+
     void DisplayFrameRate(TextContext& Text);
     void DisplayPerfGraph(GraphicsContext& Text);
     void Display(TextContext& Text, float x, float y, float w, float h);

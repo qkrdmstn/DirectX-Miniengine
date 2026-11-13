@@ -1,6 +1,7 @@
 ﻿#include "SkeletalPatchCopy.h"
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
+#include "EngineProfiling.h"
 #include "Utility.h"
 #include "ObjectSelection.h"
 #include "CuttingSystem.h"
@@ -1633,29 +1634,89 @@ namespace Viewer
         if (m_BonePending)
         {
             std::shared_ptr<SkeletalPatchBuffers> patch;
-            if (!m_Job.Poll(result, patch)) return false;
+            if (!m_Job.Poll(result, patch))
+                return false;
             CheckPatchSkin(*patch);
             m_BonePending = false;
             PublishRigBonePatch(scene, result, patch);
             return true;
         }
 
-        // 게시 다음 Update부터 정확히 60번의 물리·애니메이션 프레임을 진행한다.
-        if (m_BoundaryWait && !--m_BoundaryWait)
+        // CPU는 1프레임, GPU는 2프레임 늦으므로 게시 후 첫 3프레임을 건너뛰고 유효 표본 60개를 평균한다.
+        if (m_BoundaryWait && m_BoundaryWait <= 60)
         {
-            MeasureBoundaryAt(scene, "after60");
-            if (m_BreakCheck >= 2) m_CaptureRequest = m_BreakCheck - 1;
+            // 이번 프레임의 두 조각이 모두 유효할 때만 하나의 표본으로 취급한다.
+            const auto* owner = scene.FindObject(m_Break.Owner);
+            uint32_t pieces = 0;
+            uint32_t vertices = 0;
+            double cpuTotal = 0.0;
+            double gpuTotal = 0.0;
+            bool valid = true;
+
+            // 게시된 조각의 고유 타이머를 조회하고 누락 및 비정상 시간을 제외한다.
+            for (const auto id : m_PieceIds)
+            {
+                const auto* piece = owner ? owner->FindMeshComponent(id) : nullptr;
+                if (!piece || !piece->HasSkinnedPatch())
+                {
+                    valid = false;
+                    continue;
+                }
+
+                // 수집된 CPU/GPU 쌍을 검사한 뒤 프레임 합계에 반영한다.
+                float cpuMs = 0.0f;
+                float gpuMs = 0.0f;
+                const bool collected = EngineProfiling::GetLastBlockTimes(piece->PatchSkinTimingName, cpuMs, gpuMs);
+                valid = valid && collected && std::isfinite(cpuMs) && std::isfinite(gpuMs)
+                    && cpuMs >= 0.0f && gpuMs >= 0.0f;
+                cpuTotal += cpuMs;
+                gpuTotal += gpuMs;
+                ++pieces;
+                vertices += piece->PatchSkin->VertexCount;
+            }
+
+            // 무효 프레임은 분모에도 넣지 않고 두 조각의 유효 합계만 누적한다.
+            if (valid && pieces == 2 && std::isfinite(cpuTotal) && std::isfinite(gpuTotal))
+            {
+                m_SkinCpuMs += cpuTotal;
+                m_SkinGpuMs += gpuTotal;
+                ++m_SkinTimingFrames;
+            }
+
+            // 각 case의 마지막 표본 뒤에 양쪽 조각의 프레임당 평균을 한 번만 기록한다.
+            if (m_SkinTimingFrames == 60)
+                PatchLog("PS7 case=%u pieces=%u vertices=%u cpuAvg_ms=%.4f gpuAvg_ms=%.4f frames=%u\n",
+                    m_BreakCheck, pieces, vertices, m_SkinCpuMs / m_SkinTimingFrames,
+                    m_SkinGpuMs / m_SkinTimingFrames, m_SkinTimingFrames);
+
+            // 무효 표본만큼 마지막 대기를 연장해 다음 case 전에 유효 표본 60개를 확보한다.
+            if (m_BoundaryWait == 1 && m_SkinTimingFrames < 60)
+                ++m_BoundaryWait;
+        }
+
+        // 경계 검사는 게시 60프레임 뒤에 유지하고 타이밍 수집이 끝난 뒤 다음 case를 허용한다.
+        if (m_BoundaryWait)
+        {
+            --m_BoundaryWait;
+            if (m_BoundaryWait == 3)
+            {
+                MeasureBoundaryAt(scene, "after60");
+                if (m_BreakCheck >= 2)
+                    m_CaptureRequest = m_BreakCheck - 1;
+            }
         }
 
         // substep이 결과를 만들 때까지 다음 C 진단을 대기시킨다.
         if (m_RequestId)
         {
             BreakStatus status;
-            if (!m_Physics->TryGetBreakResult(m_RequestId, status)) return false;
+            if (!m_Physics->TryGetBreakResult(m_RequestId, status))
+                return false;
             SkeletalRigState state;
             m_Physics->GetSkeletalPhysics().ReadDiagnosticState(m_Break.Owner, state);
             unsigned dynamic = 0;
-            for (const auto& body : state.Bodies) dynamic += body.Motion == MiniPhysics::BodyMotion::Dynamic;
+            for (const auto& body : state.Bodies)
+                dynamic += body.Motion == MiniPhysics::BodyMotion::Dynamic;
             PatchLog("SP7b RequestId=%llu BreakStatus=%u JointId=%u ParentNode=%u Dynamic=%u\n",
                 m_RequestId, unsigned(status), m_Break.JointId, m_Incoming.ParentNode,
                 dynamic >= m_DynamicBefore ? dynamic - m_DynamicBefore : 0);
@@ -1676,6 +1737,7 @@ namespace Viewer
                     std::vector<std::unique_ptr<MeshComponent>> pieces;
                     for (size_t i = 0; i < 2; ++i)
                     {
+                        // 원래 배치와 부착 노드에 맞춰 게시할 조각을 준비한다.
                         const size_t index = m_PositiveA ? i : 1 - i;
                         auto piece = owner->PrepareMeshComponent(staging->GetMeshComponents()[index]->GetGeometry(), 2);
                         if (!piece->SetTransform(m_World, MeshTransformMode::WorldIndependent))
@@ -1684,12 +1746,22 @@ namespace Viewer
                         piece->Attachment = std::make_unique<NodeAttachment>(i == 0 ? m_AttachA : m_AttachB);
                         piece->PatchSkin = staging->GetMeshComponents()[index]->PatchSkin;
                         piece->ActivatePatchSkin();
-                        if (m_BreakCheck && !m_ForceStale) m_PieceIds[i] = piece->GetId();
+
+                        // owner 안에서만 고유한 컴포넌트 ID에 owner ID를 붙여 타이머 충돌을 막는다.
+                        if (m_BreakCheck && !m_ForceStale)
+                        {
+                            m_PieceIds[i] = piece->GetId();
+                            piece->PatchSkinTimingName = L"Patch Skinning " + std::to_wstring(owner->GetId())
+                                + L"/" + std::to_wstring(piece->GetId());
+                        }
+
+                        // 게시 전 준비 목록에 조각을 보관한다.
                         pieces.push_back(std::move(piece));
                     }
                     if (!m_DemoUnmask && !source->SetTriangleMask(m_Removal))
                         throw std::runtime_error("SP7e invalid removal mask");
-                    for (auto& piece : pieces) owner->CommitMeshComponent(std::move(piece));
+                    for (auto& piece : pieces)
+                        owner->CommitMeshComponent(std::move(piece));
                     PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=%u nodes=%u/%u\n",
                         m_Break.Owner, m_Result.PatchTriangles, m_DemoUnmask ? 0u : 1u, m_AttachA.NodeId, m_AttachB.NodeId);
 
@@ -1709,11 +1781,16 @@ namespace Viewer
                     if (m_BreakCheck && !m_ForceStale)
                     {
                         MeasureBoundaryAt(scene, "publish");
-                        m_BoundaryWait = 60;
+                        m_BoundaryWait = 63;
+                        m_SkinCpuMs = 0.0;
+                        m_SkinGpuMs = 0.0;
+                        m_SkinTimingFrames = 0;
                     }
                 }
-                else PatchLog("SP7e discarded BreakStatus=%u revisionMatch=%u originalUntouched=1\n", unsigned(status), current);
-                if (staging) scene.DeleteObject(m_CopyOwner);
+                else
+                    PatchLog("SP7e discarded BreakStatus=%u revisionMatch=%u originalUntouched=1\n", unsigned(status), current);
+                if (staging)
+                    scene.DeleteObject(m_CopyOwner);
                 m_CopyOwner = 0;
             }
         }
@@ -1735,7 +1812,8 @@ namespace Viewer
         if (m_Completed && !m_RequestId)
         {
             // 게시 후 검사 성공도 결과와 함께 남긴다.
-            if (m_Diagnostic && m_OffsetCopy) PatchLog("Skeletal patch static placement PASS: no dynamic bodies, offset and gap preserved\n");
+            if (m_Diagnostic && m_OffsetCopy)
+                PatchLog("Skeletal patch static placement PASS: no dynamic bodies, offset and gap preserved\n");
             result = m_Result;
             m_Completed = false;
             return true;
@@ -1782,7 +1860,8 @@ namespace Viewer
 
         // 영향 삼각형이 없는 패치만 생략하며 유한 영역 교차 수는 무한 절단을 막지 않는다.
         std::shared_ptr<SkeletalPatchBuffers> patch;
-        if (!m_Job.Poll(result, patch)) return false;
+        if (!m_Job.Poll(result, patch))
+            return false;
         CheckPatchSkin(*patch);
         m_SkinPatch = m_SkinSnapshotCount ? patch : nullptr;
         m_SelectedNode = m_Job.SelectedNode();
@@ -1816,19 +1895,26 @@ namespace Viewer
                 PatchLog("SP7e discarded before break: revision mismatch\n");
                 return true;
             }
-            uint32_t count = 0, patchId = 0;
+
+            // 기존 마스크와 합칠 전역 삼각형 수 및 패치 ID를 계산한다.
+            uint32_t count = 0;
+            uint32_t patchId = 0;
             for (size_t s = 0; s < m_SourceRevision->GetSections().size(); ++s)
                 for (uint32_t d = 0; d < m_SourceRevision->GetMesh(s).numDraws; ++d)
                     count += m_SourceRevision->GetMesh(s).draw[d].primCount / 3;
             m_Removal = source->GetTriangleMask() ? source->GetTriangleMask()->Pending : std::vector<uint32_t>(count);
-            for (uint32_t value : m_Removal) patchId = std::max(patchId, value & 65535u);
+            for (uint32_t value : m_Removal)
+                patchId = std::max(patchId, value & 65535u);
             if (++patchId > 65535u)
             {
                 PatchLog("SP7e rejected: patch id exhausted\n");
                 return true;
             }
-            for (uint32_t triangle : patch->Triangles) m_Removal.at(triangle) = 0x80000000u | patchId;
+            for (uint32_t triangle : patch->Triangles)
+                m_Removal.at(triangle) = 0x80000000u | patchId;
         }
+
+        // 복사본의 월드 오프셋과 생성 geometry를 게시한다.
         m_Offset = m_OffsetCopy ? patch->SourceWorldWidth + 0.5f : 0;
         m_World.SetTranslation(m_World.GetTranslation() + Math::Vector3(m_Offset, 0, 0));
         auto revision = GeometryRevision::FromGenerated(patch->Geometry);
@@ -1852,6 +1938,7 @@ namespace Viewer
         const Math::AffineTransform worldToPlane(Invert(Math::Matrix4(planeWorld)));
         const Math::Vector3 relative = worldToPlane * worldCenter;
         const float margin = std::max(0.01f, radius * 0.05f);
+
         // 평면 자체의 비균일 scale도 역변환하여 월드 경계와 여유가 축소되지 않게 한다.
         const float projectedRadius = (radius + margin) * AffineRadiusScale(worldToPlane);
         const float width = 2 * (std::abs(float(relative.GetX())) + projectedRadius);
@@ -1873,10 +1960,12 @@ namespace Viewer
         // Static batch·벤치마크·자동 재절단과 격리된 owner가 정확히 하나인지 검사한다.
         size_t copies = 0;
         for (const auto& object : scene.GetObjects())
-            if (object->GetName().find("_SkeletalPatch") != std::string::npos) ++copies;
+            if (object->GetName().find("_SkeletalPatch") != std::string::npos)
+                ++copies;
         PatchLog("Skeletal patch published owner=%s triangles=%u worldOffset=(%.6f,0,0) copies=%zu %s\n",
             owner.GetName().c_str(), result.PatchTriangles, m_Offset, copies, copies == 1 ? "PASS" : "FAIL");
-        if (copies != 1) throw std::runtime_error("Skeletal patch copy isolation failed");
+        if (copies != 1)
+            throw std::runtime_error("Skeletal patch copy isolation failed");
         return false;
     }
 

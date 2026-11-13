@@ -67,6 +67,7 @@ namespace Viewer
         bool PublishVisible = true; // 미게시 절단 준비물은 모든 pass에서 숨긴다.
         std::unique_ptr<NodeAttachment> Attachment;
         std::shared_ptr<PatchSkinPublication> PatchSkin; // 게시 전에는 입력만 보관하고 게시 시 PG를 활성화한다.
+        std::wstring PatchSkinTimingName; // break 진단에서만 owner/component ID로 지정한다.
         // 공유 원본 revision을 사용하되 GPU pose·렌더 상수는 새로 만든다.
         MeshComponent(ComponentId id, std::shared_ptr<const GeometryRevision> geometry);
         // 이전 프레임의 GPU 사용이 끝난 뒤 렌더 자원을 해제한다.

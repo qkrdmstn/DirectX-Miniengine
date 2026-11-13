@@ -210,6 +210,9 @@ namespace Viewer
         std::vector<SkeletalPatchBuffers::BoundarySkin> m_BoundarySkins;
         std::vector<BoundaryPair> m_BoundaryPairs;
         ComponentId m_PieceIds[2]{};
+        double m_SkinCpuMs = 0.0;
+        double m_SkinGpuMs = 0.0;
+        uint32_t m_SkinTimingFrames = 0;
         MeshCutting::CutPlaneData m_Plane;
         SkeletalPatchResult m_Result;
         std::vector<ObjectId> m_RetiredOwners;

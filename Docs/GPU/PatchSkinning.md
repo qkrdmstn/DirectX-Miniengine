@@ -1,4 +1,4 @@
-상태: 진행 중 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 `cfffd37f`, PS-4a `cfd3e682`, PS-4b `84e95a1d`, PS-4c `2c2b2d71`, PS-5 `21be6675`, PS-6 완료(Debug/Release 빌드·회귀, 2026-11-13). 남은 것: 완료 조건 6 비용 측정. 기준 master `f2b4d2ec`
+상태: 완료 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 `cfffd37f`, PS-4a `cfd3e682`, PS-4b `84e95a1d`, PS-4c `2c2b2d71`, PS-5 `21be6675`, PS-6 `f00a1993`, 비용 측정 커밋; SP7e2 PASS, Debug/Release 회귀 6종 PASS (2026-11-13). 기준 master `f2b4d2ec`
 
 # 스켈레탈 패치 조각 스키닝 (NDC25 "프로시저럴 메시 스키닝")
 
@@ -114,7 +114,7 @@ void BuildPatchPalette(const PatchSkinSnapshot& snap, const Joint* current,
 3. 테두리·cap 정점은 `K` 하나로 움직여, 테두리–cap 간격이 t_cut 대비 0.01 mm 넘게 변하지 않는다(PS-4c 진단 + 시각 확인).
 4. 조각 PG 전체 정점이 조각 bounds 안에 있다(PS-4 진단).
 5. cutter 정점 형식(`CutCommon.hlsli::Vertex`)과 Static 절단 경로는 변경 없음.
-6. 조각 스키닝 추가 비용(조각 PreparePoseCS) ms를 Release에서 한 번 측정해 이 문서에 기록.
+6. 조각 스키닝 추가 비용(조각 PreparePoseCS) ms를 Release에서 한 번 측정해 이 문서에 기록. → 측정(2026-11-13, Release, `-skeletal-patch-break-checks 1`의 PS7, 게시 뒤 3프레임 제외 유효 60프레임 평균, 3회): 조각 2개 기준 Xbot 전완 7296정점 GPU 0.039~0.041 ms·CPU 0.028~0.066 ms, Xbot 허벅지 7032정점 GPU 0.030~0.033 ms·CPU 0.023~0.094 ms, CesiumMan 팔 993정점 GPU 0.022~0.023 ms·CPU 0.016~0.039 ms. 장치 목록에 NVIDIA GeForce MX450(32.0.15.9186)과 Intel Iris Xe가 있으며 실제 사용 어댑터는 미확인. 측정용 `StatHistory` 수집 프레임 기록은 옵션과 무관하게 필드 두 개를 더 쓴다(무시 가능 수준으로 판단).
 
 ## 범위 밖
 
