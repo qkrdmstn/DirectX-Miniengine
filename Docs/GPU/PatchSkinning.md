@@ -116,6 +116,13 @@ void BuildPatchPalette(const PatchSkinSnapshot& snap, const Joint* current,
 5. cutter 정점 형식(`CutCommon.hlsli::Vertex`)과 Static 절단 경로는 변경 없음.
 6. 조각 스키닝 추가 비용(조각 PreparePoseCS) ms를 Release에서 한 번 측정해 이 문서에 기록. → 측정(2026-11-13, Release, `-skeletal-patch-break-checks 1`의 PS7, 게시 뒤 3프레임 제외 유효 60프레임 평균, 3회): 조각 2개 기준 Xbot 전완 7296정점 GPU 0.039~0.041 ms·CPU 0.028~0.066 ms, Xbot 허벅지 7032정점 GPU 0.030~0.033 ms·CPU 0.023~0.094 ms, CesiumMan 팔 993정점 GPU 0.022~0.023 ms·CPU 0.016~0.039 ms. 장치 목록에 NVIDIA GeForce MX450(32.0.15.9186)과 Intel Iris Xe가 있으며 실제 사용 어댑터는 미확인. 측정용 `StatHistory` 수집 프레임 기록은 옵션과 무관하게 필드 두 개를 더 쓴다(무시 가능 수준으로 판단).
 
+## 시각 확인 (2026-11-13)
+
+- 시연 옵션: `-patch-skinning 0`은 스키닝을 켜지 않고 이전 강체 부착으로 그린다(비교용). `-skeletal-break-demo-bone <이름>`은 `-skeletal-break-demo 1|2`에서 그 이름의 node와 DFS 첫 자식 사이 중점을 자른다.
+- CesiumMan(걷기) 팔·위팔·허벅지 좌우·목·몸통: 강체는 패치–원본 경계가 찢어지고(어깨·허리·목 둘레 틈), 스키닝은 매끈하게 이어져 걷는 동작을 따른다. 정강이는 두 모드 모두 화면상 절단 흔적이 작다.
+- Xbot(거의 정지 자세) 허벅지·정강이·위팔·전완·목·척추: 두 모드가 거의 같아 애니메이션 차이는 확인하지 못했다.
+- 스키닝과 무관한 기존 문제(추정): CesiumMan 위팔 절단에서 허리 쪽 삼각형이 패치에 들어가 B(팔)와 함께 움직인다(두 모드 동일). 패치 아일랜드 구분이 필요하다.
+
 ## 범위 밖
 
 - 재절단 결과 조각의 스키닝 승계, 다중 절단 snapshot 수명 관리.

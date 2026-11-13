@@ -360,12 +360,19 @@ namespace Viewer
     // break 진단과 시연에서 같은 본 쌍의 현재 중점·수직 평면을 재사용한다.
     MeshCutting::CutPlaneData BuildSkeletalBreakPlane(const GameObject& object, uint32_t index)
     {
-        // 전완·허벅지·팔의 기존 case 순서로 현재 월드 좌표를 조회한다.
+        // 전완·허벅지·팔의 기존 case 순서로 node 쌍을 골라 공통 평면 함수에 넘긴다.
         const uint32_t nodes[] = { 14, 60, 8 }, children[] = { 15, 61, 9 };
+        return BuildSkeletalBonePlane(object, nodes[index], children[index]);
+    }
+
+    // 두 node의 현재 월드 중점에서 본 방향을 법선으로 하는 절단 평면을 구성한다.
+    MeshCutting::CutPlaneData BuildSkeletalBonePlane(const GameObject& object, uint32_t node, uint32_t child)
+    {
+        // 두 node의 현재 월드 좌표를 조회한다.
         const auto& instance = *object.GetModelInstance();
         const auto frame = JointFrameToWorld(instance, *object.GetMeshComponents().front(), object.GetTransform(), 0);
-        const Math::Vector3 a(frame * instance.GetNodeTransforms()[nodes[index]].GetW());
-        const Math::Vector3 b(frame * instance.GetNodeTransforms()[children[index]].GetW());
+        const Math::Vector3 a(frame * instance.GetNodeTransforms()[node].GetW());
+        const Math::Vector3 b(frame * instance.GetNodeTransforms()[child].GetW());
 
         // 본 방향의 법선과 수직 축으로 평면 좌표계를 구성한다.
         const auto normal = Math::Normalize(b - a);

@@ -568,6 +568,12 @@ namespace Viewer
         // 스키닝을 허용하지 않은 조각은 기존 강체 경로를 유지한다.
         if (!PatchSkin || !PatchSkin->Snapshot.SkinningAllowed)
             return;
+
+        // 비교 시연용 -patch-skinning 0은 스키닝을 켜지 않고 이전 강체 부착으로 그린다.
+        uint32_t patchSkinning = 1;
+        CommandLineArgs::GetInteger(L"patch-skinning", patchSkinning);
+        if (patchSkinning == 0)
+            return;
         if (!m_Geometry->IsGenerated() || !Attachment || PatchSkin->Snapshot.MeshNode == UINT32_MAX)
             throw std::runtime_error("Invalid patch skin publication");
 

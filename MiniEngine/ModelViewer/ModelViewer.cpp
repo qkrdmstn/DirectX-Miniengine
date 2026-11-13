@@ -539,7 +539,7 @@ void ModelViewer::Startup( void )
     for (const wchar_t* option : { L"edit-target-checks", L"edit-apply-checks", L"edit-delete-checks",
         L"physics-sim-checks", L"skeletal-break-checks", L"skeletal-break-xbot", L"xbot-arm-checks",
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
-        L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask",
+        L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"skeletal-break-demo-bone",
         L"capture", L"capture-frame", L"animation-step-ms",
         L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cap-threads",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
@@ -1089,7 +1089,24 @@ void ModelViewer::Update( float deltaT )
         for (const auto& object : m_Scene.GetObjects())
             if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
             {
-                const auto plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
+                // -skeletal-break-demo-bone이 있으면 그 이름의 node와 DFS 첫 자식(다음 번호) 사이를 자른다.
+                std::wstring boneValue;
+                MeshCutting::CutPlaneData plane;
+                if (CommandLineArgs::GetString(L"skeletal-break-demo-bone", boneValue))
+                {
+                    const std::string bone(boneValue.begin(), boneValue.end());
+                    const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
+                    const auto found = std::find(names.begin(), names.end(), bone);
+                    if (found == names.end() || found + 1 == names.end())
+                        throw std::invalid_argument("skeletal-break-demo-bone not found: " + bone);
+                    const uint32_t node = uint32_t(found - names.begin());
+                    plane = Viewer::BuildSkeletalBonePlane(*object, node, node + 1);
+                    Utility::Printf("Skeletal demo bone=%s node=%u child=%u\n", bone.c_str(), node, node + 1);
+                }
+                else
+                {
+                    plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
+                }
                 m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
                 FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
                 Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
