@@ -1,6 +1,6 @@
 // VS Developer PowerShell, 저장소 루트: 산출물은 TEMP/SkeletalPatchTests에 둔다.
 // $sp = Join-Path $env:TEMP 'SkeletalPatchTests'; New-Item -ItemType Directory -Force $sp | Out-Null
-// cl /nologo /std:c++17 /EHsc /W4 /utf-8 /I MiniEngine/Core "/Fo:$sp/" "/Fe:$sp/SkeletalPatchTests.exe" MiniEngine/ModelViewer/Scene/tests/SkeletalPatchTests.cpp MiniEngine/MeshCutting/Geometry/CutPlane.cpp
+// cl /nologo /std:c++17 /EHsc /W4 /utf-8 /I MiniEngine/Core "/Fo:$sp/" "/Fe:$sp/SkeletalPatchTests.exe" MiniEngine/ModelViewer/Scene/tests/SkeletalPatchTests.cpp MiniEngine/MeshCutting/Geometry/CutPlane.cpp MiniEngine/Model/LatticeTopology.cpp
 // & "$sp/SkeletalPatchTests.exe"
 // Release는 /O2 /DNDEBUG를 추가한다. GPU와 Jolt는 필요 없다.
 #include "SkeletalPatchReference.h"
@@ -20,9 +20,84 @@ static void Check(bool condition, const char* message)
         throw std::runtime_error(message);
 }
 
+// 무한 평면 교차의 최상위 P 집합과 자식 방향 반공간을 합성 계층으로 검증한다.
+static void CheckCrossingJoints()
+{
+    // 형제 P 둘의 교점은 유한 사각형 밖에 있어도 모두 선택한다.
+    MeshCutting::CutPlaneData plane;
+    Check(MeshCutting::TryBuildCutPlaneData({2, 2}, AffineTransform(kIdentity), plane), "multi plane");
+    const std::vector<uint32_t> parents = {UINT32_MAX, 0, 0, 1, 2};
+    const std::vector<Vector3> positions = {Vector3(0, -2, 0), Vector3(-4, -1, 0),
+        Vector3(4, -1, 0), Vector3(-4, 1, 0), Vector3(4, 1, 0)};
+    const std::vector<std::vector<uint32_t>> palettes = {{0, 1, 2, 3, 4, 1}, {2, 4}};
+    const std::vector<uint8_t> influencing(5, 1);
+    const auto siblings = Viewer::SelectCrossingJoints(parents, positions, palettes, plane, influencing);
+    Check(siblings.size() == 2 && siblings[0].NodeId == 1 && siblings[1].NodeId == 2,
+        "two sibling P roots outside finite rectangle");
+    Check(siblings[0].ChildNodeId == 3 && siblings[1].ChildNodeId == 4
+        && siblings[0].ChildSide == 0 && siblings[1].ChildSide == 0, "sibling snapshots and B sides");
+    std::printf("MI4a siblings P={%u,%u} child={%u,%u} Bside={%u,%u}\n",
+        siblings[0].NodeId, siblings[1].NodeId, siblings[0].ChildNodeId,
+        siblings[1].ChildNodeId, siblings[0].ChildSide, siblings[1].ChildSide);
+
+    // 부호 반전은 P와 교점을 보존하고 B 반공간만 뒤집는다.
+    plane.WorldPlane *= -1.0f;
+    const auto flipped = Viewer::SelectCrossingJoints(parents, positions, palettes, plane, influencing);
+    Check(flipped.size() == siblings.size(), "sign flip count");
+    for (size_t i = 0; i < siblings.size(); ++i)
+    {
+        Check(flipped[i].NodeId == siblings[i].NodeId && flipped[i].ChildNodeId == siblings[i].ChildNodeId
+            && float(Length(flipped[i].Intersection - siblings[i].Intersection)) < 1e-6f
+            && flipped[i].ChildSide == 1 - siblings[i].ChildSide, "sign flip preserves selection and reverses B");
+    }
+    std::printf("MI4a signFlip P={%u,%u} Bside={%u,%u}\n",
+        flipped[0].NodeId, flipped[1].NodeId, flipped[0].ChildSide, flipped[1].ChildSide);
+    plane.WorldPlane *= -1.0f;
+
+    // 번호상 뒤에 있는 조상도 먼저 교차한 자손 후보를 제거한다.
+    const auto ancestor = Viewer::SelectCrossingJoints({2, 0, UINT32_MAX},
+        {Vector3(0, 1, 0), Vector3(0, -1, 0), Vector3(0, -1, 0)}, {{0, 1, 2}}, plane, {1, 1, 1});
+    Check(ancestor.size() == 1 && ancestor[0].NodeId == 2 && ancestor[0].ChildNodeId == 0,
+        "crossing ancestor removes descendant independent of node order");
+    std::printf("MI4a ancestor+descendant P={%u} child=%u\n", ancestor[0].NodeId, ancestor[0].ChildNodeId);
+
+    // 비영향 팔레트 본과 영향이 있는 비팔레트 노드를 함께 건너뛴다.
+    const auto skipped = Viewer::SelectCrossingJoints({UINT32_MAX, 0, 1, 2},
+        {Vector3(0, -1, 0), Vector3(0, -1, 0), Vector3(0, -1, 0), Vector3(0, 1, 0)},
+        {{0, 1, 3}}, plane, {1, 0, 1, 1});
+    Check(skipped.size() == 1 && skipped[0].NodeId == 0 && skipped[0].ChildNodeId == 3,
+        "skip uninfluencing and non-palette intermediates");
+    Check(Viewer::IsSelectedSegmentChild(0, 3, 2, skipped[0].ChildNodeId), "indirect child snapshot reusable");
+    std::printf("MI4a skipped P=%u child=%u Bside=%u\n", skipped[0].NodeId,
+        skipped[0].ChildNodeId, skipped[0].ChildSide);
+
+    // 같은 P는 가장 가까운 자식 하나만 보존하며 거리 동점은 작은 자식 번호다.
+    const auto branch = Viewer::SelectCrossingJoints({UINT32_MAX, 0, 0, 0},
+        {Vector3(0, -1, 0), Vector3(4, 1, 0), Vector3(0, 1, 0), Vector3(0, 1, 0)},
+        {{3, 2, 1, 0}}, plane, {1, 1, 1, 1});
+    Check(branch.size() == 1 && branch[0].ChildNodeId == 2, "same P nearest child and stable tie");
+
+    // 허용오차 끝점은 격자 교차 함수와 같은 방향을 쓰고 공면과 미교차는 제외한다.
+    for (bool flip : {false, true})
+    {
+        const auto endpoint = Viewer::SelectCrossingJoints({UINT32_MAX, 0},
+            {Vector3(0, -1, 0), Vector3(0, -1e-5f, 0)}, {{0, 1}}, plane, {1, 1});
+        Check(endpoint.size() == 1 && endpoint[0].ChildSide == (flip ? 1u : 0u)
+            && float(Length(endpoint[0].Intersection - Vector3(0, -1e-5f, 0))) < 1e-7f, "epsilon endpoint direction");
+        plane.WorldPlane *= -1.0f;
+    }
+    Check(Viewer::SelectCrossingJoints({UINT32_MAX, 0}, {Vector3(kZero), Vector3(1, 0, 0)},
+        {{0, 1}}, plane, {1, 1}).empty(), "coplanar has no unique crossing");
+    Check(Viewer::SelectCrossingJoints({UINT32_MAX, 0}, {Vector3(0, -2, 0), Vector3(0, -1, 0)},
+        {{0, 1}}, plane, {1, 1}).empty(), "no crossing has no leaf fallback");
+}
+
 // 합성 입력으로 본 선택·제거 마스크와 패치 출처의 결정성을 검증한다.
 int main()
 {
+    // 다중 본 순수 함수의 교차 집합 계약을 먼저 검사한다.
+    CheckCrossingJoints();
+
     // 중복 팔레트·동점·서로 다른 mesh 시작 위치를 GPU 정수 규칙으로 검사한다.
     {
         Input input;
