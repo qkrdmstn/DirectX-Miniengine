@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(미커밋, base `7728485a`, 2026-11-16): P_i 자체 마스크 합집합·GPU==CPU·중복 0·n=1 기존 경로 동등성 검증. 다음은 MI-4c.
+상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(미커밋, base `86522153`, 2026-11-16): n=1 동등·형제 n=2 Frozen 팔레트·LCA 검증. 다음은 MI-4d.
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -87,8 +87,8 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-3e2 | 완료(미커밋, base `94f17ca0`): 제출 포즈 교차점·실제 loop 판정, 테두리 아일랜드 재라벨 후 MI-3a/3c | 위팔 팔 keep·허리 drop/A 유지, Xbot 허벅지 keep(1/0)·fallback=0; CPU·D/R·Release 3사례·회귀 PASS |
 | MI-3f | 완료(미커밋, base `63c2292b`): leader별 side 몸체/drop 표를 GPU 분류·압축에 연결 | 위팔 cap 54개 제거·팔 cap 28개 유지, body0/1=491/167; publish/after60 PNG 확인; SP7e2 case2/3=0mm(case1 기존 N/A), PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 PASS |
 | MI-4a | 완료(`7728485a`): `SelectCrossingJoints` 무한 평면 교차 최상위 P 집합, 유효 조상 계산 공유; 런타임 미연결 | 형제 P={1,2}, 조상+자손 P={2}, 부호 반전 Bside={0,0}→{1,1}, 비영향/비팔레트 건너뜀 0→3; CPU 83 checks·Lattice·D/R 빌드·Release 회귀 6실행 PASS |
-| MI-4b | 완료(미커밋, base `7728485a`): `BuildJointUnionMasks`·추출 P 집합 입력, `PatchExtractCS::Selected` 재사용 | CesiumMan 형제 허벅지 P={13,17}: 단독364/352, 합집합526, 중복 P도526; GPU==CPU·중복0, CPU·D/R·3데모·Release 회귀 PASS |
-| MI-4c | 그룹 일반화·몸체별 snapshot/attachment 배열 | n=1 동등, 형제 n=2 Frozen 팔레트 검증 |
+| MI-4b | 완료(`86522153`): `BuildJointUnionMasks`·추출 P 집합 입력, `PatchExtractCS::Selected` 재사용 | CesiumMan 형제 허벅지 P={13,17}: 단독364/352, 합집합526, 중복 P도526; GPU==CPU·중복0, CPU·D/R·3데모·Release 회귀 PASS |
+| MI-4c | 완료(미커밋, base `86522153`): `BuildCutBodyGroups`·몸체별 snapshot/attachment 배열 | n=1 기존 Frozen 규칙·세 데모 동등; 형제 n=2 그룹·Frozen 팔레트·LCA 및 CPU/D/R/회귀 PASS |
 | MI-4d | 압축·게시 준비물 n+1 배열화(break 미연결) | 같은 side B1/B2 cap 분리, 빈 몸체 로그 |
 | MI-4e | `ApplyConstraintBreak` 검증/commit 분리 | 단일 break 회귀·거절 무변경 |
 | MI-4f | `SkeletalPhysicsSystem` batch 사전 검증·세대 계약 | 두 번째 실패 시 첫 constraint도 보존(CPU 검사) |
@@ -115,7 +115,17 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 
 ## 시험 결과
 
-MI-4b(미커밋, base `7728485a`, 2026-11-16):
+MI-4c(미커밋, base `86522153`, 2026-11-16):
+- `BuildCutBodyGroups`는 원본 계층의 노드→그룹(0=A, i=B_i), A의 모든 P_i 부모 LCA·B_i의 P_i 부착, 팔레트 순서를 보존한 Frozen=(group!=body)를 만든다. 중복·중첩 P, 잘못된 계층·팔레트는 거절한다. 공통 조상이 없는 forest의 A 부착은 UINT32_MAX이며 이번 런타임 단일 P는 기존 부모 유효성 검사를 유지한다.
+- `Request`의 attachment·skin snapshot·팔레트 오차·piece ID를 벡터로 바꾸고 별도 snapshot count를 제거했다. 몸체별 반공간 배열이 기존 `m_PositiveA`를 대체한다. `DiagnoseIslands`도 공통 그룹 분류기를 쓴다. 기본 런타임은 기존 선택 P 하나만 전달하며 D5는 기존 단일 전체 추종 snapshot이다. 압축·준비 ID 및 두-side 게시 자원과 단일 break는 MI-4d 이후 범위로 유지한다.
+- CPU `SkeletalPatchTests` Debug·/O2 각각118 checks PASS(2.17/5.27초), `LatticeTopologyTests` PASS(1.46초). 형제 그룹·팔레트 중복/순서·n=1 기존 자손 규칙·부모가 다른 LCA·오류 거절을 검사한다.
+- `CheckBodyPalettes`는 기존 `-skeletal-union-checks 1`에서 복사한 후속 포즈로 실제 `BuildPatchPalette`를 검증한다. CesiumMan P13/P17: attach A/B1/B2=2/13/17, Frozen=8/15/15(전체19), 최대 위치 오차=1.45024e-6/9.53674e-7/4.76837e-7 PASS. 다중 절단·break·게시에는 연결하지 않는다. MI-4b GPU==CPU·중복0·n=1 출처 동등도 PASS.
+- 지정 MSBuild /restore /m Debug·Release /p:Platform=Windows 및 `%TEMP%/MI3e2-fix-output.props`: 최종29.94/22.72초, 오류0·기존 경고9/4. 출력은 `%TEMP%/MI3e2-fix-build/`에 보존한다.
+- Release를 ModelViewer 작업 디렉터리에서 지정 옵션으로 실행: (a) 위팔491/167(8.96초), (b) Xbot허벅지1475/869(8.95초), (c) 기본팔161/170(9.67초), union 진단9.07초. 모두 종료0·게시fallback0. MX450/32.0.15.9186(레지스트리 확인).
+- 지정 bash Release 회귀·기존 BASH_ENV 래퍼: 6실행 종료0(54.06초), Static/PS/AR·BC12a/b·Rig PASS, SP6 누적688 PASS/0 FAIL. SP7e2 case2/3 publish/after60=0mm, case1 기존 N/A. 네 데모·회귀 D3D12 ERROR/CORRUPTION 각각0; 기존 DXGI #80·D3D12 경고 유지.
+- `ModelViewer.cpp` SHA256 작업 전후 동일(1C29C322F6CBCBF8181114194BF750B1F8AA0B9030AFC2703EA766D13C855509). Geometry/ 변경·커밋·stash/reset·브랜치 변경 없음. 근거: `%TEMP%/MI4c-{lattice,skeletal-Debug,skeletal-Release}.log`, `MI4c-{Debug,Release}-build.log`, `MI4c-{UpperArm,Thigh,DefaultArm,Union}-{patch,debug,run}.log`, `MI4c-Release-regress{,-debug}.log`, `MI4c-report.md`.
+
+MI-4b(완료 `86522153`, 2026-11-16):
 - `BuildJointUnionMasks`는 각 P_i 본 자체만 선택하는 기존 단일 선택 마스크를 OR하여 section별 0/1 팔레트 마스크 하나로 합친다. 자손은 자동 포함하지 않는다. 추출 규칙은 P_i node palette union이다. 중복 P·중복 팔레트는 멱등이며 잘못된 P·계층 순환은 거절한다.
 - `SkeletalPatchJob::Submit`의 선택적 unionRoots가 이 마스크를 사용한다. 생략하면 기존 단일 본 마스크/Influence 입력을 유지한다. `PatchExtractCS::Selected`와 원본 삼각형당 한 번인 prefix 추출은 수정 없이 재사용한다. 하나의 TriangleSources/패치 결과만 생성하며 원본 mask·patch id·다중 절단/break는 이번 단계에서 변경하지 않는다.
 - 새 옵션 `-skeletal-union-checks 1`을 기존 `-debug 1 -skeletal-break-demo 2 -physics-query-exit 180`에 추가한다. `CheckJointUnion`은 제출 prepared nodes에 mesh node·SourceFrame 보정을 적용하고 MI-4a의 무한 평면 선택 결과에서 동일 부모의 형제 P 둘을 찾는다. 진단 작업은 게시하지 않는다.

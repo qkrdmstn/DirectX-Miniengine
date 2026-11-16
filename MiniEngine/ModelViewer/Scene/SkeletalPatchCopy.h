@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Scene.h"
 #include "SegmentJointSelection.h"
 #include "SkeletalPhysicsSystem.h"
@@ -230,10 +230,10 @@ namespace Viewer
         std::shared_ptr<SkeletalPatchBuffers> m_SkinPatch;
         // 추출된 section의 공통 N을 확정하고 체크 실행에서만 PS-1 결과를 기록한다.
         void CheckPatchSkin(const SkeletalPatchBuffers& patch);
-        PatchSkinSnapshot m_SkinSnapshots[2];
+        std::vector<PatchSkinSnapshot> m_SkinSnapshots;
         std::vector<Math::Matrix4> m_SkinSectionNodes;
-        float m_SkinPaletteErrors[2]{};
-        uint32_t m_SkinSnapshotCount = 0, m_SkinCheckCase = 0;
+        std::vector<float> m_SkinPaletteErrors;
+        uint32_t m_SkinCheckCase = 0;
         // break 없이 추출된 패치를 원래 owner에 부착하고 원본 영역을 숨긴다.
         void PublishRigBonePatch(Scene& scene, const SkeletalPatchResult& result,
             const std::shared_ptr<SkeletalPatchBuffers>& patch);
@@ -255,8 +255,9 @@ namespace Viewer
         ComponentId m_SourceMesh = 0;
         uint32_t m_MaskRevision = 0;
         std::vector<uint32_t> m_Removal;
-        NodeAttachment m_AttachA{}, m_AttachB{};
-        bool m_PositiveA = true, m_OffsetCopy = false, m_DemoUnmask = false;
+        std::vector<NodeAttachment> m_Attachments;
+        std::vector<uint32_t> m_BodySides{ 0, 1 }; // 기존 side 폴백용 몸체별 반공간이다.
+        bool m_OffsetCopy = false, m_DemoUnmask = false;
         uint32_t m_Demo = 0;
         bool m_DemoPublished = false;
         BreakRequest m_Break;
@@ -274,7 +275,7 @@ namespace Viewer
         std::vector<BoundaryVertex> m_Boundary;
         std::vector<SkeletalPatchBuffers::BoundarySkin> m_BoundarySkins;
         std::vector<BoundaryPair> m_BoundaryPairs;
-        ComponentId m_PieceIds[2]{};
+        std::vector<ComponentId> m_PieceIds;
         double m_SkinCpuMs = 0.0;
         double m_SkinGpuMs = 0.0;
         uint32_t m_SkinTimingFrames = 0;

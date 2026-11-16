@@ -137,11 +137,47 @@ static void CheckCrossingJoints()
         {{0, 1}}, plane, {1, 1}).empty(), "no crossing has no leaf fallback");
 }
 
-// 합성 입력으로 본 선택·제거 마스크와 패치 출처의 결정성을 검증한다.
+// 형제 그룹의 고정 팔레트와 LCA 부착 및 단일 본의 기존 규칙 동등성을 검증한다.
+static void CheckCutBodyGroups()
+{
+    // 중복과 순서가 섞인 팔레트도 노드 그룹을 정확히 참조한다.
+    const std::vector<uint32_t> parents = {UINT32_MAX, 0, 0, 1, 2, 0};
+    const std::vector<uint32_t> joints = {4, 0, 3, 2, 1, 3, 5};
+    const auto siblings = Viewer::BuildCutBodyGroups(parents, joints, {1, 2});
+    Check(siblings.NodeGroups == std::vector<uint32_t>({0, 1, 2, 1, 2, 0}), "sibling groups");
+    Check(siblings.AttachNodes == std::vector<uint32_t>({0, 1, 2}), "sibling attachments");
+    Check(siblings.FrozenPalettes == std::vector<std::vector<uint8_t>>({
+        {1, 0, 1, 1, 1, 1, 0}, {1, 1, 0, 1, 0, 0, 1}, {0, 1, 1, 0, 1, 1, 1}}),
+        "A/B1/B2 Frozen palettes");
+    std::printf("MI4c siblings groups=0,1,2,1,2,0 attach=0,1,2 Frozen A/B1/B2 PASS\n");
+
+    // n=1은 기존 자손 판정과 A 부모 및 B 루트 부착을 그대로 보존한다.
+    const auto single = Viewer::BuildCutBodyGroups(parents, joints, {1});
+    Check(single.AttachNodes == std::vector<uint32_t>({0, 1}), "n=1 attachments");
+    for (size_t k = 0; k < joints.size(); ++k)
+    {
+        bool descendant = false;
+        for (uint32_t node = joints[k]; node != UINT32_MAX; node = parents[node])
+            descendant |= node == 1;
+        Check((single.FrozenPalettes[0][k] != 0) == descendant, "n=1 Frozen A equivalent");
+        Check((single.FrozenPalettes[1][k] != 0) == !descendant, "n=1 Frozen B equivalent");
+    }
+
+    // 부모가 서로 다른 분기도 조상 번호 순서와 무관하게 최소 공통 조상을 찾는다.
+    const auto cousins = Viewer::BuildCutBodyGroups({2, 2, UINT32_MAX, 0, 1}, {}, {3, 4});
+    Check(cousins.AttachNodes == std::vector<uint32_t>({2, 3, 4}), "parent LCA across branches");
+    Check(Viewer::BuildCutBodyGroups(parents, joints, {1, 3}).NodeGroups.empty(), "nested roots rejected");
+    Check(Viewer::BuildCutBodyGroups(parents, joints, {1, 1}).NodeGroups.empty(), "duplicate roots rejected");
+    Check(Viewer::BuildCutBodyGroups({1, 0}, {}, {1}).NodeGroups.empty(), "cycle rejected");
+    Check(Viewer::BuildCutBodyGroups(parents, {6}, {1}).NodeGroups.empty(), "bad palette rejected");
+}
+
+// 패치 추출과 선택 및 몸체 그룹의 CPU 계약을 함께 검사한다.
 int main()
 {
     // 다중 본 순수 함수의 교차 집합 계약을 먼저 검사한다.
     CheckCrossingJoints();
+    CheckCutBodyGroups();
 
     // 중복 팔레트·동점·서로 다른 mesh 시작 위치를 GPU 정수 규칙으로 검사한다.
     {

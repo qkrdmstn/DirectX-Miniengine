@@ -99,6 +99,78 @@ namespace Viewer
         return masks;
     }
 
+    struct CutBodyGroups
+    {
+        std::vector<uint32_t> NodeGroups; // 0=A, i=B_i.
+        std::vector<uint32_t> AttachNodes;
+        std::vector<std::vector<uint8_t>> FrozenPalettes;
+    };
+
+    // 서로 독립인 P 집합에서 몸체 그룹과 부착 노드 및 고정 팔레트를 만든다.
+    inline CutBodyGroups BuildCutBodyGroups(const std::vector<uint32_t>& parents,
+        const std::vector<uint32_t>& joints, const std::vector<uint32_t>& roots)
+    {
+        // 각 P의 입력 순서를 몸체 번호로 보존하고 중복 루트를 거절한다.
+        CutBodyGroups result;
+        if (roots.empty())
+            return result;
+        std::vector<uint32_t> rootGroups(parents.size(), 0);
+        for (size_t i = 0; i < roots.size(); ++i)
+        {
+            if (roots[i] >= parents.size() || rootGroups[roots[i]])
+                return {};
+            rootGroups[roots[i]] = uint32_t(i + 1);
+        }
+
+        // 전체 계층에서 노드 소속을 구하고 순환과 중첩 P를 거절한다.
+        result.NodeGroups.resize(parents.size(), 0);
+        for (uint32_t node = 0; node < parents.size(); ++node)
+        {
+            size_t depth = 0;
+            for (uint32_t ancestor = node; ancestor != UINT32_MAX; ancestor = parents[ancestor])
+            {
+                if (ancestor >= parents.size() || depth++ >= parents.size())
+                    return {};
+                if (rootGroups[ancestor])
+                {
+                    if (result.NodeGroups[node])
+                        return {};
+                    result.NodeGroups[node] = rootGroups[ancestor];
+                }
+            }
+        }
+
+        // A는 모든 P 부모의 최소 공통 조상에 붙이고 B_i는 P_i에 붙인다.
+        uint32_t common = parents[roots.front()];
+        for (size_t i = 1; i < roots.size(); ++i)
+        {
+            while (common != UINT32_MAX)
+            {
+                uint32_t ancestor = parents[roots[i]];
+                while (ancestor != UINT32_MAX && ancestor != common)
+                    ancestor = parents[ancestor];
+                if (ancestor == common)
+                    break;
+                common = parents[common];
+            }
+        }
+        result.AttachNodes.push_back(common);
+        result.AttachNodes.insert(result.AttachNodes.end(), roots.begin(), roots.end());
+
+        // 팔레트 순서와 중복을 보존하며 자기 그룹 밖의 본만 고정한다.
+        result.FrozenPalettes.resize(result.AttachNodes.size());
+        for (size_t body = 0; body < result.AttachNodes.size(); ++body)
+        {
+            for (uint32_t joint : joints)
+            {
+                if (joint >= parents.size())
+                    return {};
+                result.FrozenPalettes[body].push_back(result.NodeGroups[joint] != body);
+            }
+        }
+        return result;
+    }
+
     struct CrossingJoint
     {
         uint32_t NodeId = UINT32_MAX; // 끊는 P_i이며 B_i의 루트다.

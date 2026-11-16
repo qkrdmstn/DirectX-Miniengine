@@ -786,6 +786,12 @@ namespace Viewer
     // 외곽 경계와 PS4를 측정하고 양쪽 고정 weight 및 두 시점의 결과를 기록한다.
     void SkeletalPatchCopy::MeasureBoundaryAt(const Scene& scene, const char* label)
     {
+        // 양쪽 조각 id가 준비되지 않았으면 경계 진단을 수행하지 않는다.
+        if (m_PieceIds.size() < 2)
+        {
+            return;
+        }
+
         // 외곽 경계가 없는 case도 같은 타이밍 훅에서 A/B의 PS4를 측정한다.
         const auto* pieceOwner = scene.FindObject(m_Break.Owner);
         for (uint32_t side = 0; side < 2; ++side)
@@ -817,7 +823,7 @@ namespace Viewer
         float frozenWeightMax[2]{};
         for (const auto& pair : m_BoundaryPairs)
         {
-            if (pair.Piece >= m_SkinSnapshotCount || pair.Boundary >= m_BoundarySkins.size())
+            if (pair.Piece >= m_SkinSnapshots.size() || pair.Boundary >= m_BoundarySkins.size())
             {
                 continue;
             }
@@ -932,6 +938,51 @@ namespace Viewer
         return true;
     }
 
+    // 형제 몸체의 Frozen 본이 각 부착 노드를 따르고 나머지는 현재 팔레트를 쓰는지 검사한다.
+    static void CheckBodyPalettes(const MeshComponent& source, const std::vector<NodeId>& parents,
+        const std::vector<uint32_t>& roots)
+    {
+        // 실제 모델 팔레트를 복사하고 서로 다른 본 이동을 가한 후속 포즈를 만든다.
+        using namespace Math;
+        const auto& model = *source.GetGeometry()->GetSource();
+        const std::vector<uint32_t> jointNodes(model.m_JointIndices.get(), model.m_JointIndices.get() + model.m_NumJoints);
+        const auto groups = BuildCutBodyGroups(parents, jointNodes, roots);
+        std::vector<Matrix4> nodes(source.GetPreparedNodes(), source.GetPreparedNodes() + parents.size());
+        std::vector<Joint> joints(source.GetPreparedJoints(), source.GetPreparedJoints() + model.m_NumJoints);
+        for (size_t node = 0; node < nodes.size(); ++node)
+            nodes[node] = Matrix4(Matrix3(kIdentity), Vector3(float(node + 1), 0, 0)) * nodes[node];
+        for (auto& joint : joints)
+            joint.posXform = Matrix4(Matrix3(kIdentity), Vector3(0, 7, 0)) * joint.posXform;
+
+        // 각 몸체의 실제 팔레트 생성기를 호출해 고정 및 추종 슬롯의 위치를 비교한다.
+        for (size_t body = 0; body < groups.AttachNodes.size(); ++body)
+        {
+            PatchSkinSnapshot snapshot;
+            snapshot.AttachNode = groups.AttachNodes[body];
+            snapshot.AttachAtCut = source.GetPreparedNodes()[snapshot.AttachNode];
+            snapshot.JointsAtCut.assign(source.GetPreparedJoints(), source.GetPreparedJoints() + model.m_NumJoints);
+            snapshot.Frozen = groups.FrozenPalettes[body];
+            std::vector<Joint> palette;
+            BuildPatchPalette(snapshot, joints.data(), nodes.data(), palette);
+            const Matrix4 delta(Matrix3(kIdentity), Vector3(float(snapshot.AttachNode + 1), 0, 0));
+            float maxError = 0;
+            uint32_t frozen = 0;
+            for (size_t k = 0; k < joints.size(); ++k)
+            {
+                // 0점과 비영점에서 고정 슬롯의 부착 이동 및 자기 그룹의 후속 포즈를 검사한다.
+                const bool fixed = groups.NodeGroups[jointNodes[k]] != body;
+                frozen += fixed;
+                const Matrix4 expected = fixed ? delta * snapshot.JointsAtCut[k].posXform : joints[k].posXform;
+                for (const Vector4 point : { Vector4(0, 0, 0, 1), Vector4(1, 2, 3, 1) })
+                    maxError = std::max(maxError, float(Length(Vector3((palette[k].posXform * point) - (expected * point)))));
+            }
+            PatchLog("MI4c body=%zu attach=%u frozen=%u joints=%u paletteMaxError=%g result=%s\n",
+                body, snapshot.AttachNode, frozen, model.m_NumJoints, maxError, maxError <= 1e-4f ? "PASS" : "FAIL");
+            if (maxError > 1e-4f)
+                throw std::runtime_error("MI4c Frozen palette mismatch");
+        }
+    }
+
     // 형제 분기의 합집합과 자손이 있는 단일 본의 기존 마스크 경로를 GPU 출처 목록으로 대조한다.
     static void CheckJointUnion(const MeshComponent& source, const Math::Matrix4& world,
         const std::vector<NodeId>& parents, const std::string& modelName)
@@ -975,6 +1026,9 @@ namespace Viewer
                     const uint32_t first = crossing[a].NodeId, second = crossing[b].NodeId;
                     if (parents[first] == UINT32_MAX || parents[first] != parents[second])
                         continue;
+
+                    // MI-4c는 형제의 세 몸체 팔레트만 검사하고 다중 절단이나 break를 제출하지 않는다.
+                    CheckBodyPalettes(source, parents, {first, second});
 
                     // 두 P_i 본의 마스크를 한 작업으로 합치고 단일 P_i 및 중복 P도 검사한다.
                     PatchLog("MI4b siblings P=%u name=%s P=%u name=%s parent=%u planeY=%.6f\n",
@@ -1074,7 +1128,12 @@ namespace Viewer
         m_Name.clear();
         m_Physics = physics;
         m_SkinPatch.reset();
-        m_SkinSnapshotCount = 0;
+        m_SkinSnapshots.clear();
+        m_Attachments.clear();
+        m_PieceIds.clear();
+        m_BoundaryWait = 0;
+        m_SkinPaletteErrors.clear();
+        m_BodySides = { 0, 1 };
         m_SkinCheckCase = 0;
         m_SkinSectionNodes.clear();
         m_BreakReady = false;
@@ -1363,14 +1422,22 @@ namespace Viewer
                 PatchLog("SP7e rejected: ambiguous side within 1mm\n");
                 return;
             }
-            m_PositiveA = side >= 0;
+            m_BodySides = { side >= 0 ? 0u : 1u, side >= 0 ? 1u : 0u };
             m_SourceMesh = mesh->GetId();
             m_SourceRevision = mesh->GetGeometry();
             m_MaskRevision = mesh->GetTriangleMask() ? mesh->GetTriangleMask()->Revision : 0;
-            m_AttachA = { parents[selected.NodeId], m_SourceMesh,
-                frame * nodes[parents[selected.NodeId]], Math::Matrix4(mesh->GetWorldTransform(target->GetTransform())) };
-            m_AttachB = { selected.NodeId, m_SourceMesh,
-                frame * nodes[selected.NodeId], m_AttachA.PieceWorldAtCut };
+            const auto groups = BuildCutBodyGroups(parents, {}, { selected.NodeId });
+            if (groups.AttachNodes.empty())
+                return;
+            m_Attachments.resize(groups.AttachNodes.size());
+            m_PieceIds.assign(groups.AttachNodes.size(), 0);
+            for (size_t body = 0; body < groups.AttachNodes.size(); ++body)
+            {
+                // 각 몸체는 같은 제출 포즈와 원본 배치를 사용한다.
+                const uint32_t node = groups.AttachNodes[body];
+                m_Attachments[body] = { node, m_SourceMesh, frame * nodes[node],
+                    Math::Matrix4(mesh->GetWorldTransform(target->GetTransform())) };
+            }
         }
 
         // 추출과 같은 최종 pose에서 A/B 또는 D5의 전체 팔레트와 고정 집합을 저장한다.
@@ -1386,33 +1453,32 @@ namespace Viewer
             const Matrix4 sourceInverse(Invert(mesh->GetDeformBinding().SourceFrame.ToAffine()));
             for (size_t s = 0; s < mesh->GetGeometry()->GetSections().size(); ++s)
                 m_SkinSectionNodes.push_back(sourceInverse * nodes[mesh->GetGeometry()->GetMesh(s).meshCBV]);
-            m_SkinSnapshotCount = boneCut ? 1 : 2;
+            const std::vector<uint32_t> jointNodes(model.m_JointIndices.get(), model.m_JointIndices.get() + model.m_NumJoints);
+            const auto groups = BuildCutBodyGroups(parents, jointNodes, { selected.NodeId });
+            if (groups.AttachNodes.empty())
+                return;
+            m_SkinSnapshots.resize(boneCut ? 1 : groups.AttachNodes.size());
+            m_SkinPaletteErrors.assign(m_SkinSnapshots.size(), 0);
             uint32_t checks = 0;
             CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
             m_SkinCheckCase = checks ? m_BreakCheck + 1 : 0;
 
             // joint 인덱스를 변환기의 NodeId로 바꾼 뒤 P를 포함한 자손 여부를 판정한다.
-            for (uint32_t side = 0; side < m_SkinSnapshotCount; ++side)
+            for (uint32_t side = 0; side < m_SkinSnapshots.size(); ++side)
             {
                 auto& snapshot = m_SkinSnapshots[side];
                 snapshot = {};
                 snapshot.SourceRevision = mesh->GetGeometry()->GetId();
                 snapshot.SourceFrame = Matrix4(mesh->GetDeformBinding().SourceFrame.ToAffine());
                 snapshot.SourceFrozen = mesh->GetDeformBinding().Pose == PoseMode::Frozen;
-                snapshot.AttachNode = boneCut || side ? selected.NodeId : parents[selected.NodeId];
+                snapshot.AttachNode = boneCut ? selected.NodeId : groups.AttachNodes[side];
                 snapshot.AttachAtCut = nodes[snapshot.AttachNode];
                 size_t firstSkin = 0;
                 while (!mesh->GetGeometry()->GetMesh(firstSkin).numJoints) ++firstSkin;
                 snapshot.MeshNodeAtCut = m_SkinSectionNodes[firstSkin];
                 snapshot.JointsAtCut.assign(joints, joints + model.m_NumJoints);
-                snapshot.Frozen.resize(model.m_NumJoints);
-                for (uint32_t k = 0; k < model.m_NumJoints; ++k)
-                {
-                    bool descendant = false;
-                    for (uint32_t node = model.m_JointIndices[k]; node != UINT32_MAX; node = parents[node])
-                        descendant |= node == selected.NodeId;
-                    snapshot.Frozen[k] = !boneCut && (side ? !descendant : descendant);
-                }
+                snapshot.Frozen = boneCut ? std::vector<uint8_t>(model.m_NumJoints, 0)
+                    : groups.FrozenPalettes[side];
 
                 // 체크 실행에서만 실제 t_cut 입력으로 팔레트 오차를 계산한다.
                 m_SkinPaletteErrors[side] = 0;
@@ -1487,7 +1553,7 @@ namespace Viewer
     void SkeletalPatchCopy::CheckPatchSkin(const SkeletalPatchBuffers& patch)
     {
         // 추출 전역 삼각형 목록을 section 범위로 나누어 실제 걸친 N만 비교한다.
-        if (!m_SkinSnapshotCount || !m_SourceRevision) return;
+        if (m_SkinSnapshots.empty() || !m_SourceRevision) return;
         const std::set<uint32_t> triangles(patch.Triangles.begin(), patch.Triangles.end());
         uint32_t first = 0;
         bool found = false;
@@ -1521,7 +1587,7 @@ namespace Viewer
         }
 
         // 정상 실행에서는 snapshot만 확정하며 체크의 Stale 시도는 로그에서 제외한다.
-        for (uint32_t side = 0; side < m_SkinSnapshotCount; ++side)
+        for (uint32_t side = 0; side < m_SkinSnapshots.size(); ++side)
         {
             auto& snapshot = m_SkinSnapshots[side];
             snapshot.SkinningAllowed = found && allowed;
@@ -1551,7 +1617,7 @@ namespace Viewer
             char weight[32] = "N/A";
             if (!patch.BoundarySkins.empty()) snprintf(weight, sizeof(weight), "%g", boundaryMax);
             PatchLog("PS1 case=%u side=%s attach=%u frozen=%u joints=%u skinningAllowed=%d paletteMaxError=%g boundaryFrozenWeightMax=%s result=%s\n",
-                m_SkinCheckCase, m_SkinSnapshotCount == 1 ? "D5" : (side ? "B" : "A"), snapshot.AttachNode,
+                m_SkinCheckCase, m_SkinSnapshots.size() == 1 ? "D5" : (side ? "B" : "A"), snapshot.AttachNode,
                 frozen, uint32_t(snapshot.JointsAtCut.size()), int(snapshot.SkinningAllowed), m_SkinPaletteErrors[side],
                 weight, m_SkinPaletteErrors[side] <= 1e-5f ? "PASS" : "FAIL");
         }
@@ -1634,7 +1700,7 @@ namespace Viewer
             return;
         auto skin = std::make_shared<PatchSkinPublication>();
         skin->Snapshot = snapshot;
-        skin->Side = m_SkinSnapshotCount == 1 ? "D5" : (body ? "B" : "A");
+        skin->Side = m_SkinSnapshots.size() == 1 ? "D5" : (body ? "B" : "A");
         const bool built = BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources,
             geometry, snapshot, skin->Vertices);
         if (built)
@@ -1652,11 +1718,11 @@ namespace Viewer
         // 전체 VB readback과 CPU 비교는 요청된 자동 진단에서만 수행한다.
         uint32_t checks = 0;
         CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
-        if (m_SkinSnapshotCount == 1 && !checks)
+        if (m_SkinSnapshots.size() == 1 && !checks)
             CommandLineArgs::GetInteger(L"rig-bone-cut-checks", checks);
         if (!checks || m_ForceStale)
             return;
-        const char* label = m_SkinSnapshotCount == 1 ? "D5" : (body ? "B" : "A");
+        const char* label = m_SkinSnapshots.size() == 1 ? "D5" : (body ? "B" : "A");
         uint32_t vertices = 0;
         uint32_t copied = 0;
         uint32_t split = 0;
@@ -1808,10 +1874,13 @@ namespace Viewer
         DiscardBodyCompaction();
         m_Name.clear();
         m_SkinPatch.reset();
-        m_SkinSnapshotCount = 0;
+        m_SkinSnapshots.clear();
+        m_Attachments.clear();
+        m_PieceIds.clear();
+        m_BoundaryWait = 0;
+        m_SkinPaletteErrors.clear();
+        m_BodySides = { 0, 1 };
         m_SkinSectionNodes.clear();
-        m_SkinSnapshots[0] = {};
-        m_SkinSnapshots[1] = {};
         m_BonePending = false;
         m_BonePublication = {};
 
@@ -1867,7 +1936,7 @@ namespace Viewer
             piece->Attachment = std::make_unique<NodeAttachment>(m_BoneAttachment);
 
             // D5는 cutter를 거치지 않으므로 추출 정점 자체를 복사 출처로 지정한다.
-            if (m_SkinSnapshotCount && m_SkinSnapshots[0].SkinningAllowed)
+            if (!m_SkinSnapshots.empty() && m_SkinSnapshots[0].SkinningAllowed)
             {
                 const uint32_t count = result.PatchTriangles * 3;
                 std::vector<uint32_t> origins(size_t(count) * 8, 0);
@@ -2050,11 +2119,11 @@ namespace Viewer
                 auto* staging = scene.FindObject(m_CopyOwner);
                 const bool current = source && source->GetGeometry() == m_SourceRevision
                     && (source->GetTriangleMask() ? source->GetTriangleMask()->Revision : 0) == m_MaskRevision;
-                if (status == BreakStatus::Applied && current && staging && staging->GetMeshComponents().size() == 2)
+                if (status == BreakStatus::Applied && current && staging && staging->GetMeshComponents().size() == m_Attachments.size())
                 {
                     // 준비된 두 geometry의 원래 배치와 본 snapshot을 게시 전에 구성한다.
                     std::vector<std::unique_ptr<MeshComponent>> pieces;
-                    for (size_t i = 0; i < 2; ++i)
+                    for (size_t i = 0; i < m_Attachments.size(); ++i)
                     {
                         // 원래 배치와 부착 노드에 맞춰 게시할 조각을 준비한다.
                         auto* prepared = staging->FindMeshComponent(m_PreparedIds[i]);
@@ -2062,7 +2131,7 @@ namespace Viewer
                         if (!piece->SetTransform(m_World, MeshTransformMode::WorldIndependent))
                             throw std::runtime_error("SP7e invalid piece world");
                         piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
-                        piece->Attachment = std::make_unique<NodeAttachment>(i == 0 ? m_AttachA : m_AttachB);
+                        piece->Attachment = std::make_unique<NodeAttachment>(m_Attachments[i]);
                         piece->PatchSkin = prepared->PatchSkin;
                         piece->ActivatePatchSkin();
 
@@ -2082,7 +2151,7 @@ namespace Viewer
                     for (auto& piece : pieces)
                         owner->CommitMeshComponent(std::move(piece));
                     PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=%u nodes=%u/%u\n",
-                        m_Break.Owner, m_Result.PatchTriangles, m_DemoUnmask ? 0u : 1u, m_AttachA.NodeId, m_AttachB.NodeId);
+                        m_Break.Owner, m_Result.PatchTriangles, m_DemoUnmask ? 0u : 1u, m_Attachments[0].NodeId, m_Attachments[1].NodeId);
 
                     // 같은 프레임에 치환 IB와 새 조각의 렌더 상수 준비를 끝낸다.
                     auto& context = GraphicsContext::Begin(L"Publish attached skeletal pieces");
@@ -2182,7 +2251,7 @@ namespace Viewer
         if (!m_Job.Poll(result, patch))
             return false;
         CheckPatchSkin(*patch);
-        m_SkinPatch = m_SkinSnapshotCount ? patch : nullptr;
+        m_SkinPatch = !m_SkinSnapshots.empty() ? patch : nullptr;
         m_SelectedNode = m_Job.SelectedNode();
         if (!result.PatchTriangles)
         {
@@ -2268,7 +2337,7 @@ namespace Viewer
             width, height, margin, m_Offset);
 
         // 실제 절단 요청과 같은 평면으로 라벨을 보관하며 기존 절단 출력은 그대로 둔다.
-        m_Job.DiagnoseIslands(*patch, m_Plane, m_Offset, m_PositiveA, m_ModelName);
+        m_Job.DiagnoseIslands(*patch, m_Plane, m_Offset, m_BodySides[0] == 0, m_ModelName);
 
         // 생성 geometry의 pose와 bounds를 준비한 뒤 다음 프레임의 절단 요청을 허용한다.
         scene.InitializePoses();
@@ -2895,8 +2964,11 @@ namespace Viewer
         {
             // body 0/1은 A/B이며 cutter side 순서와 독립이다.
             auto* staging = scene.FindObject(m_CopyOwner);
-            m_PreparedIds[0] = m_PositiveA ? result.Mesh : result.Other;
-            m_PreparedIds[1] = m_PositiveA ? result.Other : result.Mesh;
+            for (size_t body = 0; body < m_BodySides.size(); ++body)
+            {
+                // 두 side 출력에서 몸체의 기존 폴백 반공간을 선택한다.
+                m_PreparedIds[body] = m_BodySides[body] == 0 ? result.Mesh : result.Other;
+            }
             const auto* compacted = GetBodyResult();
 
             // 전체 side 다수결과 무관하게 검증된 두 몸체의 압축 결과를 게시한다.
@@ -2930,7 +3002,7 @@ namespace Viewer
                 }
             }
             // cutter 출력과 추출 출처가 살아 있는 동안 A/B skin 입력을 동기로 생성한다.
-            if (m_SkinPatch && m_SkinSnapshotCount == 2)
+            if (m_SkinPatch && m_SkinSnapshots.size() == m_BodySides.size())
             {
                 auto* owner = scene.FindObject(m_CopyOwner);
                 for (uint32_t body = 0; body < 2; ++body)
@@ -3477,16 +3549,14 @@ namespace Viewer
             }
         }
 
-        // 요청당 한 번 팔레트 joint의 부모 계층을 따라 A/B1 그룹 표를 만든다.
+        // 요청당 한 번 공통 분류기로 팔레트 joint의 몸체 그룹을 읽는다.
+        const std::vector<uint32_t> jointNodes(model.m_JointIndices.get(), model.m_JointIndices.get() + model.m_NumJoints);
+        const auto groups = BuildCutBodyGroups(m_Parents, jointNodes, { m_Node });
         std::vector<uint32_t> jointGroups(model.m_NumJoints, 0);
-        for (uint32_t joint = 0; joint < model.m_NumJoints; ++joint)
+        if (!groups.NodeGroups.empty())
         {
-            for (uint32_t node = model.m_JointIndices[joint]; node != UINT32_MAX; node = m_Parents.at(node))
-                if (node == m_Node)
-                {
-                    jointGroups[joint] = 1;
-                    break;
-                }
+            for (uint32_t joint = 0; joint < model.m_NumJoints; ++joint)
+                jointGroups[joint] = groups.NodeGroups[jointNodes[joint]];
         }
 
         // 실제 incoming 관절의 B 루트에서 자식으로 나가는 제출 포즈 교차를 찾는다.
