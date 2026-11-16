@@ -36,6 +36,13 @@ void BuildOffsets()
         Bins.Store(address + 4, triangles);
         Bins.Store(address + 8, surfaceBytes);
         Bins.Store(address + 20, 0);
+        // 실제 job은 작은 표 뒤에 section별 AABB를 함께 보관한다.
+        if (Padding.x != 0)
+        {
+            uint bounds = (BodyCount * Sections + bin) * 24;
+            Bins.Store3(bounds, uint3(0xffffffff, 0xffffffff, 0xffffffff));
+            Bins.Store3(bounds + 12, uint3(0, 0, 0));
+        }
         triangles += count;
         bytes += count * triangleBytes;
         surfaceBytes += count * 3 * layout.x;
@@ -96,6 +103,19 @@ void main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex)
     {
         uint source = InputData.Load(IbOffset + (localTriangle * 3 + corner) * 4);
         uint destination = slot * 3 + corner;
+        // 부호 순서가 보존되는 정수로 변환하여 정점 readback 없이 bounds를 줄인다.
+        if (Padding.x != 0)
+        {
+            uint bounds = BodyCount * Sections * 24 + bin;
+            uint3 position = InputData.Load3(VbOffset + source * Stride);
+            for (uint axis = 0; axis < 3; ++axis)
+            {
+                uint bits = position[axis];
+                uint ordered = (bits & 0x80000000) != 0 ? ~bits : bits ^ 0x80000000;
+                Bins.InterlockedMin(bounds + axis * 4, ordered);
+                Bins.InterlockedMax(bounds + 12 + axis * 4, ordered);
+            }
+        }
         for (uint b = 0; b < Stride; b += 4)
             OutputData.Store(Bins.Load(bin + 8) + destination * Stride + b,
                 InputData.Load(VbOffset + source * Stride + b));

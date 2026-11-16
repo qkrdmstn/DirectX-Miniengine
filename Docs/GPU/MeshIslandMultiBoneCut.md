@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1·MI-2·MI-3a 완료(`2a0ab7d2`); MI-3b 압축 셰이더·합성 GPU 검사 및 P2 스키닝 주소 계약 수정 완료(미커밋, base `2a0ab7d2`), D/R 빌드·Release 회귀 PASS; MI-3c 이후 미구현 (2026-11-16).
+상태: 진행 중 — MI-3b까지 완료(`34d5199e`); MI-3c 실제 출력 압축·비동기 회수·실패 격리 완료(미커밋, base `34d5199e`), D/R 빌드·Release 위팔·회귀 PASS; 게시 연결은 MI-3d 후속 (2026-11-16).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -81,7 +81,7 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-2 | 완료(base `432ff0c5`): Poll의 기존 TriangleSources readback 재사용, 제출 포즈 반공간 예측, `LabelPatchIslands`, 로그·표 보관만 | 리뷰 3건 수정 후 CPU 테스트·D/R 빌드·Release 회귀 PASS; 위팔 P7에서 아일랜드 3개, 허리 90 tris → A; GPU 출력 불변 |
 | MI-3a | 완료(미커밋, base `b7413004`): 라벨 GPU 업로드, 출력 삼각형 몸체 판정(provenance `TriangleId`→`TriangleSideBody`) | D/R 빌드·Release 회귀 PASS; 양쪽 invalid=0/idMismatch=0, side0 reassigned=104; 출력·게시 불변 |
 | MI-3b | 완료(미커밋, base `2a0ab7d2`): body×section count→offset→scatter 압축 셰이더·합성 GPU 검사, P2 surface 우선 배치 수정 | 두-side 정점/depth/provenance/IB 보존·스키닝 주소 일치·합계 6·삼각형/바이트 overflow PASS; D/R 빌드·Release 회귀 PASS |
-| MI-3c | 압축 C++ job·메모리·fence·메타데이터(게시 미연결) | body 합계=입력 합계, material/depth/IB/bounds 검증 |
+| MI-3c | 완료(미커밋, base `34d5199e`): 실제 두 side 비동기 압축·실패 격리·완료 후 회수·몸체별 Mesh/삼각형 수 보관(게시 미연결) | 위팔 body0=518/body1=194, 합계 712=입력 712 및 material/depth/IB/bounds PASS; D/R 빌드·Release 회귀 PASS |
 | MI-3d | 단일 관절 재배치 게시 연결(`OnCutResult`·`BuildPieceSkin(body)`), cap은 SideDefault | 위팔 허리 90 tris가 A에 남음, A/B 각 1회 게시, 캡처 |
 | MI-3e | `ClipTrianglesCS` segment 출처 → cap loop 몸체 보조 전달 | 다중 loop cap 귀속·충돌/fallback 진단 |
 | MI-3f | cap loop 귀속 연결 | 위팔 publish/after60 캡처, SP7e2 ≤1mm, PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 |
@@ -176,5 +176,28 @@ Debug/Release 지정 MSBuild 명령 모두 종료 0(18.54초/29.83초, 각 오�
 MX450/591.86에서 두 합성 진단과 아래 회귀의 debugger 출력을 수집했으며 D3D12 ERROR/CORRUPTION 0. 기존 경고는 남아 있다.
 지정 `regress.sh Release` 6개 실행 모두 종료 0(17/13/11/11/11/11초, 합계 74초); SP6 누적 142 PASS/0 FAIL, BC-12a/b·AR4·Rig PASS. SP7e2 case=1은 기존 N/A, case=2/3 PASS.
 `ModelViewer.cpp`는 수정하지 않았으며 Geometry 변경도 없다. 근거: `%TEMP%/MI3b-fix-{Debug,Release}-build.log`, `MI3b-fix-synthetic-{Debug,Release}-{patch,debug,exit}.log`, `MI3b-fix-Release-regress{,-debug}.log`, `MI3b-fix.md`.
+
+MI-3c(미커밋, base `34d5199e`, 2026-11-16): `SkeletalPatchCopy::OnCutResult`가 실제 두 side의 공유 geometry와 MI-3a 몸체 버퍼를 `CompactCutBodies`에 넘긴다. 빈 section으로 양쪽 목록 순서가 달라져도 기존 VB 시작 주소로 대응시킨다.
+`CompactCutBodies`는 실제 삼각형 수로 Data/provenance 용량을 64비트 계산·검사하고 count→GPU prefix→scatter를 비동기 제출한다. 멤버 `BodyCompactJob`이 입력 공유 참조·몸체 판정 resource·출력·scratch·readback을 fence 완료까지 유지한다. `PollBodyCompaction`은 후속 `Update`에서 완료된 작은 표만 수집한다.
+`PatchBodyCompactCS::BuildOffsets`·`main`은 실제 job에서만 bin 뒤의 AABB 표를 초기화·정수 atomic 축약한다. CPU에는 bin당 48B(count/offset/cursor/bounds)와 status 4B만 읽으며 전체 정점 readback은 추가하지 않았다. 합성 검사는 기존 모드 그대로다.
+`PatchBodyResult`는 공유 `GeometryBuffers`, 몸체별 section 인덱스 목록·삼각형 수를 보관한다. `Mesh`에 원본 material/PSO, surface/depth/IB 범위·draw·bounds를 기록하고 cap material·provenance 부모·세대를 보존한다. MI-3d는 이 목록으로 몸체별 revision을 선택하고 `BuildPieceSkin(body)`에 연결할 수 있다. 현재 게시·skin 생성은 기존 A/B 경로 그대로다.
+최종 Debug 25.58초·Release 32.40초 빌드 성공(각 오류 0, 기존 경고 6). 최초 Debug에서 Vector3 인덱싱 컴파일 오류를 수정했다.
+Release를 ModelViewer 작업 디렉터리에서 `-debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone Skeleton_arm_joint_L__4_ -physics-query-exit 180`으로 실행: MX450/591.86, 9.90초·종료 0, D3D12 ERROR/CORRUPTION 0. 기존 DXGI #80·D3D12 #974/#1008은 남아 있다.
+```text
+MI3c body=0 tris=518 sections=2 bounds=(-0.152837,0.591892,-0.116663)-(0.114113,1.18967,0.134356)
+MI3c body=1 tris=194 sections=2 bounds=(-0.141221,0.716555,-0.282988)-(0.155783,1.00571,0.102364)
+MI3c sum body=712 input=712 PASS material/depth/IB/bounds=PASS status=0
+```
+body0=MI-3a side0 104+side1 373+SideDefault cap 41=518이다. `regress.sh Release` 6개 모두 종료 0(9/11/9/8/8/8초, 수집 총 54.87초), 합성 MI-3b·실제 MI-3c·BC-12a/b·AR4·Rig PASS; SP6 누적 168 PASS/0 FAIL. SP7e2 case=1은 기존 N/A, case=2/3 PASS. 회귀 debugger 수집에서도 D3D12 ERROR/CORRUPTION 0.
+근거: `%TEMP%/MI3c-{Debug,Release}-build.log`, `MI3c-UpperArm-{patch,debug,exit}.log`, `MI3c-Release-regress{,-debug}.log`, `MI3c-report.md`. Geometry 변경 없음. `ModelViewer.cpp`는 수정하지 않았다.
+
+MI-3c 리뷰 수정(미커밋, base `34d5199e`, 2026-11-16):
+- `OnCutResult`의 분류·압축 예외 경계는 용량·할당·검증 실패를 압축만의 실패로 기록하고 기존 hide→`BuildPieceSkin`→`QueueBreak` 경로를 계속한다. 로그 예외도 기존 안전 로그 함수로 격리한다.
+- layouts 초기 데이터는 `ReserveUploadMemory`와 같은 명령 목록의 `CopyBufferRegion`으로 올린다. 제출 직후 fence 대기와 초기 데이터 `Create`의 동기 업로드를 제거했다.
+- `GetBodyState`는 None/InProgress/Done/Failed를 구분하고 `GetBodyResult`는 Done에서만 결과를 노출한다. MI-3d의 몸체별 게시는 Done까지 기다려야 하며 기존 A/B 게시 연결은 유지한다.
+- `DiscardBodyCompaction`은 완료된 미게시 결과의 `ReleaseGpuResourcesAfterCompletion`을 먼저 호출한다. Request/Reset으로 취소된 미완료 job은 별도 목록에서 fence 완료 후 회수한다. job 소멸자의 대기는 소유자 종료 시 남은 미완료 제출 보호에만 사용한다.
+- 지정 MSBuild Debug/Release 성공(최종 18.77초/72.57초, 오류 0, 기존 경고 6/39). Release 위팔은 위와 같은 명령·작업 디렉터리에서 MX450/591.86(32.0.15.9186), 16.96초·종료 0이다. A/B 게시 이후 후속 프레임에서 위의 body0=518/body1=194·합계 712 로그가 동일하게 PASS였다.
+- 지정 `regress.sh Release` 6개 모두 종료 0(16/18/12/13/14/14초, 수집 총 87.65초). MI-3b/MI-3c·BC-12a/b·AR4·Rig PASS, SP6 누적 194 PASS/0 FAIL. SP7e2 case=1은 기존 N/A, case=2/3 PASS. 위팔·회귀 D3D12 ERROR/CORRUPTION 0이며 기존 DXGI #80과 D3D12 경고는 남아 있다.
+- 근거: `%TEMP%/MI3c-fix-{Debug,Release}-build.log`, `MI3c-fix-UpperArm-{patch,debug}.log`, `MI3c-fix-Release-regress{,-debug}.log`, `MI3c-fix.md`. 이번 수정은 Geometry와 `ModelViewer.cpp`를 편집하지 않았다.
 
 (MI-5에서 추가 기록)

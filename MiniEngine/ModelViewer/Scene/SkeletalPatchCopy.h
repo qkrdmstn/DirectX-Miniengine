@@ -100,6 +100,14 @@ namespace Viewer
         uint64_t m_Fence = 0;
     };
     class PhysicsSystem;
+    // MI-3d는 공유 geometry의 몸체별 section 부분집합을 게시하고 skin 입력으로 사용한다.
+    struct PatchBodyResult
+    {
+        std::shared_ptr<GeometryBuffers> Geometry;
+        std::vector<std::vector<uint32_t>> Sections;
+        std::vector<uint32_t> Triangles;
+    };
+    enum class PatchBodyState { None, InProgress, Done, Failed };
     class CuttingSystem;
     struct CutResultEntry;
     // 현재 owner의 자동 rig를 등록하며 이미 등록되어 있으면 그대로 성공한다.
@@ -172,11 +180,34 @@ namespace Viewer
             m_BonePublication = {};
             return true;
         }
+        // 후속 몸체별 게시는 완료 상태에서만 압축 결과를 사용할 수 있다.
+        PatchBodyState GetBodyState() const
+        {
+            // 진행 중과 실패를 완료 결과와 구별한다.
+            return m_BodyState;
+        }
+        // 완료된 몸체 메타데이터는 다음 요청이나 Reset까지 유지한다.
+        const PatchBodyResult* GetBodyResult() const
+        {
+            // 미완료 결과를 게시 입력으로 노출하지 않는다.
+            return m_BodyState == PatchBodyState::Done ? &m_BodyResult : nullptr;
+        }
     private:
         // 출력 반공간의 provenance로 몸체를 판정하고 작은 진단 카운터만 읽는다.
         void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands, uint32_t side);
         ByteAddressBuffer m_IslandTable;
         ByteAddressBuffer m_TriangleBodies[2]; // MI-3b 입력: side별 globalVertex / 3 인덱스, section 사이 빈 capacity 제외
+        // 양쪽 실제 출력을 압축하고 완료된 몸체별 메타데이터만 보관한다.
+        void CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2]);
+        struct BodyCompactJob;
+        std::shared_ptr<BodyCompactJob> m_BodyJob;
+        std::vector<std::shared_ptr<BodyCompactJob>> m_RetiredBodyJobs;
+        PatchBodyState m_BodyState = PatchBodyState::None;
+        // 현재 결과를 무효화하고 진행 중인 자원은 완료 후 회수한다.
+        void DiscardBodyCompaction();
+        // 완료된 작업의 메타데이터와 취소된 작업을 회수한다.
+        void PollBodyCompaction();
+        PatchBodyResult m_BodyResult; // 다음 요청 또는 Reset까지 유지하며 아직 게시하지 않는다.
         // 동기 skin VB 생성과 선택적 t_cut CPU 진단을 마친 뒤 조각에 입력을 보관한다.
         void BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
             SkeletalPatchBuffers& patch, uint32_t side);

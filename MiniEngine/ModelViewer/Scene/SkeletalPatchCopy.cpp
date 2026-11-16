@@ -22,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <set>
+#include <map>
 #include <tuple>
 #include <sstream>
 #include "SystemTime.h"
@@ -939,6 +940,7 @@ namespace Viewer
         m_DiagnosticCase = diagnosticCase;
         PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Rig ? "Rig" : mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
         m_Job.Cancel();
+        DiscardBodyCompaction();
         m_Name.clear();
         m_Physics = physics;
         m_SkinPatch.reset();
@@ -1668,6 +1670,7 @@ namespace Viewer
     {
         // 추출 완료를 기다려 임시 자원을 해제하고 미게시 배치 snapshot도 버린다.
         m_Job.Cancel();
+        DiscardBodyCompaction();
         m_Name.clear();
         m_SkinPatch.reset();
         m_SkinSnapshotCount = 0;
@@ -1800,6 +1803,9 @@ namespace Viewer
     // 복사본을 절단하고 break 성공 시 A/B의 전용 스키닝 PG를 게시한다.
     bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
+        // 압축과 취소 작업은 기존 게시 진행 여부와 관계없이 매 프레임 회수한다.
+        PollBodyCompaction();
+
         // D5 추출 완료는 break 취소와 Stale 및 절단 제출 분기에 들어가지 않는다.
         if (m_BonePending)
         {
@@ -2233,6 +2239,287 @@ namespace Viewer
         readback.Unmap();
     }
 
+    struct SkeletalPatchCopy::BodyCompactJob
+    {
+        std::shared_ptr<const GeometryBuffers> Inputs[2];
+        Microsoft::WRL::ComPtr<ID3D12Resource> Bodies[2];
+        std::shared_ptr<GeometryBuffers> Output;
+        ByteAddressBuffer Layouts, Bins, Status;
+        ReadbackBuffer Metadata, Flags;
+        std::map<uint32_t, Mesh> Templates;
+        std::vector<uint32_t> LayoutData;
+        uint64_t Fence = 0, Triangles = 0, Bytes = 0;
+        uint32_t BodyCount = 0;
+
+        // 일반 회수는 완료 확인 후 수행하고 종료 시에만 미완료 제출을 보호한다.
+        ~BodyCompactJob()
+        {
+            // 소유자 종료 시에도 제출 자원의 수명을 보장한다.
+            if (Fence && !Graphics::g_CommandManager.IsFenceComplete(Fence))
+                Graphics::g_CommandManager.WaitForFence(Fence);
+
+            // 미게시 출력은 전역 대기를 일으키는 소멸자보다 먼저 해제한다.
+            if (Output) Output->ReleaseGpuResourcesAfterCompletion();
+        }
+    };
+
+    // 현재 결과를 버리고 미완료 작업은 후속 프레임에서 회수한다.
+    void SkeletalPatchCopy::DiscardBodyCompaction()
+    {
+        // 완료 출력은 GPU 자원을 먼저 해제하여 전역 대기를 피한다.
+        if (m_BodyResult.Geometry) m_BodyResult.Geometry->ReleaseGpuResourcesAfterCompletion();
+        m_BodyResult = {};
+        m_BodyState = PatchBodyState::None;
+
+        // 제출된 작업은 완료 확인까지 입력과 함께 보관한다.
+        if (m_BodyJob && m_BodyJob->Fence
+            && !Graphics::g_CommandManager.IsFenceComplete(m_BodyJob->Fence))
+            m_RetiredBodyJobs.push_back(m_BodyJob);
+        m_BodyJob.reset();
+    }
+
+    // 각 프레임에서 완료된 압축만 회수하여 메타데이터를 검증한다.
+    void SkeletalPatchCopy::PollBodyCompaction()
+    {
+        // 무효화된 제출은 완료된 것만 비동기로 해제한다.
+        for (auto it = m_RetiredBodyJobs.begin(); it != m_RetiredBodyJobs.end();)
+            if (Graphics::g_CommandManager.IsFenceComplete((*it)->Fence))
+                it = m_RetiredBodyJobs.erase(it);
+            else ++it;
+        if (!m_BodyJob || !Graphics::g_CommandManager.IsFenceComplete(m_BodyJob->Fence)) return;
+
+        // 검증 예외도 압축만의 실패로 처리하여 기존 게시 경로를 유지한다.
+        try
+        {
+            auto& job = *m_BodyJob;
+            const auto& templates = job.Templates;
+            const auto& layouts = job.LayoutData;
+            auto output = job.Output;
+            const uint32_t bodies = job.BodyCount, sections = uint32_t(templates.size());
+            const uint64_t bins = uint64_t(bodies) * sections, triangles = job.Triangles, bytes = job.Bytes;
+            const uint32_t flags = *static_cast<const uint32_t*>(job.Flags.Map());
+            job.Flags.Unmap();
+            std::vector<uint32_t> metadataCopy(bins * 12);
+            std::memcpy(metadataCopy.data(), job.Metadata.Map(), metadataCopy.size() * sizeof(uint32_t));
+            job.Metadata.Unmap();
+            const auto* metadata = metadataCopy.data();
+            PatchBodyResult result;
+            result.Geometry = output;
+            result.Sections.resize(bodies);
+            result.Triangles.resize(bodies);
+            bool valid = flags == 0;
+            uint64_t sum = 0;
+
+            // section별 재질·범위·공통 출처 주소와 GPU AABB를 검증하고 기존 Mesh 형식으로 기록한다.
+            for (uint32_t body = 0; body < bodies && !flags; ++body)
+            {
+                Math::Vector3 low(FLT_MAX), high(-FLT_MAX);
+                uint32_t section = 0;
+                for (const auto& entry : templates)
+                {
+                    const uint32_t bin = body * sections + section++;
+                    const uint32_t* m = metadata + bin * 6;
+                    if (!m[0]) continue;
+                    Mesh mesh = entry.second;
+                    mesh.vbOffset = m[2]; mesh.vbSize = m[0] * 84;
+                    mesh.vbDepthOffset = m[3]; mesh.vbDepthSize = m[0] * 3 * layouts[(section - 1) * 2 + 1];
+                    mesh.ibOffset = m[4]; mesh.ibSize = m[0] * 12;
+                    mesh.draw[0] = { m[0] * 3, 0, 0 };
+                    const auto* bounds = metadata + (bins + bin) * 6;
+                    Math::Vector3 minimum(BoundsCoordinate(bounds[0]), BoundsCoordinate(bounds[1]), BoundsCoordinate(bounds[2]));
+                    Math::Vector3 maximum(BoundsCoordinate(bounds[3]), BoundsCoordinate(bounds[4]), BoundsCoordinate(bounds[5]));
+                    for (uint32_t axis = 0; axis < 3; ++axis)
+                        valid &= std::isfinite(BoundsCoordinate(bounds[axis])) && std::isfinite(BoundsCoordinate(bounds[axis + 3]))
+                            && BoundsCoordinate(bounds[axis]) <= BoundsCoordinate(bounds[axis + 3]);
+                    low = Min(low, minimum); high = Max(high, maximum);
+                    const Math::Vector3 center = (minimum + maximum) * 0.5f;
+                    XMStoreFloat4(reinterpret_cast<DirectX::XMFLOAT4*>(mesh.bounds), Math::Vector4(center, Length(maximum - center)));
+                    valid &= m[0] == m[5] && m[2] % 28 == 0 && m[2] / 28 == m[1] * 3
+                        && uint64_t(m[2]) + mesh.vbSize <= bytes && uint64_t(m[3]) + mesh.vbDepthSize <= bytes
+                        && uint64_t(m[4]) + mesh.ibSize <= bytes && uint64_t(m[1]) + m[0] <= triangles
+                        && (mesh.materialCBV == 0xffff || (uint64_t(mesh.materialCBV) + 1) * 256
+                            <= output->Source->m_MaterialConstants.GetBufferSize());
+                    result.Sections[body].push_back(uint32_t(output->Meshes.size()));
+                    output->Meshes.push_back(mesh);
+                    result.Triangles[body] += m[0];
+                }
+                sum += result.Triangles[body];
+                PatchLog("MI3c body=%u tris=%u sections=%zu bounds=(%g,%g,%g)-(%g,%g,%g)\n",
+                    body, result.Triangles[body], result.Sections[body].size(), float(low.GetX()), float(low.GetY()),
+                    float(low.GetZ()), float(high.GetX()), float(high.GetY()), float(high.GetZ()));
+            }
+            PatchLog("MI3c sum body=%llu input=%llu %s material/depth/IB/bounds=%s status=%u\n",
+                sum, triangles, sum == triangles ? "PASS" : "FAIL", valid ? "PASS" : "FAIL", flags);
+            if (!valid || sum != triangles) throw std::runtime_error("MI3c body compaction validation failed");
+            m_BodyResult = std::move(result);
+            job.Output.reset();
+            m_BodyState = PatchBodyState::Done;
+
+        }
+        catch (const std::exception& error)
+        {
+            // 완료된 실패 출력만 버리고 호출자에게 실패 상태를 제공한다.
+            m_BodyState = PatchBodyState::Failed;
+            WritePatchLogSafely([&error]()
+            {
+                // 오류 문자열 생성과 파일 기록도 기존 게시 경로에 예외를 전파하지 않는다.
+                return std::string("MI3c ERROR: ") + error.what() + "; existing A/B path preserved\n";
+            });
+        }
+        m_BodyJob.reset();
+    }
+
+    // 두 side의 압축을 비동기 제출하고 입력과 임시 자원을 멤버 작업에 보관한다.
+    void SkeletalPatchCopy::CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2])
+    {
+        // 누락된 section도 원래 VB 주소로 대응시켜 재질과 cap을 구별한다.
+        DiscardBodyCompaction();
+        if (m_SkinPatch->Islands.TriangleSideBody.empty()) return;
+        std::map<uint32_t, Mesh> templates;
+        uint64_t triangles = 0, bytes = 0;
+        for (const auto& input : inputs)
+            for (const auto& mesh : input->Meshes)
+            {
+                if (mesh.vbStride != 28 || !mesh.vbSize || mesh.vbSize % 84
+                    || mesh.ibFormat != DXGI_FORMAT_R32_UINT || mesh.ibSize != mesh.vbSize / 7)
+                    throw std::runtime_error("MI3c unsupported cutter layout");
+                const uint32_t depth = mesh.vbDepthSize / (mesh.vbSize / 28);
+                if ((depth != 12 && depth != 16) || mesh.vbDepthSize % (mesh.vbSize / 28))
+                    throw std::runtime_error("MI3c unsupported depth layout");
+                const auto& other = templates.emplace(mesh.vbOffset, mesh).first->second;
+                if (mesh.materialCBV != other.materialCBV || mesh.psoFlags != other.psoFlags
+                    || depth != other.vbDepthSize / (other.vbSize / 28))
+                    throw std::runtime_error("MI3c side section mismatch");
+                triangles += mesh.vbSize / 84;
+                bytes += uint64_t(mesh.vbSize / 28) * (28 + depth + 4);
+            }
+        uint32_t bodies = 1;
+        for (const auto& pair : m_SkinPatch->Islands.TriangleSideBody)
+            for (uint32_t body : pair)
+                if (body != UINT32_MAX) bodies = std::max(bodies, body + 1);
+        const uint32_t sections = uint32_t(templates.size());
+        const uint64_t bins = uint64_t(bodies) * sections;
+        if (!triangles || bytes > UINT32_MAX || triangles * 96 > UINT32_MAX || bins * 48 > UINT32_MAX)
+            throw std::length_error("MI3c capacity exceeds RAW addressing");
+
+        // 멤버 작업이 제출 입력과 부분 할당 출력의 수명을 소유한다.
+        m_BodyJob = std::make_shared<BodyCompactJob>();
+        auto& job = *m_BodyJob;
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            job.Inputs[side] = inputs[side];
+            job.Bodies[side] = m_TriangleBodies[side].GetResource();
+        }
+        job.Templates = templates;
+        job.BodyCount = bodies;
+        job.Triangles = triangles;
+        job.Bytes = bytes;
+        std::vector<uint32_t> layouts;
+        for (const auto& entry : templates)
+        {
+            layouts.push_back(28);
+            layouts.push_back(entry.second.vbDepthSize / (entry.second.vbSize / 28));
+        }
+        auto output = job.Output = std::make_shared<GeometryBuffers>();
+        job.LayoutData = layouts;
+        output->Source = inputs[0]->Source;
+        output->Parent = inputs[0]->Parent;
+        output->Generation = inputs[0]->Generation;
+        output->UncappedSegments = inputs[0]->UncappedSegments;
+        const auto parent = output->Parent ? output->Parent->GetGenerated() : nullptr;
+        output->LineageBytes = (parent ? parent->LineageBytes : 0) + bytes + triangles * 96 + 256;
+        output->Data.Create(L"Body compact data", uint32_t(bytes / 4), 4);
+        output->Provenance.Create(L"Body compact provenance", uint32_t(triangles * 24), 4);
+        output->CapMaterial.Create(L"Body compact cap material", 64, 4);
+        job.Layouts.Create(L"Body compact layouts", uint32_t(layouts.size()), 4);
+        job.Bins.Create(L"Body compact bins and bounds", uint32_t(bins * 12), 4);
+        job.Status.Create(L"Body compact status", 1, 4);
+        job.Metadata.Create(L"Body compact metadata", uint32_t(bins * 12), 4);
+        job.Flags.Create(L"Body compact flags", 1, 4);
+        struct Constants
+        {
+            uint32_t Mode, Bodies, Sections, Section, FirstTriangle, Triangles, Vb, Depth;
+            uint32_t Ib, Stride, DepthStride, CapacityBytes, CapacityTriangles, Bounds, Padding[2];
+        } c{ 0, bodies, sections, 0, 0, 0, 0, 0, 0, 28, 0, uint32_t(bytes), uint32_t(triangles), 1, {} };
+
+        // PSO를 재사용하고 count→GPU prefix→scatter 순서로 제출한다.
+        static RootSignature root;
+        static ComputePSO pso(L"Compact actual patch bodies");
+        static bool initialized = false;
+        if (!initialized)
+        {
+            root.Reset(9);
+            root[0].InitAsConstantBuffer(0);
+            for (uint32_t i = 0; i < 4; ++i) root[i + 1].InitAsBufferSRV(i);
+            for (uint32_t i = 0; i < 4; ++i) root[i + 5].InitAsBufferUAV(i);
+            root.Finalize(L"Compact actual patch bodies");
+            pso.SetRootSignature(root);
+            pso.SetComputeShader(g_pPatchBodyCompactCS, sizeof(g_pPatchBodyCompactCS));
+            pso.Finalize();
+            initialized = true;
+        }
+
+        // 업로드 메모리는 같은 제출의 fence까지 유지되어 동기 대기가 없다.
+        auto& graphics = GraphicsContext::Begin(L"Compact actual patch bodies");
+        auto upload = graphics.ReserveUploadMemory(layouts.size() * sizeof(uint32_t));
+        std::memcpy(upload.DataPtr, layouts.data(), layouts.size() * sizeof(uint32_t));
+        graphics.CopyBufferRegion(job.Layouts, 0, upload.Buffer, upload.Offset, layouts.size() * sizeof(uint32_t));
+        auto& compute = graphics.GetComputeContext();
+        for (auto* buffer : { &output->Data, &output->Provenance, &job.Bins, &job.Status })
+        {
+            compute.TransitionResource(*buffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.ClearUAV(*buffer);
+            compute.InsertUAVBarrier(*buffer);
+        }
+        compute.TransitionResource(job.Layouts, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.SetRootSignature(root);
+        compute.SetPipelineState(pso);
+        compute.SetBufferSRV(4, job.Layouts);
+        compute.SetBufferUAV(5, output->Data);
+        compute.SetBufferUAV(6, output->Provenance);
+        compute.SetBufferUAV(7, job.Bins);
+        compute.SetBufferUAV(8, job.Status);
+        for (c.Mode = 0; c.Mode < 3; ++c.Mode)
+        {
+            for (uint32_t side = 0; side < (c.Mode == 1 ? 1u : 2u); ++side)
+            {
+                auto& data = const_cast<ByteAddressBuffer&>(inputs[side]->Data);
+                auto& provenance = const_cast<ByteAddressBuffer&>(inputs[side]->Provenance);
+                for (auto* buffer : { &data, &provenance, &m_TriangleBodies[side] })
+                    compute.TransitionResource(*buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                compute.SetBufferSRV(1, data);
+                compute.SetBufferSRV(2, provenance);
+                compute.SetBufferSRV(3, m_TriangleBodies[side]);
+                for (const auto& mesh : inputs[side]->Meshes)
+                {
+                    c.Section = uint32_t(std::distance(templates.begin(), templates.find(mesh.vbOffset)));
+                    c.FirstTriangle = mesh.vbOffset / 84; c.Triangles = mesh.vbSize / 84;
+                    c.Vb = mesh.vbOffset; c.Depth = mesh.vbDepthOffset; c.Ib = mesh.ibOffset;
+                    c.DepthStride = layouts[c.Section * 2 + 1];
+                    compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+                    const uint32_t groups = (c.Triangles + 63) / 64;
+                    compute.Dispatch(c.Mode == 1 ? 1 : std::min(groups, 65535u),
+                        c.Mode == 1 ? 1 : (groups + 65534) / 65535);
+                    if (c.Mode == 1) break;
+                }
+            }
+            compute.InsertUAVBarrier(job.Bins);
+            compute.InsertUAVBarrier(job.Status);
+        }
+
+        // 작은 표의 복사를 예약하고 입력과 출력을 읽기 상태로 돌려 비동기 제출한다.
+        graphics.CopyBuffer(output->CapMaterial, const_cast<ByteAddressBuffer&>(inputs[0]->CapMaterial));
+        graphics.CopyBuffer(job.Metadata, job.Bins);
+        graphics.CopyBuffer(job.Flags, job.Status);
+        for (const auto& input : inputs)
+            for (auto* buffer : { &input->Data, &input->Provenance, &input->CapMaterial })
+                graphics.TransitionResource(const_cast<ByteAddressBuffer&>(*buffer), D3D12_RESOURCE_STATE_GENERIC_READ);
+        for (auto* buffer : { &output->Data, &output->Provenance, &output->CapMaterial })
+            graphics.TransitionResource(*buffer, D3D12_RESOURCE_STATE_GENERIC_READ);
+        job.Fence = graphics.Finish(false);
+        m_BodyState = PatchBodyState::InProgress;
+    }
+
     // 복사본 결과를 먼저 소비하여 기존 Static 진단과 발행 집계에서 제외한다.
     bool SkeletalPatchCopy::OnCutResult(Scene& scene, const CuttingSystem& cutting, const CutResultEntry& result)
     {
@@ -2260,9 +2547,27 @@ namespace Viewer
             {
                 auto* owner = scene.FindObject(m_CopyOwner);
                 const ComponentId ids[] = { result.Mesh, result.Other };
-                for (uint32_t side = 0; side < 2; ++side)
-                    ClassifyCutBodies(*owner->FindMeshComponent(ids[side])->GetGeometry()->GetGenerated(),
-                        m_SkinPatch->Islands, side);
+                const std::shared_ptr<const GeometryBuffers> inputs[] = {
+                    owner->FindMeshComponent(ids[0])->GetGeometry()->GetGenerated(),
+                    owner->FindMeshComponent(ids[1])->GetGeometry()->GetGenerated() };
+                try
+                {
+                    // 분류나 압축 실패는 기존 A/B 게시 준비에 전파하지 않는다.
+                    for (uint32_t side = 0; side < 2; ++side)
+                        ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, side);
+                    CompactCutBodies(inputs);
+                }
+                catch (const std::exception& error)
+                {
+                    // 부분 할당 자원도 작업 수명 규칙으로 정리하고 실패를 기록한다.
+                    DiscardBodyCompaction();
+                    m_BodyState = PatchBodyState::Failed;
+                    WritePatchLogSafely([&error]()
+                    {
+                        // 실패 로그도 예외를 격리하여 A/B 준비를 계속한다.
+                        return std::string("MI3c ERROR: ") + error.what() + "; existing A/B path preserved\n";
+                    });
+                }
             }
 
             // 원본 게시 전 준비 owner의 두 조각은 모든 pass에서 계속 숨긴다.
