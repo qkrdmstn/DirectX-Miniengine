@@ -57,18 +57,20 @@ namespace Viewer
     enum class BreakStatus
     {
         Prepared, Applied, NotFound, AlreadyBroken, Stale,
-        UnsupportedTopology, UnsupportedFrame, UnsupportedPose, InvalidInput, NotReady
+        UnsupportedTopology, UnsupportedFrame, UnsupportedPose, InvalidInput, NotReady,
+        // batch에서 이 요청은 통과했지만 다른 요청이 거절되어 함께 commit하지 않았다는 뜻이다.
+        BatchRejected
     };
 
     // 사전 검증을 통과한 단일 break의 commit 입력이다.
     // rig 상태를 바꾸지 않고 만들어진다.
-    // 준비와 commit 사이에 같은 world를 바꾸는 break가 끼면 안 된다.
+    // 공개 CommitBreak는 준비 뒤에 다른 break가 끼면 Stale로 거절한다.
     struct PreparedBreak
     {
         ObjectId Owner = InvalidObjectId;
         uint32_t JointId = MiniPhysics::InvalidSkeletalId;
         // 준비 시점의 rig 세대와 topology 세대다.
-        // commit은 rig 세대만 다시 확인한다.
+        // 공개 CommitBreak는 둘 다 현재 값과 같아야 한다.
         uint64_t RigGeneration = 0, TopologyGeneration = 0;
         MiniPhysics::PreparedConstraintBreak World;
     };
@@ -122,8 +124,15 @@ namespace Viewer
         // 통과하면 Prepared와 commit 입력을 주고 거절하면 out은 그대로다.
         BreakStatus PrepareBreak(const BreakRequest& request, PreparedBreak& out) const;
         // 검증된 break만 게시하고 topology 세대를 올린다.
-        // rig가 사라졌거나 관절이 이미 끊겼거나 준비 결과와 관절이 어긋나면 변경 없이 거절한다.
+        // rig나 body·관절이 사라졌거나 준비 뒤 topology 세대가 바뀌었으면(Stale) 변경 없이 거절한다.
         BreakStatus CommitBreak(PreparedBreak&& prepared);
+        // 요청 전체를 먼저 검증하고 겹침이 없을 때만 순차 commit한다.
+        // 성공한 break마다 topology 세대가 1씩 오른다.
+        // statuses는 요청 순서로 채운다.
+        // 하나라도 거절이면 아무것도 바꾸지 않고 false이며 통과한 요청은 BatchRejected다.
+        // 서로 겹치는 요청(같은 관절·Remove/Enable 관절·body 공유)은 양쪽 모두 InvalidInput이다.
+        // batch 뒤 SensorOverlapCount는 마지막 commit의 값이다.
+        bool BreakConstraints(const std::vector<BreakRequest>& requests, std::vector<BreakStatus>& statuses);
         // 선택 본의 body와 가장 가까운 body 조상을 연결하는 incoming 관절을 조회한다.
         IncomingJointResult FindIncomingJoint(ObjectId owner, uint32_t nodeId) const;
         // 성공한 break마다 증가한 topology 번호를 읽으며 미등록 owner이면 0이다.
@@ -152,6 +161,11 @@ namespace Viewer
 
     private:
         friend class PhysicsSystem;
+        // 게시 직전 조건을 변경 없이 확인하며 통과하면 Prepared다.
+        BreakStatus CheckCommittable(const PreparedBreak& prepared, bool requireTopology) const;
+        // 검사 뒤 world에 게시하고 topology 세대를 올린다.
+        // requireTopology가 false면 세대 일치를 요구하지 않는다.
+        BreakStatus CommitPrepared(PreparedBreak&& prepared, bool requireTopology);
         struct Rig
         {
             uint64_t Generation = 0;

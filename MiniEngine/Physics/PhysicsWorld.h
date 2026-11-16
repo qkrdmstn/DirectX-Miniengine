@@ -92,6 +92,10 @@ namespace MiniPhysics
         bool IsValid() const { return m_Data != nullptr; }
         // 제거할 관절 handle을 읽으며 빈 객체는 InvalidConstraint다.
         ConstraintHandle GetRemovedConstraint() const;
+        // commit이 다시 켤 내부 관절 handle 목록을 복사해 읽는다.
+        std::vector<ConstraintHandle> GetEnabledConstraints() const;
+        // commit이 sensor 해제와 Dynamic 전환으로 바꿀 body handle 목록을 복사해 읽는다.
+        std::vector<BodyHandle> GetBodies() const;
         // 구현 상세이며 PhysicsWorldBreak.cpp만 정의를 본다.
         struct Data;
 
@@ -222,6 +226,7 @@ namespace MiniPhysics
         // 이번 world 수명의 sensor 접촉 시작 횟수를 읽는다.
         uint32_t SensorContactCount() const;
         // 직전 break의 초기 겹침 추가 수 또는 world 누적 분리 해제 수를 읽는다.
+        // 연속 commit(batch) 뒤에는 마지막 commit의 추가 수다.
         uint32_t SensorOverlapCount(bool released = false) const;
         // 조회 body, simulation body, 준비 중 body의 예약 합계를 반환한다. Initialize 용량을 넘지 않는다.
         size_t GetReservedCount() const;
@@ -242,6 +247,9 @@ namespace MiniPhysics
         // 검증된 snapshot을 게시한다.
         // 빈 snapshot이거나 제거할 관절이 사라졌으면 NotReady이며 world는 그대로다.
         ConstraintBreakStatus CommitConstraintBreak(PreparedConstraintBreak&& prepared);
+        // snapshot이 쓰는 관절과 body(분리 관절의 반대 endpoint 포함)가 모두 살아 있는지 world 변경 없이 확인한다.
+        // 하나라도 없거나 빈 snapshot이면 false다.
+        bool CanCommitConstraintBreak(const PreparedConstraintBreak& prepared) const;
         // 무효 handle이면 출력을 보존한다.
         bool GetConstraintState(ConstraintHandle handle, ConstraintState& state) const;
         // 논리 관절 수를 반환하며 disabled 관절도 포함한다.

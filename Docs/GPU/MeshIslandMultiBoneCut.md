@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(`caa6f681`); MI-4d1 완료(`58807a5e`); MI-4d2 완료(`188adc01`); MI-4e 미커밋(base `188adc01`, 2026-11-16): `ApplyConstraintBreak`·`BreakConstraint` 검증/commit 분리(batch·게시 없음). 몸체별 skin 준비는 아직 미연결, batch·mask·n+1 게시는 MI-4f~4h.
+상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(`caa6f681`); MI-4d1 완료(`58807a5e`); MI-4d2 완료(`188adc01`); MI-4e 완료(`1d8c8ce2`); MI-4f 미커밋(base `1d8c8ce2`, 2026-11-16): `SkeletalPhysicsSystem::BreakConstraints` batch 사전 검증·세대 계약(런타임 미연결). 몸체별 skin 준비는 아직 미연결, `QueueBreak` batch·mask·n+1 게시는 MI-4g~4h.
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -92,8 +92,8 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-4d | 완료: MI-4d1(`58807a5e`), MI-4d2(`188adc01`) | 같은 side B1/B2 cap 분리·빈 몸체 로그 진단 PASS; 몸체별 skin 준비는 MI-4e 이후로 이월 |
 | MI-4d1 | 완료(`58807a5e`): 요청 그룹 수 기반 body×section 압축·몸체별 분류 카운터·준비 ID 배열 | 빈 마지막 몸체 보존·로그, 합성 세 몸체/빈 네 번째 몸체 GPU 압축 검증 |
 | MI-4d2 | 완료(`188adc01`): P_i 교차점 snapshot·아일랜드 재라벨·loop별 side 몸체·`-skeletal-union-checks` n=2 진단(몸체별 skin 준비는 미연결) | P13/P17 실제 합집합 절단·분류·압축 진단, B1/B2 cap 분리·빈 몸체 로그; break·mask·n+1 게시 미연결 |
-| MI-4e | 완료(미커밋, base `188adc01`): `PrepareConstraintBreak`/`CommitConstraintBreak`·`PrepareBreak`/`CommitBreak` 분리, 기존 진입점은 얇은 래퍼 | 단일 break 회귀·거절 무변경(CPU 959 checks), 세 데모·회귀 PASS |
-| MI-4f | `SkeletalPhysicsSystem` batch 사전 검증·세대 계약 | 두 번째 실패 시 첫 constraint도 보존(CPU 검사) |
+| MI-4e | 완료(`1d8c8ce2`): `PrepareConstraintBreak`/`CommitConstraintBreak`·`PrepareBreak`/`CommitBreak` 분리, 기존 진입점은 얇은 래퍼 | 단일 break 회귀·거절 무변경(CPU 959 checks), 세 데모·회귀 PASS |
+| MI-4f | 완료(미커밋, base `1d8c8ce2`): `BreakConstraints` 요청 전체 사전 검증·겹침 거절·핸들 생존 점검 후 순차 commit, 공개 `CommitBreak` 오래된 snapshot Stale | 두 번째 실패 시 첫 constraint도 보존, 같은 rig 독립 관절 batch 세대 +2·충돌 batch 무변경(CPU 996 checks), 세 데모·회귀 PASS |
 | MI-4g | `QueueBreak` batch·결과 수집 | pause·Stale·AlreadyBroken·Reset 전체 무변경 |
 | MI-4h | batch 성공 후 mask 1회 + n+1 게시 | 허벅지/몸통 캡처, constraint n개 감소, 회귀 |
 
@@ -117,12 +117,24 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 
 ## 시험 결과
 
-MI-4e(미커밋, base `188adc01`, 2026-11-16):
+MI-4f(미커밋, base `1d8c8ce2`, 2026-11-16):
+- 세대 계약: 성공한 break마다 `TopologyGeneration`을 1 올리므로 n개 batch가 전부 성공하면 +n이다. batch 요청은 호출 시점 세대로 Prepare하고 순차 commit은 세대 일치를 다시 요구하지 않는다. 공개 `CommitBreak`는 `prepared.TopologyGeneration`이 현재와 다르면 Stale로 무변경 거절한다(MI-4e (b)(c) 해결). `BreakConstraint`는 Prepare 직후 Commit이라 동작이 같다.
+- `BreakConstraints(requests, statuses)`: (가) 모든 요청 PrepareBreak, (나) 통과한 요청 쌍의 겹침 검사, (다) 거절이 하나라도 있으면 아무것도 commit하지 않음, (라) 통과하면 batch 전체 handle 생존 점검 후 순차 commit.
+- 겹침 규칙: Remove 관절 중복, 한 요청의 Remove가 다른 요청의 Enable에 포함, Enable 중복, 바꿀 body 공유 중 하나면 양쪽 요청을 InvalidInput으로 거절한다. 순서로 살리지 않는 보수적 거절이다(같은 rig의 부모 관절과 자손 관절 요청은 항상 겹침이다).
+- 반환 형태: `bool`(전부 Applied일 때만 true)과 요청 순서의 `std::vector<BreakStatus>`. 거절된 요청은 자기 사유, 통과했지만 batch가 거절된 요청은 신규 `BreakStatus::BatchRejected`다. 빈 batch는 false·빈 statuses다.
+- (a) handle 생존: `PhysicsWorld::CanCommitConstraintBreak`가 Remove/Enable 관절과 snapshot body·분리 관절 반대 endpoint 생존을 확인하고 `CommitConstraintBreak` 첫 단락이 이를 쓴다(단일 경로 포함). `SkeletalPhysicsSystem::CheckCommittable`이 rig 검사와 합쳐 batch 사전 점검에도 쓰이고, `CommitPrepared(…, requireTopology)`가 내부 순차 commit 경로다.
+- CPU `SkeletalBreakTests` Debug·Release 각 996/996 PASS(MI-4e 959에서 +37): 두 번째 요청 실패 시 첫 rig 상태 보존(세대·관절 handle/enable·body 운동·pose·속도·sensor·Pairs·TemporaryPairs), 중복 JointId·Enable/Remove 충돌·세 요청 중 충돌 쌍만 InvalidInput, 빈 batch 거절, 독립 두 rig batch는 둘 다 제거·세대 각 +1·말단 body Dynamic, 분기 fixture(body 0의 자식 1과 3)의 같은 rig 독립 관절 둘 batch는 둘 다 Applied·세대 정확히 +2·constraint 수 -2·두 말단 body Dynamic(세대 검사 생략 순차 commit 경로 실행), 끼어든 break 뒤 오래된 snapshot Stale, 준비 뒤 Enable 대상 관절이 사라진 commit NotReady 무변경. 기존 단일 break 검사는 그대로 PASS. SkeletalPatchTests·LatticeTopologyTests도 PASS.
+- 순차 commit 중 불변식 위반으로 실패하면 첫 실패에서 멈추고 남은 요청은 NotReady로 표시한다(방어 코드, 테스트로 도달 불가).
+- `SensorOverlapCount`는 commit마다 초기화되므로 batch 뒤에는 마지막 commit의 값만 보인다.
+- 빌드 exit0(Debug 68초, Release 80초), 신규 경고 없음. 지정 세 데모 491/167, 1475/869, 161/170·fallback0·exit0, SP7b/SP7e 로그가 MI-4e와 동일. 회귀 6실행 exit0, SP6 902 PASS/0 FAIL, SP7e2 case2/3 0mm, PS2 ≤0.000234mm, BC-12a/12b·AR4·Rig PASS. D3D12 ERROR 0. 근거: `%TEMP%/MI4f-*.log`, `MI4f-report.md`.
+- 남은 일: `QueueBreak` batch·결과 수집은 MI-4g, mask·n+1 게시는 MI-4h.
+
+MI-4e(완료 `1d8c8ce2`, 2026-11-16):
 - 설계: `PhysicsWorld::PrepareConstraintBreak`(const, world 불변)가 기존 거절 사유를 그대로 검사하고 통과하면 `ConstraintBreakStatus::Prepared`와 body snapshot·impulse를 담은 `PreparedConstraintBreak`(pimpl, world 자원 없음)를 준다. `CommitConstraintBreak`는 관절 제거·Dynamic 전환·impulse를 게시하며 빈 snapshot이나 사라진 관절만 NotReady로 거절한다. `ApplyConstraintBreak`는 둘을 잇는 래퍼다. 겹침 쿼리와 `TemporaryPairs` 추가는 commit에 둔다(거절 시 변경 없음 유지).
 - `SkeletalPhysicsSystem::PrepareBreak`(const)는 기존 검사 순서 그대로 `BreakStatus::Prepared`와 `PreparedBreak`(Owner·JointId·준비 시점 Rig/Topology 세대·world snapshot)를 준다. `CommitBreak`는 rig 존재·Rig 세대·관절 생존만 재확인하고 성공마다 `TopologyGeneration`을 올린다. Topology 세대 일치는 commit에서 요구하지 않는다: 같은 rig의 batch 순차 commit 계약은 MI-4f에서 정한다. `BreakConstraint`는 두 함수를 잇는 래퍼다.
 - CPU `SkeletalBreakTests` Debug·Release 각 959/959 PASS: 요청 거절 6건(NotFound 2·Stale 2·InvalidInput 2)과 world 거절 UnsupportedPose·UnsupportedTopology 각 1건, 통과한 검증·반복 검증이 세대·관절 handle/enable·body 운동/pose/속도·pair·TemporaryPairs·sensor 상태를 바꾸지 않음, commit 1회만 세대 +1, 같은 관절 두 번째 commit AlreadyBroken, unregister 뒤 NotFound, 오래된 Rig 세대 Stale, JointId와 준비 관절이 어긋난 commit NotReady(무변경).
 - 빌드 exit0(Debug 67초, Release 146초), 신규 경고 없음. 지정 세 데모 491/167, 1475/869, 161/170·fallback0·exit0, SP7b 로그가 MI-4d2와 동일(BreakStatus=1). 회귀 6실행 exit0, SP6 870 rows PASS/0 FAIL(리뷰 수정 후 재검증), SP7e2 case2/3 0mm, PS2 ≤0.000234mm, BC-12a/12b·AR4·Rig PASS. D3D12 ERROR 0. 근거: `%TEMP%/MI4e-*.log`, `MI4e-report.md`.
-- MI-4f에서 처리할 것: (a) 같은 rig 순차 commit에서 앞선 commit이 지운 Remove/Enable handle 때문에 뒤 commit이 일부만 바뀌거나 예외가 나는 문제이므로 Commit 전에 모든 handle 생존을 확인한다(단일 래퍼는 Prepare 직후 Commit이라 해당 없음). (b) `PreparedBreak::TopologyGeneration`은 저장만 하고 쓰지 않는다. (c) Prepare와 Commit을 분리 호출하면 Prepare 시점의 pose/속도 snapshot이 그대로 게시된다.
+- MI-4f에서 처리할 것(아래 MI-4f 절에서 해결): (a) 같은 rig 순차 commit에서 앞선 commit이 지운 Remove/Enable handle 때문에 뒤 commit이 일부만 바뀌거나 예외가 나는 문제이므로 Commit 전에 모든 handle 생존을 확인한다(단일 래퍼는 Prepare 직후 Commit이라 해당 없음). (b) `PreparedBreak::TopologyGeneration`은 저장만 하고 쓰지 않는다. (c) Prepare와 Commit을 분리 호출하면 Prepare 시점의 pose/속도 snapshot이 그대로 게시된다.
 - 테스트 범위: fixture body는 모두 sensor라 겹침 쿼리는 실행되지만 외부 Dynamic body와의 겹침이 없어 `TemporaryPairs`·`OverlapAdded` 증가 경로는 CPU 검사로 검증되지 않았다.
 - 남은 일: batch 사전 검증과 세대 계약은 MI-4f, `QueueBreak` batch는 MI-4g, mask·n+1 게시는 MI-4h.
 

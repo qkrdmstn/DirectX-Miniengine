@@ -145,6 +145,25 @@ namespace MiniPhysics
         return m_Data ? m_Data->Remove : InvalidConstraint;
     }
 
+    // commit이 sensor 해제와 전환으로 바꿀 body handle을 snapshot 순서대로 읽는다.
+    std::vector<BodyHandle> PreparedConstraintBreak::GetBodies() const
+    {
+        // 빈 객체는 빈 목록이다.
+        std::vector<BodyHandle> bodies;
+        if (!m_Data) return bodies;
+
+        // snapshot의 handle을 순서대로 복사한다.
+        for (const auto& snapshot : m_Data->Snapshots) bodies.push_back(snapshot.Handle);
+        return bodies;
+    }
+
+    // commit이 다시 켤 내부 관절 handle 목록을 읽는다.
+    std::vector<ConstraintHandle> PreparedConstraintBreak::GetEnabledConstraints() const
+    {
+        // 빈 객체는 빈 목록이다.
+        return m_Data ? m_Data->Enable : std::vector<ConstraintHandle>();
+    }
+
     // 검증과 commit을 이어 호출하는 기존 진입점이다.
     ConstraintBreakStatus PhysicsWorld::ApplyConstraintBreak(const ConstraintBreakDesc& desc)
     {
@@ -239,11 +258,29 @@ namespace MiniPhysics
         return ConstraintBreakStatus::Prepared;
     }
 
+    // snapshot이 가리키는 관절과 body가 world에 모두 남아 있는지 변경 없이 확인한다.
+    bool PhysicsWorld::CanCommitConstraintBreak(const PreparedConstraintBreak& prepared) const
+    {
+        // 빈 snapshot은 commit할 수 없다.
+        if (!m_Impl || !prepared.m_Data) return false;
+        const auto& data = *prepared.m_Data;
+
+        // 제거할 관절과 다시 켤 관절이 모두 살아 있어야 한다.
+        if (m_Impl->Constraints.find(data.Remove) == m_Impl->Constraints.end()) return false;
+        for (const auto handle : data.Enable)
+            if (m_Impl->Constraints.find(handle) == m_Impl->Constraints.end()) return false;
+
+        // 전환할 body와 분리 관절의 반대 endpoint가 모두 살아 있어야 한다.
+        for (const auto& snapshot : data.Snapshots)
+            if (m_Impl->SimBodies.find(snapshot.Handle) == m_Impl->SimBodies.end()) return false;
+        return m_Impl->SimBodies.find(data.Parent.Handle) != m_Impl->SimBodies.end();
+    }
+
     // 검증된 snapshot으로 sensor의 초기 겹침을 제외한 뒤 관절 분리를 게시한다.
     ConstraintBreakStatus PhysicsWorld::CommitConstraintBreak(PreparedConstraintBreak&& prepared)
     {
-        // 빈 snapshot이나 이미 사라진 관절은 world를 건드리지 않고 거절한다.
-        if (!m_Impl || !prepared.m_Data) return ConstraintBreakStatus::NotReady;
+        // 빈 snapshot이나 사라진 관절·body는 world를 건드리지 않고 거절한다.
+        if (!CanCommitConstraintBreak(prepared)) return ConstraintBreakStatus::NotReady;
         const auto data = std::move(prepared.m_Data);
         const auto selected = m_Impl->Constraints.find(data->Remove);
         if (selected == m_Impl->Constraints.end()) return ConstraintBreakStatus::NotReady;

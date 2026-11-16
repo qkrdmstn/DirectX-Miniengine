@@ -2,6 +2,7 @@
 #include "../../Physics/Collision/AggregateGeom.h"
 #include "SkeletalPhysicsFrames.h"
 #include "../../Physics/Collision/BodyMass.h"
+#include <algorithm>
 #include <cmath>
 #include <exception>
 
@@ -448,23 +449,142 @@ namespace Viewer
     }
 
     // 검증된 break를 world에 게시하고 논리 topology 세대를 올린다.
+    // 준비 뒤 다른 break가 끼어 세대가 바뀌었으면 Stale로 거절한다.
     BreakStatus SkeletalPhysicsSystem::CommitBreak(PreparedBreak&& prepared)
+    {
+        // 단일 commit은 준비 시점의 topology 세대도 요구한다.
+        return CommitPrepared(std::move(prepared), true);
+    }
+
+    // 게시 직전 조건을 world와 rig 변경 없이 확인한다.
+    // 통과하면 Prepared를 돌려주며 batch 사전 점검과 commit이 함께 쓴다.
+    BreakStatus SkeletalPhysicsSystem::CheckCommittable(const PreparedBreak& prepared, bool requireTopology) const
     {
         // rig가 같은 등록이고 관절이 아직 살아 있어야 한다.
         const auto found = m_Rigs.find(prepared.Owner);
         if (found == m_Rigs.end()) return BreakStatus::NotFound;
-        auto& rig = found->second;
+        const auto& rig = found->second;
         if (prepared.RigGeneration != rig.Generation) return BreakStatus::Stale;
         if (prepared.JointId >= rig.Joints.size()) return BreakStatus::NotFound;
         if (rig.Joints[prepared.JointId] == MiniPhysics::InvalidConstraint) return BreakStatus::AlreadyBroken;
+
+        // 준비 뒤 다른 break가 끼었는지는 단일 commit에서만 확인한다.
+        if (requireTopology && prepared.TopologyGeneration != rig.TopologyGeneration) return BreakStatus::Stale;
+
+        // 준비한 관절과 world의 관절·body가 모두 남아 있어야 한다.
         if (prepared.World.GetRemovedConstraint() != rig.Joints[prepared.JointId]) return BreakStatus::NotReady;
+        if (!m_World.CanCommitConstraintBreak(prepared.World)) return BreakStatus::NotReady;
+        return BreakStatus::Prepared;
+    }
+
+    // 검사를 통과한 break만 world에 게시하고 성공마다 topology 세대를 1 올린다.
+    BreakStatus SkeletalPhysicsSystem::CommitPrepared(PreparedBreak&& prepared, bool requireTopology)
+    {
+        // 거절 사유가 있으면 world와 rig를 바꾸지 않는다.
+        const auto checked = CheckCommittable(prepared, requireTopology);
+        if (checked != BreakStatus::Prepared) return checked;
 
         // world commit이 성공한 경우에만 논리 topology를 게시한다.
+        auto& rig = m_Rigs.find(prepared.Owner)->second;
         if (m_World.CommitConstraintBreak(std::move(prepared.World)) != MiniPhysics::ConstraintBreakStatus::Applied)
             return BreakStatus::NotReady;
         rig.Joints[prepared.JointId] = MiniPhysics::InvalidConstraint;
         ++rig.TopologyGeneration;
         return BreakStatus::Applied;
+    }
+
+    // 두 검증된 break가 같은 관절이나 body를 건드리는지 본다.
+    // 순서로 살리지 않고 겹치면 보수적으로 충돌로 본다.
+    static bool BreaksConflict(const PreparedBreak& a, const PreparedBreak& b)
+    {
+        // 제거 관절끼리 같거나 한쪽 제거 관절이 다른 쪽의 Enable 목록에 있으면 충돌이다.
+        const auto removeA = a.World.GetRemovedConstraint();
+        const auto removeB = b.World.GetRemovedConstraint();
+        const auto enableA = a.World.GetEnabledConstraints();
+        const auto enableB = b.World.GetEnabledConstraints();
+        if (removeA == removeB) return true;
+        if (std::find(enableB.begin(), enableB.end(), removeA) != enableB.end()) return true;
+        if (std::find(enableA.begin(), enableA.end(), removeB) != enableA.end()) return true;
+
+        // 다시 켤 관절이 겹쳐도 충돌이다.
+        for (const auto handle : enableA)
+            if (std::find(enableB.begin(), enableB.end(), handle) != enableB.end()) return true;
+
+        // 상태를 바꿀 body가 하나라도 겹치면 충돌이다.
+        const auto bodiesA = a.World.GetBodies();
+        const auto bodiesB = b.World.GetBodies();
+        for (const auto body : bodiesA)
+            if (std::find(bodiesB.begin(), bodiesB.end(), body) != bodiesB.end()) return true;
+        return false;
+    }
+
+    // 요청 전체를 사전 검증하고 겹침이 없을 때만 순차 commit한다.
+    // 하나라도 거절되면 아무것도 commit하지 않는다.
+    bool SkeletalPhysicsSystem::BreakConstraints(const std::vector<BreakRequest>& requests, std::vector<BreakStatus>& statuses)
+    {
+        // 빈 batch는 할 일이 없으므로 거절한다.
+        statuses.clear();
+        if (requests.empty()) return false;
+
+        // 모든 요청을 무변경으로 검증한다. 통과 요청은 임시로 Prepared를 기록한다.
+        std::vector<PreparedBreak> prepared(requests.size());
+        std::vector<BreakStatus> result(requests.size());
+        bool rejected = false;
+        for (size_t i = 0; i < requests.size(); ++i)
+        {
+            result[i] = PrepareBreak(requests[i], prepared[i]);
+            if (result[i] != BreakStatus::Prepared) rejected = true;
+        }
+
+        // 검증된 요청 쌍의 겹침을 검사하고 겹친 양쪽을 InvalidInput으로 표시한다.
+        for (size_t i = 0; i < requests.size(); ++i)
+        {
+            for (size_t j = i + 1; j < requests.size(); ++j)
+            {
+                if (!prepared[i].World.IsValid() || !prepared[j].World.IsValid() ||
+                    !BreaksConflict(prepared[i], prepared[j])) continue;
+                result[i] = BreakStatus::InvalidInput;
+                result[j] = BreakStatus::InvalidInput;
+                rejected = true;
+            }
+        }
+
+        // 게시 직전 조건을 batch 전체에 대해 먼저 확인해 world가 반쯤 바뀌지 않게 한다.
+        for (size_t i = 0; i < requests.size() && !rejected; ++i)
+        {
+            const auto checked = CheckCommittable(prepared[i], true);
+            if (checked != BreakStatus::Prepared)
+            {
+                result[i] = checked;
+                rejected = true;
+            }
+        }
+
+        // 거절이 하나라도 있으면 통과한 요청에 batch 거절을 기록하고 아무것도 commit하지 않는다.
+        if (rejected)
+        {
+            for (auto& status : result)
+                if (status == BreakStatus::Prepared) status = BreakStatus::BatchRejected;
+            statuses = std::move(result);
+            return false;
+        }
+
+        // 겹침이 없으므로 세대 일치를 다시 요구하지 않고 순차 commit한다.
+        // 사전 점검을 통과한 뒤의 실패는 불변식 위반이라 그 상태를 그대로 보고한다.
+        // 첫 실패에서 멈추고 남은 요청은 NotReady로 표시한다.
+        bool applied = true;
+        for (size_t i = 0; i < requests.size(); ++i)
+        {
+            if (!applied)
+            {
+                result[i] = BreakStatus::NotReady;
+                continue;
+            }
+            result[i] = CommitPrepared(std::move(prepared[i]), false);
+            if (result[i] != BreakStatus::Applied) applied = false;
+        }
+        statuses = std::move(result);
+        return applied;
     }
 
     // owner의 현재 topology 번호를 읽는다.

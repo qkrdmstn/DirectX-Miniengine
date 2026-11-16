@@ -628,6 +628,118 @@ static void CheckPreparedBreak(PhysicsWorld& world, SkeletalPhysicsSystem& skele
     CheckEmpty(world, "Prepared break resources zero");
 }
 
+// batch break가 전부 성공하거나 전부 무변경이고 세대 계약과 오래된 snapshot 거절이 지켜지는지 검사한다.
+static void CheckBatchBreak(PhysicsWorld& world, SkeletalPhysicsSystem& skeletal)
+{
+    // 서로 독립인 두 rig를 등록하고 각 rig의 말단 관절 요청을 준비한다.
+    using Viewer::BreakStatus;
+    using Viewer::BreakRequest;
+    auto fixture = CreateThreeBodyFixture();
+    fixture.NodeParents = { InvalidSkeletalId, 3, 1, 0 };
+    const auto frames = FixtureBodyFrames(fixture);
+    Check(skeletal.Register(50, fixture.Asset, fixture.NodeParents, frames), "Batch fixture 50 registered");
+    Check(skeletal.Register(51, fixture.Asset, fixture.NodeParents, frames), "Batch fixture 51 registered");
+    const auto makeRequest = [&](Viewer::ObjectId owner, uint32_t joint)
+    {
+        BreakRequest request{ owner, joint, skeletal.GetRigGeneration(owner), skeletal.GetTopologyGeneration(owner) };
+        request.WorldImpulse = { 1, 0, 0 };
+        request.WorldPoint = { 0, 1.6f, 0 };
+        return request;
+    };
+    const auto before50 = CaptureBreakSnapshot(world, skeletal, 50);
+    const auto before51 = CaptureBreakSnapshot(world, skeletal, 51);
+    std::vector<BreakStatus> statuses;
+
+    // 두 번째 요청이 거절되면 첫 요청도 commit하지 않고 첫 요청은 BatchRejected를 받는다.
+    auto stale = makeRequest(51, 1);
+    stale.ExpectedTopologyGeneration++;
+    Check(!skeletal.BreakConstraints({ makeRequest(50, 1), stale }, statuses) && statuses.size() == 2 &&
+        statuses[0] == BreakStatus::BatchRejected && statuses[1] == BreakStatus::Stale, "Batch second failure statuses");
+    Check(CaptureBreakSnapshot(world, skeletal, 50) == before50 && CaptureBreakSnapshot(world, skeletal, 51) == before51,
+        "Batch second failure preserves first constraint");
+
+    // 같은 관절 중복과 한 요청이 Enable로 참조하는 관절을 다른 요청이 제거하는 경우는 양쪽 InvalidInput이다.
+    Check(!skeletal.BreakConstraints({ makeRequest(50, 1), makeRequest(50, 1) }, statuses) &&
+        statuses[0] == BreakStatus::InvalidInput && statuses[1] == BreakStatus::InvalidInput, "Batch duplicate joint rejected");
+    Check(!skeletal.BreakConstraints({ makeRequest(50, 0), makeRequest(50, 1) }, statuses) &&
+        statuses[0] == BreakStatus::InvalidInput && statuses[1] == BreakStatus::InvalidInput, "Batch enable-remove conflict rejected");
+    Check(!skeletal.BreakConstraints({ makeRequest(50, 1), makeRequest(51, 1), makeRequest(50, 0) }, statuses) &&
+        statuses[0] == BreakStatus::InvalidInput && statuses[1] == BreakStatus::BatchRejected &&
+        statuses[2] == BreakStatus::InvalidInput, "Batch conflict marks only conflicting pair");
+    Check(!skeletal.BreakConstraints({}, statuses) && statuses.empty(), "Empty batch rejected");
+    Check(CaptureBreakSnapshot(world, skeletal, 50) == before50 && CaptureBreakSnapshot(world, skeletal, 51) == before51,
+        "Batch conflicts change nothing");
+
+    // 독립인 두 요청은 모두 적용되고 세대는 요청 수만큼 오른다.
+    Check(skeletal.BreakConstraints({ makeRequest(50, 1), makeRequest(51, 1) }, statuses) && statuses.size() == 2 &&
+        statuses[0] == BreakStatus::Applied && statuses[1] == BreakStatus::Applied, "Batch success statuses");
+    Check(skeletal.GetTopologyGeneration(50) == before50.Topology + 1 && skeletal.GetTopologyGeneration(51) == before51.Topology + 1 &&
+        skeletal.GetConstraintHandle(50, 1) == InvalidConstraint && skeletal.GetConstraintHandle(51, 1) == InvalidConstraint && world.GetConstraintCount() == before50.Constraints - 2,
+        "Batch success generation and joints");
+    for (const auto owner : { 50u, 51u })
+    {
+        BodyMotion motion{};
+        Check(world.GetBodyMotion(skeletal.GetBodyHandle(owner, 2), motion) && motion == BodyMotion::Dynamic &&
+            !world.IsSensor(skeletal.GetBodyHandle(owner, 2)), "Batch success detaches distal body");
+        Check(world.GetBodyMotion(skeletal.GetBodyHandle(owner, 1), motion) && motion == BodyMotion::Kinematic, "Batch success keeps proximal body");
+    }
+    Check(skeletal.Unregister(50) && skeletal.Unregister(51), "Batch fixtures released");
+
+    // body 0에 자식 1과 3을 둔 분기 fixture로 같은 rig의 독립 관절 둘을 만든다.
+    auto branch = fixture;
+    branch.NodeParents = { InvalidSkeletalId, 0, 1, 2, 0 };
+    branch.RestNodeFrames.resize(5);
+    branch.RestNodeFrames[4].Position = { 0.5, 1.5, 0 };
+    BodyDefinition sideBody;
+    sideBody.Node = 4;
+    sideBody.HalfExtentMeters = { 0.1, 0.25, 0.1 };
+    sideBody.MassKg = 1;
+    branch.Asset.Bodies.push_back(sideBody);
+    JointDefinition sideJoint = branch.Asset.Joints[0];
+    sideJoint.ChildBody = 3;
+    sideJoint.ParentBodyFromJoint.Position = { 0.5, -0.25, 0 };
+    branch.Asset.Joints.push_back(sideJoint);
+    Check(skeletal.Register(54, branch.Asset, branch.NodeParents, FixtureBodyFrames(branch)), "Branch fixture registered");
+    const auto branchGeneration = skeletal.GetTopologyGeneration(54);
+    const auto branchConstraints = world.GetConstraintCount();
+
+    // 같은 rig의 독립 관절 둘은 세대 검사를 건너뛰는 순차 commit으로 모두 적용된다.
+    Check(skeletal.BreakConstraints({ makeRequest(54, 1), makeRequest(54, 2) }, statuses) && statuses.size() == 2 &&
+        statuses[0] == BreakStatus::Applied && statuses[1] == BreakStatus::Applied, "Same-rig batch statuses");
+    Check(skeletal.GetTopologyGeneration(54) == branchGeneration + 2 && world.GetConstraintCount() == branchConstraints - 2 &&
+        skeletal.GetConstraintHandle(54, 1) == InvalidConstraint && skeletal.GetConstraintHandle(54, 2) == InvalidConstraint &&
+        skeletal.GetConstraintHandle(54, 0) != InvalidConstraint, "Same-rig batch generation and joints");
+    for (uint32_t body = 0; body < 4; ++body)
+    {
+        BodyMotion motion{};
+        const bool detached = body >= 2;
+        Check(world.GetBodyMotion(skeletal.GetBodyHandle(54, body), motion) &&
+            motion == (detached ? BodyMotion::Dynamic : BodyMotion::Kinematic), "Same-rig batch body motion");
+    }
+    Check(skeletal.Unregister(54), "Branch fixture released");
+
+    // 준비 뒤 다른 break가 끼면 오래된 snapshot은 Stale로 거절되고 상태는 그대로다.
+    Check(skeletal.Register(52, fixture.Asset, fixture.NodeParents, frames), "Stale fixture registered");
+    Viewer::PreparedBreak old;
+    Check(skeletal.PrepareBreak(makeRequest(52, 1), old) == BreakStatus::Prepared, "Prepare before interleaved break");
+    Check(skeletal.BreakConstraint(makeRequest(52, 0)) == BreakStatus::Applied, "Interleaved break applied");
+    const auto interleaved = CaptureBreakSnapshot(world, skeletal, 52);
+    Check(skeletal.CommitBreak(std::move(old)) == BreakStatus::Stale, "Commit of overtaken snapshot stale");
+    Check(CaptureBreakSnapshot(world, skeletal, 52) == interleaved, "Stale snapshot changes nothing");
+    Check(skeletal.Unregister(52), "Stale fixture released");
+
+    // 준비 뒤 world에서 Enable 대상 관절이 사라지면 commit은 변경 없이 거절한다.
+    Check(skeletal.Register(53, fixture.Asset, fixture.NodeParents, frames), "Handle fixture registered");
+    Viewer::PreparedBreak dangling;
+    Check(skeletal.PrepareBreak(makeRequest(53, 0), dangling) == BreakStatus::Prepared, "Prepare before handle removal");
+    Check(world.RemoveConstraint(skeletal.GetConstraintHandle(53, 1)), "Enable target removed externally");
+    const auto removed = CaptureBreakSnapshot(world, skeletal, 53);
+    Check(skeletal.CommitBreak(std::move(dangling)) == BreakStatus::NotReady, "Commit with dead enable handle rejected");
+    Check(CaptureBreakSnapshot(world, skeletal, 53) == removed, "Dead handle commit changes nothing");
+    Check(skeletal.Unregister(53), "Handle fixture released");
+    CheckEmpty(world, "Batch break resources zero");
+}
+
 // 등록·목표 갱신·본 writeback과 실패 뒤 자원 정리를 검사한다.
 int main()
 {
@@ -737,6 +849,7 @@ int main()
     // 동기 분리의 성공과 실패 경로를 검사한다.
     CheckSynchronousBreak(world, skeletal);
     CheckPreparedBreak(world, skeletal);
+    CheckBatchBreak(world, skeletal);
 
     // 뷰어 진단에 전달할 실제 물리 상태와 실패 보존을 검사한다.
     CheckDiagnosticState(world, skeletal);
