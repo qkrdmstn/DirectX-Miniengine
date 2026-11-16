@@ -106,13 +106,16 @@ namespace Viewer
             }
         }
 
-        // capacity 틈과 cap이 있는 두 side를 합성하여 몸체별 압축 계약을 검사한다.
+        // 두 side 합성 출력으로 다중 몸체와 빈 마지막 몸체의 압축 계약을 검사한다.
         void CheckBodyCompaction()
         {
             // 기존 검사 옵션에서 한 번만 실행하며 게시 경로에는 연결하지 않는다.
             static bool checked = false;
             uint32_t checks = 0;
             CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
+            uint32_t unionChecks = 0;
+            CommandLineArgs::GetInteger(L"skeletal-union-checks", unionChecks);
+            checks |= unionChecks;
             if (!checks || checked) return;
             checked = true;
             struct Constants
@@ -122,7 +125,7 @@ namespace Viewer
                 uint32_t IbOffset, Stride, DepthStride, CapacityBytes;
                 uint32_t CapacityTriangles, Padding[3];
             };
-            const uint32_t layouts[] = { 28, 16, 28, 0, 28, 12 }; // section 2와 body 2는 빈 구간
+            const uint32_t layouts[] = { 28, 16, 28, 0, 28, 12 }; // section 2는 빈 구간
             uint32_t input[2][500]{}, provenance[2][192]{}, bodies[2][8]{};
             for (uint32_t side = 0; side < 2; ++side)
                 for (uint32_t t : { 0u, 1u, 4u })
@@ -150,12 +153,12 @@ namespace Viewer
             sections.Create(L"Compact layouts", 6, 4, layouts);
             output.Create(L"Compact output", 512, 4);
             outProv.Create(L"Compact provenance", 144, 4);
-            bins.Create(L"Compact bins", 54, 4);
+            bins.Create(L"Compact bins", 72, 4);
             status.Create(L"Compact status", 1, 4);
             ReadbackBuffer readData, readProv, readBins, readStatus;
             readData.Create(L"Compact data readback", 512, 4);
             readProv.Create(L"Compact provenance readback", 144, 4);
-            readBins.Create(L"Compact bins readback", 54, 4);
+            readBins.Create(L"Compact bins readback", 72, 4);
             readStatus.Create(L"Compact status readback", 1, 4);
             RootSignature root;
             root.Reset(9);
@@ -169,16 +172,27 @@ namespace Viewer
             pso.Finalize();
             bool pass = true;
 
-            // 정상·용량 부족 검사 뒤 양쪽 cap drop이 출력에서 빠지는지 검사한다.
-            for (uint32_t trial = 0; trial < 4; ++trial)
+            // 정상·용량 부족·drop 검사 뒤 같은 side의 B1/B2 압축과 빈 B3를 검사한다.
+            for (uint32_t trial = 0; trial < 5; ++trial)
             {
-                // 마지막 실행은 cap만 제거하고 표면의 몸체 귀속은 그대로 유지한다.
+                // 네 번째 실행은 cap만 제거하고 표면의 몸체 귀속은 그대로 유지한다.
                 if (trial == 3)
                 {
                     for (uint32_t side = 0; side < 2; ++side)
                     {
                         bodies[side][4] = UINT32_MAX - 1;
                         labels[side].Create(L"Compact synthetic dropped caps", 8, 4, bodies[side]);
+                    }
+                }
+
+                // 세 번째 몸체에는 side0 cap만 보내며 네 번째 몸체는 의도적으로 비운다.
+                if (trial == 4)
+                {
+                    bodies[0][4] = 2;
+                    bodies[1][4] = 1;
+                    for (uint32_t side = 0; side < 2; ++side)
+                    {
+                        labels[side].Create(L"Compact synthetic multiple bodies", 8, 4, bodies[side]);
                     }
                 }
 
@@ -199,7 +213,7 @@ namespace Viewer
                 compute.SetBufferUAV(6, outProv);
                 compute.SetBufferUAV(7, bins);
                 compute.SetBufferUAV(8, status);
-                Constants constants{ 0, 3, 3, 0, 0, 0, 0, 1000, 0, 28, 0, trial == 2 ? 1u : 2048u,
+                Constants constants{ 0, 4, 3, 0, 0, 0, 0, 1000, 0, 28, 0, trial == 2 ? 1u : 2048u,
                     trial == 1 ? 5u : 6u, {} };
                 for (uint32_t mode = 0; mode < 3; ++mode)
                 {
@@ -241,11 +255,16 @@ namespace Viewer
                 // 공통 정점 주소와 모든 코너·depth·출처·IB 및 몸체별 합계를 비교한다.
                 bool seen[2][8]{};
                 uint32_t total = 0;
-                for (uint32_t bin = 0; bin < 9 && !overflow; ++bin)
+                for (uint32_t bin = 0; bin < 12 && !overflow; ++bin)
                 {
                     const uint32_t* m = meta + bin * 6;
                     pass &= m[2] % 28 == 0 && m[2] / 28 == m[1] * 3;
-                    pass &= m[0] == (bin < 6 ? (bin % 3 == 0 ? 2u : bin % 3 == 1 && trial != 3 ? 1u : 0u) : 0u);
+                    uint32_t expected = 0;
+                    for (uint32_t side = 0; side < 2; ++side)
+                        for (uint32_t triangle : { 0u, 1u, 4u })
+                            if (bodies[side][triangle] == bin / 3 && (triangle == 4 ? 1u : 0u) == bin % 3)
+                                ++expected;
+                    pass &= m[0] == expected;
                     total += m[0];
                     for (uint32_t t = 0; t < m[0]; ++t)
                     {
@@ -270,12 +289,23 @@ namespace Viewer
                 }
                 if (!overflow) pass &= total == (trial == 3 ? 4u : 6u);
                 else for (uint32_t w = 0; w < 512; ++w) pass &= result[w] == 0;
+
+                // 마지막 빈 bin과 세 몸체의 실제 합계를 별도로 검사하고 기록한다.
+                if (trial == 4)
+                {
+                    const uint32_t totals[] = { meta[0] + meta[6], meta[18] + meta[24], meta[36] + meta[42] };
+                    pass &= totals[0] == 2 && totals[1] == 3 && totals[2] == 1;
+                    PatchLog("MI4d synthetic body0=%u body1=%u body2=%u empty body=3 tris=%u sameSideBodies=1,2 %s\n",
+                        totals[0], totals[1], totals[2], meta[54] + meta[60] + meta[66], pass ? "PASS" : "FAIL");
+                }
                 readData.Unmap();
                 readProv.Unmap();
                 readBins.Unmap();
                 readStatus.Unmap();
             }
             PatchLog("MI3b synthetic two-side vertices/provenance/depth/IB skinAddress=matched totals=6 dropCaps=2 output=4 overflow=triangles+bytes %s\n", pass ? "PASS" : "FAIL");
+            if (!pass)
+                throw std::runtime_error("MI4d synthetic body compaction failed");
         }
 
         // 패치 진단의 문자열 생성과 출력을 요청의 예외 경계에서 분리한다.
@@ -2478,13 +2508,17 @@ namespace Viewer
         return table;
     }
 
-    // cutter 출력의 실제 section 범위만 판정하고 결과는 다음 압축 단계용으로 보관한다.
+    // cutter 출력의 실제 section 범위를 n+1 몸체로 판정하고 압축용 표를 보관한다.
     void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
-        const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side)
+        const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount)
     {
         // 합성 압축 검사는 진단 옵션에서만 실행한다.
         CheckBodyCompaction();
         m_DroppedCaps[side] = 0;
+
+        // 몸체 수는 라벨 최댓값이 아닌 요청 그룹 수이며 빈 마지막 몸체도 포함한다.
+        if (!bodyCount || bodyCount > (UINT32_MAX / 4 - 10) / 2)
+            throw std::length_error("MI4d invalid classification body count");
 
         // 표는 [패치 삼각형][반공간] 순서이며 물리 A/B 순서와 무관하다.
         if (islands.TriangleSideBody.empty()) return;
@@ -2497,7 +2531,7 @@ namespace Viewer
         struct Constants
         {
             uint32_t FirstTriangle, TriangleCount, PatchTriangles, Side;
-            uint32_t DefaultBody, CapLoopCount, Padding[2];
+            uint32_t DefaultBody, CapLoopCount, BodyCount, Padding;
         };
         static_assert(sizeof(Constants) == 32, "Body classification constants");
 
@@ -2535,8 +2569,9 @@ namespace Viewer
         bodies.Create(L"Output triangle bodies", end, sizeof(uint32_t));
         ByteAddressBuffer counters;
         ReadbackBuffer readback;
-        counters.Create(L"Body classification counters", 10, sizeof(uint32_t));
-        readback.Create(L"Body classification readback", 10, sizeof(uint32_t));
+        const uint32_t counterCount = 10 + bodyCount * 2;
+        counters.Create(L"Body classification counters", counterCount, sizeof(uint32_t));
+        readback.Create(L"Body classification readback", counterCount, sizeof(uint32_t));
 
         // 각 section의 실제 출력 삼각형만 dispatch하고 합산 카운터를 초기화한다.
         auto& graphics = GraphicsContext::Begin(L"Classify patch output bodies");
@@ -2559,7 +2594,7 @@ namespace Viewer
         for (const auto& mesh : geometry.Meshes)
         {
             Constants c{ mesh.vbOffset / 84, mesh.vbSize / 84, uint32_t(islands.TriangleSideBody.size()),
-                side, islands.SideDefault[side], uint32_t(capLoops.size()), {} };
+                side, islands.SideDefault[side], uint32_t(capLoops.size()), bodyCount, 0 };
             if (!c.TriangleCount) continue;
             compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
             const uint32_t groups = (c.TriangleCount + 63) / 64;
@@ -2577,6 +2612,13 @@ namespace Viewer
         m_DroppedCaps[side] = counts[7];
         PatchLog("MI3f side=%u cap=%u dropped=%u kept=%u fallback=%u invalid=%u\n",
             side, counts[1], counts[7], counts[1] - counts[7], counts[8], counts[9]);
+
+        // 같은 side의 여러 몸체를 별도 카운터로 남겨 후속 loop 귀속을 검증한다.
+        for (uint32_t body = 0; body < bodyCount; ++body)
+        {
+            PatchLog("MI4d classify side=%u body=%u surface=%u cap=%u\n",
+                side, body, counts[10 + body], counts[10 + bodyCount + body]);
+        }
         readback.Unmap();
     }
 
@@ -2620,7 +2662,7 @@ namespace Viewer
         m_BodyJob.reset();
     }
 
-    // 각 프레임에서 완료된 압축만 회수하여 메타데이터를 검증한다.
+    // 완료된 n+1 몸체 압축을 회수하고 빈 몸체를 포함한 메타데이터를 검증한다.
     void SkeletalPatchCopy::PollBodyCompaction()
     {
         // 무효화된 제출은 완료된 것만 비동기로 해제한다.
@@ -2686,6 +2728,12 @@ namespace Viewer
                     result.Triangles[body] += m[0];
                 }
                 sum += result.Triangles[body];
+                if (!result.Triangles[body])
+                {
+                    // 빈 몸체는 유효한 빈 section 목록으로 보존하고 bounds를 출력하지 않는다.
+                    PatchLog("MI4d empty body=%u tris=0 sections=0\n", body);
+                    continue;
+                }
                 PatchLog("MI3c body=%u tris=%u sections=%zu bounds=(%g,%g,%g)-(%g,%g,%g)\n",
                     body, result.Triangles[body], result.Sections[body].size(), float(low.GetX()), float(low.GetY()),
                     float(low.GetZ()), float(high.GetX()), float(high.GetY()), float(high.GetZ()));
@@ -2712,8 +2760,8 @@ namespace Viewer
         m_BodyJob.reset();
     }
 
-    // 두 side의 압축을 비동기 제출하고 입력과 임시 자원을 멤버 작업에 보관한다.
-    void SkeletalPatchCopy::CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2])
+    // 요청 그룹 수의 body×section 압축을 제출하며 빈 몸체의 bin도 보존한다.
+    void SkeletalPatchCopy::CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2], uint32_t bodyCount)
     {
         // 누락된 section도 원래 VB 주소로 대응시켜 재질과 cap을 구별한다.
         DiscardBodyCompaction();
@@ -2736,10 +2784,15 @@ namespace Viewer
                 triangles += mesh.vbSize / 84;
                 bytes += uint64_t(mesh.vbSize / 28) * (28 + depth + 4);
             }
-        uint32_t bodies = 1;
+
+        // 라벨에서 사라진 몸체도 유지하며 잘못된 표면 라벨은 할당 전에 거절한다.
+        if (!bodyCount || bodyCount >= UINT32_MAX - 1)
+            throw std::length_error("MI4d invalid compaction body count");
+        const uint32_t bodies = bodyCount;
         for (const auto& pair : m_SkinPatch->Islands.TriangleSideBody)
             for (uint32_t body : pair)
-                if (body != UINT32_MAX) bodies = std::max(bodies, body + 1);
+                if (body != UINT32_MAX && body >= bodies)
+                    throw std::runtime_error("MI4d island body outside request groups");
         const uint32_t sections = uint32_t(templates.size());
         const uint64_t bins = uint64_t(bodies) * sections;
         if (!triangles || bytes > UINT32_MAX || triangles * 96 > UINT32_MAX || bins * 48 > UINT32_MAX)
@@ -2896,8 +2949,8 @@ namespace Viewer
                     const auto real = RelabelCapLoops(result, *m_SkinPatch, m_Plane);
                     const auto capLoops = DiagnoseCapLoops(result, m_SkinPatch->Islands, real);
                     for (uint32_t side = 0; side < 2; ++side)
-                        ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, capLoops, side);
-                    CompactCutBodies(inputs);
+                        ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, capLoops, side, uint32_t(m_BodySides.size()));
+                    CompactCutBodies(inputs, uint32_t(m_BodySides.size()));
                 }
                 catch (const std::exception& error)
                 {
@@ -2943,7 +2996,7 @@ namespace Viewer
         m_BreakReady = false;
         DiscardBodyCompaction();
         m_SkinPatch.reset();
-        m_PreparedIds[0] = m_PreparedIds[1] = 0;
+        m_PreparedIds.clear();
 
         // 숨긴 staging owner를 제거하고 원본 변경 없이 거절 완료를 기록한다.
         if (scene.FindObject(m_CopyOwner)) scene.DeleteObject(m_CopyOwner);
@@ -2953,7 +3006,7 @@ namespace Viewer
         return true;
     }
 
-    // 완료된 몸체 또는 기존 side를 준비한 뒤 종전 break·게시 순서를 진행한다.
+    // 요청 몸체 수의 준비 ID를 확보한 뒤 기존 단일 break·게시 순서를 진행한다.
     void SkeletalPatchCopy::FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped)
     {
         // 지연 처리에서도 동일한 절단 기록으로 성공과 실패 이유를 복원한다.
@@ -2964,6 +3017,13 @@ namespace Viewer
         {
             // body 0/1은 A/B이며 cutter side 순서와 독립이다.
             auto* staging = scene.FindObject(m_CopyOwner);
+            m_PreparedIds.assign(m_BodySides.size(), InvalidComponentId);
+
+            // n+1 게시 연결 전에는 다중 몸체가 두 side 준비물을 공유하지 못하게 거절한다.
+            if (m_BodySides.size() != 2)
+                throw std::runtime_error("MI4d multi-body publication is not connected");
+
+            // 기존 단일 break의 두 준비물은 요청의 반공간 순서로 대응한다.
             for (size_t body = 0; body < m_BodySides.size(); ++body)
             {
                 // 두 side 출력에서 몸체의 기존 폴백 반공간을 선택한다.

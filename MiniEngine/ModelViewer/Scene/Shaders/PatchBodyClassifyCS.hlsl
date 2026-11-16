@@ -2,13 +2,13 @@ cbuffer Parameters : register(b0)
 {
     uint FirstTriangle, TriangleCount, PatchTriangles, Side;
     uint DefaultBody, CapLoopCount;
-    uint2 Padding;
+    uint BodyCount, Padding;
 };
 ByteAddressBuffer Provenance : register(t0);
 ByteAddressBuffer TriangleSideBody : register(t1);
 ByteAddressBuffer CapLoopBodies : register(t2); // leader별 uint2, UINT_MAX=미해결, UINT_MAX-1=drop
 RWByteAddressBuffer TriangleBodies : register(u0);
-RWByteAddressBuffer Counters : register(u1); // tris, cap, body0, body1, invalid, idMismatch, reassigned, dropped, capFallback, capInvalid
+RWByteAddressBuffer Counters : register(u1); // 기존 10개 진단 뒤 body별 표면 수, cap 수
 
 // 출력 삼각형의 세 출처를 검사하고 반공간별 아일랜드 몸체를 기록한다.
 [numthreads(64, 1, 1)]
@@ -34,8 +34,15 @@ void main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex)
             capBody = DefaultBody;
             Counters.InterlockedAdd(32, 1);
         }
-        if (!same)
+
+        // drop 전용 값과 유효 몸체를 구별하고 범위 밖 cap은 압축 실패로 전달한다.
+        if (capBody < BodyCount)
         {
+            Counters.InterlockedAdd((10 + BodyCount + capBody) * 4, 1);
+        }
+        else if (capBody != 0xfffffffe)
+        {
+            capBody = 0xffffffff;
             Counters.InterlockedAdd(36, 1);
         }
         TriangleBodies.Store(outputTriangle * 4, capBody);
@@ -59,10 +66,11 @@ void main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex)
     TriangleBodies.Store(outputTriangle * 4, body);
 
     // invalid는 숨기거나 대체하지 않고 남기며 유효한 표면만 몸체·재배치 수에 포함한다.
-    if (body == 0xffffffff)
+    if (body >= BodyCount)
         Counters.InterlockedAdd(16, 1);
     else
     {
+        Counters.InterlockedAdd((10 + body) * 4, 1);
         if (body < 2) Counters.InterlockedAdd(8 + body * 4, 1);
         if (body != DefaultBody) Counters.InterlockedAdd(24, 1);
     }

@@ -202,12 +202,12 @@ namespace Viewer
     private:
         // 출력 반공간의 provenance로 몸체를 판정하고 작은 진단 카운터만 읽는다.
         void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
-            const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side);
+            const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount);
         ByteAddressBuffer m_IslandTable, m_CapLoopTable;
         uint32_t m_DroppedCaps[2] = {};
         ByteAddressBuffer m_TriangleBodies[2]; // MI-3b 입력: side별 globalVertex / 3 인덱스, section 사이 빈 capacity 제외
         // 양쪽 실제 출력을 압축하고 완료된 몸체별 메타데이터만 보관한다.
-        void CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2]);
+        void CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2], uint32_t bodyCount);
         struct BodyCompactJob;
         std::shared_ptr<BodyCompactJob> m_BodyJob;
         std::vector<std::shared_ptr<BodyCompactJob>> m_RetiredBodyJobs;
@@ -223,7 +223,7 @@ namespace Viewer
         bool DiscardStaleCutResult(Scene& scene);
         std::shared_ptr<CutResultEntry> m_ReadyCut;
         uint32_t m_ReadyCaps = 0, m_ReadyUncapped = 0;
-        ComponentId m_PreparedIds[2]{}; // body 순서이며 fallback에서만 side로 매핑한다.
+        std::vector<ComponentId> m_PreparedIds; // body 순서이며 fallback에서만 side로 매핑한다.
         // 동기 skin VB 생성과 선택적 t_cut CPU 진단을 마친 뒤 조각에 입력을 보관한다.
         void BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
             SkeletalPatchBuffers& patch, uint32_t body);

@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(미커밋, base `86522153`, 2026-11-16): n=1 동등·형제 n=2 Frozen 팔레트·LCA 검증. 다음은 MI-4d.
+상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(`caa6f681`); MI-4d 진행 중(MI-4d1 미커밋, base `caa6f681`, 2026-11-16): 요청 몸체 수 기반 압축·카운터·준비 ID 배열. 실제 다중 loop 귀속·n=2 절단 진단은 MI-4d2.
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -88,8 +88,10 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-3f | 완료(미커밋, base `63c2292b`): leader별 side 몸체/drop 표를 GPU 분류·압축에 연결 | 위팔 cap 54개 제거·팔 cap 28개 유지, body0/1=491/167; publish/after60 PNG 확인; SP7e2 case2/3=0mm(case1 기존 N/A), PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 PASS |
 | MI-4a | 완료(`7728485a`): `SelectCrossingJoints` 무한 평면 교차 최상위 P 집합, 유효 조상 계산 공유; 런타임 미연결 | 형제 P={1,2}, 조상+자손 P={2}, 부호 반전 Bside={0,0}→{1,1}, 비영향/비팔레트 건너뜀 0→3; CPU 83 checks·Lattice·D/R 빌드·Release 회귀 6실행 PASS |
 | MI-4b | 완료(`86522153`): `BuildJointUnionMasks`·추출 P 집합 입력, `PatchExtractCS::Selected` 재사용 | CesiumMan 형제 허벅지 P={13,17}: 단독364/352, 합집합526, 중복 P도526; GPU==CPU·중복0, CPU·D/R·3데모·Release 회귀 PASS |
-| MI-4c | 완료(미커밋, base `86522153`): `BuildCutBodyGroups`·몸체별 snapshot/attachment 배열 | n=1 기존 Frozen 규칙·세 데모 동등; 형제 n=2 그룹·Frozen 팔레트·LCA 및 CPU/D/R/회귀 PASS |
-| MI-4d | 압축·게시 준비물 n+1 배열화(break 미연결) | 같은 side B1/B2 cap 분리, 빈 몸체 로그 |
+| MI-4c | 완료(`caa6f681`): `BuildCutBodyGroups`·몸체별 snapshot/attachment 배열 | n=1 기존 Frozen 규칙·세 데모 동등; 형제 n=2 그룹·Frozen 팔레트·LCA 및 CPU/D/R/회귀 PASS |
+| MI-4d | 진행 중: MI-4d1 완료(미커밋, base `caa6f681`), MI-4d2 대기 | 전체 완료 조건은 같은 side B1/B2 cap 분리, 빈 몸체 로그; 실제 다중 loop 귀속은 아직 미완료 |
+| MI-4d1 | 요청 그룹 수 기반 body×section 압축·몸체별 분류 카운터·준비 ID 배열 | 빈 마지막 몸체 보존·로그, 합성 세 몸체/빈 네 번째 몸체 GPU 압축 검증 |
+| MI-4d2 | P_i 교차점 snapshot·아일랜드 재라벨·loop leader→side별 몸체·몸체별 skin 준비 | P13/P17 실제 합집합 절단·분류·압축 진단, B1/B2 cap 분리·빈 몸체 로그; break·mask·n+1 게시 미연결 |
 | MI-4e | `ApplyConstraintBreak` 검증/commit 분리 | 단일 break 회귀·거절 무변경 |
 | MI-4f | `SkeletalPhysicsSystem` batch 사전 검증·세대 계약 | 두 번째 실패 시 첫 constraint도 보존(CPU 검사) |
 | MI-4g | `QueueBreak` batch·결과 수집 | pause·Stale·AlreadyBroken·Reset 전체 무변경 |
@@ -115,7 +117,20 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 
 ## 시험 결과
 
-MI-4c(미커밋, base `86522153`, 2026-11-16):
+MI-4d1(미커밋, base `caa6f681`, 2026-11-16):
+- MI-4d를 두 부분으로 분할했다. 기존 `DiagnoseIslands`·`RelabelCapLoops`는 단일 P/교차점/ChildSide를 사용한다. P_i별 snapshot, 실제 loop 대응·충돌 처리, n=2 cutter 진단까지 함께 바꾸면 약 300줄을 크게 넘으므로 이번은 압축 입력의 요청 몸체 수 계약만 구현한다.
+- `ClassifyCutBodies`·`PatchBodyClassifyCS`는 요청 BodyCount를 받아 기존 10개 진단 뒤 몸체별 표면/cap 카운터를 둔다. leader×side 표 형식은 이미 임의 몸체 ID를 담을 수 있어 유지하며 실제 다중 loop 표 생성은 MI-4d2다.
+- `CompactCutBodies`는 표면 라벨의 최댓값으로 몸체 수를 추정하지 않는다. 요청 그룹 수를 사용해 마지막 빈 몸체도 body×section bin과 `PatchBodyResult`의 빈 Sections/0 Triangles로 보존한다. 범위 밖 라벨은 거절하고 `PollBodyCompaction`은 빈 몸체를 bounds 없이 명시적으로 로그한다.
+- `m_PreparedIds`는 벡터로 바꾸되 `FinishCutResult`의 실제 준비/게시 경로는 기존 두 몸체만 허용한다. `BuildPieceSkin`의 임의 body 인덱스 입력은 유지한다. 다중 몸체별 staging 생성·skin 준비는 MI-4d2, 실제 break·mask·n+1 게시는 MI-4e~4h다.
+- 보수적 선택: 기본 요청 P 하나·n=1 loop/아일랜드 규칙·두-side 폴백을 유지한다. `CheckBodyCompaction`은 union 옵션에서도 실행하며 합성 body0/1/2=2/3/1, 같은 side body1 표면/body2 cap, 빈 body3 및 기존 drop/바이트·삼각형 overflow/정점·depth·출처·IB 보존을 검사한다. 합성 압축은 실제 loop↔P_i 대응 검증이 아니다.
+
+
+- 검증: SkeletalPatchTests Debug·/O2 각각118 checks, LatticeTopologyTests PASS. 지정 외부 출력 props로 최종 Debug/Release 빌드 exit0(32.63/38.30초), 오류0·기존 경고 각9. 외부 출력은 `%TEMP%/MI3e2-fix-build/`; 기존 pwsh 미설치 후처리 메시지는 남아 있다.
+- 새 Release의 지정 세 데모는 491/167, 1475/869, 161/170·fallback0·exit0(8.70/8.60/8.68초). union 진단9.66초·exit0, 기존 P13/P17 추출526/중복0·Frozen 팔레트 PASS; 새 합성 압축 body0/1/2=2/3/1·빈 body3=0 PASS. 실제 P13/P17 합집합 절단·분류·압축과 실제 cap loop별 B_i 검증은 MI-4d2에 남긴다.
+- 지정 bash Release 회귀·기존 BASH_ENV 래퍼: 6실행 exit0(전체53.49초), SP6 누적766 PASS/0 FAIL, Static/AR/Rig/BC PASS. SP7e2 case2/3 publish/after60=0mm, case1 기존 N/A. PS2/PS3/PS4 최대 오차=0.000234/0.000189/0mm, 각7/6/12건 모두 PASS.
+- MX450/32.0.15.9186(레지스트리 재확인), 네 데모·회귀 D3D12 ERROR/CORRUPTION 각각0, 기존 DXGI #80 유지. 초기 Release 링크는 실행 파일 잠금으로 실패했으며 해당 검증 종료 후 다시 빌드하고 전체 검증을 재실행한 최종 로그만 근거로 사용한다.
+- ModelViewer.cpp SHA256 전후 동일(1C29C322F6CBCBF8181114194BF750B1F8AA0B9030AFC2703EA766D13C855509). Geometry 변경·커밋·stash/reset·브랜치 변경 없음. 근거: `%TEMP%/MI4d-cpu.log`, `MI4d-{Debug,Release}-build.log`, `MI4d-build-summary.log`, `MI4d-{UpperArm,Thigh,DefaultArm,Union}-{patch,debug,run}.log`, `MI4d-Release-regress{,-debug}.log`, `MI4d-report.md`.
+MI-4c(완료 `caa6f681`, 2026-11-16):
 - `BuildCutBodyGroups`는 원본 계층의 노드→그룹(0=A, i=B_i), A의 모든 P_i 부모 LCA·B_i의 P_i 부착, 팔레트 순서를 보존한 Frozen=(group!=body)를 만든다. 중복·중첩 P, 잘못된 계층·팔레트는 거절한다. 공통 조상이 없는 forest의 A 부착은 UINT32_MAX이며 이번 런타임 단일 P는 기존 부모 유효성 검사를 유지한다.
 - `Request`의 attachment·skin snapshot·팔레트 오차·piece ID를 벡터로 바꾸고 별도 snapshot count를 제거했다. 몸체별 반공간 배열이 기존 `m_PositiveA`를 대체한다. `DiagnoseIslands`도 공통 그룹 분류기를 쓴다. 기본 런타임은 기존 선택 P 하나만 전달하며 D5는 기존 단일 전체 추종 snapshot이다. 압축·준비 ID 및 두-side 게시 자원과 단일 break는 MI-4d 이후 범위로 유지한다.
 - CPU `SkeletalPatchTests` Debug·/O2 각각118 checks PASS(2.17/5.27초), `LatticeTopologyTests` PASS(1.46초). 형제 그룹·팔레트 중복/순서·n=1 기존 자손 규칙·부모가 다른 LCA·오류 거절을 검사한다.
