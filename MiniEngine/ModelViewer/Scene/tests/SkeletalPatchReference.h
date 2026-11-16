@@ -129,12 +129,13 @@ namespace Viewer::PatchReference
         return selected;
     }
 
-    // 선택 본에 양수 weight가 있고 제거되지 않은 삼각형을 원본 순서로 추출한다.
-    inline std::vector<Triangle> ExtractPatchReference(const Input& input, uint32_t node)
+    // 선택 본 또는 팔레트 합집합에 양수 weight가 있는 미제거 삼각형을 원본 순서로 추출한다.
+    inline std::vector<Triangle> ExtractPatchReference(const Input& input, uint32_t node,
+        const std::vector<std::vector<uint32_t>>& masks = {})
     {
         // section/draw/triangle 순서와 원본 꼭짓점 번호를 함께 보존한다.
         std::vector<Triangle> result;
-        if (node == InvalidNode) return result;
+        if (node == InvalidNode && masks.empty()) return result;
         uint32_t global = 0;
         for (uint32_t s = 0; s < input.Sections.size(); ++s)
             for (uint32_t d = 0; d < input.Sections[s].Draws.size(); ++d)
@@ -147,7 +148,10 @@ namespace Viewer::PatchReference
                     for (uint32_t index : indices)
                         for (uint32_t slot = 0; slot < 4; ++slot)
                             if (section.Vertices.at(index).Weights[slot] > 0
-                                && input.JointNodes.at(section.StartJoint + section.Vertices.at(index).Palette[slot]) == node)
+                                && section.Vertices.at(index).Palette[slot] < section.JointCount
+                                && (masks.empty()
+                                    ? input.JointNodes.at(section.StartJoint + section.Vertices.at(index).Palette[slot]) == node
+                                    : masks.at(s).at(section.Vertices.at(index).Palette[slot]) != 0))
                                 include = true;
                     if (include) result.push_back({ s, d, t, indices });
                 }

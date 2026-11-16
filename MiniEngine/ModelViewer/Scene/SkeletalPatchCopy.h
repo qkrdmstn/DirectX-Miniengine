@@ -56,11 +56,12 @@ namespace Viewer
     public:
         // 제출 자원이 GPU에서 해제될 때까지 수명을 보장한다.
         ~SkeletalPatchJob();
-        // component-local 평면과 section별 팔레트로 GPU 선택·추출을 제출한다.
+        // component-local 평면과 section 마스크 또는 P 집합의 자손 팔레트 합집합으로 추출한다.
         bool Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
             const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
             uint32_t node = UINT32_MAX, bool diagnostic = false, bool influence = false,
-            const std::vector<NodeId>& parents = {}, uint32_t child = UINT32_MAX);
+            const std::vector<NodeId>& parents = {}, uint32_t child = UINT32_MAX,
+            const std::vector<uint32_t>& unionRoots = {});
         // 확대된 실제 복사본 평면으로 제출 포즈의 부호를 예측하고 진단 표만 보관한다.
         void DiagnoseIslands(SkeletalPatchBuffers& patch, const MeshCutting::CutPlaneData& plane,
             float offset, bool positiveA, const std::string& modelName);
@@ -85,6 +86,7 @@ namespace Viewer
         StructuredBuffer m_EmptyState;
         ByteAddressBuffer m_Adjacent;
         std::vector<uint32_t> m_State;
+        std::vector<std::vector<uint32_t>> m_SelectionMasks;
         Math::Matrix4 m_SourceWorld;
         StructuredBuffer m_Descriptors, m_Masks;
         ByteAddressBuffer m_Scan, m_Votes, m_Selected;

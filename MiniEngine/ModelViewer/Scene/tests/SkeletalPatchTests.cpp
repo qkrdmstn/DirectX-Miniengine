@@ -20,7 +20,7 @@ static void Check(bool condition, const char* message)
         throw std::runtime_error(message);
 }
 
-// 무한 평면 교차의 최상위 P 집합과 자식 방향 반공간을 합성 계층으로 검증한다.
+// 무한 평면 교차 집합과 자손이 있는 단일 루트의 기존 선택 마스크 동등성을 검증한다.
 static void CheckCrossingJoints()
 {
     // 형제 P 둘의 교점은 유한 사각형 밖에 있어도 모두 선택한다.
@@ -39,6 +39,51 @@ static void CheckCrossingJoints()
     std::printf("MI4a siblings P={%u,%u} child={%u,%u} Bside={%u,%u}\n",
         siblings[0].NodeId, siblings[1].NodeId, siblings[0].ChildNodeId,
         siblings[1].ChildNodeId, siblings[0].ChildSide, siblings[1].ChildSide);
+
+    // 형제 본 자체와 중복 팔레트를 합치며 자손은 명시적으로 선택할 때만 포함한다.
+    const auto unionMask = Viewer::BuildJointUnionMasks(parents, palettes, {1, 2});
+    Check(unionMask == std::vector<std::vector<uint32_t>>{{0, 1, 1, 0, 0, 1}, {1, 0}},
+        "sibling union excludes descendants and preserves duplicate palettes");
+    Check(Viewer::BuildJointUnionMasks(parents, palettes, {1, 2, 1}) == unionMask,
+        "duplicate roots are idempotent");
+    Check(Viewer::BuildJointUnionMasks(parents, palettes, {1})
+        == std::vector<std::vector<uint32_t>>{{0, 1, 0, 0, 0, 1}, {0, 0}}, "single P node mask");
+    Check(Viewer::BuildJointUnionMasks(parents, palettes, {})
+        == std::vector<std::vector<uint32_t>>{{0, 0, 0, 0, 0, 0}, {0, 0}}, "empty root set");
+    Check(Viewer::BuildJointUnionMasks(parents, palettes, {5}).empty(), "invalid root rejected");
+    Check(Viewer::BuildJointUnionMasks({1, 0}, {{0}}, {0}).empty(), "cyclic hierarchy rejected");
+
+    // 자손이 있는 본을 기존 선택기로 고르고 단일 루트 합집합 마스크와 직접 대조한다.
+    MeshCutting::CutPlaneData legacyPlane;
+    Check(MeshCutting::TryBuildCutPlaneData({100, 100}, AffineTransform(kIdentity), legacyPlane), "legacy plane");
+    const auto legacySelection = Viewer::SelectSegmentJoint(parents, positions, palettes, legacyPlane, influencing);
+    Check(legacySelection.NodeId == 1 && parents[3] == legacySelection.NodeId,
+        "legacy single selection has descendants");
+    const bool equivalent = Viewer::BuildJointUnionMasks(parents, palettes, {legacySelection.NodeId})
+        == legacySelection.PaletteMasks;
+    std::printf("MI4b n=1 legacy mask with descendants equivalent=%s\n", equivalent ? "PASS" : "FAIL");
+    std::fflush(stdout);
+    Check(equivalent, "n=1 union mask equals legacy single-selection mask with descendants");
+
+    // 두 P가 같은 삼각형에 영향을 주어도 한 번만 추출하고 제거 상태를 적용한다.
+    Input unionInput;
+    unionInput.JointNodes = {1, 2, 0};
+    Section section;
+    section.JointCount = 3;
+    section.Vertices = {{Vector3(kZero), {0, 1, 2, 0}, {1, 65534, 0, 0}},
+        {Vector3(kZero), {2, 0, 0, 0}, {65535, 0, 0, 0}},
+        {Vector3(kZero), {1, 0, 0, 0}, {65535, 0, 0, 0}}};
+    section.Indices16 = {0, 1, 2, 1, 1, 1};
+    section.Draws = {{0, 6, 0}};
+    unionInput.Sections.push_back(section);
+    const auto combined = ExtractPatchReference(unionInput, InvalidNode, {{1, 1, 0}});
+    Check(combined.size() == 1 && combined[0].TriangleId == 0, "overlapping triangle emitted once");
+    const auto single = ExtractPatchReference(unionInput, 1);
+    const auto singleMask = ExtractPatchReference(unionInput, InvalidNode, {{1, 0, 0}});
+    Check(single.size() == singleMask.size() && single[0].TriangleId == singleMask[0].TriangleId,
+        "n=1 mask equals existing positive weight selection");
+    unionInput.State = {0x80000000u, 0};
+    Check(ExtractPatchReference(unionInput, InvalidNode, {{1, 1, 0}}).empty(), "union excludes removed triangle");
 
     // 부호 반전은 P와 교점을 보존하고 B 반공간만 뒤집는다.
     plane.WorldPlane *= -1.0f;

@@ -64,6 +64,41 @@ namespace Viewer
         return true;
     }
 
+    // P 집합의 각 본 자체만 section별 팔레트 선택 마스크로 합친다.
+    inline std::vector<std::vector<uint32_t>> BuildJointUnionMasks(const std::vector<uint32_t>& parents,
+        const std::vector<std::vector<uint32_t>>& palettes, const std::vector<uint32_t>& roots)
+    {
+        // 중복 P와 팔레트 항목은 같은 비트로 모으고 잘못된 P는 거절한다.
+        std::vector<bool> selected(parents.size(), false);
+        for (uint32_t root : roots)
+        {
+            if (root >= parents.size())
+                return {};
+            selected[root] = true;
+        }
+
+        // 팔레트 본 자체의 선택 비트를 기록하고 계층 유효성과 순환을 검사한다.
+        std::vector<std::vector<uint32_t>> masks;
+        for (const auto& palette : palettes)
+        {
+            std::vector<uint32_t> mask;
+            for (uint32_t node : palette)
+            {
+                const bool included = node < selected.size() && selected[node];
+                size_t depth = 0;
+                while (node != UINT32_MAX)
+                {
+                    if (node >= parents.size() || depth++ >= parents.size())
+                        return {};
+                    node = parents[node];
+                }
+                mask.push_back(included ? 1u : 0u);
+            }
+            masks.push_back(std::move(mask));
+        }
+        return masks;
+    }
+
     struct CrossingJoint
     {
         uint32_t NodeId = UINT32_MAX; // 끊는 P_i이며 B_i의 루트다.

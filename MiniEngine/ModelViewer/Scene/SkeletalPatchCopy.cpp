@@ -932,7 +932,123 @@ namespace Viewer
         return true;
     }
 
-    // 유한 평면 사각형에 닿는 가장 가까운 skin 대상을 선택하고 추출한다.
+    // 형제 분기의 합집합과 자손이 있는 단일 본의 기존 마스크 경로를 GPU 출처 목록으로 대조한다.
+    static void CheckJointUnion(const MeshComponent& source, const Math::Matrix4& world,
+        const std::vector<NodeId>& parents, const std::string& modelName)
+    {
+        // 제출 pose의 component-local 본 위치와 section 팔레트를 모은다.
+        using namespace Math;
+        const auto& input = *source.GetGeometry();
+        const auto& model = *input.GetSource();
+        std::vector<Vector3> positions(parents.size(), Vector3(kZero));
+        uint32_t skinSection = 0;
+        while (skinSection < input.GetSections().size() && !input.GetMesh(skinSection).numJoints)
+            ++skinSection;
+        if (skinSection == input.GetSections().size())
+            throw std::runtime_error("MI4b no skin section");
+        const Matrix4 frame = Invert(Matrix4(source.GetDeformBinding().SourceFrame.ToAffine()))
+            * source.GetPreparedNodes()[input.GetMesh(skinSection).meshCBV];
+        for (uint32_t node = 0; node < parents.size(); ++node)
+            positions[node] = Vector3(frame * source.GetPreparedNodes()[node] * Vector4(0, 0, 0, 1));
+        std::vector<std::vector<uint32_t>> palettes;
+        for (uint32_t section = 0; section < input.GetSections().size(); ++section)
+        {
+            const auto& mesh = input.GetMesh(section);
+            palettes.emplace_back(model.m_JointIndices.get() + mesh.startJoint,
+                model.m_JointIndices.get() + mesh.startJoint + mesh.numJoints);
+        }
+
+        // 각 선분 중점 높이의 무한 평면에서 MI-4a가 고른 형제 P 둘을 찾는다.
+        for (uint32_t child = 0; child < parents.size(); ++child)
+        {
+            if (parents[child] == UINT32_MAX)
+                continue;
+            MeshCutting::CutPlaneData plane;
+            const Vector3 center = (positions[child] + positions[parents[child]]) * 0.5f;
+            if (!MeshCutting::TryBuildCutPlaneData({100, 100},
+                AffineTransform(Matrix3(kIdentity), center), plane))
+                continue;
+            const auto crossing = SelectCrossingJoints(parents, positions, palettes, plane, model.m_InfluencingJoints);
+            for (size_t a = 0; a < crossing.size(); ++a)
+                for (size_t b = a + 1; b < crossing.size(); ++b)
+                {
+                    const uint32_t first = crossing[a].NodeId, second = crossing[b].NodeId;
+                    if (parents[first] == UINT32_MAX || parents[first] != parents[second])
+                        continue;
+
+                    // 두 P_i 본의 마스크를 한 작업으로 합치고 단일 P_i 및 중복 P도 검사한다.
+                    PatchLog("MI4b siblings P=%u name=%s P=%u name=%s parent=%u planeY=%.6f\n",
+                        first, SafeDiagnosticNodeName(modelName, first).c_str(), second,
+                        SafeDiagnosticNodeName(modelName, second).c_str(), parents[first], float(center.GetY()));
+                    const std::vector<std::vector<uint32_t>> cases = {{first}, {second}, {first, second}, {first, second, first}};
+                    std::set<uint32_t> separate;
+                    for (const auto& roots : cases)
+                    {
+                        // 합집합 경로에 같은 평면과 본 집합을 GPU 작업으로 제출한다.
+                        SkeletalPatchJob job;
+                        if (!job.Submit(source, plane, {}, world, first, true, false, parents, UINT32_MAX, roots))
+                            throw std::runtime_error("MI4b union diagnostic submit failed");
+
+                        // GPU 완료를 기다리고 출처 목록을 포함한 결과를 가져온다.
+                        Graphics::g_CommandManager.IdleGPU();
+                        SkeletalPatchResult result;
+                        std::shared_ptr<SkeletalPatchBuffers> patch;
+                        if (!job.Poll(result, patch))
+                            throw std::runtime_error("MI4b union diagnostic poll failed");
+
+                        // 개별 분기의 집합과 합집합을 비교하고 GPU·CPU 대조 결과를 기록한다.
+                        const std::set<uint32_t> actual(patch->Triangles.begin(), patch->Triangles.end());
+                        if (roots.size() == 1)
+                            separate.insert(actual.begin(), actual.end());
+                        else if (actual != separate || actual.empty())
+                            throw std::runtime_error("MI4b union differs from separate P sets");
+                        PatchLog("MI4b union roots=%zu P=%u,%u parent=%u tris=%u GPU==CPU PASS duplicates=0\n",
+                            roots.size(), first, second, parents[first], result.PatchTriangles);
+                    }
+
+                    // 자손이 있는 본에서 기존 단일 선택과 같은 팔레트 마스크를 만든다.
+                    if (std::find(parents.begin(), parents.end(), first) == parents.end())
+                        throw std::runtime_error("MI4b n=1 diagnostic needs descendants");
+                    std::vector<std::vector<uint32_t>> legacyMasks;
+                    for (const auto& palette : palettes)
+                    {
+                        std::vector<uint32_t> mask;
+                        for (uint32_t node : palette)
+                            mask.push_back(node == first ? 1u : 0u);
+                        legacyMasks.push_back(std::move(mask));
+                    }
+
+                    // 같은 입력을 기존 마스크 경로와 단일 루트 합집합 경로로 각각 GPU에 제출한다.
+                    SkeletalPatchJob legacyJob, unionJob;
+                    if (!legacyJob.Submit(source, plane, legacyMasks, world, first, true, false, parents)
+                        || !unionJob.Submit(source, plane, {}, world, first, true, false, parents, UINT32_MAX, {first}))
+                        throw std::runtime_error("MI4b n=1 diagnostic submit failed");
+
+                    // 두 GPU 작업이 완료되면 각각의 출처 목록을 가져온다.
+                    Graphics::g_CommandManager.IdleGPU();
+                    SkeletalPatchResult legacyResult, unionResult;
+                    std::shared_ptr<SkeletalPatchBuffers> legacyPatch, unionPatch;
+                    if (!legacyJob.Poll(legacyResult, legacyPatch) || !unionJob.Poll(unionResult, unionPatch))
+                        throw std::runtime_error("MI4b n=1 diagnostic poll failed");
+
+                    // 출처 집합과 순서를 함께 비교하고 단일 본의 동등성 결과를 기록한다.
+                    const std::set<uint32_t> legacySources(legacyPatch->Triangles.begin(), legacyPatch->Triangles.end());
+                    const std::set<uint32_t> unionSources(unionPatch->Triangles.begin(), unionPatch->Triangles.end());
+                    const bool equivalent = legacySources == unionSources && legacyPatch->Triangles == unionPatch->Triangles;
+                    PatchLog("MI4b n=1 P=%u descendants=1 legacy=%u union=%u sourcesEquivalent=%s\n",
+                        first, legacyResult.PatchTriangles, unionResult.PatchTriangles, equivalent ? "PASS" : "FAIL");
+                    if (!equivalent)
+                        throw std::runtime_error("MI4b n=1 legacy and union sources differ");
+                    return;
+                }
+        }
+
+        // 교차하는 형제 쌍을 찾지 못하면 진단 실패를 기록하고 보고한다.
+        PatchLog("MI4b FAIL no crossing sibling pair\n");
+        throw std::runtime_error("MI4b no crossing sibling pair");
+    }
+
+    // 평면과 선택 본을 고정하고 비동기 패치 추출을 요청한다.
     void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
         SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics)
     {
@@ -1356,6 +1472,10 @@ namespace Viewer
         m_Name = m_ModelName + "_SkeletalPatch";
         m_Diagnostic = diagnostic;
         m_Plane = plane;
+        // 명시한 옵션에서만 별도 합집합 추출을 검증하고 정상 단일 본 제출을 계속한다.
+        uint32_t unionChecks = 0;
+        if (CommandLineArgs::GetInteger(L"skeletal-union-checks", unionChecks) && unionChecks)
+            CheckJointUnion(*mesh, world, target->GetModelInstance()->GetPoseParents(), m_ModelName);
         const bool submitted = m_Job.Submit(*mesh, local, selected.PaletteMasks, world,
             selected.NodeId, diagnostic, influence, target->GetModelInstance()->GetPoseParents(), selected.ChildNodeId);
         m_BonePending = boneCut && submitted;
@@ -3019,14 +3139,31 @@ namespace Viewer
     // 컴포넌트 제거 상태를 반영해 GPU 선택·추출과 기존 패치 인접 집계를 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
-        uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child)
+        uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child,
+        const std::vector<uint32_t>& unionRoots)
     {
         // 준비되지 않았거나 생성된 입력은 이 단계의 skeletal 추출 대상이 아니다.
         Cancel();
         const auto& input = *source.GetGeometry();
         const auto& posed = source.GetPosedGeometry();
         if (!Renderer::UseComputePose || !posed.IsReady() || input.IsGenerated()
-            || (!influence && mask.size() != input.GetSections().size())) return false;
+            || (!influence && unionRoots.empty() && mask.size() != input.GetSections().size())) return false;
+
+        // 명시한 P 집합은 B_i 하위 팔레트 합집합으로 바꾸고 기존 Selected 판정을 재사용한다.
+        std::vector<std::vector<uint32_t>> palettes;
+        for (uint32_t section = 0; section < input.GetSections().size(); ++section)
+        {
+            const auto& part = input.GetMesh(section);
+            palettes.emplace_back(input.GetSource()->m_JointIndices.get() + part.startJoint,
+                input.GetSource()->m_JointIndices.get() + part.startJoint + part.numJoints);
+        }
+        if (!unionRoots.empty() && influence)
+            return false;
+        m_SelectionMasks = unionRoots.empty() ? mask : BuildJointUnionMasks(parents, palettes, unionRoots);
+        if (!influence && m_SelectionMasks.size() != palettes.size())
+            return false;
+
+        // 각 원본 draw를 한 번만 등록해 겹치는 B_i도 같은 prefix 슬롯을 사용한다.
         InitializePatch();
         std::vector<DrawInput> draws;
         std::vector<uint32_t> masks;
@@ -3034,12 +3171,12 @@ namespace Viewer
         for (uint32_t s = 0; s < input.GetSections().size(); ++s)
         {
             const auto& mesh = input.GetMesh(s);
-            if (!influence && mask[s].size() != mesh.numJoints) return false;
+            if (!influence && m_SelectionMasks[s].size() != mesh.numJoints) return false;
             const uint32_t maskOffset = uint32_t(masks.size());
             if (influence)
                 masks.insert(masks.end(), input.GetSource()->m_JointIndices.get() + mesh.startJoint,
                     input.GetSource()->m_JointIndices.get() + mesh.startJoint + mesh.numJoints);
-            else masks.insert(masks.end(), mask[s].begin(), mask[s].end());
+            else masks.insert(masks.end(), m_SelectionMasks[s].begin(), m_SelectionMasks[s].end());
             m_PoseOffsets.push_back(posed.GetOffset(input.GetSections()[s].SourceMesh));
             for (uint32_t d = 0; d < mesh.numDraws; ++d)
             {
@@ -3478,7 +3615,8 @@ namespace Viewer
                 m_Node == reference ? "PASS" : "FAIL");
             if (m_Node != reference) throw std::runtime_error("Influence selected NodeId mismatch");
         }
-        const auto expected = ExtractPatchReference(input, m_Node);
+        const auto expected = ExtractPatchReference(input, m_Node, m_Influence
+            ? std::vector<std::vector<uint32_t>>{} : m_SelectionMasks);
 
         // 추출·유지 삼각형이 공유하는 원본 정점만 외곽 경계로 기록한다.
         // 재질·UV 이음매의 중복 인덱스도 같은 위치의 원본 경계로 묶는다.
@@ -3494,6 +3632,9 @@ namespace Viewer
             for (uint32_t index : triangle.Vertices) selectedVertices.insert(key(input.Sections[triangle.SectionId].Vertices[index].Position));
         }
         const std::set<uint32_t> extracted(m_Output->Triangles.begin(), m_Output->Triangles.end());
+        const size_t duplicates = m_Output->Triangles.size() - extracted.size();
+        if (duplicates != 0)
+            throw std::runtime_error("Duplicate patch triangle");
         uint32_t globalBoundary = 0;
         std::set<std::pair<uint32_t, uint32_t>> recorded;
         for (uint32_t section = 0; section < input.Sections.size(); ++section)
@@ -3706,5 +3847,6 @@ namespace Viewer
         PatchLog("Skeletal patch CPU patch=%zu crossing=%u uncovered=%u sources=%s %s\n", expected.size(),
             crossing, uncovered, pass ? "match" : "mismatch", pass ? "PASS" : "FAIL");
         if (!pass) throw std::runtime_error("Skeletal patch GPU/CPU diagnostic FAIL");
+        PatchLog("MI4b GPU==CPU PASS triangles=%zu duplicates=%zu\n", expected.size(), duplicates);
     }
 }
