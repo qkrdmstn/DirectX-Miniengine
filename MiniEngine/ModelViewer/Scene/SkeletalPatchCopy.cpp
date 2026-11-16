@@ -12,6 +12,7 @@
 #include "PipelineState.h"
 #include "CompiledShaders/PatchExtractCS.h"
 #include "CompiledShaders/PatchBodyClassifyCS.h"
+#include "CompiledShaders/PatchBodyCompactCS.h"
 #include "tests/SkeletalPatchReference.h"
 #include <cstdio>
 #include <cstdarg>
@@ -102,6 +103,166 @@ namespace Viewer
                     fclose(file);
                 }
             }
+        }
+
+        // capacity 틈과 cap이 있는 두 side를 합성하여 몸체별 압축 계약을 검사한다.
+        void CheckBodyCompaction()
+        {
+            // 기존 검사 옵션에서 한 번만 실행하며 게시 경로에는 연결하지 않는다.
+            static bool checked = false;
+            uint32_t checks = 0;
+            CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
+            if (!checks || checked) return;
+            checked = true;
+            struct Constants
+            {
+                uint32_t Mode, BodyCount, Sections, Section;
+                uint32_t FirstTriangle, Triangles, VbOffset, DepthOffset;
+                uint32_t IbOffset, Stride, DepthStride, CapacityBytes;
+                uint32_t CapacityTriangles, Padding[3];
+            };
+            const uint32_t layouts[] = { 28, 16, 28, 0, 28, 12 }; // section 2와 body 2는 빈 구간
+            uint32_t input[2][500]{}, provenance[2][192]{}, bodies[2][8]{};
+            for (uint32_t side = 0; side < 2; ++side)
+                for (uint32_t t : { 0u, 1u, 4u })
+                {
+                    bodies[side][t] = (side + t) % 2;
+                    for (uint32_t c = 0; c < 3; ++c)
+                    {
+                        const uint32_t token = side * 1000 + t * 10 + c + 1;
+                        for (uint32_t w = 0; w < 7; ++w) input[side][t * 21 + c * 7 + w] = token * 100 + w;
+                        for (uint32_t w = 0; w < 4; ++w) input[side][250 + t * 12 + c * 4 + w] = token * 100 + 20 + w;
+                        for (uint32_t w = 0; w < 8; ++w) provenance[side][t * 24 + c * 8 + w] = token * 100 + 40 + w;
+                        if (t == 4) provenance[side][t * 24 + c * 8] = UINT32_MAX;
+                        input[side][350 + t * 3 + c] = (t == 4 ? 0 : t * 3) + (c + 2) % 3;
+                    }
+                }
+
+            // 실제 셰이더에 RAW 버퍼를 바인딩하고 출력 전체를 진단용으로만 읽는다.
+            ByteAddressBuffer data[2], prov[2], labels[2], sections, output, outProv, bins, status;
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                data[side].Create(L"Compact synthetic data", 500, 4, input[side]);
+                prov[side].Create(L"Compact synthetic provenance", 192, 4, provenance[side]);
+                labels[side].Create(L"Compact synthetic bodies", 8, 4, bodies[side]);
+            }
+            sections.Create(L"Compact layouts", 6, 4, layouts);
+            output.Create(L"Compact output", 512, 4);
+            outProv.Create(L"Compact provenance", 144, 4);
+            bins.Create(L"Compact bins", 54, 4);
+            status.Create(L"Compact status", 1, 4);
+            ReadbackBuffer readData, readProv, readBins, readStatus;
+            readData.Create(L"Compact data readback", 512, 4);
+            readProv.Create(L"Compact provenance readback", 144, 4);
+            readBins.Create(L"Compact bins readback", 54, 4);
+            readStatus.Create(L"Compact status readback", 1, 4);
+            RootSignature root;
+            root.Reset(9);
+            root[0].InitAsConstantBuffer(0);
+            for (uint32_t i = 0; i < 4; ++i) root[i + 1].InitAsBufferSRV(i);
+            for (uint32_t i = 0; i < 4; ++i) root[i + 5].InitAsBufferUAV(i);
+            root.Finalize(L"Body compact checks");
+            ComputePSO pso(L"Body compact checks");
+            pso.SetRootSignature(root);
+            pso.SetComputeShader(g_pPatchBodyCompactCS, sizeof(g_pPatchBodyCompactCS));
+            pso.Finalize();
+            bool pass = true;
+
+            // 정상 실행과 삼각형·바이트 용량 부족을 각각 검사한다.
+            for (uint32_t trial = 0; trial < 3; ++trial)
+            {
+                auto& graphics = GraphicsContext::Begin(L"Body compact checks");
+                auto& compute = graphics.GetComputeContext();
+                for (auto* buffer : { &output, &outProv, &bins, &status })
+                {
+                    compute.TransitionResource(*buffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                    compute.ClearUAV(*buffer);
+                    compute.InsertUAVBarrier(*buffer);
+                }
+                compute.TransitionResource(sections, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                compute.SetRootSignature(root);
+                compute.SetPipelineState(pso);
+                compute.SetBufferSRV(4, sections);
+                compute.SetBufferUAV(5, output);
+                compute.SetBufferUAV(6, outProv);
+                compute.SetBufferUAV(7, bins);
+                compute.SetBufferUAV(8, status);
+                Constants constants{ 0, 3, 3, 0, 0, 0, 0, 1000, 0, 28, 0, trial == 2 ? 1u : 2048u,
+                    trial == 1 ? 5u : 6u, {} };
+                for (uint32_t mode = 0; mode < 3; ++mode)
+                {
+                    constants.Mode = mode;
+                    for (uint32_t side = 0; side < (mode == 1 ? 1u : 2u); ++side)
+                    {
+                        for (auto* buffer : { &data[side], &prov[side], &labels[side] })
+                            compute.TransitionResource(*buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                        compute.SetBufferSRV(1, data[side]);
+                        compute.SetBufferSRV(2, prov[side]);
+                        compute.SetBufferSRV(3, labels[side]);
+                        for (uint32_t section = 0; section < (mode == 1 ? 1u : 3u); ++section)
+                        {
+                            constants.Section = section;
+                            constants.FirstTriangle = section ? 4 : 0;
+                            constants.Triangles = section == 2 ? 0 : section ? 1 : 2;
+                            constants.VbOffset = constants.FirstTriangle * 84;
+                            constants.DepthStride = layouts[section * 2 + 1];
+                            constants.IbOffset = 1400 + constants.FirstTriangle * 12;
+                            compute.SetDynamicConstantBufferView(0, sizeof(constants), &constants);
+                            compute.Dispatch(1, 1, 1);
+                        }
+                    }
+                    compute.InsertUAVBarrier(bins);
+                    compute.InsertUAVBarrier(status);
+                }
+                graphics.CopyBuffer(readData, output);
+                graphics.CopyBuffer(readProv, outProv);
+                graphics.CopyBuffer(readBins, bins);
+                graphics.CopyBuffer(readStatus, status);
+                graphics.Finish(true);
+                const auto* result = static_cast<const uint32_t*>(readData.Map());
+                const auto* sources = static_cast<const uint32_t*>(readProv.Map());
+                const auto* meta = static_cast<const uint32_t*>(readBins.Map());
+                const uint32_t flags = *static_cast<const uint32_t*>(readStatus.Map());
+                pass &= flags == (trial ? 1u : 0u);
+
+                // 공통 정점 주소와 모든 코너·depth·출처·IB 및 몸체별 합계를 비교한다.
+                bool seen[2][8]{};
+                uint32_t total = 0;
+                for (uint32_t bin = 0; bin < 9 && !trial; ++bin)
+                {
+                    const uint32_t* m = meta + bin * 6;
+                    pass &= m[2] % 28 == 0 && m[2] / 28 == m[1] * 3;
+                    pass &= m[0] == (bin < 6 ? (bin % 3 == 0 ? 2u : bin % 3 == 1 ? 1u : 0u) : 0u);
+                    total += m[0];
+                    for (uint32_t t = 0; t < m[0]; ++t)
+                    {
+                        const uint32_t token = result[m[2] / 4 + t * 21] / 100;
+                        const uint32_t side = token / 1000, triangle = (token % 1000) / 10;
+                        if (side >= 2 || (triangle != 0 && triangle != 1 && triangle != 4))
+                        {
+                            pass = false;
+                            continue;
+                        }
+                        pass &= !seen[side][triangle] && bodies[side][triangle] == bin / 3 && (triangle == 4 ? 1u : 0u) == bin % 3;
+                        seen[side][triangle] = true;
+                        for (uint32_t c = 0; c < 3; ++c)
+                        {
+                            const uint32_t source = triangle * 3 + (c + 2) % 3, v = t * 3 + c;
+                            pass &= std::memcmp(result + m[2] / 4 + v * 7, input[side] + source * 7, 28) == 0;
+                            if (bin % 3 == 0) pass &= std::memcmp(result + m[3] / 4 + v * 4, input[side] + 250 + source * 4, 16) == 0;
+                            pass &= std::memcmp(sources + (m[1] * 3 + v) * 8, provenance[side] + source * 8, 32) == 0;
+                            pass &= result[m[4] / 4 + v] == v;
+                        }
+                    }
+                }
+                if (!trial) pass &= total == 6;
+                else for (uint32_t w = 0; w < 512; ++w) pass &= result[w] == 0;
+                readData.Unmap();
+                readProv.Unmap();
+                readBins.Unmap();
+                readStatus.Unmap();
+            }
+            PatchLog("MI3b synthetic two-side vertices/provenance/depth/IB skinAddress=matched totals=6 overflow=triangles+bytes %s\n", pass ? "PASS" : "FAIL");
         }
 
         // 패치 진단의 문자열 생성과 출력을 요청의 예외 경계에서 분리한다.
@@ -1984,6 +2145,9 @@ namespace Viewer
     // cutter 출력의 실제 section 범위만 판정하고 결과는 다음 압축 단계용으로 보관한다.
     void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands, uint32_t side)
     {
+        // 합성 압축 검사는 진단 옵션에서만 실행한다.
+        CheckBodyCompaction();
+
         // 표는 [패치 삼각형][반공간] 순서이며 물리 A/B 순서와 무관하다.
         if (islands.TriangleSideBody.empty()) return;
         if (side == 0)

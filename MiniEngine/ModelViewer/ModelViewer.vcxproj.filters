@@ -327,6 +327,7 @@
     <FxCompile Include="Scene\Shaders\TriangleMaskCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchBodyClassifyCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\PatchBodyCompactCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBakeCS.hlsl" />
   </ItemGroup>

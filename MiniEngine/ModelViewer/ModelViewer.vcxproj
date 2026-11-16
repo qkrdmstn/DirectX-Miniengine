@@ -125,6 +125,9 @@
     <FxCompile Include="Scene\Shaders\PatchBodyClassifyCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>
+    <FxCompile Include="Scene\Shaders\PatchBodyCompactCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>

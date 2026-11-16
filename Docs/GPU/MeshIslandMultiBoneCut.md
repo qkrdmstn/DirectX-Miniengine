@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1·MI-2 완료; MI-3a GPU 몸체 판정·카운터 완료(미커밋, base `b7413004`), Debug/Release 빌드·Release 회귀 PASS; MI-3b 이후 미구현 (2026-11-16).
+상태: 진행 중 — MI-1·MI-2·MI-3a 완료(`2a0ab7d2`); MI-3b 압축 셰이더·합성 GPU 검사 및 P2 스키닝 주소 계약 수정 완료(미커밋, base `2a0ab7d2`), D/R 빌드·Release 회귀 PASS; MI-3c 이후 미구현 (2026-11-16).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -80,7 +80,7 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-1 | 격자 토폴로지 맵: CPU 인덱스 보관, `BuildLatticeTopology`, 로드 시 생성, union-find | 단위 테스트(분리된 두 삼각형 띠=2 성분, 같은 위치 중복 정점=1 성분, 평면 절단 시 성분 증가) PASS; CesiumMan 로드 로그에 Dim·셀 수·전체 성분 수 |
 | MI-2 | 완료(base `432ff0c5`): Poll의 기존 TriangleSources readback 재사용, 제출 포즈 반공간 예측, `LabelPatchIslands`, 로그·표 보관만 | 리뷰 3건 수정 후 CPU 테스트·D/R 빌드·Release 회귀 PASS; 위팔 P7에서 아일랜드 3개, 허리 90 tris → A; GPU 출력 불변 |
 | MI-3a | 완료(미커밋, base `b7413004`): 라벨 GPU 업로드, 출력 삼각형 몸체 판정(provenance `TriangleId`→`TriangleSideBody`) | D/R 빌드·Release 회귀 PASS; 양쪽 invalid=0/idMismatch=0, side0 reassigned=104; 출력·게시 불변 |
-| MI-3b | body×section count/scatter 압축 셰이더 | 합성 두-side 입력에서 정점·provenance 보존, overflow 검사 |
+| MI-3b | 완료(미커밋, base `2a0ab7d2`): body×section count→offset→scatter 압축 셰이더·합성 GPU 검사, P2 surface 우선 배치 수정 | 두-side 정점/depth/provenance/IB 보존·스키닝 주소 일치·합계 6·삼각형/바이트 overflow PASS; D/R 빌드·Release 회귀 PASS |
 | MI-3c | 압축 C++ job·메모리·fence·메타데이터(게시 미연결) | body 합계=입력 합계, material/depth/IB/bounds 검증 |
 | MI-3d | 단일 관절 재배치 게시 연결(`OnCutResult`·`BuildPieceSkin(body)`), cap은 SideDefault | 위팔 허리 90 tris가 A에 남음, A/B 각 1회 게시, 캡처 |
 | MI-3e | `ClipTrianglesCS` segment 출처 → cap loop 몸체 보조 전달 | 다중 loop cap 귀속·충돌/fallback 진단 |
@@ -154,5 +154,27 @@ MI-2의 side0 허리 원본 90 tris(A) 라벨에 대응하는 절단 후 표면 
 지정 `regress.sh Release` 6개 실행 모두 종료 0(11/14/11/12/11/11초, 합계 70초), BC-12a/b·AR4·Rig PASS; SP6 누적 PASS 72행/FAIL 0.
 SP7e2 case=1 publish/after60은 기존 N/A(noCoincidentKeptBoundary), case=2/3 PASS.
 근거 로그: `%TEMP%/MI3a-{Debug,Release}-build.log`, `%TEMP%/MI3a-UpperArm-{patch,debug,exit}.log`, `%TEMP%/MI3a-Release-regress.log`.
+
+MI-3b(미커밋, base `2a0ab7d2`, 2026-11-16): `PatchBodyCompactCS::main`은 Mode 0=count, 1=단일 스레드 prefix(`BuildOffsets`), 2=scatter로 호출한다.
+몸체 수는 `BodyCount`이며 두 side의 대응 section을 같은 body×section bin에 누적한다. 표는 bin당 24B(count, provenance firstTriangle, surface/depth/IB byte offset, cursor)다.
+기존 cutter처럼 삼각형별 독립 정점을 복사하고 section 로컬 R32 IB를 쓴다. surface/depth stride는 DWORD 정렬이며 두 side의 대응 section 레이아웃이 같아야 한다.
+입력 `FirstTriangle`은 MI-3a의 capacity 틈을 포함한 globalVertex/3이고, IB는 section 로컬이다. 32B provenance는 비트 그대로 복사하며 cap도 MI-3a가 기록한 SideDefault 몸체를 사용한다.
+용량은 Data 바이트·provenance 삼각형 수를 각각 제한한다. Status bit0=overflow, bit1=invalid body이며 오류가 있으면 scatter를 막는다. 호출자는 패스 사이 UAV barrier와 입력/출력 자원 수명을 보장한다.
+`CheckBodyCompaction`은 `-skeletal-patch-break-checks 1`에서 한 번 실행된다. capacity 틈, 재정렬 IB, 양 side의 혼합 몸체, cap, depth 있음/없음, 빈 body/section을 합성한다.
+정점·depth·32B 출처·IB 보존, 몸체별 3+3=입력 6 tris, 삼각형/바이트 부족 각각 overflow 및 출력 억제 PASS. 실제 cutter 출력 압축 job·메타데이터 게시 연결은 MI-3c/3d에 남긴다.
+Debug/Release MSBuild 성공(종료 0); 최초 HLSL 예약어 변수명 오류는 수정 후 통과했다. 기존 C++ 경고 및 post-build `pwsh.exe` 미설치 메시지가 있으며 빌드 종료 코드는 0이다.
+Release `-debug 1 -skeletal-patch-break-checks 1`: MX450/591.86, 12.22초, 종료 0, MI3b PASS, D3D12 ERROR 0. 기존 DXGI #80·D3D12 #974/#1008 경고 관찰.
+지정 `regress.sh Release`: 6개 모두 종료 0(9/11/8/9/8/9초, 합계 54초), BC-12a/b·AR4·Rig PASS; SP6 누적 104 PASS/0 FAIL.
+SP7e2 case=1 publish/after60은 기존 N/A(noCoincidentKeptBoundary), case=2/3 PASS. Geometry 변경이 없어 CPU slicer 검사는 해당하지 않는다.
+근거: `%TEMP%/MI3b-{Debug,Release}-build.log`, `MI3b-synthetic-{patch,debug}.log`, `MI3b-Release-regress.log`, `MI3b-report.md`.
+
+MI-3b P2 수정(미커밋, base `2a0ab7d2`, 2026-11-16): bin마다 surface→depth→IB를 배치하여 다음 surface 주소와 provenance 정점 번호가 어긋나는 문제를 수정했다.
+`CutJob::BuildResults`는 surface 주소를 `VertexStart*28`로 게시한다. `BuildPatchSkinVertices`는 28B 정렬을 검사하고 `vbOffset/28`을 넘기며, `PatchSkinBuildCS::main`은 이 번호로 Data와 provenance를 함께 읽는다.
+`PatchBodyCompactCS::BuildOffsets`는 전체 용량을 검사하며 모든 bin의 surface VB를 먼저 연속 배치하고, 그 뒤에 bin별 depth·IB를 배치한다. 28B surface에서 provenance의 `firstTriangle*3`과 surface 정점 번호가 일치한다.
+`CheckBodyCompaction`에 빈 bin을 포함한 `vbOffset%28==0 && vbOffset/28==firstTriangle*3` 검사를 추가했다. 합성 입력의 두 번째 bin surface 주소는 288B에서 168B(정점 6)로 바뀐다.
+Debug/Release 지정 MSBuild 명령 모두 종료 0(18.54초/29.83초, 각 오류 0·기존 경고 6). 두 구성 모두 `-debug 1 -skeletal-patch-break-checks 1`에서 `skinAddress=matched ... PASS`, 종료 0(24.69초/14.53초).
+MX450/591.86에서 두 합성 진단과 아래 회귀의 debugger 출력을 수집했으며 D3D12 ERROR/CORRUPTION 0. 기존 경고는 남아 있다.
+지정 `regress.sh Release` 6개 실행 모두 종료 0(17/13/11/11/11/11초, 합계 74초); SP6 누적 142 PASS/0 FAIL, BC-12a/b·AR4·Rig PASS. SP7e2 case=1은 기존 N/A, case=2/3 PASS.
+`ModelViewer.cpp`는 수정하지 않았으며 Geometry 변경도 없다. 근거: `%TEMP%/MI3b-fix-{Debug,Release}-build.log`, `MI3b-fix-synthetic-{Debug,Release}-{patch,debug,exit}.log`, `MI3b-fix-Release-regress{,-debug}.log`, `MI3b-fix.md`.
 
 (MI-5에서 추가 기록)
