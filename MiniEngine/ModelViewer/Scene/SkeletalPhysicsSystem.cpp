@@ -363,13 +363,26 @@ namespace Viewer
         return true;
     }
 
-    // 선택 관절 아래의 연결된 body만 검증하고 동기 분리를 게시한다.
+    // 선택 관절 아래의 연결된 body를 검증하고 동기 분리를 게시한다.
+    // 검증과 commit을 이어 부르는 얇은 진입점이다.
     BreakStatus SkeletalPhysicsSystem::BreakConstraint(const BreakRequest& request)
+    {
+        // 검증이 거절하면 그 사유를 그대로 돌려준다.
+        PreparedBreak prepared;
+        const auto status = PrepareBreak(request, prepared);
+        if (status != BreakStatus::Prepared) return status;
+
+        // 검증된 결과만 게시한다.
+        return CommitBreak(std::move(prepared));
+    }
+
+    // 선택 관절 아래의 연결된 body를 rig와 world 변경 없이 검증한다.
+    BreakStatus SkeletalPhysicsSystem::PrepareBreak(const BreakRequest& request, PreparedBreak& out) const
     {
         // 같은 관절 재요청은 오래된 세대나 잘못된 impulse보다 우선한다.
         const auto found = m_Rigs.find(request.Owner);
         if (found == m_Rigs.end()) return BreakStatus::NotFound;
-        auto& rig = found->second;
+        const auto& rig = found->second;
         if (request.JointId >= rig.Joints.size()) return BreakStatus::NotFound;
         if (rig.Joints[request.JointId] == MiniPhysics::InvalidConstraint) return BreakStatus::AlreadyBroken;
         if (request.ExpectedRigGeneration != rig.Generation ||
@@ -412,17 +425,44 @@ namespace Viewer
             desc.Point[i] = request.WorldPoint[i];
         }
 
-        // world의 전체 선검증과 무실패 commit이 성공한 경우에만 논리 topology를 게시한다.
-        const auto status = m_World.ApplyConstraintBreak(desc);
+        // world의 전체 선검증만 실행하며 통과하면 commit 입력을 호출자에게 넘긴다.
+        PreparedBreak prepared;
+        const auto status = m_World.PrepareConstraintBreak(desc, prepared.World);
         switch (status)
         {
         case MiniPhysics::ConstraintBreakStatus::InvalidInput: return BreakStatus::InvalidInput;
         case MiniPhysics::ConstraintBreakStatus::NotReady: return BreakStatus::NotReady;
         case MiniPhysics::ConstraintBreakStatus::UnsupportedPose: return BreakStatus::UnsupportedPose;
         case MiniPhysics::ConstraintBreakStatus::UnsupportedTopology: return BreakStatus::UnsupportedTopology;
-        case MiniPhysics::ConstraintBreakStatus::Applied: break;
+        case MiniPhysics::ConstraintBreakStatus::Applied: return BreakStatus::NotReady;
+        case MiniPhysics::ConstraintBreakStatus::Prepared: break;
         }
-        rig.Joints[request.JointId] = MiniPhysics::InvalidConstraint;
+
+        // 거절 경로가 모두 끝난 뒤에만 출력 객체를 채운다.
+        prepared.Owner = request.Owner;
+        prepared.JointId = request.JointId;
+        prepared.RigGeneration = rig.Generation;
+        prepared.TopologyGeneration = rig.TopologyGeneration;
+        out = std::move(prepared);
+        return BreakStatus::Prepared;
+    }
+
+    // 검증된 break를 world에 게시하고 논리 topology 세대를 올린다.
+    BreakStatus SkeletalPhysicsSystem::CommitBreak(PreparedBreak&& prepared)
+    {
+        // rig가 같은 등록이고 관절이 아직 살아 있어야 한다.
+        const auto found = m_Rigs.find(prepared.Owner);
+        if (found == m_Rigs.end()) return BreakStatus::NotFound;
+        auto& rig = found->second;
+        if (prepared.RigGeneration != rig.Generation) return BreakStatus::Stale;
+        if (prepared.JointId >= rig.Joints.size()) return BreakStatus::NotFound;
+        if (rig.Joints[prepared.JointId] == MiniPhysics::InvalidConstraint) return BreakStatus::AlreadyBroken;
+        if (prepared.World.GetRemovedConstraint() != rig.Joints[prepared.JointId]) return BreakStatus::NotReady;
+
+        // world commit이 성공한 경우에만 논리 topology를 게시한다.
+        if (m_World.CommitConstraintBreak(std::move(prepared.World)) != MiniPhysics::ConstraintBreakStatus::Applied)
+            return BreakStatus::NotReady;
+        rig.Joints[prepared.JointId] = MiniPhysics::InvalidConstraint;
         ++rig.TopologyGeneration;
         return BreakStatus::Applied;
     }

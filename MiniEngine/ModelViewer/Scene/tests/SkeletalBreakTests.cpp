@@ -472,6 +472,162 @@ static void CheckSynchronousBreak(PhysicsWorld& world, SkeletalPhysicsSystem& sk
     CheckEmpty(world, "Break tests resources zero");
 }
 
+// break 전후 비교용으로 세대·관절·body 상태와 pair 필터를 한 번에 담는다.
+struct BreakSnapshot
+{
+    uint64_t Topology = 0;
+    size_t Constraints = 0, Bodies = 0, Pairs = 0, TemporaryPairs = 0;
+    std::array<ConstraintHandle, 2> Joints{};
+    std::array<bool, 2> Enabled{};
+    std::array<BodyMotion, 3> Motion{};
+    std::array<std::array<double, 3>, 3> Position{}, Linear{}, Angular{};
+    std::array<bool, 3> Sensor{};
+
+    // 모든 항목이 같은지 비교한다.
+    bool operator==(const BreakSnapshot& other) const
+    {
+        return Topology == other.Topology && Constraints == other.Constraints && Bodies == other.Bodies &&
+            Pairs == other.Pairs && TemporaryPairs == other.TemporaryPairs && Joints == other.Joints &&
+            Enabled == other.Enabled && Motion == other.Motion && Position == other.Position &&
+            Linear == other.Linear && Angular == other.Angular && Sensor == other.Sensor;
+    }
+};
+
+// 세 body·두 관절 rig의 현재 상태를 읽어 snapshot으로 만든다.
+static BreakSnapshot CaptureBreakSnapshot(PhysicsWorld& world, SkeletalPhysicsSystem& skeletal, Viewer::ObjectId owner)
+{
+    // world 전체 수와 내부 pair 필터 크기를 읽는다.
+    BreakSnapshot snapshot;
+    const auto* impl = PhysicsWorldAccess::GetImpl(world);
+    snapshot.Topology = skeletal.GetTopologyGeneration(owner);
+    snapshot.Constraints = world.GetConstraintCount();
+    snapshot.Bodies = world.GetBodyCount();
+    snapshot.Pairs = impl->PairFilter->Pairs.size();
+    snapshot.TemporaryPairs = impl->PairFilter->TemporaryPairs.size();
+
+    // 관절 handle과 enable 상태를 읽는다.
+    for (uint32_t joint = 0; joint < 2; ++joint)
+    {
+        snapshot.Joints[joint] = skeletal.GetConstraintHandle(owner, joint);
+        ConstraintState state;
+        snapshot.Enabled[joint] = world.GetConstraintState(snapshot.Joints[joint], state) && state.Enabled;
+    }
+
+    // body별 운동 방식·pose·속도·sensor 상태를 읽는다.
+    for (uint32_t body = 0; body < 3; ++body)
+    {
+        const auto handle = skeletal.GetBodyHandle(owner, body);
+        std::array<double, 4> rotation{};
+        world.GetBodyMotion(handle, snapshot.Motion[body]);
+        world.GetBodyPose(handle, snapshot.Position[body], rotation);
+        world.GetBodyVelocity(handle, snapshot.Linear[body], snapshot.Angular[body]);
+        snapshot.Sensor[body] = world.IsSensor(handle);
+    }
+    return snapshot;
+}
+
+// 사전 검증이 상태를 바꾸지 않고 거절 사유별로 무변경인지, commit이 기존 break와 같은지 검사한다.
+static void CheckPreparedBreak(PhysicsWorld& world, SkeletalPhysicsSystem& skeletal)
+{
+    // 무변경 확인용 fixture와 세대가 일치하는 요청을 준비한다.
+    using Viewer::BreakStatus;
+    using Viewer::PreparedBreak;
+    auto fixture = CreateThreeBodyFixture();
+    fixture.NodeParents = { InvalidSkeletalId, 3, 1, 0 };
+    const auto frames = FixtureBodyFrames(fixture);
+    Check(skeletal.Register(40, fixture.Asset, fixture.NodeParents, frames), "Prepare fixture registered");
+    Viewer::BreakRequest request{ 40, 0, skeletal.GetRigGeneration(40), skeletal.GetTopologyGeneration(40) };
+    request.WorldImpulse = { 1, 0, 0 };
+    request.WorldPoint = { 0, 1.6f, 0 };
+    const auto before = CaptureBreakSnapshot(world, skeletal, 40);
+
+    // 요청 자체의 거절 사유는 모두 prepared를 비운 채 상태를 보존한다.
+    PreparedBreak prepared;
+    auto bad = request;
+    bad.Owner = 999;
+    Check(skeletal.PrepareBreak(bad, prepared) == BreakStatus::NotFound, "Prepare unknown owner");
+    bad = request;
+    bad.JointId = 5;
+    Check(skeletal.PrepareBreak(bad, prepared) == BreakStatus::NotFound, "Prepare unknown joint");
+    bad = request;
+    bad.ExpectedTopologyGeneration++;
+    Check(skeletal.PrepareBreak(bad, prepared) == BreakStatus::Stale, "Prepare stale topology");
+    bad = request;
+    bad.ExpectedRigGeneration++;
+    Check(skeletal.PrepareBreak(bad, prepared) == BreakStatus::Stale, "Prepare stale rig");
+    bad = request;
+    bad.WorldImpulse[0] = NAN;
+    Check(skeletal.PrepareBreak(bad, prepared) == BreakStatus::InvalidInput, "Prepare NaN impulse");
+    bad = request;
+    bad.WorldImpulse[0] = FLT_MAX;
+    Check(skeletal.PrepareBreak(bad, prepared) == BreakStatus::InvalidInput, "Prepare overflow impulse");
+    Check(!prepared.World.IsValid() && prepared.Owner == Viewer::InvalidObjectId, "Prepare rejection leaves output empty");
+    Check(CaptureBreakSnapshot(world, skeletal, 40) == before, "Prepare rejections change nothing");
+
+    // 통과한 검증도 상태를 바꾸지 않고 세대와 commit 입력만 남긴다.
+    Check(skeletal.PrepareBreak(request, prepared) == BreakStatus::Prepared, "Prepare passes");
+    Check(prepared.World.IsValid() && prepared.Owner == 40 && prepared.JointId == 0 &&
+        prepared.RigGeneration == request.ExpectedRigGeneration &&
+        prepared.TopologyGeneration == request.ExpectedTopologyGeneration, "Prepare records generations");
+    Check(CaptureBreakSnapshot(world, skeletal, 40) == before, "Prepare success changes nothing");
+    PreparedBreak duplicate;
+    Check(skeletal.PrepareBreak(request, duplicate) == BreakStatus::Prepared, "Prepare is repeatable");
+    Check(CaptureBreakSnapshot(world, skeletal, 40) == before, "Repeated prepare changes nothing");
+
+    // commit은 기존 단일 break와 같이 세대를 한 번만 올리고 두 번째 commit은 거절한다.
+    Check(skeletal.CommitBreak(std::move(prepared)) == BreakStatus::Applied, "Commit applies prepared");
+    Check(skeletal.GetTopologyGeneration(40) == 2 && world.GetConstraintCount() == 1, "Commit publishes once");
+    const auto committed = CaptureBreakSnapshot(world, skeletal, 40);
+    Check(skeletal.CommitBreak(std::move(duplicate)) == BreakStatus::AlreadyBroken, "Second commit of same joint rejected");
+    Check(CaptureBreakSnapshot(world, skeletal, 40) == committed, "Rejected commit changes nothing");
+    Check(skeletal.CommitBreak(PreparedBreak{}) == BreakStatus::NotFound, "Empty prepared rejected");
+    Check(skeletal.PrepareBreak(request, duplicate) == BreakStatus::AlreadyBroken, "Prepare after break already broken");
+    Check(CaptureBreakSnapshot(world, skeletal, 40) == committed, "Prepare after break changes nothing");
+
+    // 재등록으로 세대가 바뀐 rig에 옛 prepared를 commit하면 거절한다.
+    PreparedBreak old;
+    request = { 40, 1, skeletal.GetRigGeneration(40), skeletal.GetTopologyGeneration(40) };
+    Check(skeletal.PrepareBreak(request, old) == BreakStatus::Prepared, "Prepare before reregister");
+    Check(skeletal.Unregister(40), "Prepare fixture released");
+    Check(skeletal.CommitBreak(std::move(old)) == BreakStatus::NotFound, "Commit after unregister rejected");
+    CheckEmpty(world, "Prepare unregister resources zero");
+    Check(skeletal.Register(40, fixture.Asset, fixture.NodeParents, frames), "Prepare fixture reregistered");
+    request = { 40, 1, skeletal.GetRigGeneration(40), 1 };
+    Check(skeletal.PrepareBreak(request, old) == BreakStatus::Prepared, "Prepare new generation");
+    old.RigGeneration--;
+    Check(skeletal.CommitBreak(std::move(old)) == BreakStatus::Stale, "Commit with old rig generation stale");
+    Check(skeletal.GetTopologyGeneration(40) == 1 && world.GetConstraintCount() == 2, "Stale commit changes nothing");
+    // 준비한 관절과 JointId가 어긋난 commit은 변경 없이 거절한다.
+    PreparedBreak mismatched;
+    request = { 40, 0, skeletal.GetRigGeneration(40), 1 };
+    Check(skeletal.PrepareBreak(request, mismatched) == BreakStatus::Prepared, "Prepare for mismatch");
+    mismatched.JointId = 1;
+    const auto beforeMismatch = CaptureBreakSnapshot(world, skeletal, 40);
+    Check(skeletal.CommitBreak(std::move(mismatched)) == BreakStatus::NotReady, "Commit with mismatched joint rejected");
+    Check(CaptureBreakSnapshot(world, skeletal, 40) == beforeMismatch, "Mismatched commit changes nothing");
+    Check(skeletal.Unregister(40), "Reregistered fixture released");
+
+    // 위치 위반과 예상 밖 pin도 검증 단계에서 거절하며 상태가 그대로다.
+    auto badFrames = frames;
+    badFrames[2].Position[0] += 0.01;
+    Check(skeletal.Register(41, fixture.Asset, fixture.NodeParents, badFrames), "Prepare misaligned registered");
+    request = { 41, 0, skeletal.GetRigGeneration(41), 1 };
+    const auto misaligned = CaptureBreakSnapshot(world, skeletal, 41);
+    Check(skeletal.PrepareBreak(request, prepared) == BreakStatus::UnsupportedPose, "Prepare bad anchor rejected");
+    Check(CaptureBreakSnapshot(world, skeletal, 41) == misaligned, "Pose rejection changes nothing");
+    Check(skeletal.Unregister(41), "Prepare misaligned released");
+    Check(skeletal.Register(42, fixture.Asset, fixture.NodeParents, frames), "Prepare pin fixture registered");
+    request = { 42, 0, skeletal.GetRigGeneration(42), 1 };
+    const auto pin = world.CreateSwingTwist({ skeletal.GetBodyHandle(42, 0), skeletal.GetBodyHandle(42, 2), fixture.Asset.Joints[0] });
+    Check(pin != InvalidConstraint, "Prepare pin created");
+    const auto pinned = CaptureBreakSnapshot(world, skeletal, 42);
+    Check(skeletal.PrepareBreak(request, prepared) == BreakStatus::UnsupportedTopology, "Prepare external pin rejected");
+    Check(CaptureBreakSnapshot(world, skeletal, 42) == pinned && world.GetConstraintCount() == 3, "Topology rejection changes nothing");
+    Check(world.RemoveConstraint(pin), "Prepare pin removed");
+    Check(skeletal.Unregister(42), "Prepare pin fixture released");
+    CheckEmpty(world, "Prepared break resources zero");
+}
+
 // 등록·목표 갱신·본 writeback과 실패 뒤 자원 정리를 검사한다.
 int main()
 {
@@ -580,6 +736,7 @@ int main()
 
     // 동기 분리의 성공과 실패 경로를 검사한다.
     CheckSynchronousBreak(world, skeletal);
+    CheckPreparedBreak(world, skeletal);
 
     // 뷰어 진단에 전달할 실제 물리 상태와 실패 보존을 검사한다.
     CheckDiagnosticState(world, skeletal);

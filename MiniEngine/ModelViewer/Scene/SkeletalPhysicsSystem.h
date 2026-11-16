@@ -60,6 +60,19 @@ namespace Viewer
         UnsupportedTopology, UnsupportedFrame, UnsupportedPose, InvalidInput, NotReady
     };
 
+    // 사전 검증을 통과한 단일 break의 commit 입력이다.
+    // rig 상태를 바꾸지 않고 만들어진다.
+    // 준비와 commit 사이에 같은 world를 바꾸는 break가 끼면 안 된다.
+    struct PreparedBreak
+    {
+        ObjectId Owner = InvalidObjectId;
+        uint32_t JointId = MiniPhysics::InvalidSkeletalId;
+        // 준비 시점의 rig 세대와 topology 세대다.
+        // commit은 rig 세대만 다시 확인한다.
+        uint64_t RigGeneration = 0, TopologyGeneration = 0;
+        MiniPhysics::PreparedConstraintBreak World;
+    };
+
     enum class IncomingJointStatus { Ok, NoBody, RigRoot, AlreadyBroken, NotRegistered };
     struct IncomingJointResult
     {
@@ -105,6 +118,12 @@ namespace Viewer
             std::vector<NodePhysicsPose>& overrides) const;
         // fixed substep 경계에서 선택 관절만 제거하고 연결된 자식 body들을 물리로 전환한다.
         BreakStatus BreakConstraint(const BreakRequest& request);
+        // 상태를 전혀 바꾸지 않고 break 요청을 검증한다.
+        // 통과하면 Prepared와 commit 입력을 주고 거절하면 out은 그대로다.
+        BreakStatus PrepareBreak(const BreakRequest& request, PreparedBreak& out) const;
+        // 검증된 break만 게시하고 topology 세대를 올린다.
+        // rig가 사라졌거나 관절이 이미 끊겼거나 준비 결과와 관절이 어긋나면 변경 없이 거절한다.
+        BreakStatus CommitBreak(PreparedBreak&& prepared);
         // 선택 본의 body와 가장 가까운 body 조상을 연결하는 incoming 관절을 조회한다.
         IncomingJointResult FindIncomingJoint(ObjectId owner, uint32_t nodeId) const;
         // 성공한 break마다 증가한 topology 번호를 읽으며 미등록 owner이면 0이다.

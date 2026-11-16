@@ -72,7 +72,33 @@ namespace MiniPhysics
         std::array<double, 3> Impulse{}, Point{};
     };
 
-    enum class ConstraintBreakStatus { Applied, InvalidInput, NotReady, UnsupportedPose, UnsupportedTopology };
+    // Prepared는 사전 검증만 통과했고 world는 바뀌지 않았다는 뜻이다.
+    enum class ConstraintBreakStatus { Applied, InvalidInput, NotReady, UnsupportedPose, UnsupportedTopology, Prepared };
+
+    // 검증을 통과한 break의 snapshot이며 world 자원을 쥐지 않는다.
+    // 준비와 commit 사이에 world를 바꾸면 안 된다.
+    // 이동만 가능하다.
+    class PreparedConstraintBreak
+    {
+    public:
+        // 빈 객체를 만든다.
+        PreparedConstraintBreak();
+        ~PreparedConstraintBreak();
+        PreparedConstraintBreak(PreparedConstraintBreak&& other) noexcept;
+        PreparedConstraintBreak& operator=(PreparedConstraintBreak&& other) noexcept;
+        PreparedConstraintBreak(const PreparedConstraintBreak&) = delete;
+        PreparedConstraintBreak& operator=(const PreparedConstraintBreak&) = delete;
+        // 검증된 snapshot을 쥐고 있는지 반환한다.
+        bool IsValid() const { return m_Data != nullptr; }
+        // 제거할 관절 handle을 읽으며 빈 객체는 InvalidConstraint다.
+        ConstraintHandle GetRemovedConstraint() const;
+        // 구현 상세이며 PhysicsWorldBreak.cpp만 정의를 본다.
+        struct Data;
+
+    private:
+        friend class PhysicsWorld;
+        std::unique_ptr<Data> m_Data;
+    };
 
     // body 생성 요청이다. Geometry의 hull 정점은 컴포넌트 로컬 좌표(에셋 단위)이며 Scale이 정점에 곱해진다.
     // body pose는 Position/Rotation(xyzw 쿼터니언)만 담고 scale은 담지 않는다. Geometry는 PrepareBody 호출 중에만 참조한다.
@@ -210,6 +236,12 @@ namespace MiniPhysics
         bool SetConstraintMotorsOff(ConstraintHandle handle);
         // 모든 handle·목표·관절·impulse를 선검증하고 성공할 때만 관절 제거와 Dynamic 전환을 함께 적용한다.
         ConstraintBreakStatus ApplyConstraintBreak(const ConstraintBreakDesc& desc);
+        // 모든 거절 조건을 world 변경 없이 검사하고 통과하면 Prepared와 commit용 snapshot을 반환한다.
+        // 거절하면 out은 그대로다.
+        ConstraintBreakStatus PrepareConstraintBreak(const ConstraintBreakDesc& desc, PreparedConstraintBreak& out) const;
+        // 검증된 snapshot을 게시한다.
+        // 빈 snapshot이거나 제거할 관절이 사라졌으면 NotReady이며 world는 그대로다.
+        ConstraintBreakStatus CommitConstraintBreak(PreparedConstraintBreak&& prepared);
         // 무효 handle이면 출력을 보존한다.
         bool GetConstraintState(ConstraintHandle handle, ConstraintState& state) const;
         // 논리 관절 수를 반환하며 disabled 관절도 포함한다.

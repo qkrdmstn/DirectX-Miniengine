@@ -115,8 +115,50 @@ namespace MiniPhysics
         }
     }
 
-    // 전체 요청을 검증하고 sensor의 초기 겹침을 제외한 뒤 관절 분리를 게시한다.
+    // 검증이 끝난 break의 snapshot이며 commit은 이 값만 읽는다.
+    struct PreparedConstraintBreak::Data
+    {
+        ConstraintHandle Remove = InvalidConstraint;
+        std::vector<ConstraintHandle> Enable;
+        std::vector<ActivationSnapshot> Snapshots;
+        ActivationSnapshot Parent;
+        size_t ImpulseIndex = 0;
+        JPH::Vec3 Impulse;
+        JPH::RVec3 Point;
+    };
+
+    // 빈 객체를 만든다.
+    PreparedConstraintBreak::PreparedConstraintBreak() = default;
+
+    // snapshot만 쥐고 있으므로 정리할 world 자원이 없다.
+    PreparedConstraintBreak::~PreparedConstraintBreak() = default;
+
+    // 소유권을 넘겨받는다. 원본은 빈 상태가 된다.
+    PreparedConstraintBreak::PreparedConstraintBreak(PreparedConstraintBreak&& other) noexcept = default;
+
+    // 현재 snapshot을 버리고 소유권을 넘겨받는다.
+    PreparedConstraintBreak& PreparedConstraintBreak::operator=(PreparedConstraintBreak&& other) noexcept = default;
+
+    // 이 snapshot이 제거할 관절 handle을 읽으며 빈 객체는 InvalidConstraint다.
+    ConstraintHandle PreparedConstraintBreak::GetRemovedConstraint() const
+    {
+        return m_Data ? m_Data->Remove : InvalidConstraint;
+    }
+
+    // 검증과 commit을 이어 호출하는 기존 진입점이다.
     ConstraintBreakStatus PhysicsWorld::ApplyConstraintBreak(const ConstraintBreakDesc& desc)
+    {
+        // 검증이 거절하면 commit 없이 그 사유를 돌려준다.
+        PreparedConstraintBreak prepared;
+        const auto status = PrepareConstraintBreak(desc, prepared);
+        if (status != ConstraintBreakStatus::Prepared) return status;
+
+        // 검증된 snapshot을 게시한다.
+        return CommitConstraintBreak(std::move(prepared));
+    }
+
+    // 전체 요청을 world 변경 없이 검증하고 commit에 필요한 snapshot을 만든다.
+    ConstraintBreakStatus PhysicsWorld::PrepareConstraintBreak(const ConstraintBreakDesc& desc, PreparedConstraintBreak& out) const
     {
         // 기본 요청 값과 선택 관절의 수명을 검사한다.
         if (!m_Impl || !desc.Remove || desc.Bodies.empty()) return ConstraintBreakStatus::NotReady;
@@ -142,6 +184,7 @@ namespace MiniPhysics
         };
         const auto* impulseBody = findBody(desc.ImpulseBody);
         if (!impulseBody || findBody(selected->second.Parent)) return ConstraintBreakStatus::UnsupportedTopology;
+        const size_t impulseIndex = size_t(impulseBody - snapshots.data());
 
         // 선택 관절의 반대 endpoint도 실제로 존재해야 분리와 wake가 안전하다.
         BodyActivation parentInput;
@@ -182,6 +225,35 @@ namespace MiniPhysics
         const auto linear = impulseBody->Linear + impulse * impulseBody->InverseMass;
         const auto angular = impulseBody->Angular + inverseInertia.Multiply3x3(JPH::Vec3(point - center).Cross(impulse));
         if (!std::isfinite(linear.LengthSq()) || !std::isfinite(angular.LengthSq())) return ConstraintBreakStatus::InvalidInput;
+
+        // 검증을 통과한 snapshot을 넘기며 이 시점까지 world는 바뀌지 않았다.
+        auto data = std::make_unique<PreparedConstraintBreak::Data>();
+        data->Remove = desc.Remove;
+        data->Enable = desc.Enable;
+        data->Snapshots = std::move(snapshots);
+        data->Parent = parentSnapshot;
+        data->ImpulseIndex = impulseIndex;
+        data->Impulse = impulse;
+        data->Point = point;
+        out.m_Data = std::move(data);
+        return ConstraintBreakStatus::Prepared;
+    }
+
+    // 검증된 snapshot으로 sensor의 초기 겹침을 제외한 뒤 관절 분리를 게시한다.
+    ConstraintBreakStatus PhysicsWorld::CommitConstraintBreak(PreparedConstraintBreak&& prepared)
+    {
+        // 빈 snapshot이나 이미 사라진 관절은 world를 건드리지 않고 거절한다.
+        if (!m_Impl || !prepared.m_Data) return ConstraintBreakStatus::NotReady;
+        const auto data = std::move(prepared.m_Data);
+        const auto selected = m_Impl->Constraints.find(data->Remove);
+        if (selected == m_Impl->Constraints.end()) return ConstraintBreakStatus::NotReady;
+
+        // 게시에 쓸 snapshot 값을 참조로 묶는다.
+        const auto& snapshots = data->Snapshots;
+        const auto& impulseBody = snapshots[data->ImpulseIndex];
+        const auto& impulse = data->Impulse;
+        const auto& point = data->Point;
+        const auto& parentSnapshot = data->Parent;
 
         // subtree 전체를 쿼리에서 제외해 전환 순서에 따른 내부 쌍 생성을 막는다.
         DynamicOverlapFilter overlapFilter;
@@ -225,14 +297,14 @@ namespace MiniPhysics
             }
             bodies.ActivateBody(snapshot.Id);
         }
-        for (const auto handle : desc.Enable)
+        for (const auto handle : data->Enable)
         {
             auto& joint = m_Impl->Constraints.at(handle).Joint;
             joint->SetSwingMotorState(JPH::EMotorState::Off);
             joint->SetTwistMotorState(JPH::EMotorState::Off);
             joint->SetEnabled(true);
         }
-        bodies.AddImpulse(impulseBody->Id, impulse, point);
+        bodies.AddImpulse(impulseBody.Id, impulse, point);
         return ConstraintBreakStatus::Applied;
     }
 }
