@@ -11,6 +11,7 @@
 #include "RootSignature.h"
 #include "PipelineState.h"
 #include "CompiledShaders/PatchExtractCS.h"
+#include "CompiledShaders/PatchBodyClassifyCS.h"
 #include "tests/SkeletalPatchReference.h"
 #include <cstdio>
 #include <cstdarg>
@@ -1980,6 +1981,94 @@ namespace Viewer
         return false;
     }
 
+    // cutter 출력의 실제 section 범위만 판정하고 결과는 다음 압축 단계용으로 보관한다.
+    void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands, uint32_t side)
+    {
+        // 표는 [패치 삼각형][반공간] 순서이며 물리 A/B 순서와 무관하다.
+        if (islands.TriangleSideBody.empty()) return;
+        if (side == 0)
+            m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
+                sizeof(islands.TriangleSideBody[0]), islands.TriangleSideBody.data());
+        struct Constants
+        {
+            uint32_t FirstTriangle, TriangleCount, PatchTriangles, Side;
+            uint32_t DefaultBody, Padding[3];
+        };
+        static_assert(sizeof(Constants) == 32, "Body classification constants");
+
+        // 읽기 전용 provenance·표와 판정 결과·카운터만 compute에 바인딩한다.
+        static RootSignature root;
+        static ComputePSO pso(L"Classify patch output bodies");
+        static bool initialized = false;
+        if (!initialized)
+        {
+            root.Reset(5);
+            root[0].InitAsConstantBuffer(0);
+            root[1].InitAsBufferSRV(0);
+            root[2].InitAsBufferSRV(1);
+            root[3].InitAsBufferUAV(0);
+            root[4].InitAsBufferUAV(1);
+            root.Finalize(L"Patch body classification");
+            pso.SetRootSignature(root);
+            pso.SetComputeShader(g_pPatchBodyClassifyCS, sizeof(g_pPatchBodyClassifyCS));
+            pso.Finalize();
+            initialized = true;
+        }
+
+        // cutter의 section 사이 capacity 간격을 유지해 globalVertex/3로 결과를 찾게 한다.
+        uint32_t end = 0;
+        for (const auto& mesh : geometry.Meshes)
+        {
+            if (mesh.vbStride != 28 || mesh.vbOffset % 84 || mesh.vbSize % 84
+                || (uint64_t(mesh.vbOffset) + mesh.vbSize) / 28 * 32 > geometry.Provenance.GetBufferSize())
+                throw std::runtime_error("Invalid body classification provenance range");
+            end = std::max(end, mesh.vbOffset / 84 + mesh.vbSize / 84);
+        }
+        if (!end) return;
+        auto& bodies = m_TriangleBodies[side];
+        bodies.Create(L"Output triangle bodies", end, sizeof(uint32_t));
+        ByteAddressBuffer counters;
+        ReadbackBuffer readback;
+        counters.Create(L"Body classification counters", 8, sizeof(uint32_t));
+        readback.Create(L"Body classification readback", 8, sizeof(uint32_t));
+
+        // 각 section의 실제 출력 삼각형만 dispatch하고 합산 카운터를 초기화한다.
+        auto& graphics = GraphicsContext::Begin(L"Classify patch output bodies");
+        auto& compute = graphics.GetComputeContext();
+        auto& provenance = const_cast<ByteAddressBuffer&>(geometry.Provenance);
+        compute.TransitionResource(provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.TransitionResource(m_IslandTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.TransitionResource(bodies, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.TransitionResource(counters, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.ClearUAV(counters);
+        compute.InsertUAVBarrier(counters);
+        compute.SetRootSignature(root);
+        compute.SetPipelineState(pso);
+        compute.SetBufferSRV(1, provenance);
+        compute.SetBufferSRV(2, m_IslandTable);
+        compute.SetBufferUAV(3, bodies);
+        compute.SetBufferUAV(4, counters);
+        for (const auto& mesh : geometry.Meshes)
+        {
+            Constants c{ mesh.vbOffset / 84, mesh.vbSize / 84, uint32_t(islands.TriangleSideBody.size()),
+                side, islands.SideDefault[side], {} };
+            if (!c.TriangleCount) continue;
+            compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+            const uint32_t groups = (c.TriangleCount + 63) / 64;
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+        }
+
+        // 임시 자원은 완료까지 유지하고 provenance와 판정 결과를 후속 읽기 상태로 돌린다.
+        graphics.CopyBuffer(readback, counters);
+        graphics.TransitionResource(provenance, D3D12_RESOURCE_STATE_GENERIC_READ);
+        graphics.TransitionResource(bodies, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        graphics.Finish(true);
+        const auto* counts = static_cast<const uint32_t*>(readback.Map());
+        PatchLog("MI3a side=%u tris=%u cap=%u body0=%u body1=%u invalid=%u idMismatch=%u reassigned=%u\n",
+            side, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
+        readback.Unmap();
+    }
+
     // 복사본 결과를 먼저 소비하여 기존 Static 진단과 발행 집계에서 제외한다.
     bool SkeletalPatchCopy::OnCutResult(Scene& scene, const CuttingSystem& cutting, const CutResultEntry& result)
     {
@@ -2002,6 +2091,16 @@ namespace Viewer
         // A는 양의 반공간이므로 B를 음의 법선으로 0.1 m 이동해 간격을 만든다.
         if (result.Status == CutResultStatus::Published)
         {
+            // cutter side 0/1을 직접 사용하며 물리 A/B skin 순서로 뒤집지 않는다.
+            if (m_SkinPatch)
+            {
+                auto* owner = scene.FindObject(m_CopyOwner);
+                const ComponentId ids[] = { result.Mesh, result.Other };
+                for (uint32_t side = 0; side < 2; ++side)
+                    ClassifyCutBodies(*owner->FindMeshComponent(ids[side])->GetGeometry()->GetGenerated(),
+                        m_SkinPatch->Islands, side);
+            }
+
             // 원본 게시 전 준비 owner의 두 조각은 모든 pass에서 계속 숨긴다.
             if (!m_OffsetCopy)
                 for (const auto& piece : scene.FindObject(m_CopyOwner)->GetMeshComponents()) piece->PublishVisible = false;

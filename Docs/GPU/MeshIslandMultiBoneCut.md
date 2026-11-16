@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1·MI-2 아일랜드 라벨 진단 및 MI-2 리뷰 3건 수정 완료, CPU 테스트·Debug/Release 빌드·Release 회귀 PASS(base `432ff0c5`); MI-3~5 미구현 (2026-11-13).
+상태: 진행 중 — MI-1·MI-2 완료; MI-3a GPU 몸체 판정·카운터 완료(미커밋, base `b7413004`), Debug/Release 빌드·Release 회귀 PASS; MI-3b 이후 미구현 (2026-11-16).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -79,7 +79,7 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | --- | --- | --- |
 | MI-1 | 격자 토폴로지 맵: CPU 인덱스 보관, `BuildLatticeTopology`, 로드 시 생성, union-find | 단위 테스트(분리된 두 삼각형 띠=2 성분, 같은 위치 중복 정점=1 성분, 평면 절단 시 성분 증가) PASS; CesiumMan 로드 로그에 Dim·셀 수·전체 성분 수 |
 | MI-2 | 완료(base `432ff0c5`): Poll의 기존 TriangleSources readback 재사용, 제출 포즈 반공간 예측, `LabelPatchIslands`, 로그·표 보관만 | 리뷰 3건 수정 후 CPU 테스트·D/R 빌드·Release 회귀 PASS; 위팔 P7에서 아일랜드 3개, 허리 90 tris → A; GPU 출력 불변 |
-| MI-3a | 라벨 GPU 업로드, 출력 삼각형 몸체 판정(provenance `TriangleId`→`TriangleSideBody`) | 세 정점 ID 일치, invalid/fallback 로그; 출력 불변 |
+| MI-3a | 완료(미커밋, base `b7413004`): 라벨 GPU 업로드, 출력 삼각형 몸체 판정(provenance `TriangleId`→`TriangleSideBody`) | D/R 빌드·Release 회귀 PASS; 양쪽 invalid=0/idMismatch=0, side0 reassigned=104; 출력·게시 불변 |
 | MI-3b | body×section count/scatter 압축 셰이더 | 합성 두-side 입력에서 정점·provenance 보존, overflow 검사 |
 | MI-3c | 압축 C++ job·메모리·fence·메타데이터(게시 미연결) | body 합계=입력 합계, material/depth/IB/bounds 검증 |
 | MI-3d | 단일 관절 재배치 게시 연결(`OnCutResult`·`BuildPieceSkin(body)`), cap은 SideDefault | 위팔 허리 90 tris가 A에 남음, A/B 각 1회 게시, 캡처 |
@@ -134,5 +134,25 @@ Release를 ModelViewer 작업 디렉터리에서 `-debug 1 -skeletal-break-demo 
 실행 로그: `%TEMP%/MI2-fix-UpperArm-patch.log`, `%TEMP%/MI2-fix-UpperArm-exit.log`.
 지정 `regress.sh Release`의 6개 실행 모두 종료 0(12/13/14/10/8/9초, 총 66.0초). SP6 비교 로그 누적 46행 PASS·FAIL 0, BC-12a/b·AR4·Rig PASS.
 SP7e2 case=1 publish/after60은 기존 N/A(noCoincidentKeptBoundary), case=2/3은 PASS. 회귀 로그: `%TEMP%/MI2-fix-Release-regress.log`.
+
+MI-3a(미커밋, base `b7413004`, 2026-11-16): 중단된 부분 구현을 검토하고 `PatchBodyClassifyCS`의 예약어 변수명을 수정했다.
+ModelViewer 프로젝트와 filters에 compute 셰이더를 등록해 기존 `CompiledShaders` 헤더 생성·PSO 로딩 경로를 사용한다.
+`SkeletalPatchCopy::ClassifyCutBodies`가 `Islands.TriangleSideBody`를 GPU에 올리고 `OnCutResult`에서 skin 복원 전 실제 section 출력 범위만 판정한다.
+side0=`result.Mesh`, side1=`result.Other`이며 물리 A/B 순서와 독립이다. provenance는 정점당 32B, `TriangleId`는 +20B다.
+세 정점 ID 불일치·범위 밖 ID·출력 없는 표 항목(`UINT32_MAX`)을 진단하고 invalid 몸체는 sentinel 그대로 남긴다.
+cap(`Origin.x==UINT_MAX`)은 별도로 세며 SideDefault를 기록한다. `body0/body1/reassigned`는 cap을 제외한 표면 수다.
+삼각형별 몸체 버퍼는 side별 globalVertex/3 인덱스로 유지하고 section 사이 빈 capacity는 소비 대상에서 제외한다. 후속 MI-3b용이며 현재 출력·게시에는 사용하지 않는다.
+readback은 32B 카운터만 동기로 읽고 임시 자원은 fence 완료까지 유지한다.
+Debug 41.93초·Release 49.57초 빌드 성공(각 오류 0, 경고 39). 최초 Debug 시도는 예약어 충돌로 실패했으며 수정 후 두 구성 모두 통과했다.
+Release 실행: ModelViewer 작업 디렉터리, `-debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone Skeleton_arm_joint_L__4_ -physics-query-exit 180`.
+MX450/591.86, 13.25초·종료 0, A/B components=2/caps=2/uncapped=0/error=0. D3D12 ERROR 0; 기존 DXGI #80 및 D3D12 경고 #974/#1008 관찰.
+```text
+MI3a side=0 tris=298 cap=41 body0=104 body1=153 invalid=0 idMismatch=0 reassigned=104
+MI3a side=1 tris=414 cap=41 body0=373 body1=0 invalid=0 idMismatch=0 reassigned=0
+```
+MI-2의 side0 허리 원본 90 tris(A) 라벨에 대응하는 절단 후 표면 104 tris가 reassigned로 잡힌다. 원본 수와 출력 수는 clip 분할로 다르다.
+지정 `regress.sh Release` 6개 실행 모두 종료 0(11/14/11/12/11/11초, 합계 70초), BC-12a/b·AR4·Rig PASS; SP6 누적 PASS 72행/FAIL 0.
+SP7e2 case=1 publish/after60은 기존 N/A(noCoincidentKeptBoundary), case=2/3 PASS.
+근거 로그: `%TEMP%/MI3a-{Debug,Release}-build.log`, `%TEMP%/MI3a-UpperArm-{patch,debug,exit}.log`, `%TEMP%/MI3a-Release-regress.log`.
 
 (MI-5에서 추가 기록)

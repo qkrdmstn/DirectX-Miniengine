@@ -2,6 +2,8 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
+MI-3a(미커밋, base `b7413004`, 2026-11-16): `SkeletalPatchCopy::OnCutResult`가 skin 복원 전 `ClassifyCutBodies`를 cutter side 순서로 호출한다. `PatchBodyClassifyCS::main`은 provenance `TriangleId`와 GPU `TriangleSideBody` 표로 몸체를 기록하고 cap·invalid·ID 불일치·재배치 카운터만 readback한다. side별 삼각형 몸체 버퍼는 MI-3b용으로 보관하며 출력·게시는 불변이다. D/R 빌드·Release 회귀 PASS, 위팔 invalid/idMismatch=0·side0 reassigned=104([결정·로그](../GPU/MeshIslandMultiBoneCut.md)).
+
 MI-2(base `432ff0c5`, 2026-11-13): `SkeletalPatchJob::Poll`이 기존 TriangleSources readback을 재사용한다. `Submit`의 준비 포즈 snapshot과 실제 확대 평면으로 `DiagnoseIslands`가 패치 참조 정점만 중복 없이 스키닝하고 joint→그룹 표를 요청당 한 번 만든다. `LabelPatchIslands`는 출력 없는 side를 제외하고 (셀, side) 연결과 원본 세 꼭짓점 전체의 bind weight 투표를 분리해 몸체 표를 job/패치에 보관한다. GPU 출력에는 적용하지 않는다. CPU 테스트·D/R 빌드·Release 회귀 PASS; CesiumMan 위팔 P7에서 3개 아일랜드 중 허리 90 tris가 A로 재배치되는 라벨을 확인했다([결정·로그](../GPU/MeshIslandMultiBoneCut.md)).
 
 MI-1(base `2a1620cd`, 2026-11-13): `BuildInfluencingJoints`는 skin section에 draw 로컬 삼각형 인덱스를 보존한다. `BuildLatticeTopology`가 bind 최장축 64칸의 점유 셀·삼각형 간선을 생성해 `Model::m_LatticeTopology`에 보관한다. `LatticeUnionFind`·`CountLatticeComponents`는 순수 CPU 연결 성분 계산이며 절단 출력은 변경하지 않는다([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).

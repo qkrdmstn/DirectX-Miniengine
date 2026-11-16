@@ -173,6 +173,10 @@ namespace Viewer
             return true;
         }
     private:
+        // 출력 반공간의 provenance로 몸체를 판정하고 작은 진단 카운터만 읽는다.
+        void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands, uint32_t side);
+        ByteAddressBuffer m_IslandTable;
+        ByteAddressBuffer m_TriangleBodies[2]; // MI-3b 입력: side별 globalVertex / 3 인덱스, section 사이 빈 capacity 제외
         // 동기 skin VB 생성과 선택적 t_cut CPU 진단을 마친 뒤 조각에 입력을 보관한다.
         void BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
             SkeletalPatchBuffers& patch, uint32_t side);
