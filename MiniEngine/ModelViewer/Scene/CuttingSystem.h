@@ -28,6 +28,7 @@ namespace Viewer
         double GpuMs = 0;
         double ReadyMs = 0;
         std::array<double, 4> StageMs{};  // clip, boundary, cap, finalize GPU ms
+        std::vector<std::array<uint32_t, 4>> CapSegments; // cap 이전 선분 출처 snapshot
         uint32_t Loops = 0, CapMaxLoop = 0, CapMappedLoops = 0, CapRounds = 0;  // cap 루프 크기와 Mapped 경로 진단
     };
 
@@ -38,7 +39,7 @@ namespace Viewer
         // 절단 작업이 사용할 장면을 연결한다.
         explicit CuttingSystem(Scene& scene, PhysicsSystem& physics) : m_Scene(scene), m_Physics(physics) {}
         // section 행렬이 준비된 Static 컴포넌트와 평면을 고정해 작업을 시작한다.
-        bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0);
+        bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0, bool captureLoops = false);
         // 현재 절단 영역의 Static 후보를 고정하고 이후 프레임에서 제한된 수만큼 제출한다.
         bool RequestAll(const MeshCutting::CutPlaneData& plane, uint32_t capMode = 0);
         // Scene.Update 뒤 revision과 section 행렬로 다음 후보를 제출한다.
@@ -91,7 +92,7 @@ namespace Viewer
         };
         // 단일 요청과 대기열 내부 제출이 공유하는 GPU 작업 시작 경로다.
         bool Submit(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane,
-            bool publish, float worldEpsilon, uint32_t capMode, const CutCandidate* candidate = nullptr);
+            bool publish, float worldEpsilon, uint32_t capMode, const CutCandidate* candidate = nullptr, bool captureLoops = false);
         // 예외 원인을 소유 버퍼에 보존하고 대상·용량 진단을 할당 없이 기록한다.
         void RejectInput(ObjectId owner, ComponentId mesh, const GeometryRevision& geometry,
             uint64_t requestedWorking, const char* reason) noexcept;

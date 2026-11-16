@@ -161,7 +161,7 @@ namespace Viewer
     }
 
     // 단일 대상 요청이 진행 중인 일괄 절단에 끼어들지 않도록 검사한다.
-    bool CuttingSystem::Request(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode)
+    bool CuttingSystem::Request(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode, bool captureLoops)
     {
         // 진행 중인 작업이 있으면 단일 요청을 받지 않는다.
         if (IsBusy())
@@ -185,17 +185,17 @@ namespace Viewer
             const auto candidates = m_Physics.QueryCutCandidates(plane, worldEpsilon, owner, meshId);
             for (const auto& candidate : candidates)
                 if (candidate.Owner == owner && candidate.Mesh == meshId)
-                    return Submit(owner, meshId, plane, publish, worldEpsilon, capMode, &candidate);
+                    return Submit(owner, meshId, plane, publish, worldEpsilon, capMode, &candidate, captureLoops);
             m_StatusText = "No eligible attached mesh in the cut area";
             return false;
         }
 
         // 비부착 단일 요청은 기존 직접 제출 경로를 유지한다.
-        return Submit(owner,meshId,plane,publish,worldEpsilon,capMode);
+        return Submit(owner,meshId,plane,publish,worldEpsilon,capMode,nullptr,captureLoops);
     }
 
     // revision Data와 section 행렬을 입력으로 요청의 소유·월드 배치를 고정한다.
-    bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode, const CutCandidate* candidate)
+    bool CuttingSystem::Submit(ObjectId owner, ComponentId meshId, const MeshCutting::CutPlaneData& plane, bool publish, float worldEpsilon, uint32_t capMode, const CutCandidate* candidate, bool captureLoops)
     {
         // 합산 예산 대기만 후보를 다음 frame에 남기도록 구별한다.
         m_SubmissionDeferred = false;
@@ -257,7 +257,7 @@ namespace Viewer
             if (!mesh->BuildCutSectionFrames(sectionFrames))
                 throw std::invalid_argument("Cut section frames are not ready");
             capacity = MeshCutting::GpuMeshCutter::PlanCapacity(*geometry, sectionFrames, world, plane, worldEpsilon, forceCount != 0);
-            estimate = MeshCutting::GpuMeshCutter::EstimateWorkingBytes(*geometry, ValidateResults, &capacity);
+            estimate = MeshCutting::GpuMeshCutter::EstimateWorkingBytes(*geometry, ValidateResults, &capacity, captureLoops);
             if (!capacity.SurfaceVertices.empty())
             {
                 uint64_t vertices = uint64_t(capacity.MaxSegments) * 3;
@@ -317,7 +317,7 @@ namespace Viewer
             std::vector<Math::BoundingSphere> bounds;
             for (size_t i = 0; i < geometry->GetSections().size(); ++i)
                 bounds.push_back(mesh->GetLocalSectionBounds(i));
-            active.Job = MeshCutting::GpuMeshCutter::Submit(geometry, sectionFrames, world, plane, worldEpsilon, capMode, bounds, ValidateResults, &capacity, retainedLimit);
+            active.Job = MeshCutting::GpuMeshCutter::Submit(geometry, sectionFrames, world, plane, worldEpsilon, capMode, bounds, ValidateResults, &capacity, retainedLimit, captureLoops);
         }
         catch (const std::exception& error)
         {
@@ -852,6 +852,9 @@ namespace Viewer
         entry.CapMaxLoop = job.CapMaxLoop;
         entry.CapMappedLoops = job.CapMappedLoops;
         entry.CapRounds = job.CapRounds;
+
+        // 작업 해제 전에 작은 선분 snapshot의 소유권을 결과로 이전한다.
+        entry.CapSegments = std::move(job.CapSegments);
         m_Results.push_back(entry);
 
         // 완료한 작업을 해제하고 묶음 진행 상태를 갱신한다.

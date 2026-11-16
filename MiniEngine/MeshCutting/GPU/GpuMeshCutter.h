@@ -23,7 +23,10 @@ namespace MeshCutting
         std::vector<CutSection> Sections;
         std::vector<Math::Matrix4> SectionFrames;
         std::vector<Mesh> Templates;
-        ByteAddressBuffer Metadata, Scratch;
+        ByteAddressBuffer Metadata, Scratch, LoopSources;
+        ReadbackBuffer LoopReadback;
+        // 선분마다 TriangleId, leader, active, bad를 cap 처리 전에 보존한다.
+        std::vector<std::array<uint32_t, 4>> CapSegments;
         StructuredBuffer Descriptors;
         ReadbackBuffer StatusReadback, TimeReadback;
         ReadbackBuffer DiagnosticInputData;
@@ -79,12 +82,12 @@ namespace MeshCutting
         // 지원 용량 계약 안에서 작업별 임시 GPU 메모리 예약치를 보수적으로 계산한다.
         // 진단 시에만 Data snapshot과 최대 readback 묶음을 포함한다.
         static uint64_t EstimateWorkingBytes(const GeometryRevision& input,
-            bool snapshotDiagnostics = false, const CutCapacityPlan* capacity = nullptr);
+            bool snapshotDiagnostics = false, const CutCapacityPlan* capacity = nullptr, bool captureLoops = false);
         // revision Data와 section 행렬로 Static 절단하며 진단도 같은 입력을 사용한다.
         static std::unique_ptr<CutJob> Submit(std::shared_ptr<const GeometryRevision> input,
             const std::vector<Math::Matrix4>& sectionFrames, const Math::AffineTransform& world,
             const CutPlaneData& plane, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0,
             const std::vector<Math::BoundingSphere>& bounds = {}, bool snapshotDiagnostics = false,
-            const CutCapacityPlan* capacity = nullptr, uint64_t retainedLimitBytes = 512ull * 1024 * 1024);
+            const CutCapacityPlan* capacity = nullptr, uint64_t retainedLimitBytes = 512ull * 1024 * 1024, bool captureLoops = false);
     };
 }

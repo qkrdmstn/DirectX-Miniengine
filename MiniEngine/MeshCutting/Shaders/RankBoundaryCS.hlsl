@@ -1,5 +1,7 @@
 #include "CutCommon.hlsli"
 
+RWByteAddressBuffer LoopSources : register(u6);
+
 cbuffer Pass : register(b1) {
     uint Commit;
 };
@@ -9,11 +11,20 @@ cbuffer Pass : register(b1) {
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
+    // 실제 기록된 선분 범위만 처리한다.
     uint i = id.x;
     uint segmentCount = min(Meta.Load(4), MaxSegments);
     if (i >= segmentCount)
         return;
     
+    // 별도 요청에서만 귀 클리핑 전의 leader와 유효성 정보를 보존한다.
+    if (Commit == 2)
+    {
+        LoopSources.Store3(i * 16 + 4, uint3(Ring.Load(i * 128 + 48),
+            Ring.Load(i * 128 + 108), Ring.Load(i * 128 + 52)));
+        return;
+    }
+
     uint a = i * 128; // 내 선분 슬롯의 시작 주소
     
     // Rings 구조:

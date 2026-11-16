@@ -41,12 +41,12 @@ namespace MeshCutting
                 return;
 
             // t0 revision과 t2 section만 등록하고 t1 입력은 제거한다.
-            Root.Reset(10);
+            Root.Reset(11);
             Root[0].InitAsConstantBuffer(0);
             Root[1].InitAsConstants(1, 1);
             Root[2].InitAsBufferSRV(0);
             Root[3].InitAsBufferSRV(2);
-            for (uint32_t i = 0; i < 6; ++i)
+            for (uint32_t i = 0; i < 7; ++i)
                 Root[i + 4].InitAsBufferUAV(i);
             Root.Finalize(L"Static cut");
 
@@ -196,7 +196,7 @@ namespace MeshCutting
         compute.SetBufferSRV(2, input.GetDataBuffer());
         compute.SetBufferSRV(3, descriptors);
         compute.TransitionResource(metadata, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        for (uint32_t slot = 4; slot < 10; ++slot)
+        for (uint32_t slot = 4; slot < 11; ++slot)
             compute.SetBufferUAV(slot, metadata);
         compute.Dispatch1D(first, 64);
         graphics.CopyBuffer(readback, metadata);
@@ -222,7 +222,7 @@ namespace MeshCutting
     // 지원 용량 계약과 Submit의 draw 해석에 맞춰 임시 자원 예약치를 계산한다.
     // 원본 geometry·부모 lineage·posed cache는 별도 소유이므로 포함하지 않는다.
     uint64_t GpuMeshCutter::EstimateWorkingBytes(const GeometryRevision& input,
-        bool snapshotDiagnostics, const CutCapacityPlan* capacity)
+        bool snapshotDiagnostics, const CutCapacityPlan* capacity, bool captureLoops)
     {
         // CPU draw 정보로 작업량과 출력 정점 용량을 합산한다.
         uint64_t triangles = 0;
@@ -297,6 +297,9 @@ namespace MeshCutting
         bytes += allocated(metadataBytes);
         bytes += allocated(5 * sizeof(uint64_t));
 
+        // 선택한 선분 진단의 UAV와 readback도 작업별 예산에 포함한다.
+        if (captureLoops) bytes += allocated(segments * 16) * 2;
+
         // 11개 GPU buffer 외 counter·query heap·동적 constant allocator page를 더한다.
         bytes += AllocationGranularity * 3;
 
@@ -349,6 +352,7 @@ namespace MeshCutting
     // fence가 끝난 뒤 cap 누적 진단을 포함한 metadata와 GPU timestamp만 읽는다.
     bool CutJob::Poll()
     {
+        // 수집한 작업은 재사용하고 미완료 작업은 다음 프레임까지 기다린다.
         if (Collected) return true;
         if (!Graphics::g_CommandManager.IsFenceComplete(Fence)) return false;
 
@@ -356,6 +360,14 @@ namespace MeshCutting
         Status.resize(80 / 4 + Constants.Sections * 2 + 2 * KDopWordsPerSide + 6);
         std::memcpy(Status.data(), StatusReadback.Map(), Status.size() * 4);
         StatusReadback.Unmap();
+
+        // fence 완료 후 선분 표만 읽고 CutJob 해제 전 소비자에게 넘길 snapshot을 만든다.
+        if (LoopReadback.GetResource())
+        {
+            CapSegments.resize(std::min(Status[1], Constants.MaxSegments));
+            std::memcpy(CapSegments.data(), LoopReadback.Map(), CapSegments.size() * 16);
+            LoopReadback.Unmap();
+        }
 
         // section 수에 따른 진단 시작 위치에서 라운드·표시·실제 제거 합계를 해석한다.
         const uint32_t capBase = 58 + Constants.Sections * 2;
@@ -460,14 +472,14 @@ namespace MeshCutting
 
     // GPU 절단을 제출하고 명시적 진단에서만 같은 시점의 부모 정점·인덱스를 보존한다.
     std::unique_ptr<CutJob> GpuMeshCutter::Submit(std::shared_ptr<const GeometryRevision> input,
-        const std::vector<Math::Matrix4>& sectionFrames, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics, const CutCapacityPlan* capacity, uint64_t retainedLimitBytes)
+        const std::vector<Math::Matrix4>& sectionFrames, const AffineTransform& world, const CutPlaneData& plane, float epsilon, uint32_t capMode, const std::vector<BoundingSphere>& bounds, bool snapshotDiagnostics, const CutCapacityPlan* capacity, uint64_t retainedLimitBytes, bool captureLoops)
     {
         // section snapshot과 평면 허용오차를 검사한다.
         if (!input || sectionFrames.size() != input->GetSections().size() || !std::isfinite(epsilon) || epsilon <= 0)
             throw std::invalid_argument("Static cut requires section frames and a valid epsilon");
 
         // Submit도 같은 지원 용량 계약을 확인해 scheduler 추정과 작업 생성 조건을 맞춘다.
-        const uint64_t workingEstimate = EstimateWorkingBytes(*input, snapshotDiagnostics, capacity);
+        const uint64_t workingEstimate = EstimateWorkingBytes(*input, snapshotDiagnostics, capacity, captureLoops);
         (void)workingEstimate;
 
         // 큰 입력은 작은 count 결과 없이 최악 용량 버퍼를 만들지 않는다.
@@ -619,6 +631,13 @@ namespace MeshCutting
         job->Descriptors.Create(L"Cut sections", c.Sections, sizeof(CutSection));
         job->StatusReadback.Create(L"Cut metadata readback", uint32_t(initial.size()), 4);
         job->TimeReadback.Create(L"Cut timestamp readback", 5, 8);
+        // 스켈레탈 요청에서만 선분별 16B 보조 표와 readback을 확보한다.
+        if (captureLoops)
+        {
+            job->LoopSources.Create(L"Cap segment sources", c.MaxSegments, 16);
+            job->LoopReadback.Create(L"Cap segment readback", c.MaxSegments, 16);
+        }
+
         D3D12_QUERY_HEAP_DESC q{};
         q.Count = 5;
         q.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
@@ -675,6 +694,10 @@ namespace MeshCutting
             compute.InsertUAVBarrier(job->Scratch);
             compute.InsertUAVBarrier(job->Metadata);
         };
+        // Static 요청은 보조 버퍼를 쓰지 않고 기존 scratch를 미사용 슬롯에 바인딩한다.
+        if (captureLoops) compute.TransitionResource(job->LoopSources, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.SetBufferUAV(10, captureLoops ? job->LoopSources : job->Scratch);
+        compute.SetConstant(1, 0, captureLoops ? 1u : 0u);
         dispatch(0, c.Triangles);
         graphics.InsertTimeStamp(job->Queries.Get(), 1);
 
@@ -700,6 +723,15 @@ namespace MeshCutting
             dispatch(3, c.MaxSegments);
         }
         graphics.InsertTimeStamp(job->Queries.Get(), 2);
+
+        // 귀 클리핑이 연결 정보를 변경하기 전에 확정 leader와 출처를 보존한다.
+        if (captureLoops)
+        {
+            compute.InsertUAVBarrier(job->LoopSources);
+            compute.SetConstant(1, 0, 2);
+            dispatch(3, c.MaxSegments);
+            graphics.CopyBuffer(job->LoopReadback, job->LoopSources);
+        }
 
         // earclipping 수행
         compute.SetConstant(1, 0, capMode);

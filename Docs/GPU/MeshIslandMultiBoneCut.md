@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-3c `96214e6f` 완료; MI-3d 단일 관절 몸체별 게시 연결 구현(미커밋, base `96214e6f`), D/R 빌드·Release 위팔 ON/OFF·회귀 PASS (2026-11-16).
+상태: 진행 중 — MI-3d `e8cd2e59` 완료; MI-3e cap loop 몸체 진단 구현(미커밋, base `e8cd2e59`), D/R 빌드·Release 위팔/허벅지·회귀 PASS (2026-11-16).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -29,7 +29,7 @@
 | 셀 연결 | 한 삼각형의 꼭짓점 셀끼리 연결 | 맞닿기만 한 팔·허리는 연결하지 않는다 |
 | 맵 자르기 | 노드를 (셀, 반공간)으로 나누고 같은 반공간끼리만 잇는다 | 평면을 건너는 연결을 끊는 것이 곧 맵 절단이다 |
 | 계산 위치 | 맵·아일랜드 라벨은 CPU, 출력 분리는 GPU | 패치 삼각형 수천 개 수준이라 CPU 비용이 작다 |
-| 아일랜드→몸체 | weight 다수결 | 평면 반대편에 있어도 몸통 weight가 큰 허리는 A에 남는다 |
+| 아일랜드→몸체 | 실제 분리 loop에 닿으면 반공간, 아니면 weight 다수결(2026-11-16 수정, 아래 추가 결정) | 평면 반대편에 있어도 몸통 weight가 큰 허리는 A에 남는다 |
 | 다중 본 | 무한 평면과 교차하는 본 세그먼트 중 최상위만 | 조상이 이미 끊기면 자손 관절은 끊지 않는다 |
 
 ### 그룹과 다수결
@@ -83,7 +83,8 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-3b | 완료(미커밋, base `2a0ab7d2`): body×section count→offset→scatter 압축 셰이더·합성 GPU 검사, P2 surface 우선 배치 수정 | 두-side 정점/depth/provenance/IB 보존·스키닝 주소 일치·합계 6·삼각형/바이트 overflow PASS; D/R 빌드·Release 회귀 PASS |
 | MI-3c | 완료(`96214e6f`): 실제 두 side 비동기 압축·실패 격리·완료 후 회수·몸체별 Mesh/삼각형 수 보관(게시 미연결) | 위팔 body0=518/body1=194, 합계 712=입력 712 및 material/depth/IB/bounds PASS; D/R 빌드·Release 회귀 PASS |
 | MI-3d | 완료(미커밋, base `96214e6f`): 비동기 완료 후 body 0/1 게시·몸체 snapshot 스키닝, cap은 SideDefault, 부적합 결과는 side 폴백 | 위팔 518/194 fallback=0, 허리 90 tris→A, ON/OFF 캡처·D/R 빌드·Release 회귀 PASS |
-| MI-3e | `ClipTrianglesCS` segment 출처 → cap loop 몸체 보조 전달 | 다중 loop cap 귀속·충돌/fallback 진단 |
+| MI-3e | 완료(미커밋, base `e8cd2e59`): segment 출처·leader snapshot → loop별 양쪽 몸체 다수결 진단 | 위팔 팔 keep(B/A)·허리 drop, Xbot 허벅지 drop; conflicts/fallback=0, D/R·Release 회귀 PASS. 귀속은 MI-3f |
+| MI-3e2 | 실제 분리 loop 판정(끊는 세그먼트 교차점 포함)과 그 loop에 닿은 아일랜드의 반공간 몸체 재라벨, 이후 MI-3a 판정 | 위팔 팔 loop real·허리 loop 가짜, Xbot 허벅지 loop real(side0/side1 다른 몸체), fallback=0 |
 | MI-3f | cap loop 귀속 연결 | 위팔 publish/after60 캡처, SP7e2 ≤1mm, PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 |
 | MI-4a | 무한 평면 교차 세그먼트 집합·조상 제거 함수 | 형제 2개/조상+자손/부호 반전 fixture 로그 |
 | MI-4b | joint 집합 팔레트 합집합 선택(`PatchExtractCS::Selected` 재사용) | 중복 삼각형 0, GPU==CPU |
@@ -98,6 +99,10 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 
 - 재배치는 절단 후 body×section 압축(새 Scene compute pass)으로 한다. 절단 전 패치에서 빼는 방식은 교차 삼각형·B_i↔B_j 분배·cap을 풀지 못해 쓰지 않는다.
 - 출력 삼각형 몸체 = provenance `TriangleId`(패치 삼각형)와 출력 side로 `TriangleSideBody` 조회. cap은 loop 단위 몸체(MI-3e까지는 SideDefault).
+- cap loop 규칙: loop의 side0 테두리 아일랜드 몸체와 side1 테두리 아일랜드 몸체가 같으면 그 loop는 실제 분리면이 아니므로 양쪽 cap을 모두 버린다(위팔 MI-3d 캡처의 허리 cap). 다르면 각 side cap은 그 side 테두리 아일랜드의 몸체로 간다. 한 loop 안 테두리 라벨이 섞이면 다수결 후 충돌 수를 로그한다.
+- 아일랜드→몸체 규칙 수정(사용자 확정 2026-11-16): weight 다수결만으로는 관절 근처 절단에서 양쪽이 모두 B가 된다(MI-3e Xbot 허벅지 `side0Body=1 side1Body=1`).
+  끊는 세그먼트 `P_i→자식`과 평면의 교차점을 평면 위 2D로 둘러싼 loop를 "실제 분리 loop"로 본다. 그 loop에 닿은 아일랜드는 반공간으로 정한다(자식 쪽=B_i, 반대=A).
+  어느 실제 분리 loop에도 닿지 않은 아일랜드만 weight 다수결로 정한다. 실제가 아닌 loop의 cap은 버린다. 서로 다른 몸체를 요구하는 실제 loop 둘에 닿은 아일랜드는 다수결로 정하고 충돌로 로그한다.
 - 원본 mask는 합집합 패치 전체를 한 번 숨기고 patch id 하나를 유지한다.
 - 다중 본 A의 강체 부착 node = 모든 `P_i` 부모의 최소 공통 조상(n=1이면 현재와 같다).
 - 다중 break는 전부 성공 아니면 전부 거절(사전 검증 후 순차 commit). 부분 성공은 허용하지 않는다.
@@ -213,4 +218,14 @@ MI-3d(미커밋, base `96214e6f`, 2026-11-16):
 - 지정 `regress.sh Release` 6개 모두 종료 0(11/13/11/11/10/10초, 총 67.71초). SP7e2 case=1 publish/after60은 기존 N/A, case=2/3은 모두 0.000000mm PASS. case=2는 side 폴백(1475/869, fallback=1), case=3은 압축 게시(161/170, fallback=0). PS2 7건·PS3 6건·PS4 12건 PASS, FAIL 0; PS4 간격 변화 0mm. MI-3b/3c·BC-12a/b·AR4·Rig PASS, SP6 누적 246 PASS/0 FAIL. 회귀 D3D12 ERROR/CORRUPTION 0, 기존 DXGI #80 및 D3D12 경고는 남는다.
 - 근거: `%TEMP%/MI3d-{Debug,Release}-build.log`, `MI3d-arm-{on,off}-{patch,debug,exit}.log`, `MI3d-Release-regress{,-debug}.log`, `MI3d-arm-{on,off}-demo-{000,007}-post.png`, `MI3d-report.md`.
 - MI-3d P1 수정(2026-11-16): `Update`의 압축 대기 중과 `FinishCutResult`의 `QueueBreak` 직전에 `DiscardStaleCutResult`로 Applied 후와 동일한 geometry/mask revision을 검사하고, 불일치 시 break 없이 대기 결과·숨긴 staging owner·압축 상태를 정리하고 로그를 남긴다(Applied 후 검사 유지). Debug/Release 빌드 PASS(38.9/49.7초, 오류 0), MX450/591.86에서 지정 Release 위팔 180프레임 실행 PASS(11.84초, body0=518/body1=194 fallback=0), 지정 `regress.sh Release` 6개 종료 0·PASS(73.74초, SP6 누적 272 PASS/0 FAIL; SP7e2 case=1 기존 N/A), 두 실행 D3D12 ERROR/CORRUPTION 0; 근거 `%TEMP%/MI3d-fix-{Debug,Release}-build.log`, `MI3d-fix-UpperArm-{patch,debug}.log`, `MI3d-fix-Release-regress{,-debug}.log`, `MI3d-fix.md`.
+
+MI-3e(미커밋, base `e8cd2e59`, 2026-11-16):
+- `ClipTrianglesCS::main`은 스켈레탈 요청에서만 보조 UAV에 표면 provenance와 같은 `TriangleId`를 기록한다. Static·capacity count는 쓰기를 생략한다.
+- `RankBoundaryCS::main`의 Commit=2가 pointer jumping 완료 후, CapEars 전에 선분별 16B(TriangleId/leader/active/bad)를 보존한다. `CutJob::Poll`은 fence 완료 후 이 표만 수집하고 `CuttingSystem::UpdateOne`이 작업 해제 전 `CutResultEntry`로 소유권을 넘긴다. 전체 정점 CPU readback은 추가하지 않았다. 선택한 두 GPU 버퍼도 작업 예산에 포함한다.
+- `DiagnoseCapLoops`는 active 선분을 leader로 묶어 각 side의 `TriangleSideBody`를 투표한다. 동점은 작은 몸체 번호(A 우선), 유효 표가 없으면 SideDefault다. conflicts는 유효 라벨 중 승자와 다른 (선분, side) 수, fallback은 출처/side 라벨 부재 또는 bad 경계로 투표에서 제외한 (선분, side) 수다. 같은 몸체=drop, 다른 몸체=keep을 로그하며 실제 cap 귀속·압축·게시는 기존 SideDefault 그대로다.
+- MX450/591.86(32.0.15.9186), Release를 ModelViewer 작업 디렉터리에서 `-debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone Skeleton_arm_joint_L__4_ -physics-query-exit 180`으로 실행: 종료 0, 9.91초. 허리 leader=0/segs=29/A-A/drop, 팔 leader=4/segs=16/B-A/keep. loops=2/drop=1/keep=1/conflicts=0/fallback=0. 기존 게시 518/194/fallback=0 유지.
+- 같은 디렉터리에서 `-debug 1 -skeletal-break-demo 1 -physics-query-exit 180`: 종료 0, 12.72초. Xbot 허벅지 leader=0/segs=60/B-B/drop, loops=1/drop=1/keep=0/conflicts=0/fallback=0. 기존 MI-3d 게시 1475/869/fallback=1 유지(동일 SideDefault).
+- Debug/Release 지정 MSBuild 성공, 오류 0(40.63/61.01초, 기존 경고 55). 주석 정리 후 최종 재빌드도 오류 0(13.28/15.31초, 기존 경고 5). 지정 `regress.sh Release` 6개 모두 종료 0, 63.96초: MI-3b/3c·BC-12a/b·AR4(Static 재절단 포함)·Rig PASS. SP6 누적 298 PASS/0 FAIL, SP7e2 case=1 기존 N/A, case=2/3 publish/after60 모두 0mm PASS. 두 데모·회귀 D3D12 ERROR/CORRUPTION 0, 기존 DXGI #80 관찰.
+- Geometry/ 변경·신규 파일 없음. `ModelViewer.cpp`의 다른 세션 미커밋 변경은 보존했다. 근거: `%TEMP%/MI3e-{Debug,Release}{,-final}-build.log`, `MI3e-{UpperArm,Thigh}-{patch,debug}.log`, `MI3e-Release-regress{,-debug}.log`, `MI3e-report.md`.
+
 (MI-5에서 추가 기록)

@@ -2022,7 +2022,7 @@ namespace Viewer
             owner->SetNotCuttable(false);
             try
             {
-                m_CutInFlight = cutting.Request(m_CopyOwner, component->GetId(), m_Plane);
+                m_CutInFlight = cutting.Request(m_CopyOwner, component->GetId(), m_Plane, true, 1.0e-5f, 0, m_SkinPatch != nullptr);
             }
             catch (...)
             {
@@ -2157,6 +2157,70 @@ namespace Viewer
         if (copies != 1)
             throw std::runtime_error("Skeletal patch copy isolation failed");
         return false;
+    }
+
+    // 보존한 경계 출처를 반공간 라벨로 투표하고 MI-3f의 cap 정책만 진단한다.
+    static void DiagnoseCapLoops(const CutResultEntry& result, const IslandLabels& islands)
+    {
+        // 유효한 loop의 각 선분에서 양쪽 몸체 투표와 미해결 수를 집계한다.
+        struct Votes
+        {
+            uint32_t Segments = 0, Missing[2] = {};
+            std::map<uint32_t, uint32_t> Side[2];
+        };
+        std::map<uint32_t, Votes> loops;
+        for (const auto& segment : result.CapSegments)
+        {
+            if (!segment[2])
+                continue;
+            auto& votes = loops[segment[1]];
+            ++votes.Segments;
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                const uint32_t body = segment[0] < islands.TriangleSideBody.size()
+                    ? islands.TriangleSideBody[segment[0]][side] : UINT32_MAX;
+                if (body == UINT32_MAX || (segment[3] & 5) != 0)
+                    ++votes.Missing[side];
+                else
+                    ++votes.Side[side][body];
+            }
+        }
+
+        // 최다 득표 몸체를 고르고 동점은 작은 몸체 번호, 출처 부재는 SideDefault로 기록한다.
+        uint32_t drop = 0, conflicts = 0, fallback = 0;
+        for (const auto& loop : loops)
+        {
+            const auto& votes = loop.second;
+            uint32_t bodies[2], disagreement = 0;
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                bodies[side] = islands.SideDefault[side];
+                uint32_t best = 0, valid = 0;
+                for (const auto& vote : votes.Side[side])
+                {
+                    valid += vote.second;
+                    if (vote.second > best)
+                    {
+                        best = vote.second;
+                        bodies[side] = vote.first;
+                    }
+                }
+                disagreement += valid - best;
+                fallback += votes.Missing[side];
+            }
+
+            // 같은 몸체면 양쪽 cap 제거를 예고하고 실제 귀속과 출력은 그대로 둔다.
+            conflicts += disagreement;
+            if (bodies[0] == bodies[1]) ++drop;
+            const std::string action = bodies[0] == bodies[1] ? "drop" :
+                "keep(side0->" + std::to_string(bodies[0]) + ",side1->" + std::to_string(bodies[1]) + ")";
+            PatchLog("MI3e loop=%u segs=%u side0Body=%u side1Body=%u conflicts=%u action=%s\n",
+                loop.first, votes.Segments, bodies[0], bodies[1], disagreement, action.c_str());
+        }
+
+        // fallback은 출처가 없어 투표에서 빠진 (선분, side) 수다.
+        PatchLog("MI3e loops=%u drop=%u keep=%u conflicts=%u fallback=%u\n",
+            uint32_t(loops.size()), drop, uint32_t(loops.size()) - drop, conflicts, fallback);
     }
 
     // cutter 출력의 실제 section 범위만 판정하고 결과는 다음 압축 단계용으로 보관한다.
@@ -2561,6 +2625,7 @@ namespace Viewer
                 try
                 {
                     // 분류나 압축 실패는 기존 A/B 게시 준비에 전파하지 않는다.
+                    DiagnoseCapLoops(result, m_SkinPatch->Islands);
                     for (uint32_t side = 0; side < 2; ++side)
                         ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, side);
                     CompactCutBodies(inputs);
