@@ -28,7 +28,7 @@ namespace Viewer
         double GpuMs = 0;
         double ReadyMs = 0;
         std::array<double, 4> StageMs{};  // clip, boundary, cap, finalize GPU ms
-        std::vector<std::array<uint32_t, 4>> CapSegments; // cap 이전 선분 출처 snapshot
+        std::vector<std::array<uint32_t, 8>> CapSegments; // 출처·leader·active·bad 및 float 비트의 2D 양 끝점
         uint32_t Loops = 0, CapMaxLoop = 0, CapMappedLoops = 0, CapRounds = 0;  // cap 루프 크기와 Mapped 경로 진단
     };
 

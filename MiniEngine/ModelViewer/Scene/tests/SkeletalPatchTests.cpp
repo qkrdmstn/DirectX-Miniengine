@@ -171,7 +171,19 @@ int main()
 
     // 비본 노드는 건너뛰며 사각형 밖 교점은 segment 후보에서 제외한다.
     Check(MeshCutting::TryBuildCutPlaneData({2, 2}, AffineTransform(kIdentity), plane), "origin plane");
-    Check(Viewer::SelectSegmentJoint(parents, {Vector3(0, -2, 0), Vector3(0, -1, 0), Vector3(0, 2, 0)}, {{0, 2}}, plane, std::vector<uint8_t>(3, 1)).NodeId == 0, "skip non-joint ancestor");
+    const auto sparse = Viewer::SelectSegmentJoint(parents,
+        {Vector3(0, -2, 0), Vector3(0, -1, 0), Vector3(0, 2, 0)}, {{0, 2}}, plane, std::vector<uint8_t>(3, 1));
+    Check(sparse.NodeId == 0 && sparse.ChildNodeId == 2, "skip non-joint ancestor");
+
+    // 선택된 0→2 선분은 직접 부모가 달라도 유지하고 중간 자식은 제외한다.
+    Check(Viewer::IsSelectedSegmentChild(sparse.NodeId, 2, parents[2], sparse.ChildNodeId), "snapshot keeps indirect child");
+    Check(!Viewer::IsSelectedSegmentChild(sparse.NodeId, 1, parents[1], sparse.ChildNodeId), "snapshot excludes other child");
+
+    // snapshot이 없을 때는 직접 자식만 교차 후보로 허용한다.
+    Check(Viewer::IsSelectedSegmentChild(0, 1, parents[1], UINT32_MAX), "fallback keeps direct child");
+    Check(!Viewer::IsSelectedSegmentChild(0, 2, parents[2], UINT32_MAX), "fallback excludes indirect child");
+
+    // 유한 사각형 밖의 교차는 말단 선택으로 돌아간다.
     const auto outside = Viewer::SelectSegmentJoint({UINT32_MAX, 0}, {Vector3(3, -1, 0), Vector3(3, 1, 0)}, {{0, 1}}, plane, std::vector<uint8_t>(2, 1));
     Check(outside.NodeId == 1 && outside.Kind == Viewer::SegmentJointKind::Leaf, "finite rectangle excludes crossing");
 

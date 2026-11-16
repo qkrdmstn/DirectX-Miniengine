@@ -57,6 +57,7 @@ struct PatchIsland
 struct IslandLabels
 {
     std::vector<std::array<uint32_t, 2>> TriangleSideBody; // 없는 side는 UINT32_MAX
+    std::vector<std::array<uint32_t, 2>> TriangleSideIsland; // 재라벨에 사용하는 안정된 아일랜드 번호
     std::vector<PatchIsland> Islands;
     uint32_t IslandCount = 0;
     uint32_t SideDefault[2] = {}; // 해당 side의 삼각형 수 다수결, 동점 A
@@ -65,3 +66,14 @@ struct IslandLabels
 IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vector<SkinCpuSection>& sections,
     const std::vector<std::array<uint32_t, 2>>& triangles, const std::vector<std::vector<int8_t>>& signs,
     const std::function<uint32_t(uint32_t)>& jointGroup);
+
+// 순서와 무관한 폐곡선 선분의 홀짝 교차로 내부와 경계 포함을 판정한다.
+bool ContainsLatticeLoop(const std::vector<std::array<float, 4>>& edges, const std::array<float, 2>& point);
+// 교차점을 감싼 유효 폐곡선 중 최소 면적 loop를 반환한다.
+uint32_t SmallestContainingLatticeLoop(const std::map<uint32_t, std::vector<std::array<float, 4>>>& loops,
+    const std::array<float, 2>& point);
+// 끝점 허용오차를 처리하고 부모에서 자식으로 향하는 반공간을 반환한다.
+bool IntersectLatticeSegment(float parentDistance, float childDistance, float& fraction, uint32_t& childSide);
+// (삼각형, side, 요구 몸체)를 아일랜드에 전파하고 충돌은 원래 다수결을 보존한다.
+std::array<uint32_t, 3> RelabelPatchIslands(IslandLabels& labels,
+    const std::vector<std::array<uint32_t, 3>>& requests);

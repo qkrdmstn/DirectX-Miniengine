@@ -42,7 +42,10 @@ namespace Viewer
         float SourceWorldWidth = 0;
         std::vector<uint32_t> Triangles;
         std::vector<std::array<uint32_t, 2>> IslandSources; // skin CPU section, section 로컬 삼각형
-        IslandLabels Islands; // MI-3용 진단 표이며 GPU 출력에는 아직 적용하지 않는다.
+        IslandLabels Islands; // snapshot 수집 뒤 재라벨하여 GPU 분류에 사용한다.
+        Math::Vector3 Crossing = Math::Vector3(Math::kZero);
+        bool HasCrossing = false;
+        uint32_t ChildSide = 0;
         std::vector<BoundaryVertex> Boundary; // 진단에서만 채우는 C 시점 바깥 경계 정점
         std::vector<BoundarySkin> BoundarySkins;
     };
@@ -57,7 +60,7 @@ namespace Viewer
         bool Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
             const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
             uint32_t node = UINT32_MAX, bool diagnostic = false, bool influence = false,
-            const std::vector<NodeId>& parents = {});
+            const std::vector<NodeId>& parents = {}, uint32_t child = UINT32_MAX);
         // 확대된 실제 복사본 평면으로 제출 포즈의 부호를 예측하고 진단 표만 보관한다.
         void DiagnoseIslands(SkeletalPatchBuffers& patch, const MeshCutting::CutPlaneData& plane,
             float offset, bool positiveA, const std::string& modelName);
@@ -93,9 +96,11 @@ namespace Viewer
         std::vector<NodeId> m_Parents;
         std::vector<Joint> m_IslandJoints;
         std::vector<Math::Matrix4> m_IslandFrames;
+        std::vector<Math::Matrix4> m_IslandNodes;
         std::vector<uint32_t> m_SkinSections;
         IslandLabels m_IslandLabels; // 출력 버퍼 해제 뒤에도 다음 요청까지 결과를 보관한다.
         uint32_t m_Node = UINT32_MAX;
+        uint32_t m_ChildNode = UINT32_MAX;
         bool m_Diagnostic = false;
         uint64_t m_Fence = 0;
     };

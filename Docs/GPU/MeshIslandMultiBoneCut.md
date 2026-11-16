@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-3d `e8cd2e59` 완료; MI-3e cap loop 몸체 진단 구현(미커밋, base `e8cd2e59`), D/R 빌드·Release 위팔/허벅지·회귀 PASS (2026-11-16).
+상태: 진행 중 — MI-3e `94f17ca0` 완료; MI-3e2 실제 loop 판정·아일랜드 재라벨 구현(미커밋, base `94f17ca0`), CPU·D/R 빌드·Release 3사례·회귀 PASS (2026-11-16). 리뷰 3건(중첩 최소 면적·선택 자식 snapshot·끝점 허용오차) 수정 및 CPU/D/R/3데모/회귀 PASS(미커밋, base `94f17ca0`, 2026-11-16).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -84,7 +84,7 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-3c | 완료(`96214e6f`): 실제 두 side 비동기 압축·실패 격리·완료 후 회수·몸체별 Mesh/삼각형 수 보관(게시 미연결) | 위팔 body0=518/body1=194, 합계 712=입력 712 및 material/depth/IB/bounds PASS; D/R 빌드·Release 회귀 PASS |
 | MI-3d | 완료(미커밋, base `96214e6f`): 비동기 완료 후 body 0/1 게시·몸체 snapshot 스키닝, cap은 SideDefault, 부적합 결과는 side 폴백 | 위팔 518/194 fallback=0, 허리 90 tris→A, ON/OFF 캡처·D/R 빌드·Release 회귀 PASS |
 | MI-3e | 완료(미커밋, base `e8cd2e59`): segment 출처·leader snapshot → loop별 양쪽 몸체 다수결 진단 | 위팔 팔 keep(B/A)·허리 drop, Xbot 허벅지 drop; conflicts/fallback=0, D/R·Release 회귀 PASS. 귀속은 MI-3f |
-| MI-3e2 | 실제 분리 loop 판정(끊는 세그먼트 교차점 포함)과 그 loop에 닿은 아일랜드의 반공간 몸체 재라벨, 이후 MI-3a 판정 | 위팔 팔 loop real·허리 loop 가짜, Xbot 허벅지 loop real(side0/side1 다른 몸체), fallback=0 |
+| MI-3e2 | 완료(미커밋, base `94f17ca0`): 제출 포즈 교차점·실제 loop 판정, 테두리 아일랜드 재라벨 후 MI-3a/3c | 위팔 팔 keep·허리 drop/A 유지, Xbot 허벅지 keep(1/0)·fallback=0; CPU·D/R·Release 3사례·회귀 PASS |
 | MI-3f | cap loop 귀속 연결 | 위팔 publish/after60 캡처, SP7e2 ≤1mm, PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 |
 | MI-4a | 무한 평면 교차 세그먼트 집합·조상 제거 함수 | 형제 2개/조상+자손/부호 반전 fixture 로그 |
 | MI-4b | joint 집합 팔레트 합집합 선택(`PatchExtractCS::Selected` 재사용) | 중복 삼각형 0, GPU==CPU |
@@ -102,6 +102,8 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 - cap loop 규칙: loop의 side0 테두리 아일랜드 몸체와 side1 테두리 아일랜드 몸체가 같으면 그 loop는 실제 분리면이 아니므로 양쪽 cap을 모두 버린다(위팔 MI-3d 캡처의 허리 cap). 다르면 각 side cap은 그 side 테두리 아일랜드의 몸체로 간다. 한 loop 안 테두리 라벨이 섞이면 다수결 후 충돌 수를 로그한다.
 - 아일랜드→몸체 규칙 수정(사용자 확정 2026-11-16): weight 다수결만으로는 관절 근처 절단에서 양쪽이 모두 B가 된다(MI-3e Xbot 허벅지 `side0Body=1 side1Body=1`).
   끊는 세그먼트 `P_i→자식`과 평면의 교차점을 평면 위 2D로 둘러싼 loop를 "실제 분리 loop"로 본다. 그 loop에 닿은 아일랜드는 반공간으로 정한다(자식 쪽=B_i, 반대=A).
+  중첩되면 교차점을 포함하는 유효 폐곡선 중 최소 면적 loop 하나만 실제로 선택하며, 끝점은 |d|<=1e-5에서 교차로 처리하고 B는 부모→자식 방향으로 정한다.
+  선택기의 ChildNodeId를 제출 snapshot에 보존해 사용하며, 보존값이 없으면 B 루트 P_i의 직접 자식 중 평면 교차점이 평면 중심에 가장 가까운 선분을 사용한다.
   어느 실제 분리 loop에도 닿지 않은 아일랜드만 weight 다수결로 정한다. 실제가 아닌 loop의 cap은 버린다. 서로 다른 몸체를 요구하는 실제 loop 둘에 닿은 아일랜드는 다수결로 정하고 충돌로 로그한다.
 - 원본 mask는 합집합 패치 전체를 한 번 숨기고 patch id 하나를 유지한다.
 - 다중 본 A의 강체 부착 node = 모든 `P_i` 부모의 최소 공통 조상(n=1이면 현재와 같다).
@@ -228,4 +230,23 @@ MI-3e(미커밋, base `e8cd2e59`, 2026-11-16):
 - Debug/Release 지정 MSBuild 성공, 오류 0(40.63/61.01초, 기존 경고 55). 주석 정리 후 최종 재빌드도 오류 0(13.28/15.31초, 기존 경고 5). 지정 `regress.sh Release` 6개 모두 종료 0, 63.96초: MI-3b/3c·BC-12a/b·AR4(Static 재절단 포함)·Rig PASS. SP6 누적 298 PASS/0 FAIL, SP7e2 case=1 기존 N/A, case=2/3 publish/after60 모두 0mm PASS. 두 데모·회귀 D3D12 ERROR/CORRUPTION 0, 기존 DXGI #80 관찰.
 - Geometry/ 변경·신규 파일 없음. `ModelViewer.cpp`의 다른 세션 미커밋 변경은 보존했다. 근거: `%TEMP%/MI3e-{Debug,Release}{,-final}-build.log`, `MI3e-{UpperArm,Thigh}-{patch,debug}.log`, `MI3e-Release-regress{,-debug}.log`, `MI3e-report.md`.
 
+MI-3e2(미커밋, base `94f17ca0`, 2026-11-16):
+- `SkeletalPatchJob::Submit`이 prepared nodes도 고정한다. `DiagnoseIslands`는 실제 incoming B 루트 P의 자식 중 평면을 가로지르는 세그먼트의 교차점과 자식 side를 제출 component world·공통 skin frame으로 계산한다.
+- CapEars 전 snapshot을 16B→32B로 늘려 출처·leader·active·bad와 평면 2D 양 끝점을 보존한다. 요청 예산·GPU/readback stride도 함께 갱신했다. 전체 정점 readback은 추가하지 않는다.
+- `ContainsLatticeLoop`는 순서와 무관한 선분의 홀짝 교차로 오목 loop와 경계 포함을 판정한다. `TriangleSideIsland`를 보존하고 `RelabelPatchIslands`가 실제 loop에 닿은 아일랜드 전체를 자식 쪽 B/반대쪽 A로 바꾼다. 미접촉은 다수결, 상충 요구는 원래 다수결과 충돌 수를 보존한다. GPU 표와 임시 SideDefault도 갱신한다.
+- `OnCutResult`는 이미 snapshot 수집 뒤 호출된다. `RelabelCapLoops`→`DiagnoseCapLoops`→`ClassifyCutBodies`→`CompactCutBodies` 순서로 연결하여 추가 프레임 지연 없이 기존 비동기 압축·원본 revision 검증을 유지한다. MI-3e action은 실제 loop만 keep이다. 실제 cap 귀속·제거는 MI-3f에 남긴다.
+- CPU 테스트 PASS(최종 컴파일·실행 4.95초): 오목 polygon 내부/외부/꼭짓점/수평 경계, 아일랜드 전체 전파·정확한 변경 수·미접촉 허리·없는 side·SideDefault 동점, 상충 다수결 보존. Geometry/ 변경 없음.
+- 지정 MSBuild Debug/Release 최종 성공(39.92/43.46초, 오류 0, 경고 67/55). 첫 빌드도 오류 0으로 성공했다. 초기 Developer PowerShell 호출은 실행 정책으로 실행되지 않아 process 범위 Bypass 후 CPU 테스트를 실행했다.
+- Release, ModelViewer 작업 디렉터리, MX450/591.86: (a) 지정 CesiumMan 위팔 9.67초·종료 0, crossing=(12.688820,0.540722,-0.262048), 팔 realLoop=0 keep(1/0), 허리 loop=6 drop·90 tris A 유지, relabeled=0, body0=518/body1=194 fallback=0. (b) Xbot 허벅지 9.04초·종료 0, realLoop=0, 1 island/1372 triangle-side 재라벨, keep(1/0), body0=1475/body1=869 fallback=0(기존 1). (c) 기본 CesiumMan 팔 9.32초·종료 0, realLoop=0 keep(1/0), body0=161/body1=170 fallback=0. 교차점 상세는 각 patch 로그 참조.
+- 지정 `regress.sh Release` 6개 모두 종료 0(8/12/9/9/9/8초, 수집 56.22초). MI3b/3c·BC-12a/b·AR4(Static 재절단 포함)·Rig PASS, SP6 누적 376 PASS/0 FAIL. SP7e2 case=1은 기존 N/A(noCoincidentKeptBoundary), case=2/3 publish/after60 모두 0.000000mm PASS. case=2는 압축 게시 fallback=0이며 PS4 간격 변화도 0mm PASS.
+- 세 데모와 회귀의 debugger 수집에서 D3D12 ERROR/CORRUPTION 0. 기존 DXGI #80·D3D12 경고는 남아 있다. `ModelViewer.cpp` SHA256은 작업 전후 동일하다. 커밋·브랜치 변경 없음.
+- 근거: `%TEMP%/MI3e2-unit.log`, `MI3e2-{Debug,Release}-final-build.log`, `MI3e2-{UpperArm,Thigh,DefaultArm}-{patch,debug,run}.log`, `MI3e2-Release-regress{,-debug}.log`, `MI3e2-report.md`.
+
 (MI-5에서 추가 기록)
+
+MI-3e2 리뷰 3건 수정(미커밋, base `94f17ca0`, 2026-11-16):
+- `SmallestContainingLatticeLoop`로 중첩 시 최소 면적 유효 loop 하나만 고른다. `Submit`은 선택 자식을 보존하고 `DiagnoseIslands`는 그 선분을 우선한다. `IntersectLatticeSegment`는 끝점 허용오차와 선분 진행 방향으로 B side를 정한다.
+- CPU PASS; 외부 출력 경로 전체 Debug/Release 빌드 286.49/305.26초, 최종 재빌드 28.81/21.79초, 모두 오류 0.
+- Release 3데모 종료 0: 위팔 relabel=0/0, real=0, keep/drop=1/1, body=518/194; Xbot 허벅지 relabel=1/1372, real=0, keep/drop=1/0, body=1475/869; 기본 CesiumMan relabel=0/0, real=0, keep/drop=1/0, body=161/170. conflicts·fallback 모두 0.
+- 지정 회귀 6실행 모두 종료 0, 53.83초. BC-12a/b·AR4·Rig PASS; SP7e2 case=2/3 publish/after60 0mm PASS, case=1 기존 N/A. 3데모·회귀 D3D12 ERROR/CORRUPTION 0.
+- 근거와 실행 경로: `%TEMP%/MI3e2-fix.md`. 빌드 출력은 `%TEMP%/MI3e2-fix-build/`, `ModelViewer.cpp` 해시는 작업 전후 동일하다.

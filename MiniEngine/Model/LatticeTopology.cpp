@@ -238,9 +238,133 @@ IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vecto
     for (uint32_t side = 0; side < 2; ++side)
         for (const auto& count : counts[side])
             if (count.second > counts[side][result.SideDefault[side]]) result.SideDefault[side] = count.first;
+    result.TriangleSideIsland = nodes;
     result.TriangleSideBody = nodes;
     for (auto& bodies : result.TriangleSideBody)
         for (auto& body : bodies)
             if (body != UINT32_MAX) body = result.Islands[body].Body;
     return result;
+}
+
+// 경계는 포함하고 수평 변과 꼭짓점의 중복 교차는 반개구간으로 처리한다.
+bool ContainsLatticeLoop(const std::vector<std::array<float, 4>>& edges, const std::array<float, 2>& point)
+{
+    // 세 변 미만은 유효한 폐곡선이 아니다.
+    if (edges.size() < 3) return false;
+
+    // 각 선분의 방향과 검사점의 상대 위치를 계산한다.
+    bool inside = false;
+    for (const auto& e : edges)
+    {
+        // 경계 판정에 사용할 길이와 외적 및 내적을 구한다.
+        const double dx = double(e[2]) - e[0], dy = double(e[3]) - e[1];
+        const double x = double(point[0]) - e[0], y = double(point[1]) - e[1];
+        const double length = dx * dx + dy * dy;
+        const double cross = x * dy - y * dx, dot = x * dx + y * dy;
+
+        // 선분 경계 위의 점은 폐곡선 내부에 포함한다.
+        if (length > 0 && cross * cross <= 1e-12 * length && dot >= 0 && dot <= length) return true;
+
+        // 반개구간 교차마다 홀짝 상태를 반전한다.
+        if ((e[1] > point[1]) != (e[3] > point[1]) && x < dx * y / dy) inside = !inside;
+    }
+
+    // 모든 선분을 지난 뒤의 홀짝 상태를 반환한다.
+    return inside;
+}
+
+// 순서가 섞인 유향 변의 면적을 비교해 중첩 loop 중 가장 안쪽 하나를 고른다.
+uint32_t SmallestContainingLatticeLoop(const std::map<uint32_t, std::vector<std::array<float, 4>>>& loops,
+    const std::array<float, 2>& point)
+{
+    // 폐곡선의 포함 여부를 확인하고 최소 절대 면적 후보만 남긴다.
+    uint32_t selected = UINT32_MAX;
+    double smallest = std::numeric_limits<double>::max();
+    for (const auto& loop : loops)
+    {
+        if (!ContainsLatticeLoop(loop.second, point)) continue;
+        double area = 0;
+        for (const auto& edge : loop.second)
+        {
+            area += double(edge[0]) * edge[3] - double(edge[2]) * edge[1];
+        }
+
+        // 호출자가 유효성을 확인한 폐곡선에서 퇴화 면적은 제외한다.
+        area = std::abs(area);
+        if (area > 0 && area < smallest)
+        {
+            smallest = area;
+            selected = loop.first;
+        }
+    }
+    return selected;
+}
+
+// 평면 끝점 허용오차와 엄격한 관통을 같은 선분 교차 규칙으로 처리한다.
+bool IntersectLatticeSegment(float parentDistance, float childDistance, float& fraction, uint32_t& childSide)
+{
+    // 양 끝이 평면 위이면 유일한 교차점이 없으므로 제외한다.
+    const bool parentOn = std::abs(parentDistance) <= 1e-5f;
+    const bool childOn = std::abs(childDistance) <= 1e-5f;
+    if (parentOn && childOn) return false;
+    if (!parentOn && !childOn && (parentDistance > 0) == (childDistance > 0)) return false;
+
+    // 끝점 교차는 끝점에 고정하고 B는 부모에서 자식으로 향하는 방향으로 정한다.
+    fraction = parentOn ? 0.0f : childOn ? 1.0f : parentDistance / (parentDistance - childDistance);
+    childSide = childDistance > parentDistance ? 0 : 1;
+    return true;
+}
+
+// 모든 요구를 먼저 모아 순서에 무관하게 충돌 아일랜드의 다수결을 보존한다.
+std::array<uint32_t, 3> RelabelPatchIslands(IslandLabels& labels,
+    const std::vector<std::array<uint32_t, 3>>& requests)
+{
+    // 같은 아일랜드에 다른 몸체 요구가 오면 별도 충돌 표시에 둔다.
+    std::vector<uint32_t> bodies(labels.Islands.size(), UINT32_MAX);
+    std::vector<bool> conflict(bodies.size(), false);
+    for (const auto& request : requests)
+    {
+        if (request[0] >= labels.TriangleSideIsland.size() || request[1] > 1) continue;
+        const uint32_t island = labels.TriangleSideIsland[request[0]][request[1]];
+        if (island == UINT32_MAX) continue;
+        if (bodies[island] != UINT32_MAX && bodies[island] != request[2]) conflict[island] = true;
+        bodies[island] = request[2];
+    }
+
+    // 변경된 아일랜드 수와 삼각형-side 수 및 충돌 수를 반환한다.
+    std::array<uint32_t, 3> counts = {};
+    for (size_t i = 0; i < bodies.size(); ++i)
+    {
+        if (conflict[i]) ++counts[2];
+        else if (bodies[i] != UINT32_MAX && labels.Islands[i].Body != bodies[i])
+        {
+            labels.Islands[i].Body = bodies[i];
+            ++counts[0];
+            counts[1] += labels.Islands[i].Triangles;
+        }
+    }
+
+    // GPU 표와 cap 임시 기본 몸체를 재라벨된 결과로 다시 계산한다.
+    std::map<uint32_t, uint32_t> totals[2];
+    for (size_t t = 0; t < labels.TriangleSideBody.size(); ++t)
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            const uint32_t island = labels.TriangleSideIsland[t][side];
+            if (island == UINT32_MAX) continue;
+            const uint32_t body = labels.Islands[island].Body;
+            labels.TriangleSideBody[t][side] = body;
+            ++totals[side][body];
+        }
+    for (uint32_t side = 0; side < 2; ++side)
+    {
+        labels.SideDefault[side] = 0;
+        uint32_t best = 0;
+        for (const auto& total : totals[side])
+            if (total.second > best)
+            {
+                best = total.second;
+                labels.SideDefault[side] = total.first;
+            }
+    }
+    return counts;
 }

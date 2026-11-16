@@ -25,8 +25,8 @@ namespace MeshCutting
         std::vector<Mesh> Templates;
         ByteAddressBuffer Metadata, Scratch, LoopSources;
         ReadbackBuffer LoopReadback;
-        // 선분마다 TriangleId, leader, active, bad를 cap 처리 전에 보존한다.
-        std::vector<std::array<uint32_t, 4>> CapSegments;
+        // 선분마다 TriangleId, leader, active, bad와 평면 2D 양 끝점을 보존한다.
+        std::vector<std::array<uint32_t, 8>> CapSegments;
         StructuredBuffer Descriptors;
         ReadbackBuffer StatusReadback, TimeReadback;
         ReadbackBuffer DiagnosticInputData;

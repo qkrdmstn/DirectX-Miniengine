@@ -298,7 +298,7 @@ namespace MeshCutting
         bytes += allocated(5 * sizeof(uint64_t));
 
         // 선택한 선분 진단의 UAV와 readback도 작업별 예산에 포함한다.
-        if (captureLoops) bytes += allocated(segments * 16) * 2;
+        if (captureLoops) bytes += allocated(segments * 32) * 2;
 
         // 11개 GPU buffer 외 counter·query heap·동적 constant allocator page를 더한다.
         bytes += AllocationGranularity * 3;
@@ -365,7 +365,7 @@ namespace MeshCutting
         if (LoopReadback.GetResource())
         {
             CapSegments.resize(std::min(Status[1], Constants.MaxSegments));
-            std::memcpy(CapSegments.data(), LoopReadback.Map(), CapSegments.size() * 16);
+            std::memcpy(CapSegments.data(), LoopReadback.Map(), CapSegments.size() * 32);
             LoopReadback.Unmap();
         }
 
@@ -631,11 +631,11 @@ namespace MeshCutting
         job->Descriptors.Create(L"Cut sections", c.Sections, sizeof(CutSection));
         job->StatusReadback.Create(L"Cut metadata readback", uint32_t(initial.size()), 4);
         job->TimeReadback.Create(L"Cut timestamp readback", 5, 8);
-        // 스켈레탈 요청에서만 선분별 16B 보조 표와 readback을 확보한다.
+        // 스켈레탈 요청에서만 선분별 32B 보조 표와 readback을 확보한다.
         if (captureLoops)
         {
-            job->LoopSources.Create(L"Cap segment sources", c.MaxSegments, 16);
-            job->LoopReadback.Create(L"Cap segment readback", c.MaxSegments, 16);
+            job->LoopSources.Create(L"Cap segment sources", c.MaxSegments, 32);
+            job->LoopReadback.Create(L"Cap segment readback", c.MaxSegments, 32);
         }
 
         D3D12_QUERY_HEAP_DESC q{};

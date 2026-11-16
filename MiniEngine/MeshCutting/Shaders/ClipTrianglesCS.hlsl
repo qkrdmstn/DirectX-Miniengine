@@ -183,7 +183,7 @@ void main(uint3 id : SV_DispatchThreadID)
     
     // 선분 하나에 128 바이트 (연결, loop 상태, cap 정보를 저장)
     // 보조 버퍼가 있는 요청만 표면 출처와 동일한 TriangleId를 저장한다.
-    if (CaptureLoops != 0) LoopSources.Store(at * 16, t);
+    if (CaptureLoops != 0) LoopSources.Store(at * 32, t);
 
     Ring.Store3(at * 128, asuint(enter)); // 3D 좌표 저장 (12바이트)
     Ring.Store3(at * 128 + 12, asuint(exit));

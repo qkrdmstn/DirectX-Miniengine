@@ -174,6 +174,56 @@ int main()
         Require(zeroCrossing.IslandCount == 2 && zeroCrossing.Islands[0].Triangles == 2
             && zeroCrossing.Islands[1].Triangles == 2, "on-plane vertices join both sides");
 
+        // 순서가 섞인 오목 polygon의 내부·외부·경계와 빈 loop를 검사한다.
+        const std::vector<std::array<float, 4>> loop = {
+            {2,0,1,1}, {0,2,0,0}, {1,1,2,2}, {0,0,2,0}, {2,2,0,2} };
+        Require(ContainsLatticeLoop(loop, {0.5f,1}) && !ContainsLatticeLoop(loop, {1.8f,1})
+            && ContainsLatticeLoop(loop, {1,1}) && ContainsLatticeLoop(loop, {1,0})
+            && !ContainsLatticeLoop({}, {0,0}), "MI3e2 concave containment and boundary");
+
+        // 중첩 loop는 방향과 열거 순서에 무관하게 최소 면적 폐곡선 하나만 선택한다.
+        const std::vector<std::array<float, 4>> outer = {
+            {-3,-3,3,-3}, {3,3,-3,3}, {3,-3,3,3}, {-3,3,-3,-3} };
+        const std::vector<std::array<float, 4>> inner = {
+            {-1,-1,-1,1}, {1,1,1,-1}, {-1,1,1,1}, {1,-1,-1,-1} };
+        Require(SmallestContainingLatticeLoop({{0,outer}, {7,inner}}, {0,0}) == 7
+            && SmallestContainingLatticeLoop({{0,inner}, {7,outer}}, {0,0}) == 0
+            && SmallestContainingLatticeLoop({{0,outer}, {7,inner}}, {2,0}) == 0
+            && SmallestContainingLatticeLoop({{0,outer}}, {4,0}) == UINT32_MAX,
+            "MI3e2 nested loops select only smallest area");
+
+        // 끝점 허용오차는 정확한 끝점으로 고정하고 B는 선분 진행 방향을 따른다.
+        float fraction = 0;
+        uint32_t childSide = 0;
+        Require(IntersectLatticeSegment(-1, 1, fraction, childSide) && fraction == 0.5f && childSide == 0,
+            "MI3e2 strict crossing");
+        Require(IntersectLatticeSegment(0, -1, fraction, childSide) && fraction == 0 && childSide == 1,
+            "MI3e2 parent on plane");
+        Require(IntersectLatticeSegment(-1, -1e-5f, fraction, childSide) && fraction == 1 && childSide == 0,
+            "MI3e2 child on plane points toward positive");
+        Require(IntersectLatticeSegment(1, 1e-5f, fraction, childSide) && fraction == 1 && childSide == 1,
+            "MI3e2 child on plane points toward negative");
+        Require(IntersectLatticeSegment(1e-5f, 1, fraction, childSide) && fraction == 0 && childSide == 0
+            && !IntersectLatticeSegment(2e-5f, 1, fraction, childSide)
+            && !IntersectLatticeSegment(0, 0, fraction, childSide), "MI3e2 tolerance and coplanar rejection");
+
+        // 실제 loop의 한 삼각형만 요청해도 아일랜드 전체가 바뀌며 허리는 다수결을 유지한다.
+        auto relabeled = LabelPatchIslands(BuildLatticeTopology(strips), strips, patch,
+            {{1,1,1,1}, {1,1,1,1}}, groups);
+        const auto waist = relabeled.TriangleSideBody.back()[0];
+        const auto changed = RelabelPatchIslands(relabeled, {{0,0,1}, {0,0,1}, {999,0,1}, {0,1,1}});
+        Require(changed == std::array<uint32_t, 3>{1,2,0} && relabeled.TriangleSideBody[0][0] == 1
+            && relabeled.TriangleSideBody[1][0] == 1 && relabeled.TriangleSideBody.back()[0] == waist
+            && relabeled.TriangleSideBody[0][1] == UINT32_MAX && relabeled.SideDefault[0] == 0,
+            "MI3e2 whole island and untouched waist");
+
+        // 상반된 loop 요구는 최초 다수결을 보존하고 없는 side는 sentinel로 남는다.
+        auto conflicting = fullVote;
+        const auto conflict = RelabelPatchIslands(conflicting, {{0,0,0}, {0,0,1}, {0,1,0}});
+        Require(conflict[2] == 1 && conflicting.TriangleSideBody[0][0] == fullVote.TriangleSideBody[0][0]
+            && conflicting.TriangleSideBody[0][1] == 0 && conflicting.SideDefault[1] == 0,
+            "MI3e2 conflicting demands preserve majority and update defaults");
+
         // 빈 입력과 점 크기 bounds도 유효한 결과를 낸다.
         Require(CountLatticeComponents(BuildLatticeTopology({})) == 0, "empty");
         Require(BuildLatticeTopology({ SkinCpuSection{ strip[0], strip[0] } }).CellCount == 1, "point bounds");

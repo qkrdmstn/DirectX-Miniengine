@@ -20,8 +20,9 @@ void main(uint3 id : SV_DispatchThreadID)
     // 별도 요청에서만 귀 클리핑 전의 leader와 유효성 정보를 보존한다.
     if (Commit == 2)
     {
-        LoopSources.Store3(i * 16 + 4, uint3(Ring.Load(i * 128 + 48),
+        LoopSources.Store3(i * 32 + 4, uint3(Ring.Load(i * 128 + 48),
             Ring.Load(i * 128 + 108), Ring.Load(i * 128 + 52)));
+        LoopSources.Store4(i * 32 + 16, Ring.Load4(i * 128 + 24));
         return;
     }
 

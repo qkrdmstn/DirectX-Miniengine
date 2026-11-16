@@ -18,6 +18,13 @@ namespace Viewer
         std::vector<std::vector<uint32_t>> PaletteMasks;
     };
 
+    // 보존한 선택 자식을 우선하고 snapshot이 없을 때만 직접 자식을 허용한다.
+    inline bool IsSelectedSegmentChild(uint32_t node, uint32_t child, uint32_t parent, uint32_t snapshotChild)
+    {
+        // 선택 선분은 중간 비영향 또는 비팔레트 조상을 건너뛸 수 있다.
+        return snapshotChild != UINT32_MAX ? child == snapshotChild : parent == node;
+    }
+
     // 현재 월드 위치와 유효 부모에서 유한 평면을 지나는 segment의 부모 본을 고른다.
     inline SegmentJointSelection SelectSegmentJoint(const std::vector<uint32_t>& parents,
         const std::vector<Math::Vector3>& positions, const std::vector<std::vector<uint32_t>>& palettes,

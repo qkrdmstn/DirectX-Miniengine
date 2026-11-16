@@ -1345,7 +1345,7 @@ namespace Viewer
         m_Diagnostic = diagnostic;
         m_Plane = plane;
         const bool submitted = m_Job.Submit(*mesh, local, selected.PaletteMasks, world,
-            selected.NodeId, diagnostic, influence, target->GetModelInstance()->GetPoseParents());
+            selected.NodeId, diagnostic, influence, target->GetModelInstance()->GetPoseParents(), selected.ChildNodeId);
         m_BonePending = boneCut && submitted;
         if (!submitted && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
@@ -2159,8 +2159,50 @@ namespace Viewer
         return false;
     }
 
-    // 보존한 경계 출처를 반공간 라벨로 투표하고 MI-3f의 cap 정책만 진단한다.
-    static void DiagnoseCapLoops(const CutResultEntry& result, const IslandLabels& islands)
+    // 교차점을 포함하는 실제 loop의 테두리 아일랜드를 GPU 분류 전에 재라벨한다.
+    static std::set<uint32_t> RelabelCapLoops(const CutResultEntry& result, SkeletalPatchBuffers& patch,
+        const MeshCutting::CutPlaneData& plane)
+    {
+        // cutter와 같은 월드 평면 축으로 snapshot 선분과 교차점을 비교한다.
+        const Math::Vector3 normal(plane.WorldPlane);
+        const auto u = Normalize(Cross(normal, Abs(normal.GetY()) < 0.9f
+            ? Math::Vector3(Math::kYUnitVector) : Math::Vector3(Math::kXUnitVector)));
+        const auto v = Cross(normal, u);
+        const std::array<float, 2> point = { Dot(u, patch.Crossing), Dot(v, patch.Crossing) };
+        std::map<uint32_t, std::vector<std::array<float, 4>>> loops;
+        std::set<uint32_t> bad, real;
+        for (const auto& segment : result.CapSegments)
+        {
+            if (!segment[2]) continue;
+            std::array<float, 4> edge;
+            std::memcpy(edge.data(), segment.data() + 4, sizeof(edge));
+            loops[segment[1]].push_back(edge);
+            if (segment[3] != 0) bad.insert(segment[1]);
+        }
+
+        // 잘못된 loop를 제외하고 교차점을 감싼 최소 면적 폐곡선 하나만 선택한다.
+        for (uint32_t leader : bad) loops.erase(leader);
+        const uint32_t selected = patch.HasCrossing ? SmallestContainingLatticeLoop(loops, point) : UINT32_MAX;
+        if (selected != UINT32_MAX) real.insert(selected);
+
+        // 실제 loop에 닿은 아일랜드 전체를 자식 쪽 B와 반대쪽 A로 요청한다.
+        std::vector<std::array<uint32_t, 3>> requests;
+        for (const auto& segment : result.CapSegments)
+            if (segment[2] && real.count(segment[1]))
+                for (uint32_t side = 0; side < 2; ++side)
+                    requests.push_back({ segment[0], side, uint32_t(side == patch.ChildSide) });
+        const auto counts = RelabelPatchIslands(patch.Islands, requests);
+        const std::string crossing = patch.HasCrossing ? std::to_string(float(patch.Crossing.GetX())) + ","
+            + std::to_string(float(patch.Crossing.GetY())) + "," + std::to_string(float(patch.Crossing.GetZ())) : "none";
+        const std::string leader = real.empty() ? "none" : std::to_string(*real.begin());
+        PatchLog("MI3e2 crossing=%s realLoop=%s relabeled islands=%u tris=%u conflicts=%u\n",
+            crossing.c_str(), leader.c_str(), counts[0], counts[1], counts[2]);
+        return real;
+    }
+
+    // 재라벨한 경계 몸체를 투표하고 실제 loop에만 keep을 진단한다.
+    static void DiagnoseCapLoops(const CutResultEntry& result, const IslandLabels& islands,
+        const std::set<uint32_t>& real)
     {
         // 유효한 loop의 각 선분에서 양쪽 몸체 투표와 미해결 수를 집계한다.
         struct Votes
@@ -2209,10 +2251,10 @@ namespace Viewer
                 fallback += votes.Missing[side];
             }
 
-            // 같은 몸체면 양쪽 cap 제거를 예고하고 실제 귀속과 출력은 그대로 둔다.
+            // 실제 loop에만 cap 유지를 예고하고 실제 귀속은 MI-3f에서 연결한다.
             conflicts += disagreement;
-            if (bodies[0] == bodies[1]) ++drop;
-            const std::string action = bodies[0] == bodies[1] ? "drop" :
+            if (!real.count(loop.first)) ++drop;
+            const std::string action = !real.count(loop.first) ? "drop" :
                 "keep(side0->" + std::to_string(bodies[0]) + ",side1->" + std::to_string(bodies[1]) + ")";
             PatchLog("MI3e loop=%u segs=%u side0Body=%u side1Body=%u conflicts=%u action=%s\n",
                 loop.first, votes.Segments, bodies[0], bodies[1], disagreement, action.c_str());
@@ -2625,7 +2667,8 @@ namespace Viewer
                 try
                 {
                     // 분류나 압축 실패는 기존 A/B 게시 준비에 전파하지 않는다.
-                    DiagnoseCapLoops(result, m_SkinPatch->Islands);
+                    const auto real = RelabelCapLoops(result, *m_SkinPatch, m_Plane);
+                    DiagnoseCapLoops(result, m_SkinPatch->Islands, real);
                     for (uint32_t side = 0; side < 2; ++side)
                         ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, side);
                     CompactCutBodies(inputs);
@@ -2927,6 +2970,7 @@ namespace Viewer
         m_PoseOffsets.clear();
         m_Parents.clear();
         m_IslandJoints.clear();
+        m_IslandNodes.clear();
         m_IslandFrames.clear();
         m_SkinSections.clear();
         m_IslandLabels = {};
@@ -2935,7 +2979,7 @@ namespace Viewer
     // 컴포넌트 제거 상태를 반영해 GPU 선택·추출과 기존 패치 인접 집계를 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
-        uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents)
+        uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child)
     {
         // 준비되지 않았거나 생성된 입력은 이 단계의 skeletal 추출 대상이 아니다.
         Cancel();
@@ -2978,7 +3022,9 @@ namespace Viewer
         // GPU가 사용한 준비 팔레트와 node/source/world 합성을 제출 시점에 고정한다.
         const auto& model = *input.GetSource();
         m_Parents = parents;
+        m_ChildNode = child;
         m_IslandJoints.assign(source.GetPreparedJoints(), source.GetPreparedJoints() + model.m_NumJoints);
+        m_IslandNodes.assign(source.GetPreparedNodes(), source.GetPreparedNodes() + model.m_NumNodes);
         const uint8_t* meshData = model.m_MeshData.get();
         std::vector<uint32_t> skinSections(model.m_NumMeshes, UINT32_MAX);
         uint32_t skin = 0;
@@ -3264,6 +3310,44 @@ namespace Viewer
                     jointGroups[joint] = 1;
                     break;
                 }
+        }
+
+        // 실제 incoming 관절의 B 루트에서 자식으로 나가는 제출 포즈 교차를 찾는다.
+        patch.HasCrossing = false;
+        const auto first = std::find_if(m_SkinSections.begin(), m_SkinSections.end(),
+            [](uint32_t skin)
+            {
+                // 공통 skin frame을 제공하는 첫 section을 고른다.
+                return skin != UINT32_MAX;
+            });
+        if (m_Node < m_IslandNodes.size() && first != m_SkinSections.end())
+        {
+            const auto frame = m_SourceWorld * m_IslandFrames[size_t(first - m_SkinSections.begin())];
+            const Math::Vector3 parent(frame * m_IslandNodes[m_Node].GetW());
+            const float a = Dot(plane.WorldPlane, Math::Vector4(parent + Math::Vector3(offset, 0, 0), 1));
+            const Math::Vector3 center = (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f;
+            float closest = std::numeric_limits<float>::max();
+            for (uint32_t child = 0; child < m_Parents.size(); ++child)
+            {
+                // 보존한 선택 선분을 사용하고 snapshot이 없을 때만 직접 자식으로 제한한다.
+                if (!IsSelectedSegmentChild(m_Node, child, m_Parents[child], m_ChildNode)) continue;
+
+                // 제출 포즈의 선택 선분과 평면 사이의 교점을 계산한다.
+                const Math::Vector3 position(frame * m_IslandNodes[child].GetW());
+                const float b = Dot(plane.WorldPlane, Math::Vector4(position + Math::Vector3(offset, 0, 0), 1));
+                float fraction = 0;
+                uint32_t side = 0;
+                if (!IntersectLatticeSegment(a, b, fraction, side)) continue;
+                const Math::Vector3 crossing = parent + (position - parent) * fraction + Math::Vector3(offset, 0, 0);
+                const float distance = LengthSquare(crossing - center);
+                if (distance >= closest) continue;
+
+                // 자식 snapshot이 없으면 평면 중심에 가장 가까운 직접 자식 교차를 보존한다.
+                closest = distance;
+                patch.Crossing = crossing;
+                patch.ChildSide = side;
+                patch.HasCrossing = true;
+            }
         }
 
         // 투표 중에는 계층을 다시 탐색하지 않고 그룹 표만 조회한다.
