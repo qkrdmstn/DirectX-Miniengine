@@ -199,8 +199,10 @@ namespace Viewer
         }
     private:
         // 출력 반공간의 provenance로 몸체를 판정하고 작은 진단 카운터만 읽는다.
-        void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands, uint32_t side);
-        ByteAddressBuffer m_IslandTable;
+        void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
+            const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side);
+        ByteAddressBuffer m_IslandTable, m_CapLoopTable;
+        uint32_t m_DroppedCaps[2] = {};
         ByteAddressBuffer m_TriangleBodies[2]; // MI-3b 입력: side별 globalVertex / 3 인덱스, section 사이 빈 capacity 제외
         // 양쪽 실제 출력을 압축하고 완료된 몸체별 메타데이터만 보관한다.
         void CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2]);

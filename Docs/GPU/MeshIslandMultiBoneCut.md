@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-3e `94f17ca0` 완료; MI-3e2 실제 loop 판정·아일랜드 재라벨 구현(미커밋, base `94f17ca0`), CPU·D/R 빌드·Release 3사례·회귀 PASS (2026-11-16). 리뷰 3건(중첩 최소 면적·선택 자식 snapshot·끝점 허용오차) 수정 및 CPU/D/R/3데모/회귀 PASS(미커밋, base `94f17ca0`, 2026-11-16).
+상태: 진행 중 — MI-3e `94f17ca0` 완료; MI-3e2 실제 loop 판정·아일랜드 재라벨 구현(미커밋, base `94f17ca0`), CPU·D/R 빌드·Release 3사례·회귀 PASS (2026-11-16). 리뷰 3건(중첩 최소 면적·선택 자식 snapshot·끝점 허용오차) 수정 및 CPU/D/R/3데모/회귀 PASS(미커밋, base `94f17ca0`, 2026-11-16). MI-3f cap loop 귀속·drop 제거 완료(미커밋, base `63c2292b`), CPU/D/R/3데모/캡처/회귀 PASS(2026-11-16).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -85,7 +85,7 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-3d | 완료(미커밋, base `96214e6f`): 비동기 완료 후 body 0/1 게시·몸체 snapshot 스키닝, cap은 SideDefault, 부적합 결과는 side 폴백 | 위팔 518/194 fallback=0, 허리 90 tris→A, ON/OFF 캡처·D/R 빌드·Release 회귀 PASS |
 | MI-3e | 완료(미커밋, base `e8cd2e59`): segment 출처·leader snapshot → loop별 양쪽 몸체 다수결 진단 | 위팔 팔 keep(B/A)·허리 drop, Xbot 허벅지 drop; conflicts/fallback=0, D/R·Release 회귀 PASS. 귀속은 MI-3f |
 | MI-3e2 | 완료(미커밋, base `94f17ca0`): 제출 포즈 교차점·실제 loop 판정, 테두리 아일랜드 재라벨 후 MI-3a/3c | 위팔 팔 keep·허리 drop/A 유지, Xbot 허벅지 keep(1/0)·fallback=0; CPU·D/R·Release 3사례·회귀 PASS |
-| MI-3f | cap loop 귀속 연결 | 위팔 publish/after60 캡처, SP7e2 ≤1mm, PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 |
+| MI-3f | 완료(미커밋, base `63c2292b`): leader별 side 몸체/drop 표를 GPU 분류·압축에 연결 | 위팔 cap 54개 제거·팔 cap 28개 유지, body0/1=491/167; publish/after60 PNG 확인; SP7e2 case2/3=0mm(case1 기존 N/A), PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 PASS |
 | MI-4a | 무한 평면 교차 세그먼트 집합·조상 제거 함수 | 형제 2개/조상+자손/부호 반전 fixture 로그 |
 | MI-4b | joint 집합 팔레트 합집합 선택(`PatchExtractCS::Selected` 재사용) | 중복 삼각형 0, GPU==CPU |
 | MI-4c | 그룹 일반화·몸체별 snapshot/attachment 배열 | n=1 동등, 형제 n=2 Frozen 팔레트 검증 |
@@ -250,3 +250,15 @@ MI-3e2 리뷰 3건 수정(미커밋, base `94f17ca0`, 2026-11-16):
 - Release 3데모 종료 0: 위팔 relabel=0/0, real=0, keep/drop=1/1, body=518/194; Xbot 허벅지 relabel=1/1372, real=0, keep/drop=1/0, body=1475/869; 기본 CesiumMan relabel=0/0, real=0, keep/drop=1/0, body=161/170. conflicts·fallback 모두 0.
 - 지정 회귀 6실행 모두 종료 0, 53.83초. BC-12a/b·AR4·Rig PASS; SP7e2 case=2/3 publish/after60 0mm PASS, case=1 기존 N/A. 3데모·회귀 D3D12 ERROR/CORRUPTION 0.
 - 근거와 실행 경로: `%TEMP%/MI3e2-fix.md`. 빌드 출력은 `%TEMP%/MI3e2-fix-build/`, `ModelViewer.cpp` 해시는 작업 전후 동일하다.
+
+MI-3f(미커밋, base `63c2292b`, 2026-11-16):
+- 리뷰 P2/P3 수정: `FinishCutResult`는 SideDefault 동일 여부와 무관하게 검증된 두 비어 있지 않은 압축 몸체를 게시하고, 압축 결과 없음·몸체 수 오류·빈 몸체만 사유를 기록해 side로 대체한다. 지정 C++/HLSL 조건문은 조건·실행문·중괄호를 별도 줄로 분리했다.
+- `DiagnoseCapLoops`는 기존 투표·충돌 진단으로 leader별 uint2(side0/1 몸체) 표를 반환한다. 실제 분리 loop이며 양쪽 몸체가 다르면 keep, 그 외는 양쪽 drop이다. `OnCutResult`의 Relabel→Diagnose→Classify→Compact 순서는 유지한다.
+- `ClassifyCutBodies`가 표를 업로드하고 `PatchBodyClassifyCS::main`이 cap Origin.y leader로 조회한다. UINT_MAX는 미해결 SideDefault 대체, UINT_MAX-1은 의도적 drop이며 세 코너 leader 불일치는 오류로 보존한다. cap fallback/invalid/drop 수를 별도 기록한다.
+- `PatchBodyCompactCS::main`은 drop을 count·scatter·bounds 전에 제외한다. `BodyCompactJob`이 실제 제거 수를 보존하고 `PollBodyCompaction`은 출력+drop=입력으로 검증한다. 용량은 입력 상한을 유지한다. `CheckBodyCompaction`의 양쪽 cap 2개 제거→출력 4개 GPU 합성 검사 PASS.
+- CPU LatticeTopologyTests PASS(1.82초), SkeletalPatchTests Debug/Release 각 69 checks PASS(2.00/3.71초). 지정 MSBuild /restore /m /p:Platform=Windows Debug/Release 최종 41.62/45.10초, 오류 0·기존 경고 각 9. 출력은 `%TEMP%/MI3e2-fix-build/`와 기존 외부 props를 사용했다.
+- Release, ModelViewer 작업 디렉터리, MX450(기존 드라이버 기록 591.86): (a) 위팔 10.74초, loop keep/drop=1/1, cap 각 side 41 중 27 drop·14 keep, 입력712−54=출력658, body0/1=491/167. (b) Xbot 허벅지 11.28초, keep/drop=1/0, cap 각53 유지, body=1475/869. (c) 기본 CesiumMan 팔 10.85초, keep/drop=1/0, cap 각14 유지, body=161/170. 모두 종료0, conflicts·분류fallback/invalid·게시fallback=0, 압축 bounds PASS.
+- (a)에 `-capture %TEMP%/MI3f-UpperArm -capture-count 2 -capture-step 60` 추가: 게시 f64/+0과 f124/+60 post RAW를 지정 raw2png.ps1로 원본 해상도 PNG 변환했다. 두 프레임에서 허리 주황 cap이 없고 게시 프레임 팔 절단면에는 cap이 보인다. +60은 팔 조각이 화면 밖으로 떨어지고 몸통의 절단 끝은 유지된다. 팔 cap 보존 수는 양쪽 각14다.
+- 지정 `regress.sh Release`+기존 외부 exe 래퍼: 6실행 모두 종료0(11/12/10/11/10/10초), 수집64.57초. SP6 누적454 PASS/0 FAIL, Static 재절단/AR4·BC12a/b·Rig PASS. SP7e2 case2/3 publish/after60 모두0mm, case1 기존 N/A(noCoincidentKeptBoundary). PS2 7건 최대0.000234mm, PS3 6건 최대0.000189mm, PS4 12건 간격변화0mm PASS.
+- 세 데모·회귀 D3D12 ERROR/CORRUPTION 각0. 기존 DXGI #80·D3D12 경고는 남는다. Geometry/·신규 소스/셰이더·ModelViewer.cpp 편집 없음. 커밋·stash/reset·브랜치 변경 없음.
+- 근거: `%TEMP%/MI3f-{Debug,Release}-build.log`, `MI3f-{lattice,skeletal-Debug,skeletal-Release}.log`, `MI3f-{UpperArm,Thigh,DefaultArm}-{patch,debug,run}.log`, `MI3f-Release-regress{,-debug}.log`, `MI3f-UpperArm-demo-{000,001}-post.png`, `MI3f-report.md`.

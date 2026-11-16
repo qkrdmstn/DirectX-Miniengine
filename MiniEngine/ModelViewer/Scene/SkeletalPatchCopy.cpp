@@ -169,9 +169,20 @@ namespace Viewer
             pso.Finalize();
             bool pass = true;
 
-            // 정상 실행과 삼각형·바이트 용량 부족을 각각 검사한다.
-            for (uint32_t trial = 0; trial < 3; ++trial)
+            // 정상·용량 부족 검사 뒤 양쪽 cap drop이 출력에서 빠지는지 검사한다.
+            for (uint32_t trial = 0; trial < 4; ++trial)
             {
+                // 마지막 실행은 cap만 제거하고 표면의 몸체 귀속은 그대로 유지한다.
+                if (trial == 3)
+                {
+                    for (uint32_t side = 0; side < 2; ++side)
+                    {
+                        bodies[side][4] = UINT32_MAX - 1;
+                        labels[side].Create(L"Compact synthetic dropped caps", 8, 4, bodies[side]);
+                    }
+                }
+
+                // 각 실행의 출력과 진단 상태를 초기화한다.
                 auto& graphics = GraphicsContext::Begin(L"Body compact checks");
                 auto& compute = graphics.GetComputeContext();
                 for (auto* buffer : { &output, &outProv, &bins, &status })
@@ -224,16 +235,17 @@ namespace Viewer
                 const auto* sources = static_cast<const uint32_t*>(readProv.Map());
                 const auto* meta = static_cast<const uint32_t*>(readBins.Map());
                 const uint32_t flags = *static_cast<const uint32_t*>(readStatus.Map());
-                pass &= flags == (trial ? 1u : 0u);
+                const bool overflow = trial == 1 || trial == 2;
+                pass &= flags == (overflow ? 1u : 0u);
 
                 // 공통 정점 주소와 모든 코너·depth·출처·IB 및 몸체별 합계를 비교한다.
                 bool seen[2][8]{};
                 uint32_t total = 0;
-                for (uint32_t bin = 0; bin < 9 && !trial; ++bin)
+                for (uint32_t bin = 0; bin < 9 && !overflow; ++bin)
                 {
                     const uint32_t* m = meta + bin * 6;
                     pass &= m[2] % 28 == 0 && m[2] / 28 == m[1] * 3;
-                    pass &= m[0] == (bin < 6 ? (bin % 3 == 0 ? 2u : bin % 3 == 1 ? 1u : 0u) : 0u);
+                    pass &= m[0] == (bin < 6 ? (bin % 3 == 0 ? 2u : bin % 3 == 1 && trial != 3 ? 1u : 0u) : 0u);
                     total += m[0];
                     for (uint32_t t = 0; t < m[0]; ++t)
                     {
@@ -256,14 +268,14 @@ namespace Viewer
                         }
                     }
                 }
-                if (!trial) pass &= total == 6;
+                if (!overflow) pass &= total == (trial == 3 ? 4u : 6u);
                 else for (uint32_t w = 0; w < 512; ++w) pass &= result[w] == 0;
                 readData.Unmap();
                 readProv.Unmap();
                 readBins.Unmap();
                 readStatus.Unmap();
             }
-            PatchLog("MI3b synthetic two-side vertices/provenance/depth/IB skinAddress=matched totals=6 overflow=triangles+bytes %s\n", pass ? "PASS" : "FAIL");
+            PatchLog("MI3b synthetic two-side vertices/provenance/depth/IB skinAddress=matched totals=6 dropCaps=2 output=4 overflow=triangles+bytes %s\n", pass ? "PASS" : "FAIL");
         }
 
         // 패치 진단의 문자열 생성과 출력을 요청의 예외 경계에서 분리한다.
@@ -2200,8 +2212,8 @@ namespace Viewer
         return real;
     }
 
-    // 재라벨한 경계 몸체를 투표하고 실제 loop에만 keep을 진단한다.
-    static void DiagnoseCapLoops(const CutResultEntry& result, const IslandLabels& islands,
+    // 재라벨한 경계 몸체를 투표하고 leader별 GPU 귀속 표를 만든다.
+    static std::vector<std::array<uint32_t, 2>> DiagnoseCapLoops(const CutResultEntry& result, const IslandLabels& islands,
         const std::set<uint32_t>& real)
     {
         // 유효한 loop의 각 선분에서 양쪽 몸체 투표와 미해결 수를 집계한다.
@@ -2229,6 +2241,7 @@ namespace Viewer
         }
 
         // 최다 득표 몸체를 고르고 동점은 작은 몸체 번호, 출처 부재는 SideDefault로 기록한다.
+        std::vector<std::array<uint32_t, 2>> table(1, { UINT32_MAX, UINT32_MAX });
         uint32_t drop = 0, conflicts = 0, fallback = 0;
         for (const auto& loop : loops)
         {
@@ -2251,10 +2264,20 @@ namespace Viewer
                 fallback += votes.Missing[side];
             }
 
-            // 실제 loop에만 cap 유지를 예고하고 실제 귀속은 MI-3f에서 연결한다.
+            // 실제 분리 loop만 유지하고 나머지는 양쪽 모두 drop 전용 값으로 표시한다.
             conflicts += disagreement;
-            if (!real.count(loop.first)) ++drop;
-            const std::string action = !real.count(loop.first) ? "drop" :
+            const bool keep = real.count(loop.first) && bodies[0] != bodies[1];
+            if (!keep)
+            {
+                ++drop;
+            }
+            if (table.size() <= loop.first)
+            {
+                table.resize(size_t(loop.first) + 1, { UINT32_MAX, UINT32_MAX });
+            }
+            table[loop.first] = keep ? std::array<uint32_t, 2>{ bodies[0], bodies[1] }
+                : std::array<uint32_t, 2>{ UINT32_MAX - 1, UINT32_MAX - 1 };
+            const std::string action = !keep ? "drop" :
                 "keep(side0->" + std::to_string(bodies[0]) + ",side1->" + std::to_string(bodies[1]) + ")";
             PatchLog("MI3e loop=%u segs=%u side0Body=%u side1Body=%u conflicts=%u action=%s\n",
                 loop.first, votes.Segments, bodies[0], bodies[1], disagreement, action.c_str());
@@ -2263,23 +2286,29 @@ namespace Viewer
         // fallback은 출처가 없어 투표에서 빠진 (선분, side) 수다.
         PatchLog("MI3e loops=%u drop=%u keep=%u conflicts=%u fallback=%u\n",
             uint32_t(loops.size()), drop, uint32_t(loops.size()) - drop, conflicts, fallback);
+        return table;
     }
 
     // cutter 출력의 실제 section 범위만 판정하고 결과는 다음 압축 단계용으로 보관한다.
-    void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands, uint32_t side)
+    void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
+        const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side)
     {
         // 합성 압축 검사는 진단 옵션에서만 실행한다.
         CheckBodyCompaction();
+        m_DroppedCaps[side] = 0;
 
         // 표는 [패치 삼각형][반공간] 순서이며 물리 A/B 순서와 무관하다.
         if (islands.TriangleSideBody.empty()) return;
         if (side == 0)
+        {
+            m_CapLoopTable.Create(L"Cap loop side bodies", uint32_t(capLoops.size()), sizeof(capLoops[0]), capLoops.data());
             m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
                 sizeof(islands.TriangleSideBody[0]), islands.TriangleSideBody.data());
+        }
         struct Constants
         {
             uint32_t FirstTriangle, TriangleCount, PatchTriangles, Side;
-            uint32_t DefaultBody, Padding[3];
+            uint32_t DefaultBody, CapLoopCount, Padding[2];
         };
         static_assert(sizeof(Constants) == 32, "Body classification constants");
 
@@ -2289,12 +2318,13 @@ namespace Viewer
         static bool initialized = false;
         if (!initialized)
         {
-            root.Reset(5);
+            root.Reset(6);
             root[0].InitAsConstantBuffer(0);
             root[1].InitAsBufferSRV(0);
             root[2].InitAsBufferSRV(1);
             root[3].InitAsBufferUAV(0);
             root[4].InitAsBufferUAV(1);
+            root[5].InitAsBufferSRV(2);
             root.Finalize(L"Patch body classification");
             pso.SetRootSignature(root);
             pso.SetComputeShader(g_pPatchBodyClassifyCS, sizeof(g_pPatchBodyClassifyCS));
@@ -2316,8 +2346,8 @@ namespace Viewer
         bodies.Create(L"Output triangle bodies", end, sizeof(uint32_t));
         ByteAddressBuffer counters;
         ReadbackBuffer readback;
-        counters.Create(L"Body classification counters", 8, sizeof(uint32_t));
-        readback.Create(L"Body classification readback", 8, sizeof(uint32_t));
+        counters.Create(L"Body classification counters", 10, sizeof(uint32_t));
+        readback.Create(L"Body classification readback", 10, sizeof(uint32_t));
 
         // 각 section의 실제 출력 삼각형만 dispatch하고 합산 카운터를 초기화한다.
         auto& graphics = GraphicsContext::Begin(L"Classify patch output bodies");
@@ -2325,6 +2355,7 @@ namespace Viewer
         auto& provenance = const_cast<ByteAddressBuffer&>(geometry.Provenance);
         compute.TransitionResource(provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.TransitionResource(m_IslandTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.TransitionResource(m_CapLoopTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.TransitionResource(bodies, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         compute.TransitionResource(counters, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         compute.ClearUAV(counters);
@@ -2333,12 +2364,13 @@ namespace Viewer
         compute.SetPipelineState(pso);
         compute.SetBufferSRV(1, provenance);
         compute.SetBufferSRV(2, m_IslandTable);
+        compute.SetBufferSRV(5, m_CapLoopTable);
         compute.SetBufferUAV(3, bodies);
         compute.SetBufferUAV(4, counters);
         for (const auto& mesh : geometry.Meshes)
         {
             Constants c{ mesh.vbOffset / 84, mesh.vbSize / 84, uint32_t(islands.TriangleSideBody.size()),
-                side, islands.SideDefault[side], {} };
+                side, islands.SideDefault[side], uint32_t(capLoops.size()), {} };
             if (!c.TriangleCount) continue;
             compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
             const uint32_t groups = (c.TriangleCount + 63) / 64;
@@ -2353,6 +2385,9 @@ namespace Viewer
         const auto* counts = static_cast<const uint32_t*>(readback.Map());
         PatchLog("MI3a side=%u tris=%u cap=%u body0=%u body1=%u invalid=%u idMismatch=%u reassigned=%u\n",
             side, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
+        m_DroppedCaps[side] = counts[7];
+        PatchLog("MI3f side=%u cap=%u dropped=%u kept=%u fallback=%u invalid=%u\n",
+            side, counts[1], counts[7], counts[1] - counts[7], counts[8], counts[9]);
         readback.Unmap();
     }
 
@@ -2365,7 +2400,7 @@ namespace Viewer
         ReadbackBuffer Metadata, Flags;
         std::map<uint32_t, Mesh> Templates;
         std::vector<uint32_t> LayoutData;
-        uint64_t Fence = 0, Triangles = 0, Bytes = 0;
+        uint64_t Fence = 0, Triangles = 0, Bytes = 0, Dropped = 0;
         uint32_t BodyCount = 0;
 
         // 일반 회수는 완료 확인 후 수행하고 종료 시에만 미완료 제출을 보호한다.
@@ -2467,8 +2502,9 @@ namespace Viewer
                     float(low.GetZ()), float(high.GetX()), float(high.GetY()), float(high.GetZ()));
             }
             PatchLog("MI3c sum body=%llu input=%llu %s material/depth/IB/bounds=%s status=%u\n",
-                sum, triangles, sum == triangles ? "PASS" : "FAIL", valid ? "PASS" : "FAIL", flags);
-            if (!valid || sum != triangles) throw std::runtime_error("MI3c body compaction validation failed");
+                sum, triangles, sum + job.Dropped == triangles ? "PASS" : "FAIL", valid ? "PASS" : "FAIL", flags);
+            PatchLog("MI3f compact input=%llu dropped=%llu output=%llu\n", triangles, job.Dropped, sum);
+            if (!valid || sum + job.Dropped != triangles) throw std::runtime_error("MI3c body compaction validation failed");
             m_BodyResult = std::move(result);
             job.Output.reset();
             m_BodyState = PatchBodyState::Done;
@@ -2531,6 +2567,7 @@ namespace Viewer
         job.Templates = templates;
         job.BodyCount = bodies;
         job.Triangles = triangles;
+        job.Dropped = uint64_t(m_DroppedCaps[0]) + m_DroppedCaps[1];
         job.Bytes = bytes;
         std::vector<uint32_t> layouts;
         for (const auto& entry : templates)
@@ -2668,9 +2705,9 @@ namespace Viewer
                 {
                     // 분류나 압축 실패는 기존 A/B 게시 준비에 전파하지 않는다.
                     const auto real = RelabelCapLoops(result, *m_SkinPatch, m_Plane);
-                    DiagnoseCapLoops(result, m_SkinPatch->Islands, real);
+                    const auto capLoops = DiagnoseCapLoops(result, m_SkinPatch->Islands, real);
                     for (uint32_t side = 0; side < 2; ++side)
-                        ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, side);
+                        ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, capLoops, side);
                     CompactCutBodies(inputs);
                 }
                 catch (const std::exception& error)
@@ -2741,10 +2778,12 @@ namespace Viewer
             m_PreparedIds[0] = m_PositiveA ? result.Mesh : result.Other;
             m_PreparedIds[1] = m_PositiveA ? result.Other : result.Mesh;
             const auto* compacted = GetBodyResult();
-            const bool distinctDefaults = m_SkinPatch
-                && m_SkinPatch->Islands.SideDefault[0] != m_SkinPatch->Islands.SideDefault[1];
-            const bool fallback = !compacted || compacted->Triangles.size() != 2
-                || !compacted->Triangles[0] || !compacted->Triangles[1] || !distinctDefaults;
+
+            // 전체 side 다수결과 무관하게 검증된 두 몸체의 압축 결과를 게시한다.
+            const char* fallbackReason = !compacted ? "compaction unavailable/failed"
+                : compacted->Triangles.size() != 2 ? "invalid compacted body count"
+                : !compacted->Triangles[0] || !compacted->Triangles[1] ? "empty compacted body" : nullptr;
+            const bool fallback = fallbackReason != nullptr;
             if (!m_OffsetCopy && !fallback)
             {
                 const auto revision = GeometryRevision::FromGenerated(compacted->Geometry);
@@ -2765,9 +2804,10 @@ namespace Viewer
                         triangles[body] += revision.GetGenerated()->Meshes[section.SourceMesh].ibSize / 12;
                 }
                 PatchLog("MI3d publish body0 tris=%u body1 tris=%u fallback=%u\n", triangles[0], triangles[1], fallback);
-                if (fallback) PatchLog("MI3d fallback: %s; existing side results\n", !distinctDefaults
-                    ? "same SideDefault cannot form complementary A/B caps"
-                    : "compaction unavailable/failed or empty body");
+                if (fallback)
+                {
+                    PatchLog("MI3d fallback: %s; existing side results\n", fallbackReason);
+                }
             }
             // cutter 출력과 추출 출처가 살아 있는 동안 A/B skin 입력을 동기로 생성한다.
             if (m_SkinPatch && m_SkinSnapshotCount == 2)

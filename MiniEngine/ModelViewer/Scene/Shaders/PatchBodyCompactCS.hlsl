@@ -75,6 +75,8 @@ void main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex)
     uint localTriangle = (group.y * 65535 + group.x) * 64 + lane;
     if (localTriangle >= Triangles) return;
     uint body = Bodies.Load((FirstTriangle + localTriangle) * 4);
+    // 의도적으로 제거한 cap은 count·scatter·bounds 모두에서 제외한다.
+    if (body == 0xfffffffe) return;
     if (body >= BodyCount)
     {
         Status.InterlockedOr(0, 2);
