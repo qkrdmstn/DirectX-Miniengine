@@ -149,7 +149,7 @@ namespace Viewer
         bool IsPending() const
         {
             // 추출부터 절단 결과 소비까지 같은 요청으로 취급한다.
-            return m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed || m_RequestId || m_BoundaryWait;
+            return m_ReadyCut || m_Job.IsPending() || m_CutPending || m_CutInFlight || m_Completed || m_RequestId || m_BoundaryWait;
         }
         // 제거 상태를 게시하지 않는 unmask 시연의 후속 C 차단 여부를 읽는다.
         bool IsUnmaskDemoPublished() const
@@ -169,7 +169,7 @@ namespace Viewer
         bool IsCutInFlight() const
         {
             // 결과를 소비하기 전까지 복사본의 단독 작업이다.
-            return m_CutInFlight || !m_RetiredOwners.empty();
+            return m_ReadyCut || m_CutInFlight || !m_RetiredOwners.empty();
         }
         // 후속 AR 단계가 준비된 부착 패치와 요청 평면을 한 번 가져간다.
         bool TakeRigBoneCutPublication(RigBoneCutPublication& publication)
@@ -207,10 +207,17 @@ namespace Viewer
         void DiscardBodyCompaction();
         // 완료된 작업의 메타데이터와 취소된 작업을 회수한다.
         void PollBodyCompaction();
-        PatchBodyResult m_BodyResult; // 다음 요청 또는 Reset까지 유지하며 아직 게시하지 않는다.
+        PatchBodyResult m_BodyResult; // 게시 revision과 GPU 자원을 공유하며 다음 요청까지 유지한다.
+        // 압축 완료 뒤 스키닝과 break 준비를 이어서 수행한다.
+        void FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped);
+        // 원본 revision 불일치 시 미게시 결과를 정리하고 취소 여부를 반환한다.
+        bool DiscardStaleCutResult(Scene& scene);
+        std::shared_ptr<CutResultEntry> m_ReadyCut;
+        uint32_t m_ReadyCaps = 0, m_ReadyUncapped = 0;
+        ComponentId m_PreparedIds[2]{}; // body 순서이며 fallback에서만 side로 매핑한다.
         // 동기 skin VB 생성과 선택적 t_cut CPU 진단을 마친 뒤 조각에 입력을 보관한다.
         void BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
-            SkeletalPatchBuffers& patch, uint32_t side);
+            SkeletalPatchBuffers& patch, uint32_t body);
         std::shared_ptr<SkeletalPatchBuffers> m_SkinPatch;
         // 추출된 section의 공통 N을 확정하고 체크 실행에서만 PS-1 결과를 기록한다.
         void CheckPatchSkin(const SkeletalPatchBuffers& patch);

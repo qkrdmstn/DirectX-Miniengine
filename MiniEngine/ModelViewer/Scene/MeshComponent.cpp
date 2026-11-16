@@ -577,10 +577,13 @@ namespace Viewer
         if (!m_Geometry->IsGenerated() || !Attachment || PatchSkin->Snapshot.MeshNode == UINT32_MAX)
             throw std::runtime_error("Invalid patch skin publication");
 
-        // section 순서를 렌더 offset과 일치시키며 게시 전 PG를 할당한다.
-        std::vector<PosedGeometry::VertexRange> sections;
-        for (const auto& section : PatchSkin->Sections)
-            sections.push_back({ section.FirstVertex, section.VertexCount });
+        // 부분집합 조각도 렌더가 쓰는 전체 SourceMesh 번호로 PG offset을 조회한다.
+        std::vector<PosedGeometry::VertexRange> sections(m_Geometry->GetGenerated()->Meshes.size(), { 0, 0 });
+        for (size_t i = 0; i < PatchSkin->Sections.size(); ++i)
+        {
+            const auto& section = PatchSkin->Sections[i];
+            sections[m_Geometry->GetSections()[i].SourceMesh] = { section.FirstVertex, section.VertexCount };
+        }
         auto posed = std::make_unique<PosedGeometry>(PatchSkin->Vertices.Data,
             PatchSkin->Vertices.Stride, PatchSkin->Vertices.Flags, sections);
         m_PosedGeometry = std::move(posed);
@@ -633,7 +636,12 @@ namespace Viewer
             bytes += size;
         }
         buffers->LineageBytes = parent->LineageBytes + bytes;
-        const auto revision = GeometryRevision::FromGenerated(buffers);
+
+        // 몸체 부분집합을 유지하여 베이크 뒤 다른 몸체의 section이 다시 나타나지 않게 한다.
+        std::vector<uint32_t> selected;
+        for (const auto& section : m_Geometry->GetSections())
+            selected.push_back(section.SourceMesh);
+        const auto revision = GeometryRevision::FromGenerated(buffers)->SelectSections(selected);
         auto posed = std::make_unique<PosedGeometry>(*buffers);
 
         // 재사용 파이프라인은 RAW40 입력과 복사한 28 B Data만 바인딩한다.

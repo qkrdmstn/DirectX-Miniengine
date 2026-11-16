@@ -738,7 +738,8 @@ namespace Viewer
                 for (uint32_t v = 0; v < section.VertexCount; ++v)
                 {
                     float p[3];
-                    std::memcpy(p, bytes + posed.GetOffset(i) + size_t(v) * PosedGeometry::VertexStride, sizeof(p));
+                    std::memcpy(p, bytes + posed.GetOffset(piece->GetGeometry()->GetSections()[i].SourceMesh)
+                        + size_t(v) * PosedGeometry::VertexStride, sizeof(p));
                     const Math::Vector3 position(p[0], p[1], p[2]);
                     positions.at(size_t(section.FirstVertex) + v) = position;
                     const float distance = float(Math::Length(position - bound.GetCenter()));
@@ -940,6 +941,7 @@ namespace Viewer
         m_DiagnosticCase = diagnosticCase;
         PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Rig ? "Rig" : mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
         m_Job.Cancel();
+        m_ReadyCut.reset();
         DiscardBodyCompaction();
         m_Name.clear();
         m_Physics = physics;
@@ -1492,15 +1494,15 @@ namespace Viewer
 
     // 생성 skin VB를 보관하고 진단 옵션에서 Data 비교와 rim/cap 대응 쌍 생성을 수행한다.
     void SkeletalPatchCopy::BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
-        SkeletalPatchBuffers& patch, uint32_t side)
+        SkeletalPatchBuffers& patch, uint32_t body)
     {
         // 원본 revision과 출처는 동기 API가 반환할 때까지 호출자가 보유한다.
-        const auto& snapshot = m_SkinSnapshots[side];
+        const auto& snapshot = m_SkinSnapshots[body];
         if (!snapshot.SkinningAllowed || !m_SourceRevision)
             return;
         auto skin = std::make_shared<PatchSkinPublication>();
         skin->Snapshot = snapshot;
-        skin->Side = m_SkinSnapshotCount == 1 ? "D5" : (side ? "B" : "A");
+        skin->Side = m_SkinSnapshotCount == 1 ? "D5" : (body ? "B" : "A");
         const bool built = BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources,
             geometry, snapshot, skin->Vertices);
         if (built)
@@ -1522,7 +1524,7 @@ namespace Viewer
             CommandLineArgs::GetInteger(L"rig-bone-cut-checks", checks);
         if (!checks || m_ForceStale)
             return;
-        const char* label = m_SkinSnapshotCount == 1 ? "D5" : (side ? "B" : "A");
+        const char* label = m_SkinSnapshotCount == 1 ? "D5" : (body ? "B" : "A");
         uint32_t vertices = 0;
         uint32_t copied = 0;
         uint32_t split = 0;
@@ -1670,6 +1672,7 @@ namespace Viewer
     {
         // 추출 완료를 기다려 임시 자원을 해제하고 미게시 배치 snapshot도 버린다.
         m_Job.Cancel();
+        m_ReadyCut.reset();
         DiscardBodyCompaction();
         m_Name.clear();
         m_SkinPatch.reset();
@@ -1806,6 +1809,14 @@ namespace Viewer
         // 압축과 취소 작업은 기존 게시 진행 여부와 관계없이 매 프레임 회수한다.
         PollBodyCompaction();
 
+        // 압축 완료 뒤에만 스키닝과 break를 준비하고 실패하면 기존 side를 사용한다.
+        if (m_ReadyCut && !DiscardStaleCutResult(scene))
+        {
+            if (GetBodyState() == PatchBodyState::InProgress) return false;
+            auto ready = std::move(m_ReadyCut);
+            FinishCutResult(scene, *ready, m_ReadyCaps, m_ReadyUncapped);
+        }
+
         // D5 추출 완료는 break 취소와 Stale 및 절단 제출 분기에 들어가지 않는다.
         if (m_BonePending)
         {
@@ -1914,13 +1925,13 @@ namespace Viewer
                     for (size_t i = 0; i < 2; ++i)
                     {
                         // 원래 배치와 부착 노드에 맞춰 게시할 조각을 준비한다.
-                        const size_t index = m_PositiveA ? i : 1 - i;
-                        auto piece = owner->PrepareMeshComponent(staging->GetMeshComponents()[index]->GetGeometry(), 2);
+                        auto* prepared = staging->FindMeshComponent(m_PreparedIds[i]);
+                        auto piece = owner->PrepareMeshComponent(prepared->GetGeometry(), 2);
                         if (!piece->SetTransform(m_World, MeshTransformMode::WorldIndependent))
                             throw std::runtime_error("SP7e invalid piece world");
                         piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
                         piece->Attachment = std::make_unique<NodeAttachment>(i == 0 ? m_AttachA : m_AttachB);
-                        piece->PatchSkin = staging->GetMeshComponents()[index]->PatchSkin;
+                        piece->PatchSkin = prepared->PatchSkin;
                         piece->ActivatePatchSkin();
 
                         // owner 안에서만 고유한 컴포넌트 ID에 owner ID를 붙여 타이머 충돌을 막는다.
@@ -2266,8 +2277,9 @@ namespace Viewer
     // 현재 결과를 버리고 미완료 작업은 후속 프레임에서 회수한다.
     void SkeletalPatchCopy::DiscardBodyCompaction()
     {
-        // 완료 출력은 GPU 자원을 먼저 해제하여 전역 대기를 피한다.
-        if (m_BodyResult.Geometry) m_BodyResult.Geometry->ReleaseGpuResourcesAfterCompletion();
+        // 게시 revision이 참조하는 출력은 유지하고 미게시 출력만 직접 해제한다.
+        if (m_BodyResult.Geometry && m_BodyResult.Geometry.use_count() == 1)
+            m_BodyResult.Geometry->ReleaseGpuResourcesAfterCompletion();
         m_BodyResult = {};
         m_BodyState = PatchBodyState::None;
 
@@ -2535,10 +2547,6 @@ namespace Viewer
 
         // batch가 비었을 때 단독 제출했으므로 Last 진단은 이 결과에 대응한다.
         m_CutInFlight = false;
-        const char* reason = result.Status == CutResultStatus::Published ? "published A/B" :
-            result.Reason ? result.Reason : result.Error & 1 ? "finite rectangle endpoints outside" :
-            result.Error ? "cutter fatal error; original copy kept" : "no split; original copy kept";
-
         // A는 양의 반공간이므로 B를 음의 법선으로 0.1 m 이동해 간격을 만든다.
         if (result.Status == CutResultStatus::Published)
         {
@@ -2574,17 +2582,94 @@ namespace Viewer
             if (!m_OffsetCopy)
                 for (const auto& piece : scene.FindObject(m_CopyOwner)->GetMeshComponents()) piece->PublishVisible = false;
 
+            // 결과와 진단 수치를 보관하여 다음 Update에서 비동기 완료를 기다린다.
+            m_ReadyCut = std::make_shared<CutResultEntry>(result);
+            m_ReadyCaps = cutting.LastCaps;
+            m_ReadyUncapped = cutting.LastUncapped;
+            return true;
+        }
+        FinishCutResult(scene, result, cutting.LastCaps, cutting.LastUncapped);
+        return true;
+    }
+
+    // 원본이 바뀐 미게시 절단은 break 없이 취소하고 숨긴 준비물을 정리한다.
+    bool SkeletalPatchCopy::DiscardStaleCutResult(Scene& scene)
+    {
+        // offset 진단을 제외하고 Applied 이후와 같은 geometry·mask 기준으로 검사한다.
+        if (m_OffsetCopy) return false;
+        const auto* owner = scene.FindObject(m_Break.Owner);
+        const auto* source = owner ? owner->FindMeshComponent(m_SourceMesh) : nullptr;
+        if (source && source->GetGeometry() == m_SourceRevision
+            && (source->GetTriangleMask() ? source->GetTriangleMask()->Revision : 0) == m_MaskRevision)
+            return false;
+
+        // 대기 결과와 break 준비를 취소하고 미완료 GPU 작업은 fence 뒤에 회수한다.
+        m_ReadyCut.reset();
+        m_ReadyCaps = m_ReadyUncapped = 0;
+        m_BreakReady = false;
+        DiscardBodyCompaction();
+        m_SkinPatch.reset();
+        m_PreparedIds[0] = m_PreparedIds[1] = 0;
+
+        // 숨긴 staging owner를 제거하고 원본 변경 없이 거절 완료를 기록한다.
+        if (scene.FindObject(m_CopyOwner)) scene.DeleteObject(m_CopyOwner);
+        m_CopyOwner = 0;
+        PatchLog("MI3d discarded before break: source geometry/mask revision mismatch; breakSubmitted=0\n");
+        LogCutResult(scene, "source revision mismatch before break", 0, 0, 0);
+        return true;
+    }
+
+    // 완료된 몸체 또는 기존 side를 준비한 뒤 종전 break·게시 순서를 진행한다.
+    void SkeletalPatchCopy::FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped)
+    {
+        // 지연 처리에서도 동일한 절단 기록으로 성공과 실패 이유를 복원한다.
+        const char* reason = result.Status == CutResultStatus::Published ? "published A/B" :
+            result.Reason ? result.Reason : result.Error & 1 ? "finite rectangle endpoints outside" :
+            result.Error ? "cutter fatal error; original copy kept" : "no split; original copy kept";
+        if (result.Status == CutResultStatus::Published)
+        {
+            // body 0/1은 A/B이며 cutter side 순서와 독립이다.
+            auto* staging = scene.FindObject(m_CopyOwner);
+            m_PreparedIds[0] = m_PositiveA ? result.Mesh : result.Other;
+            m_PreparedIds[1] = m_PositiveA ? result.Other : result.Mesh;
+            const auto* compacted = GetBodyResult();
+            const bool distinctDefaults = m_SkinPatch
+                && m_SkinPatch->Islands.SideDefault[0] != m_SkinPatch->Islands.SideDefault[1];
+            const bool fallback = !compacted || compacted->Triangles.size() != 2
+                || !compacted->Triangles[0] || !compacted->Triangles[1] || !distinctDefaults;
+            if (!m_OffsetCopy && !fallback)
+            {
+                const auto revision = GeometryRevision::FromGenerated(compacted->Geometry);
+                for (uint32_t body = 0; body < 2; ++body)
+                    if (!staging->FindMeshComponent(m_PreparedIds[body])->SetGeometry(
+                        revision->SelectSections(compacted->Sections[body])))
+                        throw std::runtime_error("MI3d body geometry rejected");
+            }
+
+            // 실제 게시할 삼각형 수와 기존 side 대체 여부를 한 번 기록한다.
+            if (!m_OffsetCopy)
+            {
+                uint32_t triangles[2]{};
+                for (uint32_t body = 0; body < 2; ++body)
+                {
+                    const auto& revision = *staging->FindMeshComponent(m_PreparedIds[body])->GetGeometry();
+                    for (const auto& section : revision.GetSections())
+                        triangles[body] += revision.GetGenerated()->Meshes[section.SourceMesh].ibSize / 12;
+                }
+                PatchLog("MI3d publish body0 tris=%u body1 tris=%u fallback=%u\n", triangles[0], triangles[1], fallback);
+                if (fallback) PatchLog("MI3d fallback: %s; existing side results\n", !distinctDefaults
+                    ? "same SideDefault cannot form complementary A/B caps"
+                    : "compaction unavailable/failed or empty body");
+            }
             // cutter 출력과 추출 출처가 살아 있는 동안 A/B skin 입력을 동기로 생성한다.
             if (m_SkinPatch && m_SkinSnapshotCount == 2)
             {
                 auto* owner = scene.FindObject(m_CopyOwner);
-                const ComponentId ids[] = { m_PositiveA ? result.Mesh : result.Other,
-                    m_PositiveA ? result.Other : result.Mesh };
-                for (uint32_t side = 0; side < 2; ++side)
+                for (uint32_t body = 0; body < 2; ++body)
                 {
-                    auto* piece = owner->FindMeshComponent(ids[side]);
-                    if (piece && m_SkinSnapshots[side].SkinningAllowed)
-                        BuildPieceSkin(*piece, *piece->GetGeometry()->GetGenerated(), *m_SkinPatch, side);
+                    auto* piece = owner->FindMeshComponent(m_PreparedIds[body]);
+                    if (piece && m_SkinSnapshots[body].SkinningAllowed)
+                        BuildPieceSkin(*piece, *piece->GetGeometry()->GetGenerated(), *m_SkinPatch, body);
                 }
             }
             m_SkinPatch.reset();
@@ -2599,6 +2684,9 @@ namespace Viewer
                 // 진단에서만 저장된 topology 세대를 바꿔 실제 Stale 거절 경로를 통과시킨다.
                 auto request = m_Break;
                 if (m_ForceStale) ++request.ExpectedTopologyGeneration;
+
+                // 압축 후 skin 준비가 끝난 시점에도 원본이 같을 때만 관절을 끊는다.
+                if (DiscardStaleCutResult(scene)) return;
                 m_RequestId = m_Physics->QueueBreak(request, true);
                 PatchLog("SP7b queued RequestId=%llu JointId=%u ParentNode=%u %s\n", m_RequestId,
                     m_Break.JointId, m_Incoming.ParentNode, m_Physics->IsSimulationRunning() ? "" : "paused: waiting");
@@ -2610,14 +2698,14 @@ namespace Viewer
                 // C snapshot의 외곽 정점을 숨긴 A/B의 baked 정점과 대응시킨다.
                 if (!m_ForceStale && m_BreakCheck)
                 {
-                    const auto& meshes = scene.FindObject(m_CopyOwner)->GetMeshComponents();
-                    const MeshComponent* pieces[] = { meshes[m_PositiveA ? 0 : 1].get(), meshes[m_PositiveA ? 1 : 0].get() };
+                    const auto* prepared = scene.FindObject(m_CopyOwner);
+                    const MeshComponent* pieces[] = { prepared->FindMeshComponent(m_PreparedIds[0]), prepared->FindMeshComponent(m_PreparedIds[1]) };
 
                     // 짝 누락도 게시·after60 측정에서 FAIL로 집계하도록 대응 결과를 보존한다.
                     PairBoundary(pieces, m_Boundary, m_BoundaryPairs);
                 }
-                LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
-                return true;
+                LogCutResult(scene, reason, caps, uncapped, result.Error);
+                return;
             }
             auto* owner = scene.FindObject(m_CopyOwner);
             auto* piece = owner ? owner->FindMeshComponent(result.Other) : nullptr;
@@ -2643,7 +2731,7 @@ namespace Viewer
             m_SkinPatch.reset();
             PatchLog("Skeletal patch B gap not applied: %s\n", reason);
         }
-        LogCutResult(scene, reason, cutting.LastCaps, cutting.LastUncapped, result.Error);
+        LogCutResult(scene, reason, caps, uncapped, result.Error);
 
         // 절단 자체가 실패하면 숨긴 준비물도 즉시 버린다.
         if (!m_OffsetCopy && result.Status != CutResultStatus::Published)
@@ -2652,7 +2740,7 @@ namespace Viewer
             m_CopyOwner = 0;
             m_BreakReady = false;
         }
-        return true;
+        return;
     }
 
     // 열린 패치의 surface 게시 또는 거절을 컴포넌트 수와 함께 기록한다.

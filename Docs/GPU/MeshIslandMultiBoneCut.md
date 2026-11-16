@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-3b까지 완료(`34d5199e`); MI-3c 실제 출력 압축·비동기 회수·실패 격리 완료(미커밋, base `34d5199e`), D/R 빌드·Release 위팔·회귀 PASS; 게시 연결은 MI-3d 후속 (2026-11-16).
+상태: 진행 중 — MI-3c `96214e6f` 완료; MI-3d 단일 관절 몸체별 게시 연결 구현(미커밋, base `96214e6f`), D/R 빌드·Release 위팔 ON/OFF·회귀 PASS (2026-11-16).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -81,8 +81,8 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-2 | 완료(base `432ff0c5`): Poll의 기존 TriangleSources readback 재사용, 제출 포즈 반공간 예측, `LabelPatchIslands`, 로그·표 보관만 | 리뷰 3건 수정 후 CPU 테스트·D/R 빌드·Release 회귀 PASS; 위팔 P7에서 아일랜드 3개, 허리 90 tris → A; GPU 출력 불변 |
 | MI-3a | 완료(미커밋, base `b7413004`): 라벨 GPU 업로드, 출력 삼각형 몸체 판정(provenance `TriangleId`→`TriangleSideBody`) | D/R 빌드·Release 회귀 PASS; 양쪽 invalid=0/idMismatch=0, side0 reassigned=104; 출력·게시 불변 |
 | MI-3b | 완료(미커밋, base `2a0ab7d2`): body×section count→offset→scatter 압축 셰이더·합성 GPU 검사, P2 surface 우선 배치 수정 | 두-side 정점/depth/provenance/IB 보존·스키닝 주소 일치·합계 6·삼각형/바이트 overflow PASS; D/R 빌드·Release 회귀 PASS |
-| MI-3c | 완료(미커밋, base `34d5199e`): 실제 두 side 비동기 압축·실패 격리·완료 후 회수·몸체별 Mesh/삼각형 수 보관(게시 미연결) | 위팔 body0=518/body1=194, 합계 712=입력 712 및 material/depth/IB/bounds PASS; D/R 빌드·Release 회귀 PASS |
-| MI-3d | 단일 관절 재배치 게시 연결(`OnCutResult`·`BuildPieceSkin(body)`), cap은 SideDefault | 위팔 허리 90 tris가 A에 남음, A/B 각 1회 게시, 캡처 |
+| MI-3c | 완료(`96214e6f`): 실제 두 side 비동기 압축·실패 격리·완료 후 회수·몸체별 Mesh/삼각형 수 보관(게시 미연결) | 위팔 body0=518/body1=194, 합계 712=입력 712 및 material/depth/IB/bounds PASS; D/R 빌드·Release 회귀 PASS |
+| MI-3d | 완료(미커밋, base `96214e6f`): 비동기 완료 후 body 0/1 게시·몸체 snapshot 스키닝, cap은 SideDefault, 부적합 결과는 side 폴백 | 위팔 518/194 fallback=0, 허리 90 tris→A, ON/OFF 캡처·D/R 빌드·Release 회귀 PASS |
 | MI-3e | `ClipTrianglesCS` segment 출처 → cap loop 몸체 보조 전달 | 다중 loop cap 귀속·충돌/fallback 진단 |
 | MI-3f | cap loop 귀속 연결 | 위팔 publish/after60 캡처, SP7e2 ≤1mm, PS2/3·PS4 ≤0.01mm, Static/PS/AR 회귀 |
 | MI-4a | 무한 평면 교차 세그먼트 집합·조상 제거 함수 | 형제 2개/조상+자손/부호 반전 fixture 로그 |
@@ -200,4 +200,17 @@ MI-3c 리뷰 수정(미커밋, base `34d5199e`, 2026-11-16):
 - 지정 `regress.sh Release` 6개 모두 종료 0(16/18/12/13/14/14초, 수집 총 87.65초). MI-3b/MI-3c·BC-12a/b·AR4·Rig PASS, SP6 누적 194 PASS/0 FAIL. SP7e2 case=1은 기존 N/A, case=2/3 PASS. 위팔·회귀 D3D12 ERROR/CORRUPTION 0이며 기존 DXGI #80과 D3D12 경고는 남아 있다.
 - 근거: `%TEMP%/MI3c-fix-{Debug,Release}-build.log`, `MI3c-fix-UpperArm-{patch,debug}.log`, `MI3c-fix-Release-regress{,-debug}.log`, `MI3c-fix.md`. 이번 수정은 Geometry와 `ModelViewer.cpp`를 편집하지 않았다.
 
+MI-3d(미커밋, base `96214e6f`, 2026-11-16):
+- `OnCutResult`는 양쪽 side를 분류·압축 제출하고 결과를 숨긴 채 보관한다. `Update`는 `GetBodyState`의 InProgress 동안 대기하고, Done/Failed/None에서 `FinishCutResult`로 준비를 이어간다. Request/Reset은 대기 결과도 취소한다.
+- `FinishCutResult`는 공유 압축 geometry에서 body 0=A, 1=B의 section을 선택한다. `BuildPieceSkin(body)`는 side와 독립된 몸체 snapshot을 사용하며, QueueBreak→Applied 확인→원본 mask 1회→A/B 각 1회 게시 순서를 유지한다. offset 복사 진단은 기존 side 배치를 유지한다.
+- 압축 실패·빈 몸체는 기존 side 결과로 폴백한다. 추가 게시 검증: 양쪽 SideDefault가 같으면 상보적인 A/B cap을 만들지 못하므로 side 폴백한다. Xbot 허벅지 case=2는 두 기본 몸체가 B이고 압축 A는 반대 다리 20 tris뿐이다. 그대로 게시한 첫 회귀에서 SP7e2 9.764/1253.511mm·A cap 없음이 확인되어 이 검증을 추가했다. 라벨·고정 joint 정책 변경은 이 단계 범위 밖이다.
+- cap은 MI-3a/3c 그대로 같은 side의 SideDefault에 귀속한다. 위팔 body0=104+373+41 cap=518, body1=153+41 cap=194이며 허리 원본 90 tris의 clip 출력 104 tris가 A에 남는다.
+- `PollBodyCompaction`의 `vbOffset % 28 == 0`, `vbOffset/28 == firstTriangle*3` 검증과 MI-3b 합성 skinAddress 검사를 유지한다. `PatchSkinBuildCS`는 같은 정점 번호로 Data(28B)와 provenance(32B)를 읽고 PS2/3 실제 복원도 PASS다.
+- `ActivatePatchSkin`은 부분집합의 SourceMesh 번호로 PG offset을 보존한다. 빈 section의 끝 주소 UAV 오류는 `UpdateSkinnedGenerated`의 빈 section 바인딩 생략으로 해결했다. PS4는 같은 SourceMesh offset을 읽고 `BakePatchSkin`은 몸체 section 부분집합을 유지한다. `DiscardBodyCompaction`은 게시 중인 공유 버퍼를 직접 해제하지 않는다.
+- 지정 MSBuild Debug/Release 성공(21.57/25.90초, 각각 오류 0·기존 경고 5). Geometry/ 변경 없음. `ModelViewer.cpp`는 편집하지 않았다.
+- Release 위팔은 ModelViewer 작업 디렉터리에서 `-debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone Skeleton_arm_joint_L__4_ -capture %TEMP%/MI3d-arm-{on,off} -physics-query-exit 400 -patch-skinning {1,0}` 실행. MX450/32.0.15.9186, 두 실행 종료 0(ON 33.48초/OFF 34.80초)·A/B 각 1회 게시·HDR/post RAW 각 8쌍·D3D12 ERROR/CORRUPTION 0.
+- 양쪽 실행 로그: `MI3d publish body0 tris=518 body1 tris=194 fallback=0`. 지정 raw2png.ps1로 첫/마지막 post(000/007)를 PNG 변환·확인했다. ON에서 허리 표면은 몸통에 남고, OFF는 기존 강체 경계 벌어짐이 보인다. SideDefault cap의 허리 단면은 MI-3e/3f 후속 범위다.
+- 지정 `regress.sh Release` 6개 모두 종료 0(11/13/11/11/10/10초, 총 67.71초). SP7e2 case=1 publish/after60은 기존 N/A, case=2/3은 모두 0.000000mm PASS. case=2는 side 폴백(1475/869, fallback=1), case=3은 압축 게시(161/170, fallback=0). PS2 7건·PS3 6건·PS4 12건 PASS, FAIL 0; PS4 간격 변화 0mm. MI-3b/3c·BC-12a/b·AR4·Rig PASS, SP6 누적 246 PASS/0 FAIL. 회귀 D3D12 ERROR/CORRUPTION 0, 기존 DXGI #80 및 D3D12 경고는 남는다.
+- 근거: `%TEMP%/MI3d-{Debug,Release}-build.log`, `MI3d-arm-{on,off}-{patch,debug,exit}.log`, `MI3d-Release-regress{,-debug}.log`, `MI3d-arm-{on,off}-demo-{000,007}-post.png`, `MI3d-report.md`.
+- MI-3d P1 수정(2026-11-16): `Update`의 압축 대기 중과 `FinishCutResult`의 `QueueBreak` 직전에 `DiscardStaleCutResult`로 Applied 후와 동일한 geometry/mask revision을 검사하고, 불일치 시 break 없이 대기 결과·숨긴 staging owner·압축 상태를 정리하고 로그를 남긴다(Applied 후 검사 유지). Debug/Release 빌드 PASS(38.9/49.7초, 오류 0), MX450/591.86에서 지정 Release 위팔 180프레임 실행 PASS(11.84초, body0=518/body1=194 fallback=0), 지정 `regress.sh Release` 6개 종료 0·PASS(73.74초, SP6 누적 272 PASS/0 FAIL; SP7e2 case=1 기존 N/A), 두 실행 D3D12 ERROR/CORRUPTION 0; 근거 `%TEMP%/MI3d-fix-{Debug,Release}-build.log`, `MI3d-fix-UpperArm-{patch,debug}.log`, `MI3d-fix-Release-regress{,-debug}.log`, `MI3d-fix.md`.
 (MI-5에서 추가 기록)

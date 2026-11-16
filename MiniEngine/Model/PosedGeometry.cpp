@@ -415,10 +415,12 @@ void PosedGeometry::UpdateSkinnedGenerated(GraphicsContext& context, const ByteA
     compute.SetBufferSRV(1, source);
     compute.SetDynamicSRV(2, sizeof(Joint) * palette.size(), palette.data());
 
-    // section별 원본 VB 구간을 연속 RAW40 구간으로 변환한다.
+    // 부분집합의 빈 section은 바인딩하지 않고 실제 VB 구간만 RAW40으로 변환한다.
     for (size_t i = 0; i < m_SkinSections.size(); ++i)
     {
         const auto& section = m_SkinSections[i];
+        if (!section.VertexCount)
+            continue;
         DispatchPoseSection(compute, m_Buffer, m_Offsets[i], section.FirstVertex * m_SkinStride,
             m_SkinStride, section.VertexCount, m_SkinFlags, nodeMatrix);
     }
