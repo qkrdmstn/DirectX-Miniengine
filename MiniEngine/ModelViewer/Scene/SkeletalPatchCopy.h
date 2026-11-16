@@ -43,9 +43,13 @@ namespace Viewer
         std::vector<uint32_t> Triangles;
         std::vector<std::array<uint32_t, 2>> IslandSources; // skin CPU section, section 로컬 삼각형
         IslandLabels Islands; // snapshot 수집 뒤 재라벨하여 GPU 분류에 사용한다.
-        Math::Vector3 Crossing = Math::Vector3(Math::kZero);
-        bool HasCrossing = false;
-        uint32_t ChildSide = 0;
+        struct CutCrossing
+        {
+            uint32_t Root = UINT32_MAX, Child = UINT32_MAX, ChildSide = 0;
+            Math::Vector3 Point = Math::Vector3(Math::kZero);
+            bool Valid = false;
+        };
+        std::vector<CutCrossing> Crossings; // 몸체 i+1의 제출 포즈 선분 snapshot이다.
         std::vector<BoundaryVertex> Boundary; // 진단에서만 채우는 C 시점 바깥 경계 정점
         std::vector<BoundarySkin> BoundarySkins;
     };
@@ -61,7 +65,8 @@ namespace Viewer
             const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
             uint32_t node = UINT32_MAX, bool diagnostic = false, bool influence = false,
             const std::vector<NodeId>& parents = {}, uint32_t child = UINT32_MAX,
-            const std::vector<uint32_t>& unionRoots = {});
+            const std::vector<uint32_t>& unionRoots = {},
+            const std::vector<uint32_t>& unionChildren = {});
         // 확대된 실제 복사본 평면으로 제출 포즈의 부호를 예측하고 진단 표만 보관한다.
         void DiagnoseIslands(SkeletalPatchBuffers& patch, const MeshCutting::CutPlaneData& plane,
             float offset, bool positiveA, const std::string& modelName);
@@ -102,7 +107,8 @@ namespace Viewer
         std::vector<uint32_t> m_SkinSections;
         IslandLabels m_IslandLabels; // 출력 버퍼 해제 뒤에도 다음 요청까지 결과를 보관한다.
         uint32_t m_Node = UINT32_MAX;
-        uint32_t m_ChildNode = UINT32_MAX;
+        std::vector<uint32_t> m_CutRoots, m_CutChildren;
+        bool m_UnionSubmit = false; // 합집합 제출이면 P_i를 제출 인자로 고정한다.
         bool m_Diagnostic = false;
         uint64_t m_Fence = 0;
     };

@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(`caa6f681`); MI-4d 진행 중(MI-4d1 미커밋, base `caa6f681`, 2026-11-16): 요청 몸체 수 기반 압축·카운터·준비 ID 배열. 실제 다중 loop 귀속·n=2 절단 진단은 MI-4d2.
+상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(`caa6f681`); MI-4d1 완료(`58807a5e`); MI-4d2 미커밋(base `58807a5e`, 2026-11-16): P_i 교차점 snapshot·다중 loop 귀속·n=2 합집합 절단/분류/압축 진단(게시·break·mask 없음). 몸체별 skin 준비는 아직 미연결, break·mask·n+1 게시는 MI-4e~4h.
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -89,9 +89,9 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-4a | 완료(`7728485a`): `SelectCrossingJoints` 무한 평면 교차 최상위 P 집합, 유효 조상 계산 공유; 런타임 미연결 | 형제 P={1,2}, 조상+자손 P={2}, 부호 반전 Bside={0,0}→{1,1}, 비영향/비팔레트 건너뜀 0→3; CPU 83 checks·Lattice·D/R 빌드·Release 회귀 6실행 PASS |
 | MI-4b | 완료(`86522153`): `BuildJointUnionMasks`·추출 P 집합 입력, `PatchExtractCS::Selected` 재사용 | CesiumMan 형제 허벅지 P={13,17}: 단독364/352, 합집합526, 중복 P도526; GPU==CPU·중복0, CPU·D/R·3데모·Release 회귀 PASS |
 | MI-4c | 완료(`caa6f681`): `BuildCutBodyGroups`·몸체별 snapshot/attachment 배열 | n=1 기존 Frozen 규칙·세 데모 동등; 형제 n=2 그룹·Frozen 팔레트·LCA 및 CPU/D/R/회귀 PASS |
-| MI-4d | 진행 중: MI-4d1 완료(미커밋, base `caa6f681`), MI-4d2 대기 | 전체 완료 조건은 같은 side B1/B2 cap 분리, 빈 몸체 로그; 실제 다중 loop 귀속은 아직 미완료 |
-| MI-4d1 | 요청 그룹 수 기반 body×section 압축·몸체별 분류 카운터·준비 ID 배열 | 빈 마지막 몸체 보존·로그, 합성 세 몸체/빈 네 번째 몸체 GPU 압축 검증 |
-| MI-4d2 | P_i 교차점 snapshot·아일랜드 재라벨·loop leader→side별 몸체·몸체별 skin 준비 | P13/P17 실제 합집합 절단·분류·압축 진단, B1/B2 cap 분리·빈 몸체 로그; break·mask·n+1 게시 미연결 |
+| MI-4d | 진행 중: MI-4d1 완료(`58807a5e`), MI-4d2 완료(미커밋, base `58807a5e`) | 같은 side B1/B2 cap 분리·빈 몸체 로그 진단 PASS; 몸체별 skin 준비는 MI-4e 이후로 이월 |
+| MI-4d1 | 완료(`58807a5e`): 요청 그룹 수 기반 body×section 압축·몸체별 분류 카운터·준비 ID 배열 | 빈 마지막 몸체 보존·로그, 합성 세 몸체/빈 네 번째 몸체 GPU 압축 검증 |
+| MI-4d2 | 완료(미커밋, base `58807a5e`): P_i 교차점 snapshot·아일랜드 재라벨·loop별 side 몸체·`-skeletal-union-checks` n=2 진단(몸체별 skin 준비는 미연결) | P13/P17 실제 합집합 절단·분류·압축 진단, B1/B2 cap 분리·빈 몸체 로그; break·mask·n+1 게시 미연결 |
 | MI-4e | `ApplyConstraintBreak` 검증/commit 분리 | 단일 break 회귀·거절 무변경 |
 | MI-4f | `SkeletalPhysicsSystem` batch 사전 검증·세대 계약 | 두 번째 실패 시 첫 constraint도 보존(CPU 검사) |
 | MI-4g | `QueueBreak` batch·결과 수집 | pause·Stale·AlreadyBroken·Reset 전체 무변경 |
@@ -117,7 +117,15 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 
 ## 시험 결과
 
-MI-4d1(미커밋, base `caa6f681`, 2026-11-16):
+MI-4d2(미커밋, base `58807a5e`, 2026-11-16):
+- `SkeletalPatchBuffers::Crossings`가 P_i별 Root/Child/ChildSide/Point/Valid를 보관하고 `RelabelCapLoops`는 교차점마다 최소 면적 유효 loop를 고른다. loop 공유·아일랜드 요구 충돌은 다중일 때 진단 실패 예외로 격리한다. `DiagnoseCapLoops(bodyCount)`는 side별 몸체 유지 loop 수와 같은 side B1/B2 cap 분리 로그를 남긴다.
+- `CheckJointUnion`이 검증한 형제 P 쌍을 반환하고 `-skeletal-union-checks 1`일 때만 `Request`가 그 평면으로 3몸체(A/B1/B2) 절단을 제출한다. 기본 n=1 경로는 불변이다. `FinishCutResult`는 몸체가 둘이 아니면 압축 결과만 확인하고 게시·break·mask 없이 끝낸다.
+- 컴파일 오류 없음. 리뷰 수정: 단일 제출은 Poll의 GPU NodeId로 P_0 확정(Influence), 다중 몸체 조기 종료 정리 순서·Submit 실패 시 몸체 side 복원. SkeletalPatchTests Debug·/O2 각 118 checks, LatticeTopologyTests PASS, Debug 40초·Release 42초 빌드 exit0.
+- 지정 세 데모는 491/167, 1475/869, 161/170·fallback0·exit0. n=2(P=13,17 child=14,18): loop0→B1·loop6→B2 선택, keep 2/drop0·conflicts/fallback 0, side1 cap 몸체별 B1=1/B2=1, `same-side B1/B2 cap split=PASS`, 분류 body1=169+18/body2=161+14, 압축 body0/1/2=300/187/175 tris(합계 662=입력, PASS), `publish=0 break=0 mask=0`·exit0.
+- 지정 bash Release 회귀 6실행 exit0(31초), SP6 792 PASS/0 FAIL, SP7e2 case2/3 0mm(case1 기존 N/A), PS2 ≤0.000234mm, 기존 PASS 유지. 모든 실행 D3D12 ERROR 0. 근거: `%TEMP%/MI4d2-*.log`, `MI4d2-report.md`.
+- 남은 일: 몸체별 skin 준비는 미연결(MI-4e 이후), break·mask·n+1 게시는 MI-4e~4h.
+
+MI-4d1(`58807a5e`, 2026-11-16):
 - MI-4d를 두 부분으로 분할했다. 기존 `DiagnoseIslands`·`RelabelCapLoops`는 단일 P/교차점/ChildSide를 사용한다. P_i별 snapshot, 실제 loop 대응·충돌 처리, n=2 cutter 진단까지 함께 바꾸면 약 300줄을 크게 넘으므로 이번은 압축 입력의 요청 몸체 수 계약만 구현한다.
 - `ClassifyCutBodies`·`PatchBodyClassifyCS`는 요청 BodyCount를 받아 기존 10개 진단 뒤 몸체별 표면/cap 카운터를 둔다. leader×side 표 형식은 이미 임의 몸체 ID를 담을 수 있어 유지하며 실제 다중 loop 표 생성은 MI-4d2다.
 - `CompactCutBodies`는 표면 라벨의 최댓값으로 몸체 수를 추정하지 않는다. 요청 그룹 수를 사용해 마지막 빈 몸체도 body×section bin과 `PatchBodyResult`의 빈 Sections/0 Triangles로 보존한다. 범위 밖 라벨은 거절하고 `PollBodyCompaction`은 빈 몸체를 bounds 없이 명시적으로 로그한다.

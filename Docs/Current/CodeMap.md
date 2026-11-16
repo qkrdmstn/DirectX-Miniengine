@@ -2,7 +2,9 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
-MI-4d1(base `caa6f681`, 미커밋): `ClassifyCutBodies`·`PatchBodyClassifyCS::main`은 요청 BodyCount로 몸체별 표면/cap 카운터를 기록한다. `CompactCutBodies`는 라벨 최댓값 대신 요청 몸체 수로 bin을 할당해 마지막 빈 몸체를 보존하고 `PollBodyCompaction`이 빈 몸체를 명시적으로 로그한다. `m_PreparedIds`는 벡터이며 `FinishCutResult`의 게시 연결은 기존 두 몸체만 허용한다. `CheckBodyCompaction`의 합성 세 몸체/빈 body3 검사는 union 옵션에서도 실행한다. P_i별 교차점·실제 loop 귀속·n=2 절단/분류/압축 진단과 몸체별 staging/skin 준비는 MI-4d2, batch break·mask·n+1 게시는 MI-4e~4h다([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).
+MI-4d2(base `58807a5e`, 미커밋): `DiagnoseIslands`가 `SkeletalPatchBuffers::Crossings`에 P_i별 교차점 snapshot을 만들고 `RelabelCapLoops`가 교차점마다 최소 면적 loop를 골라 loop 공유·아일랜드 충돌은 다중일 때 예외로 격리한다. `DiagnoseCapLoops(bodyCount)`는 side별 몸체 유지 loop 수와 B1/B2 cap 분리를 로그한다. `CheckJointUnion`이 반환한 형제 P 쌍을 `-skeletal-union-checks`일 때만 `Request`가 3몸체로 제출하며 `FinishCutResult`는 압축 확인 뒤 게시·break·mask 없이 끝낸다. 몸체별 skin 준비는 미연결.
+
+MI-4d1(`58807a5e`): `ClassifyCutBodies`·`PatchBodyClassifyCS::main`은 요청 BodyCount로 몸체별 표면/cap 카운터를 기록한다. `CompactCutBodies`는 라벨 최댓값 대신 요청 몸체 수로 bin을 할당해 마지막 빈 몸체를 보존하고 `PollBodyCompaction`이 빈 몸체를 명시적으로 로그한다. `m_PreparedIds`는 벡터이며 `FinishCutResult`의 게시 연결은 기존 두 몸체만 허용한다. `CheckBodyCompaction`의 합성 세 몸체/빈 body3 검사는 union 옵션에서도 실행한다. P_i별 교차점·실제 loop 귀속·n=2 절단/분류/압축 진단과 몸체별 staging/skin 준비는 MI-4d2, batch break·mask·n+1 게시는 MI-4e~4h다([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).
 
 MI-4c(완료 `caa6f681`): `BuildCutBodyGroups`가 노드 그룹·P_i 부모 LCA의 A 부착·P_i의 B_i 부착·Frozen=(group!=body)를 만든다. `Request`는 몸체별 attachment/snapshot/piece ID와 side 매핑 벡터를 사용하고 `DiagnoseIslands`도 그룹 분류를 공유한다. 기본 입력은 기존 단일 P이며 압축·게시 자원 n+1 확장과 break batch는 후속 범위다. CPU118 checks와 `CheckBodyPalettes`의 형제 P13/P17 후속 포즈 팔레트(A/B1/B2 attach=2/13/17, Frozen=8/15/15) PASS; n=1 세 데모·CPU/D/R·Release 회귀 PASS([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).
 

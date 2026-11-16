@@ -1013,8 +1013,16 @@ namespace Viewer
         }
     }
 
+    // 합집합 진단이 고른 형제 P_i와 그 선분 snapshot을 component-local 평면과 함께 담는다.
+    struct UnionCutRequest
+    {
+        MeshCutting::CutPlaneData Plane;
+        std::vector<uint32_t> Roots, Children, ChildSides;
+    };
+
     // 형제 분기의 합집합과 자손이 있는 단일 본의 기존 마스크 경로를 GPU 출처 목록으로 대조한다.
-    static void CheckJointUnion(const MeshComponent& source, const Math::Matrix4& world,
+    // 검증한 형제 쌍을 실제 다중 P 절단 진단 요청으로 반환한다.
+    static UnionCutRequest CheckJointUnion(const MeshComponent& source, const Math::Matrix4& world,
         const std::vector<NodeId>& parents, const std::string& modelName)
     {
         // 제출 pose의 component-local 본 위치와 section 팔레트를 모은다.
@@ -1123,7 +1131,10 @@ namespace Viewer
                         first, legacyResult.PatchTriangles, unionResult.PatchTriangles, equivalent ? "PASS" : "FAIL");
                     if (!equivalent)
                         throw std::runtime_error("MI4b n=1 legacy and union sources differ");
-                    return;
+
+                    // 검증한 형제 쌍과 선택 자식 snapshot을 실제 다중 P 절단 진단에 넘긴다.
+                    return { plane, { first, second }, { crossing[a].ChildNodeId, crossing[b].ChildNodeId },
+                        { crossing[a].ChildSide, crossing[b].ChildSide } };
                 }
         }
 
@@ -1568,12 +1579,39 @@ namespace Viewer
         m_Name = m_ModelName + "_SkeletalPatch";
         m_Diagnostic = diagnostic;
         m_Plane = plane;
-        // 명시한 옵션에서만 별도 합집합 추출을 검증하고 정상 단일 본 제출을 계속한다.
+        // 명시한 옵션에서만 별도 합집합 추출을 검증하고 형제 P_i 쌍을 받는다.
         uint32_t unionChecks = 0;
+        UnionCutRequest unionCut;
         if (CommandLineArgs::GetInteger(L"skeletal-union-checks", unionChecks) && unionChecks)
-            CheckJointUnion(*mesh, world, target->GetModelInstance()->GetPoseParents(), m_ModelName);
-        const bool submitted = m_Job.Submit(*mesh, local, selected.PaletteMasks, world,
-            selected.NodeId, diagnostic, influence, target->GetModelInstance()->GetPoseParents(), selected.ChildNodeId);
+            unionCut = CheckJointUnion(*mesh, world, target->GetModelInstance()->GetPoseParents(), m_ModelName);
+
+        // 합집합 진단은 형제 평면을 월드로 옮기고 n+1 몸체의 폴백 반공간을 정한다.
+        if (!unionCut.Roots.empty())
+        {
+            if (!MeshCutting::TryBuildCutPlaneData({ 100, 100 },
+                AffineTransform(world * Invert(unionCut.Plane.WorldToPlane)), m_Plane))
+                throw std::runtime_error("MI4d2 union world plane invalid");
+            local = m_Plane;
+            local.WorldPlane = Transpose(world) * m_Plane.WorldPlane;
+            local.WorldToPlane = m_Plane.WorldToPlane * world;
+            m_BodySides = { 1 - unionCut.ChildSides[0], unionCut.ChildSides[0], unionCut.ChildSides[1] };
+            PatchLog("MI4d2 union cut P=%u,%u child=%u,%u childSide=%u,%u bodies=3 publish/break/mask=skipped\n",
+                unionCut.Roots[0], unionCut.Roots[1], unionCut.Children[0], unionCut.Children[1],
+                unionCut.ChildSides[0], unionCut.ChildSides[1]);
+        }
+
+        // 기본 실행은 단일 P를, 합집합 진단은 P_i 배열과 자식 snapshot을 제출한다.
+        const bool submitted = unionCut.Roots.empty()
+            ? m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic, influence,
+                target->GetModelInstance()->GetPoseParents(), selected.ChildNodeId)
+            : m_Job.Submit(*mesh, local, {}, world, unionCut.Roots[0], diagnostic, false,
+                target->GetModelInstance()->GetPoseParents(), UINT32_MAX, unionCut.Roots, unionCut.Children);
+
+        // 합집합 제출이 거절되면 몸체 side를 기본 두 몸체로 되돌린다.
+        if (!submitted && !unionCut.Roots.empty())
+        {
+            m_BodySides = { 0, 1 };
+        }
         m_BonePending = boneCut && submitted;
         if (!submitted && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
@@ -2399,7 +2437,6 @@ namespace Viewer
         const auto u = Normalize(Cross(normal, Abs(normal.GetY()) < 0.9f
             ? Math::Vector3(Math::kYUnitVector) : Math::Vector3(Math::kXUnitVector)));
         const auto v = Cross(normal, u);
-        const std::array<float, 2> point = { Dot(u, patch.Crossing), Dot(v, patch.Crossing) };
         std::map<uint32_t, std::vector<std::array<float, 4>>> loops;
         std::set<uint32_t> bad, real;
         for (const auto& segment : result.CapSegments)
@@ -2411,29 +2448,67 @@ namespace Viewer
             if (segment[3] != 0) bad.insert(segment[1]);
         }
 
-        // 잘못된 loop를 제외하고 교차점을 감싼 최소 면적 폐곡선 하나만 선택한다.
-        for (uint32_t leader : bad) loops.erase(leader);
-        const uint32_t selected = patch.HasCrossing ? SmallestContainingLatticeLoop(loops, point) : UINT32_MAX;
-        if (selected != UINT32_MAX) real.insert(selected);
+        // 각 교차점의 최소 loop를 고르고 같은 loop를 요구하는 P_i는 진단 실패로 격리한다.
+        for (uint32_t leader : bad)
+        {
+            loops.erase(leader);
+        }
+        std::map<uint32_t, uint32_t> owners;
+        for (uint32_t i = 0; i < patch.Crossings.size(); ++i)
+        {
+            const auto& crossing = patch.Crossings[i];
+            const std::array<float, 2> point = { Dot(u, crossing.Point), Dot(v, crossing.Point) };
+            const uint32_t selected = crossing.Valid ? SmallestContainingLatticeLoop(loops, point) : UINT32_MAX;
+            PatchLog("MI4d2 body=%u P=%u child=%u crossingValid=%u crossing=(%g,%g,%g) childSide=%u loop=%u\n",
+                i + 1, crossing.Root, crossing.Child, crossing.Valid, float(crossing.Point.GetX()),
+                float(crossing.Point.GetY()), float(crossing.Point.GetZ()), crossing.ChildSide, selected);
+            if (selected == UINT32_MAX)
+            {
+                if (patch.Crossings.size() > 1)
+                {
+                    PatchLog("MI4d2 diagnostic FAIL body=%u missing real loop\n", i + 1);
+                    throw std::runtime_error("MI4d2 missing multi-P loop");
+                }
+                continue;
+            }
+            if (!owners.emplace(selected, i).second)
+            {
+                PatchLog("MI4d2 diagnostic FAIL loop=%u shared bodies=%u,%u\n", selected, owners.at(selected) + 1, i + 1);
+                throw std::runtime_error("MI4d2 shared multi-P loop");
+            }
+            real.insert(selected);
+        }
 
-        // 실제 loop에 닿은 아일랜드 전체를 자식 쪽 B와 반대쪽 A로 요청한다.
+        // 실제 loop의 자식 side는 B_i, 반대 side는 A로 요청하고 아일랜드 충돌을 함께 검사한다.
         std::vector<std::array<uint32_t, 3>> requests;
         for (const auto& segment : result.CapSegments)
-            if (segment[2] && real.count(segment[1]))
-                for (uint32_t side = 0; side < 2; ++side)
-                    requests.push_back({ segment[0], side, uint32_t(side == patch.ChildSide) });
-        const auto counts = RelabelPatchIslands(patch.Islands, requests);
-        const std::string crossing = patch.HasCrossing ? std::to_string(float(patch.Crossing.GetX())) + ","
-            + std::to_string(float(patch.Crossing.GetY())) + "," + std::to_string(float(patch.Crossing.GetZ())) : "none";
-        const std::string leader = real.empty() ? "none" : std::to_string(*real.begin());
-        PatchLog("MI3e2 crossing=%s realLoop=%s relabeled islands=%u tris=%u conflicts=%u\n",
-            crossing.c_str(), leader.c_str(), counts[0], counts[1], counts[2]);
+        {
+            if (!segment[2] || !real.count(segment[1]))
+            {
+                continue;
+            }
+            const uint32_t owner = owners.at(segment[1]);
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                requests.push_back({ segment[0], side, side == patch.Crossings[owner].ChildSide ? owner + 1 : 0 });
+            }
+        }
+        IslandLabels relabeled = patch.Islands;
+        const auto counts = RelabelPatchIslands(relabeled, requests);
+        PatchLog("MI3e2 realLoops=%zu relabeled islands=%u tris=%u conflicts=%u\n",
+            real.size(), counts[0], counts[1], counts[2]);
+        if (patch.Crossings.size() > 1 && counts[2])
+        {
+            PatchLog("MI4d2 diagnostic FAIL conflicting islands=%u; original labels preserved\n", counts[2]);
+            throw std::runtime_error("MI4d2 conflicting multi-P island requests");
+        }
+        patch.Islands = std::move(relabeled);
         return real;
     }
 
     // 재라벨한 경계 몸체를 투표하고 leader별 GPU 귀속 표를 만든다.
     static std::vector<std::array<uint32_t, 2>> DiagnoseCapLoops(const CutResultEntry& result, const IslandLabels& islands,
-        const std::set<uint32_t>& real)
+        const std::set<uint32_t>& real, uint32_t bodyCount)
     {
         // 유효한 loop의 각 선분에서 양쪽 몸체 투표와 미해결 수를 집계한다.
         struct Votes
@@ -2505,6 +2580,38 @@ namespace Viewer
         // fallback은 출처가 없어 투표에서 빠진 (선분, side) 수다.
         PatchLog("MI3e loops=%u drop=%u keep=%u conflicts=%u fallback=%u\n",
             uint32_t(loops.size()), drop, uint32_t(loops.size()) - drop, conflicts, fallback);
+
+        // 다중 요청은 불완전한 loop 투표를 side 기본값으로 압축하지 않고 진단 실패로 격리한다.
+        if (bodyCount > 2 && (conflicts || fallback))
+        {
+            PatchLog("MI4d2 diagnostic FAIL cap conflicts=%u fallback=%u\n", conflicts, fallback);
+            throw std::runtime_error("MI4d2 ambiguous multi-P cap labels");
+        }
+
+        // 다중 몸체는 side별 유지 loop 수를 몸체마다 세어 같은 side B1/B2 cap 분리를 기록한다.
+        if (bodyCount > 2)
+        {
+            bool split = false;
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                std::vector<uint32_t> perBody(bodyCount, 0);
+                for (const auto& entry : table)
+                {
+                    if (entry[side] < bodyCount)
+                    {
+                        ++perBody[entry[side]];
+                    }
+                }
+                std::string counts;
+                for (uint32_t body = 0; body < bodyCount; ++body)
+                {
+                    counts += " body" + std::to_string(body) + "=" + std::to_string(perBody[body]);
+                }
+                split |= perBody[1] && perBody[2];
+                PatchLog("MI4d2 cap loops side=%u%s\n", side, counts.c_str());
+            }
+            PatchLog("MI4d2 same-side B1/B2 cap split=%s\n", split ? "PASS" : "FAIL");
+        }
         return table;
     }
 
@@ -2947,7 +3054,7 @@ namespace Viewer
                 {
                     // 분류나 압축 실패는 기존 A/B 게시 준비에 전파하지 않는다.
                     const auto real = RelabelCapLoops(result, *m_SkinPatch, m_Plane);
-                    const auto capLoops = DiagnoseCapLoops(result, m_SkinPatch->Islands, real);
+                    const auto capLoops = DiagnoseCapLoops(result, m_SkinPatch->Islands, real, uint32_t(m_BodySides.size()));
                     for (uint32_t side = 0; side < 2; ++side)
                         ClassifyCutBodies(*inputs[side], m_SkinPatch->Islands, capLoops, side, uint32_t(m_BodySides.size()));
                     CompactCutBodies(inputs, uint32_t(m_BodySides.size()));
@@ -3019,9 +3126,28 @@ namespace Viewer
             auto* staging = scene.FindObject(m_CopyOwner);
             m_PreparedIds.assign(m_BodySides.size(), InvalidComponentId);
 
-            // n+1 게시 연결 전에는 다중 몸체가 두 side 준비물을 공유하지 못하게 거절한다.
+            // n+1 게시 연결 전의 다중 몸체 진단은 압축 결과만 확인하고 게시·break·mask 없이 끝낸다.
             if (m_BodySides.size() != 2)
-                throw std::runtime_error("MI4d multi-body publication is not connected");
+            {
+                const bool compacted = GetBodyResult() != nullptr;
+                PatchLog("MI4d2 union diagnostic bodies=%zu compaction=%s publish=0 break=0 mask=0\n",
+                    m_BodySides.size(), compacted ? "PASS" : "FAIL");
+                LogCutResult(scene, "MI4d2 union diagnostic; publish skipped", caps, uncapped, result.Error);
+
+                // 로그 뒤에 압축 출력과 준비물 상태를 모두 해제한다.
+                DiscardBodyCompaction();
+                m_SkinPatch.reset();
+                scene.DeleteObject(m_CopyOwner);
+                m_CopyOwner = 0;
+                m_PreparedIds.clear();
+                m_ReadyCaps = m_ReadyUncapped = 0;
+                m_BreakReady = false;
+
+                // 압축 결과가 없었다면 정리 후 진단 실패로 알린다.
+                if (!compacted)
+                    throw std::runtime_error("MI4d2 union compaction failed");
+                return;
+            }
 
             // 기존 단일 break의 두 준비물은 요청의 반공간 순서로 대응한다.
             for (size_t body = 0; body < m_BodySides.size(); ++body)
@@ -3272,7 +3398,7 @@ namespace Viewer
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
         uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child,
-        const std::vector<uint32_t>& unionRoots)
+        const std::vector<uint32_t>& unionRoots, const std::vector<uint32_t>& unionChildren)
     {
         // 준비되지 않았거나 생성된 입력은 이 단계의 skeletal 추출 대상이 아니다.
         Cancel();
@@ -3331,7 +3457,17 @@ namespace Viewer
         // GPU가 사용한 준비 팔레트와 node/source/world 합성을 제출 시점에 고정한다.
         const auto& model = *input.GetSource();
         m_Parents = parents;
-        m_ChildNode = child;
+        m_CutRoots = unionRoots.empty() ? std::vector<uint32_t>{node} : unionRoots;
+        if (!unionChildren.empty() && unionChildren.size() != m_CutRoots.size())
+        {
+            throw std::invalid_argument("MI4d2 child snapshot count mismatch");
+        }
+        m_CutChildren = unionChildren.empty() ? std::vector<uint32_t>(m_CutRoots.size(), UINT32_MAX) : unionChildren;
+        m_UnionSubmit = !unionRoots.empty();
+        if (!m_UnionSubmit)
+        {
+            m_CutChildren[0] = child;
+        }
         m_IslandJoints.assign(source.GetPreparedJoints(), source.GetPreparedJoints() + model.m_NumJoints);
         m_IslandNodes.assign(source.GetPreparedNodes(), source.GetPreparedNodes() + model.m_NumNodes);
         const uint8_t* meshData = model.m_MeshData.get();
@@ -3493,6 +3629,12 @@ namespace Viewer
         std::memcpy(metadata, m_Readback.Map(), sizeof(metadata));
         std::memcpy(&result, metadata, sizeof(result));
         m_Node = metadata[11];
+
+        // 단일 제출은 GPU가 고른 NodeId(Influence 포함)를 P_0로 확정한다.
+        if (!m_UnionSubmit)
+        {
+            m_CutRoots[0] = m_Node;
+        }
         PatchLog("Skeletal patch GPU selected mode=%s NodeId=%u\n", m_Influence ? "Influence" : "Parent", m_Node);
         m_Readback.Unmap();
         m_Output->SourceWorldWidth = BoundsCoordinate(metadata[10]) - BoundsCoordinate(metadata[9]);
@@ -3611,7 +3753,7 @@ namespace Viewer
 
         // 요청당 한 번 공통 분류기로 팔레트 joint의 몸체 그룹을 읽는다.
         const std::vector<uint32_t> jointNodes(model.m_JointIndices.get(), model.m_JointIndices.get() + model.m_NumJoints);
-        const auto groups = BuildCutBodyGroups(m_Parents, jointNodes, { m_Node });
+        const auto groups = BuildCutBodyGroups(m_Parents, jointNodes, m_CutRoots);
         std::vector<uint32_t> jointGroups(model.m_NumJoints, 0);
         if (!groups.NodeGroups.empty())
         {
@@ -3620,24 +3762,32 @@ namespace Viewer
         }
 
         // 실제 incoming 관절의 B 루트에서 자식으로 나가는 제출 포즈 교차를 찾는다.
-        patch.HasCrossing = false;
+        patch.Crossings.assign(m_CutRoots.size(), {});
         const auto first = std::find_if(m_SkinSections.begin(), m_SkinSections.end(),
             [](uint32_t skin)
             {
                 // 공통 skin frame을 제공하는 첫 section을 고른다.
                 return skin != UINT32_MAX;
             });
-        if (m_Node < m_IslandNodes.size() && first != m_SkinSections.end())
+        for (size_t i = 0; i < m_CutRoots.size(); ++i)
         {
+            // 각 P_i의 선택 자식과 교차점을 독립적으로 보존한다.
+            auto& snapshot = patch.Crossings[i];
+            snapshot.Root = m_CutRoots[i];
+            snapshot.Child = m_CutChildren[i];
+            if (snapshot.Root >= m_IslandNodes.size() || first == m_SkinSections.end())
+            {
+                continue;
+            }
             const auto frame = m_SourceWorld * m_IslandFrames[size_t(first - m_SkinSections.begin())];
-            const Math::Vector3 parent(frame * m_IslandNodes[m_Node].GetW());
+            const Math::Vector3 parent(frame * m_IslandNodes[snapshot.Root].GetW());
             const float a = Dot(plane.WorldPlane, Math::Vector4(parent + Math::Vector3(offset, 0, 0), 1));
             const Math::Vector3 center = (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f;
             float closest = std::numeric_limits<float>::max();
             for (uint32_t child = 0; child < m_Parents.size(); ++child)
             {
                 // 보존한 선택 선분을 사용하고 snapshot이 없을 때만 직접 자식으로 제한한다.
-                if (!IsSelectedSegmentChild(m_Node, child, m_Parents[child], m_ChildNode)) continue;
+                if (!IsSelectedSegmentChild(snapshot.Root, child, m_Parents[child], m_CutChildren[i])) continue;
 
                 // 제출 포즈의 선택 선분과 평면 사이의 교점을 계산한다.
                 const Math::Vector3 position(frame * m_IslandNodes[child].GetW());
@@ -3651,9 +3801,10 @@ namespace Viewer
 
                 // 자식 snapshot이 없으면 평면 중심에 가장 가까운 직접 자식 교차를 보존한다.
                 closest = distance;
-                patch.Crossing = crossing;
-                patch.ChildSide = side;
-                patch.HasCrossing = true;
+                snapshot.Point = crossing;
+                snapshot.Child = child;
+                snapshot.ChildSide = side;
+                snapshot.Valid = true;
             }
         }
 
@@ -3683,9 +3834,9 @@ namespace Viewer
                     score = entry.second;
                 }
             const uint32_t node = joint == UINT32_MAX ? UINT32_MAX : model.m_JointIndices[joint];
-            PatchLog("MI2 island side=%u tris=%u scoreA=%.6f scoreB=%.6f body=%s representative=%u name=%s weight=%.6f\n",
+            PatchLog("MI2 island side=%u tris=%u scoreA=%.6f scoreB=%.6f body=%u representative=%u name=%s weight=%.6f\n",
                 island.Side, island.Triangles, island.Scores[0], island.Scores.size() > 1 ? island.Scores[1] : 0,
-                island.Body ? "B1" : "A", node, SafeDiagnosticNodeName(modelName, node).c_str(), score);
+                island.Body, node, SafeDiagnosticNodeName(modelName, node).c_str(), score);
         }
     }
 
