@@ -1143,10 +1143,70 @@ namespace Viewer
         throw std::runtime_error("MI4b no crossing sibling pair");
     }
 
+    // 요청 평면에서 교차하는 최상위 P와 자식 방향을 component-local 공간으로 선택한다.
+    static UnionCutRequest SelectMultiCut(const MeshComponent& source, const Math::Matrix4& world,
+        const std::vector<NodeId>& parents, const MeshCutting::CutPlaneData& plane)
+    {
+        // 공통 skin frame으로 모든 본 위치와 section 팔레트를 모은다.
+        using namespace Math;
+        const auto& input = *source.GetGeometry();
+        const auto& model = *input.GetSource();
+        const auto* nodes = source.GetPreparedNodes();
+        if (!nodes)
+        {
+            return {};
+        }
+        size_t firstSkin = 0;
+        while (firstSkin < input.GetSections().size() && !input.GetMesh(firstSkin).numJoints)
+        {
+            ++firstSkin;
+        }
+        if (firstSkin == input.GetSections().size())
+        {
+            return {};
+        }
+        const Matrix4 frame = Invert(Matrix4(source.GetDeformBinding().SourceFrame.ToAffine()))
+            * nodes[input.GetMesh(firstSkin).meshCBV];
+        std::vector<Vector3> positions(parents.size(), Vector3(kZero));
+        for (uint32_t node = 0; node < parents.size(); ++node)
+        {
+            positions[node] = Vector3(frame * nodes[node] * Vector4(0, 0, 0, 1));
+        }
+        std::vector<std::vector<uint32_t>> palettes;
+        for (size_t section = 0; section < input.GetSections().size(); ++section)
+        {
+            const auto& mesh = input.GetMesh(section);
+            palettes.emplace_back(model.m_JointIndices.get() + mesh.startJoint,
+                model.m_JointIndices.get() + mesh.startJoint + mesh.numJoints);
+        }
+
+        // 무한 평면의 최상위 교차 집합과 자식 snapshot을 고정한다.
+        UnionCutRequest result;
+        result.Plane = plane;
+        result.Plane.WorldPlane = Transpose(world) * plane.WorldPlane;
+        result.Plane.WorldToPlane = plane.WorldToPlane * world;
+        const Matrix4 inverseWorld = Invert(world);
+        for (auto& corner : result.Plane.WorldCorners)
+        {
+            corner = Vector3(inverseWorld * Vector4(corner, 1));
+        }
+        for (const auto& crossing : SelectCrossingJoints(parents, positions, palettes,
+            result.Plane, model.m_InfluencingJoints))
+        {
+            result.Roots.push_back(crossing.NodeId);
+            result.Children.push_back(crossing.ChildNodeId);
+            result.ChildSides.push_back(crossing.ChildSide);
+        }
+        return result;
+    }
+
     // 평면과 선택 본을 고정하고 비동기 패치 추출을 요청한다.
-    void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
+    void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& requestedPlane, bool diagnostic,
         SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics)
     {
+        // 명시 다중 옵션의 진단 평면만 요청 내부에서 교체한다.
+        auto plane = requestedPlane;
+
         // 제거 상태와 패치 id가 없는 unmask 게시 이후에는 모든 후속 C를 거절한다.
         if (IsUnmaskDemoPublished())
         {
@@ -1160,6 +1220,7 @@ namespace Viewer
             PatchLog("SP7b C waiting RequestId=%llu\n", m_RequestId);
             return;
         }
+        m_MultiPrepare = false;
         m_Mode = mode;
         m_DiagnosticCase = diagnosticCase;
         PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Rig ? "Rig" : mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
@@ -1365,8 +1426,56 @@ namespace Viewer
             return;
         }
 
+        // 명시 옵션에서만 최상위 교차 P 집합을 몸체별 준비 입력으로 고정한다.
+        uint32_t multiCut = 0;
+        CommandLineArgs::GetInteger(L"skeletal-multi-cut", multiCut);
+        UnionCutRequest unionCut;
+        if (multiCut && !influence && !m_OffsetCopy)
+        {
+            const Matrix4 sourceWorld(mesh->GetWorldTransform(target->GetTransform()));
+            uint32_t unionChecks = 0;
+            CommandLineArgs::GetInteger(L"skeletal-union-checks", unionChecks);
+            if (unionChecks)
+            {
+                unionCut = CheckJointUnion(*mesh, sourceWorld,
+                    target->GetModelInstance()->GetPoseParents(), target->GetName());
+                if (!MeshCutting::TryBuildCutPlaneData({ 100, 100 },
+                    AffineTransform(sourceWorld * Invert(unionCut.Plane.WorldToPlane)), plane))
+                {
+                    throw std::runtime_error("MI4h1 union world plane invalid");
+                }
+
+                // 이동·회전한 월드 평면을 다시 선택해 local 진단의 자식과 side 규약을 대조한다.
+                const Matrix4 movedWorld = Matrix4(AffineTransform(Matrix3::MakeYRotation(0.7f), Vector3(7, -3, 5))) * sourceWorld;
+                MeshCutting::CutPlaneData movedPlane;
+                if (!MeshCutting::TryBuildCutPlaneData({ 100, 100 },
+                    AffineTransform(movedWorld * Invert(unionCut.Plane.WorldToPlane)), movedPlane))
+                {
+                    throw std::runtime_error("MI4h1 transformed plane invalid");
+                }
+                const auto moved = SelectMultiCut(*mesh, movedWorld, target->GetModelInstance()->GetPoseParents(), movedPlane);
+                if (moved.Roots != unionCut.Roots || moved.Children != unionCut.Children || moved.ChildSides != unionCut.ChildSides)
+                {
+                    throw std::runtime_error("MI4h1 transformed selection mismatch");
+                }
+                PatchLog("MI4h1 translated/rotated local selection roots/children/sides=PASS\n");
+            }
+            else
+            {
+                unionCut = SelectMultiCut(*mesh, sourceWorld,
+                    target->GetModelInstance()->GetPoseParents(), plane);
+            }
+            m_MultiPrepare = unionCut.Roots.size() > 1;
+            if (!m_MultiPrepare)
+            {
+                unionCut = {};
+            }
+        }
+        const std::vector<uint32_t> cutRoots = m_MultiPrepare
+            ? unionCut.Roots : std::vector<uint32_t>{ selected.NodeId };
+
         // D5는 AR과 같은 월드 joint 원점 거리로 모호한 요청을 먼저 거절한다.
-        const bool boneCut = rigQuery && rig.Reason == RigSelectionReason::D5;
+        const bool boneCut = !m_MultiPrepare && rigQuery && rig.Reason == RigSelectionReason::D5;
         if (boneCut)
         {
             const auto* nodes = mesh->GetPreparedNodes();
@@ -1467,7 +1576,7 @@ namespace Viewer
             m_SourceMesh = mesh->GetId();
             m_SourceRevision = mesh->GetGeometry();
             m_MaskRevision = mesh->GetTriangleMask() ? mesh->GetTriangleMask()->Revision : 0;
-            const auto groups = BuildCutBodyGroups(parents, {}, { selected.NodeId });
+            const auto groups = BuildCutBodyGroups(parents, {}, cutRoots);
             if (groups.AttachNodes.empty())
                 return;
             m_Attachments.resize(groups.AttachNodes.size());
@@ -1495,7 +1604,7 @@ namespace Viewer
             for (size_t s = 0; s < mesh->GetGeometry()->GetSections().size(); ++s)
                 m_SkinSectionNodes.push_back(sourceInverse * nodes[mesh->GetGeometry()->GetMesh(s).meshCBV]);
             const std::vector<uint32_t> jointNodes(model.m_JointIndices.get(), model.m_JointIndices.get() + model.m_NumJoints);
-            const auto groups = BuildCutBodyGroups(parents, jointNodes, { selected.NodeId });
+            const auto groups = BuildCutBodyGroups(parents, jointNodes, cutRoots);
             if (groups.AttachNodes.empty())
                 return;
             m_SkinSnapshots.resize(boneCut ? 1 : groups.AttachNodes.size());
@@ -1581,8 +1690,7 @@ namespace Viewer
         m_Plane = plane;
         // 명시한 옵션에서만 별도 합집합 추출을 검증하고 형제 P_i 쌍을 받는다.
         uint32_t unionChecks = 0;
-        UnionCutRequest unionCut;
-        if (CommandLineArgs::GetInteger(L"skeletal-union-checks", unionChecks) && unionChecks)
+        if (!m_MultiPrepare && CommandLineArgs::GetInteger(L"skeletal-union-checks", unionChecks) && unionChecks)
             unionCut = CheckJointUnion(*mesh, world, target->GetModelInstance()->GetPoseParents(), m_ModelName);
 
         // 합집합 진단은 형제 평면을 월드로 옮기고 n+1 몸체의 폴백 반공간을 정한다.
@@ -1594,7 +1702,8 @@ namespace Viewer
             local = m_Plane;
             local.WorldPlane = Transpose(world) * m_Plane.WorldPlane;
             local.WorldToPlane = m_Plane.WorldToPlane * world;
-            m_BodySides = { 1 - unionCut.ChildSides[0], unionCut.ChildSides[0], unionCut.ChildSides[1] };
+            m_BodySides = { 1 - unionCut.ChildSides[0] };
+            m_BodySides.insert(m_BodySides.end(), unionCut.ChildSides.begin(), unionCut.ChildSides.end());
             PatchLog("MI4d2 union cut P=%u,%u child=%u,%u childSide=%u,%u bodies=3 publish/break/mask=skipped\n",
                 unionCut.Roots[0], unionCut.Roots[1], unionCut.Children[0], unionCut.Children[1],
                 unionCut.ChildSides[0], unionCut.ChildSides[1]);
@@ -3090,27 +3199,115 @@ namespace Viewer
     bool SkeletalPatchCopy::DiscardStaleCutResult(Scene& scene)
     {
         // offset 진단을 제외하고 Applied 이후와 같은 geometry·mask 기준으로 검사한다.
-        if (m_OffsetCopy) return false;
+        if (m_OffsetCopy)
+        {
+            return false;
+        }
         const auto* owner = scene.FindObject(m_Break.Owner);
         const auto* source = owner ? owner->FindMeshComponent(m_SourceMesh) : nullptr;
         if (source && source->GetGeometry() == m_SourceRevision
             && (source->GetTriangleMask() ? source->GetTriangleMask()->Revision : 0) == m_MaskRevision)
+        {
             return false;
+        }
 
-        // 대기 결과와 break 준비를 취소하고 미완료 GPU 작업은 fence 뒤에 회수한다.
-        m_ReadyCut.reset();
-        m_ReadyCaps = m_ReadyUncapped = 0;
-        m_BreakReady = false;
-        DiscardBodyCompaction();
-        m_SkinPatch.reset();
-        m_PreparedIds.clear();
-
-        // 숨긴 staging owner를 제거하고 원본 변경 없이 거절 완료를 기록한다.
-        if (scene.FindObject(m_CopyOwner)) scene.DeleteObject(m_CopyOwner);
-        m_CopyOwner = 0;
+        // 미게시 자원과 준비 상태를 먼저 폐기한 뒤 거절 완료를 기록한다.
+        DiscardPreparedBodies(scene);
         PatchLog("MI3d discarded before break: source geometry/mask revision mismatch; breakSubmitted=0\n");
         LogCutResult(scene, "source revision mismatch before break", 0, 0, 0);
         return true;
+    }
+
+    // 숨긴 owner와 압축 자원을 해제하고 미게시 준비 상태를 초기화한다.
+    void SkeletalPatchCopy::DiscardPreparedBodies(Scene& scene)
+    {
+        // component의 공유 geometry 참조를 먼저 없애 압축 출력까지 회수한다.
+        if (scene.FindObject(m_CopyOwner))
+        {
+            scene.DeleteObject(m_CopyOwner);
+        }
+        m_CopyOwner = 0;
+        DiscardBodyCompaction();
+
+        // 이미 Update가 가져간 결과도 남은 준비 상태를 통해 재사용하지 못하게 한다.
+        m_ReadyCut.reset();
+        m_ReadyCaps = m_ReadyUncapped = 0;
+        m_BreakReady = false;
+        m_SkinPatch.reset();
+        m_PreparedIds.clear();
+    }
+
+    // n+1 압축 몸체의 숨긴 component와 skin을 검증하고 원본 상태 보존을 확인한다.
+    void SkeletalPatchCopy::PrepareMultiBodies(Scene& scene)
+    {
+        // 강제 revision 불일치에서도 원본을 건드리지 않고 기존 거절 경로를 검증한다.
+        uint32_t stale = 0;
+        CommandLineArgs::GetInteger(L"skeletal-multi-stale", stale);
+        const auto before = ReadOriginalState(scene, *m_Physics);
+        if (stale)
+        {
+            ++m_MaskRevision;
+        }
+        if (DiscardStaleCutResult(scene))
+        {
+            const bool unchanged = before == ReadOriginalState(scene, *m_Physics);
+            PatchLog("MI4h1 rejected revision original/mask/constraint=%s publish=0 break=0 mask=0\n",
+                unchanged ? "PASS" : "FAIL");
+            if (!unchanged)
+            {
+                throw std::runtime_error("MI4h1 rejected request changed original");
+            }
+            return;
+        }
+
+        // 몸체 수와 snapshot 수가 일치할 때 압축 section의 독립 준비물을 만든다.
+        const auto* compacted = GetBodyResult();
+        auto* staging = scene.FindObject(m_CopyOwner);
+        if (!compacted || !staging || compacted->Triangles.size() != m_Attachments.size()
+            || m_SkinSnapshots.size() != m_Attachments.size() || !m_SkinPatch)
+        {
+            throw std::runtime_error("MI4h1 body preparation input mismatch");
+        }
+        const auto revision = GeometryRevision::FromGenerated(compacted->Geometry);
+        for (uint32_t body = 0; body < compacted->Triangles.size(); ++body)
+        {
+            // 빈 몸체는 준비 대상에서 제외하되 몸체 배열의 자리는 유지한다.
+            if (!compacted->Triangles[body])
+            {
+                PatchLog("MI4h1 body=%u tris=0 empty skipped\n", body);
+                continue;
+            }
+            auto& piece = staging->AddMeshComponent(revision->SelectSections(compacted->Sections[body]));
+            piece.PublishVisible = false;
+            m_PreparedIds[body] = piece.GetId();
+
+            // 명시 실패 진단은 첫 몸체 준비 후 두 번째 snapshot의 skin을 거절한다.
+            uint32_t fail = 0;
+            CommandLineArgs::GetInteger(L"skeletal-multi-fail", fail);
+            if (fail && body == 1)
+            {
+                m_SkinSnapshots[body].SkinningAllowed = false;
+            }
+            BuildPieceSkin(piece, *compacted->Geometry, *m_SkinPatch, body);
+            const bool ready = piece.PatchSkin && piece.PatchSkin->VertexCount == compacted->Triangles[body] * 3;
+            PatchLog("MI4h1 body=%u tris=%u attach=%u frozen=%zu skin=%s visible=0\n",
+                body, compacted->Triangles[body], m_Attachments[body].NodeId,
+                size_t(std::count(m_SkinSnapshots[body].Frozen.begin(), m_SkinSnapshots[body].Frozen.end(), uint8_t(1))),
+                ready ? "PASS" : "FAIL");
+            if (!ready)
+            {
+                throw std::runtime_error("MI4h1 body skin preparation failed");
+            }
+        }
+
+        // h1은 break와 mask를 제출하지 않고 준비 전후 원본 상태를 대조한다.
+        const bool unchanged = before == ReadOriginalState(scene, *m_Physics);
+        PatchLog("MI4h1 prepared bodies=%zu original/mask/constraint=%s publish=0 break=0 mask=0\n",
+            m_Attachments.size(), unchanged ? "PASS" : "FAIL");
+        if (!unchanged)
+        {
+            throw std::runtime_error("MI4h1 preparation changed original");
+        }
     }
 
     // 요청 몸체 수의 준비 ID를 확보한 뒤 기존 단일 break·게시 순서를 진행한다.
@@ -3124,32 +3321,73 @@ namespace Viewer
         {
             // body 0/1은 A/B이며 cutter side 순서와 독립이다.
             auto* staging = scene.FindObject(m_CopyOwner);
-            m_PreparedIds.assign(m_BodySides.size(), InvalidComponentId);
 
             // n+1 게시 연결 전의 다중 몸체 진단은 압축 결과만 확인하고 게시·break·mask 없이 끝낸다.
             if (m_BodySides.size() != 2)
             {
-                const bool compacted = GetBodyResult() != nullptr;
-                PatchLog("MI4d2 union diagnostic bodies=%zu compaction=%s publish=0 break=0 mask=0\n",
-                    m_BodySides.size(), compacted ? "PASS" : "FAIL");
+                // 준비 중 어느 예외가 발생해도 완료 기록 전에 부분 생성물을 폐기한다.
+                const auto preparedOwner = m_CopyOwner;
+                std::vector<uint64_t> original;
+                try
+                {
+                    m_PreparedIds.assign(m_BodySides.size(), InvalidComponentId);
+                    if (m_MultiPrepare)
+                    {
+                        original = ReadOriginalState(scene, *m_Physics);
+                        PrepareMultiBodies(scene);
+                        if (!m_CopyOwner)
+                        {
+                            return;
+                        }
+                    }
+                    if (!GetBodyResult())
+                    {
+                        throw std::runtime_error("MI4d2 union compaction failed");
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    // 실패 원인을 기록하기 전에 owner와 압축 자원 및 준비 상태를 폐기한다.
+                    DiscardPreparedBodies(scene);
+                    LogCutResult(scene, "multi body preparation failed", caps, uncapped, 1);
+
+                    // 명시 진단은 주입한 skin 실패에 한해 정리 완료를 검사하고 소비한다.
+                    uint32_t fail = 0;
+                    CommandLineArgs::GetInteger(L"skeletal-multi-fail", fail);
+                    if (fail && std::strcmp(error.what(), "MI4h1 body skin preparation failed") == 0)
+                    {
+                        const bool clean = !scene.FindObject(preparedOwner) && !m_CopyOwner
+                            && !m_BodyJob && !GetBodyResult() && m_BodyState == PatchBodyState::None
+                            && m_PreparedIds.empty() && !m_SkinPatch && !m_BreakReady
+                            && !m_ReadyCut && !m_ReadyCaps && !m_ReadyUncapped
+                            && original == ReadOriginalState(scene, *m_Physics);
+                        PatchLog("MI4h1 forced failure cleanup=%s owner=0 components=0 compact=0 ids=0 skin=0 breakReady=0 original/mask/constraint=unchanged\n",
+                            clean ? "PASS" : "FAIL");
+                        if (clean)
+                        {
+                            return;
+                        }
+                    }
+                    throw;
+                }
+                catch (...)
+                {
+                    // 표준 예외 이외의 실패도 같은 정리와 완료 기록을 보장한다.
+                    DiscardPreparedBodies(scene);
+                    LogCutResult(scene, "multi body preparation failed", caps, uncapped, 1);
+                    throw;
+                }
+
+                // 성공 진단도 자원과 준비 상태를 먼저 폐기한 뒤 완료를 기록한다.
+                DiscardPreparedBodies(scene);
+                PatchLog("MI4d2 union diagnostic bodies=%zu compaction=PASS publish=0 break=0 mask=0\n",
+                    m_BodySides.size());
                 LogCutResult(scene, "MI4d2 union diagnostic; publish skipped", caps, uncapped, result.Error);
-
-                // 로그 뒤에 압축 출력과 준비물 상태를 모두 해제한다.
-                DiscardBodyCompaction();
-                m_SkinPatch.reset();
-                scene.DeleteObject(m_CopyOwner);
-                m_CopyOwner = 0;
-                m_PreparedIds.clear();
-                m_ReadyCaps = m_ReadyUncapped = 0;
-                m_BreakReady = false;
-
-                // 압축 결과가 없었다면 정리 후 진단 실패로 알린다.
-                if (!compacted)
-                    throw std::runtime_error("MI4d2 union compaction failed");
                 return;
             }
 
             // 기존 단일 break의 두 준비물은 요청의 반공간 순서로 대응한다.
+            m_PreparedIds.assign(m_BodySides.size(), InvalidComponentId);
             for (size_t body = 0; body < m_BodySides.size(); ++body)
             {
                 // 두 side 출력에서 몸체의 기존 폴백 반공간을 선택한다.

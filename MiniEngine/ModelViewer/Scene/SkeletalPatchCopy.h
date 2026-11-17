@@ -223,6 +223,11 @@ namespace Viewer
         // 완료된 작업의 메타데이터와 취소된 작업을 회수한다.
         void PollBodyCompaction();
         PatchBodyResult m_BodyResult; // 게시 revision과 GPU 자원을 공유하며 다음 요청까지 유지한다.
+        // 미게시 owner와 압축 자원을 폐기하고 준비 상태를 초기화한다.
+        void DiscardPreparedBodies(Scene& scene);
+        // 명시 다중 경로는 숨긴 몸체별 skin 준비와 원본 보존만 검증한다.
+        void PrepareMultiBodies(Scene& scene);
+        bool m_MultiPrepare = false;
         // 압축 완료 뒤 스키닝과 break 준비를 이어서 수행한다.
         void FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped);
         // 원본 revision 불일치 시 미게시 결과를 정리하고 취소 여부를 반환한다.
