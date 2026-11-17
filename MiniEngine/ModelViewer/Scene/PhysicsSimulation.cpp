@@ -195,19 +195,40 @@ namespace Viewer
     // 요청을 보관하고 결과 보관 여부를 지정해 다음 실제 substep에서 처리한다.
     uint64_t PhysicsSystem::QueueBreak(const BreakRequest& request, bool keepResult)
     {
+        // 단일 요청도 같은 batch 경로와 번호 발급을 사용한다.
+        return QueueBreaks({ request }, keepResult);
+    }
+
+    // batch 입력을 복사해 제출 시점의 요청별 기대 세대를 보존한다.
+    uint64_t PhysicsSystem::QueueBreaks(const std::vector<BreakRequest>& requests, bool keepResult)
+    {
         // zero-step과 pause 프레임에서는 요청을 소비하지 않는다.
         const uint64_t id = m_NextBreakRequest++;
-        m_PendingBreaks.emplace_back(keepResult ? id : 0, request);
+        m_PendingBreaks.emplace_back(keepResult ? id : 0, requests);
         return id;
     }
 
     // 완료된 break 결과를 호출자에게 전달하고 보관 항목을 제거한다.
     bool PhysicsSystem::TryGetBreakResult(uint64_t requestId, BreakStatus& status)
     {
+        // 빈 batch에는 단일 결과가 없으므로 소비하지 않는다.
+        const auto found = m_BreakResults.find(requestId);
+        if (found == m_BreakResults.end() || found->second.empty()) return false;
+
+        // 기존과 같이 성공한 조회에서만 결과를 소비한다.
+        std::vector<BreakStatus> statuses;
+        if (!TryGetBreakResults(requestId, statuses)) return false;
+        status = statuses[0];
+        return true;
+    }
+
+    // 완료된 batch 결과를 순서대로 전달하고 보관 항목을 제거한다.
+    bool PhysicsSystem::TryGetBreakResults(uint64_t requestId, std::vector<BreakStatus>& statuses)
+    {
         // 실제 substep 전에는 결과를 만들지 않는다.
         const auto found = m_BreakResults.find(requestId);
         if (found == m_BreakResults.end()) return false;
-        status = found->second;
+        statuses = std::move(found->second);
         m_BreakResults.erase(found);
         return true;
     }
@@ -279,6 +300,66 @@ namespace Viewer
                 return false;
             }
         return true;
+    }
+
+    // 대기 batch를 처리하고 기존 요청별 로그와 진단 계수를 보존한다.
+    void PhysicsSystem::ProcessQueuedBreaks()
+    {
+        // pause 중에는 batch 전체를 다음 실행까지 그대로 보관한다.
+        if (!m_Running) return;
+
+        for (const auto& pending : m_PendingBreaks)
+        {
+            // 실제 반환값으로 처리 수와 NotFound 수를 함께 기록한다.
+            std::vector<BreakStatus> statuses;
+            m_Skeletal.BreakConstraints(pending.second, statuses);
+            for (size_t index = 0; index < pending.second.size(); ++index)
+            {
+                const auto& request = pending.second[index];
+                const auto status = statuses[index];
+
+                // 적용 직후 owner의 Dynamic body와 실제 sensor 해제 수를 다시 읽는다.
+                if (status == BreakStatus::Applied)
+                {
+                    size_t dynamic = 0, sensorOff = 0;
+                    const auto& rig = m_Skeletal.m_Rigs.at(request.Owner);
+                    for (auto body : rig.Bodies)
+                    {
+                        MiniPhysics::BodyMotion motion;
+                        if (m_World.GetBodyMotion(body, motion) && motion == MiniPhysics::BodyMotion::Dynamic)
+                        {
+                            ++dynamic;
+                            if (!m_World.IsSensor(body)) ++sensorOff;
+                        }
+                    }
+                    const auto* object = m_Scene.FindObject(request.Owner);
+                    // 같은 break의 초기 겹침 쌍 수를 기존 진단 출력에 남긴다.
+                    WriteRigPreloadLogSafely([&]
+                    {
+                        // 진단 문자열 할당도 예외 경계 안에서 수행한다.
+                        return "RigSensor overlapIgnore owner=" + (object ? object->GetName() : std::to_string(request.Owner)) +
+                            " pairs=" + std::to_string(m_World.SensorOverlapCount()) + "\n";
+                    });
+
+                    // 같은 owner의 Dynamic body와 sensor 해제 수를 기록한다.
+                    WriteRigPreloadLogSafely([&]
+                    {
+                        // 진단 문자열 할당도 예외 경계 안에서 수행한다.
+                        return "RigSensor break owner=" + (object ? object->GetName() : std::to_string(request.Owner)) +
+                            " dynamic=" + std::to_string(dynamic) + " sensorOff=" + std::to_string(sensorOff) + "\n";
+                    });
+                }
+
+                // 기존 요청 결과와 진단 계수를 갱신한다.
+                ++m_QueuedBreakDiagnostics.Processed;
+                if (status == BreakStatus::NotFound)
+                    ++m_QueuedBreakDiagnostics.NotFound;
+                Utility::Printf("Skeletal break: owner=%llu status=%u\n", request.Owner, unsigned(status));
+            }
+            // 요청별 결과를 batch 하나로 보관한다.
+            if (pending.first) m_BreakResults.emplace(pending.first, std::move(statuses));
+        }
+        m_PendingBreaks.clear();
     }
 
     // 실제 렌더 section에서 공통 E를 구하고 물리 본에 종속된 Nmesh는 거절한다.
@@ -394,52 +475,7 @@ namespace Viewer
                 }
 
             // 최신 목표를 사용해 대기 중인 break를 소비한다.
-            for (const auto& pending : m_PendingBreaks)
-            {
-                // 실제 반환값으로 처리 수와 NotFound 수를 함께 기록한다.
-                const auto& request = pending.second;
-                const auto status = m_Skeletal.BreakConstraint(request);
-
-                // 적용 직후 owner의 Dynamic body와 실제 sensor 해제 수를 다시 읽는다.
-                if (status == BreakStatus::Applied)
-                {
-                    size_t dynamic = 0, sensorOff = 0;
-                    const auto& rig = m_Skeletal.m_Rigs.at(request.Owner);
-                    for (auto body : rig.Bodies)
-                    {
-                        MiniPhysics::BodyMotion motion;
-                        if (m_World.GetBodyMotion(body, motion) && motion == MiniPhysics::BodyMotion::Dynamic)
-                        {
-                            ++dynamic;
-                            if (!m_World.IsSensor(body)) ++sensorOff;
-                        }
-                    }
-                    const auto* object = m_Scene.FindObject(request.Owner);
-                    // 같은 break의 초기 겹침 쌍 수를 기존 진단 출력에 남긴다.
-                    WriteRigPreloadLogSafely([&]
-                    {
-                        // 진단 문자열 할당도 예외 경계 안에서 수행한다.
-                        return "RigSensor overlapIgnore owner=" + (object ? object->GetName() : std::to_string(request.Owner)) +
-                            " pairs=" + std::to_string(m_World.SensorOverlapCount()) + "\n";
-                    });
-
-                    // 같은 owner의 Dynamic body와 sensor 해제 수를 기록한다.
-                    WriteRigPreloadLogSafely([&]
-                    {
-                        // 진단 문자열 할당도 예외 경계 안에서 수행한다.
-                        return "RigSensor break owner=" + (object ? object->GetName() : std::to_string(request.Owner)) +
-                            " dynamic=" + std::to_string(dynamic) + " sensorOff=" + std::to_string(sensorOff) + "\n";
-                    });
-                }
-
-                // 기존 요청 결과와 진단 계수를 갱신한다.
-                if (pending.first) m_BreakResults.emplace(pending.first, status);
-                ++m_QueuedBreakDiagnostics.Processed;
-                if (status == BreakStatus::NotFound)
-                    ++m_QueuedBreakDiagnostics.NotFound;
-                Utility::Printf("Skeletal break: owner=%llu status=%u\n", request.Owner, unsigned(status));
-            }
-            m_PendingBreaks.clear();
+            ProcessQueuedBreaks();
 
             // 공통 world를 고정 시간으로 한 번 진행한다.
             if (!StepSimulation(dt))

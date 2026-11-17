@@ -55,6 +55,10 @@ namespace Viewer
         unsigned UpdateFrame(GraphicsContext& context, double deltaSeconds, float animationSeconds);
         // 다음 fixed step에서 처리하며 keepResult인 요청만 결과를 소비할 때까지 보관한다.
         uint64_t QueueBreak(const BreakRequest& request, bool keepResult = false);
+        // 요청 순서를 보존하는 batch를 다음 실제 substep에 제출한다.
+        uint64_t QueueBreaks(const std::vector<BreakRequest>& requests, bool keepResult = false);
+        // 완료된 batch 결과 배열을 한 번 소비한다.
+        bool TryGetBreakResults(uint64_t requestId, std::vector<BreakStatus>& statuses);
         // 완료된 요청 결과를 한 번 소비하며 실제 substep 전에는 false를 반환한다.
         bool TryGetBreakResult(uint64_t requestId, BreakStatus& status);
         // 아직 실행하지 않은 요청과 보관 결과를 폐기한다. 적용된 break는 되돌리지 않는다.
@@ -157,10 +161,13 @@ namespace Viewer
             std::vector<Math::Matrix4>& nodes) const;
         // 일반 owner와 물리 owner의 최종 pose를 각각 한 번 확정한다.
         void FinalizeSimulationPoses();
-        std::vector<std::pair<uint64_t, BreakRequest>> m_PendingBreaks;
-        std::map<uint64_t, BreakStatus> m_BreakResults;
+        std::vector<std::pair<uint64_t, std::vector<BreakRequest>>> m_PendingBreaks;
+        std::map<uint64_t, std::vector<BreakStatus>> m_BreakResults;
         uint64_t m_NextBreakRequest = 1;
         QueuedBreakDiagnostics m_QueuedBreakDiagnostics;
+        // fixed step의 목표 갱신 뒤 대기 batch를 하나씩 처리한다.
+        void ProcessQueuedBreaks();
+        friend class QueuedBreakChecks;
         friend class CutTransaction;
         friend class EditApplyChecks;
         friend class EditDeleteChecks;

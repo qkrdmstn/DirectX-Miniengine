@@ -10,6 +10,175 @@
 
 namespace Viewer
 {
+    // 렌더 타깃에 연결된 실제 PhysicsSystem 큐를 독립 world에서 검사한다.
+    class QueuedBreakChecks
+    {
+        // 실패를 Release에서도 실행 중단으로 보고한다.
+        static void Require(bool value)
+        {
+            // 조건을 만족하지 않으면 회귀 실행을 실패시킨다.
+            if (!value) throw std::runtime_error("MI4g queued break check failed");
+        }
+
+        // 세대·관절·body·sensor·pair 수를 정확 비교 가능한 값으로 모은다.
+        static std::vector<double> Capture(PhysicsSystem& physics, ObjectId owner)
+        {
+            // 작은 fixture의 정수 값은 double로도 손실 없이 보존된다.
+            auto& world = physics.m_World;
+            auto& skeletal = physics.m_Skeletal;
+            std::vector<double> values{ double(skeletal.GetRigGeneration(owner)),
+                double(skeletal.GetTopologyGeneration(owner)), double(world.GetConstraintCount()),
+                double(world.GetBodyCount()), double(world.GetExcludedPairCount()) };
+
+            // 관절별 handle과 활성 상태를 순서대로 수집한다.
+            for (uint32_t joint = 0; joint < 3; ++joint)
+            {
+                // 관절 handle과 enable을 함께 보관한다.
+                const auto handle = skeletal.GetConstraintHandle(owner, joint);
+                MiniPhysics::ConstraintState state;
+                values.push_back(double(handle));
+                values.push_back(world.GetConstraintState(handle, state) && state.Enabled);
+            }
+
+            // body별 운동 상태와 pose 및 속도를 순서대로 수집한다.
+            for (uint32_t body = 0; body < 4; ++body)
+            {
+                // 회전을 포함한 전체 pose와 두 속도 및 sensor를 보관한다.
+                const auto handle = skeletal.GetBodyHandle(owner, body);
+                MiniPhysics::BodyMotion motion{};
+                std::array<double, 3> position{}, linear{}, angular{};
+                std::array<double, 4> rotation{};
+                Require(world.GetBodyMotion(handle, motion) && world.GetBodyPose(handle, position, rotation) &&
+                    world.GetBodyVelocity(handle, linear, angular));
+                values.push_back(double(motion));
+                values.push_back(world.IsSensor(handle));
+                values.insert(values.end(), position.begin(), position.end());
+                values.insert(values.end(), rotation.begin(), rotation.end());
+                values.insert(values.end(), linear.begin(), linear.end());
+                values.insert(values.end(), angular.begin(), angular.end());
+            }
+
+            // 완성한 snapshot을 호출자에게 반환한다.
+            return values;
+        }
+
+    public:
+        // MI-4f 분기 fixture로 pause·거절·Reset 취소와 성공 batch를 검사한다.
+        static void Run()
+        {
+            // CPU 타깃에는 Scene·렌더 종속성이 없어 실제 큐 검사는 런타임 타깃에서 수행한다.
+            Scene scene;
+            PhysicsSystem physics(scene);
+            physics.Initialize(true, 64, true);
+            auto& skeletal = physics.m_Skeletal;
+
+            // 독립 관절 둘을 포함하는 분기 fixture를 만든다.
+            auto fixture = MiniPhysics::CreateThreeBodyFixture();
+            fixture.NodeParents = { MiniPhysics::InvalidSkeletalId, 0, 1, 2, 0 };
+            fixture.RestNodeFrames.resize(5);
+            fixture.RestNodeFrames[4].Position = { 0.5, 1.5, 0 };
+            auto body = fixture.Asset.Bodies[0];
+            body.Node = 4;
+            fixture.Asset.Bodies.push_back(body);
+            auto joint = fixture.Asset.Joints[0];
+            joint.ChildBody = 3;
+            joint.ParentBodyFromJoint.Position = { 0.5, -0.25, 0 };
+            fixture.Asset.Joints.push_back(joint);
+            std::vector<MiniPhysics::SkeletalRigidFrame> frames;
+            for (const auto& item : fixture.Asset.Bodies)
+            {
+                // 각 body의 초기 프레임을 등록 순서로 모은다.
+                frames.push_back(fixture.RestNodeFrames[item.Node]);
+            }
+            const ObjectId owner = scene.CreateObject("MI4g fixture").GetId();
+            Require(skeletal.Register(owner, fixture.Asset, fixture.NodeParents, frames));
+
+            // 현재 세대를 복사한 독립 관절 요청 둘을 준비한다.
+            BreakRequest first{ owner, 1, skeletal.GetRigGeneration(owner), skeletal.GetTopologyGeneration(owner) };
+            BreakRequest second = first;
+            second.JointId = 2;
+            std::vector<BreakStatus> statuses{ BreakStatus::NotReady };
+
+            // 요청 전 snapshot을 무변경 비교 기준으로 저장한다.
+            auto before = Capture(physics, owner);
+
+            // pause는 실제 프레임과 큐 처리부 모두 결과·계수·fixture를 보존한다.
+            physics.SetSimulationRunning(false);
+            const auto paused = physics.QueueBreaks({ first, second }, true);
+            Require(paused == 1 && physics.AdvanceSimulation(1.0 / 60) == 0);
+            physics.ProcessQueuedBreaks();
+            Require(!physics.TryGetBreakResults(paused, statuses) && statuses == std::vector<BreakStatus>{ BreakStatus::NotReady });
+            Require(Capture(physics, owner) == before);
+            Require(physics.GetQueuedBreakDiagnostics().Processed == 0);
+
+            // 재개 후 같은 RequestId가 실제 처리되는지 결과와 세대로 확인한다.
+            physics.SetSimulationRunning(true);
+            physics.ProcessQueuedBreaks();
+            Require(physics.TryGetBreakResults(paused, statuses) &&
+                statuses == std::vector<BreakStatus>{ BreakStatus::Applied, BreakStatus::Applied });
+            Require(skeletal.GetTopologyGeneration(owner) == first.ExpectedTopologyGeneration + 2);
+            Require(physics.GetQueuedBreakDiagnostics().Processed == 2);
+
+            // 후속 거절과 취소 검사를 위해 fixture와 기대 세대를 복원한다.
+            Require(skeletal.Unregister(owner) && skeletal.Register(owner, fixture.Asset, fixture.NodeParents, frames));
+            first.ExpectedRigGeneration = skeletal.GetRigGeneration(owner);
+            first.ExpectedTopologyGeneration = skeletal.GetTopologyGeneration(owner);
+            second = first;
+            second.JointId = 2;
+            before = Capture(physics, owner);
+
+            // Reset의 CancelBreak 경로는 batch 전체를 결과 없이 취소한다.
+            const auto cancelled = physics.QueueBreaks({ first, second }, true);
+            physics.CancelBreak(cancelled);
+            physics.ProcessQueuedBreaks();
+            Require(!physics.TryGetBreakResults(cancelled, statuses));
+            Require(Capture(physics, owner) == before);
+            Require(physics.GetQueuedBreakDiagnostics().Processed == 2);
+
+            // 제출 뒤 원본 입력 변경은 복사된 기대 세대를 바꾸지 않는다.
+            auto stale = second;
+            --stale.ExpectedTopologyGeneration;
+            std::vector<BreakRequest> submitted{ first, stale };
+            const auto rejected = physics.QueueBreaks(submitted, true);
+            submitted[1].ExpectedTopologyGeneration = second.ExpectedTopologyGeneration;
+            physics.ProcessQueuedBreaks();
+            Require(physics.TryGetBreakResults(rejected, statuses) &&
+                statuses == std::vector<BreakStatus>{ BreakStatus::BatchRejected, BreakStatus::Stale });
+            Require(Capture(physics, owner) == before);
+            Require(!physics.TryGetBreakResults(rejected, statuses));
+
+            // 제출 후 다른 단일 break가 끼면 전체 batch를 거절하고 현재 snapshot을 보존한다.
+            const auto interleaved = physics.QueueBreaks({ first, second }, true);
+            Require(skeletal.BreakConstraint(second) == BreakStatus::Applied);
+            const auto broken = Capture(physics, owner);
+            physics.ProcessQueuedBreaks();
+            Require(physics.TryGetBreakResults(interleaved, statuses) &&
+                statuses == std::vector<BreakStatus>{ BreakStatus::Stale, BreakStatus::AlreadyBroken });
+            Require(Capture(physics, owner) == broken);
+            first.ExpectedTopologyGeneration = skeletal.GetTopologyGeneration(owner);
+            second.ExpectedTopologyGeneration = first.ExpectedTopologyGeneration;
+            const auto already = physics.QueueBreaks({ first, second }, true);
+            physics.ProcessQueuedBreaks();
+            Require(physics.TryGetBreakResults(already, statuses) &&
+                statuses == std::vector<BreakStatus>{ BreakStatus::BatchRejected, BreakStatus::AlreadyBroken });
+            Require(Capture(physics, owner) == broken);
+
+            // 같은 rig의 독립 관절 둘 성공과 결과 순서·세대 +2를 검사한다.
+            Require(skeletal.Unregister(owner) && skeletal.Register(owner, fixture.Asset, fixture.NodeParents, frames));
+            first.ExpectedRigGeneration = skeletal.GetRigGeneration(owner);
+            first.ExpectedTopologyGeneration = skeletal.GetTopologyGeneration(owner);
+            second = first;
+            second.JointId = 2;
+            const auto success = physics.QueueBreaks({ first, second }, true);
+            physics.ProcessQueuedBreaks();
+            Require(physics.TryGetBreakResults(success, statuses) &&
+                statuses == std::vector<BreakStatus>{ BreakStatus::Applied, BreakStatus::Applied });
+            Require(skeletal.GetTopologyGeneration(owner) == first.ExpectedTopologyGeneration + 2);
+            Require(physics.GetQueuedBreakDiagnostics().Processed == 10 && physics.GetQueuedBreakDiagnostics().NotFound == 0);
+            Utility::Printf("MI4g queue pause/Stale/AlreadyBroken/Reset/success PASS\n");
+        }
+    };
+
     // fixture 또는 기존 Xbot의 세 상자 rig를 공통 프레임 경로로 검사한다.
     class SkeletalPhysicsChecks
     {
@@ -24,6 +193,8 @@ namespace Viewer
             // 진단 로그를 열고 기존 Xbot 모드이면 별도 등록 경로로 보낸다.
             if (!Enabled) return;
             m_Log.open("SkeletalPhysicsChecks.log", std::ios::trunc);
+            QueuedBreakChecks::Run();
+            m_Log << "MI4g queue pause/Stale/AlreadyBroken/Reset/success PASS\n";
             if (Xbot)
             {
                 StartXbot(scene, physics);
