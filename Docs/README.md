@@ -35,7 +35,7 @@
 | [SkeletalPatchCopyCut.md](GPU/SkeletalPatchCopyCut.md) | C 입력으로 영향 본 선택→패치 GPU 복사→정적 복사본 무한 절단 | 진행 중 — SP-7e 게시·부착 구현(미커밋, base `9400691f`); 경계 오차·강제 Stale·캡처 확장 진단 미완료 (2026-11-03) |
 | [SkeletalPatchBreak.md](GPU/SkeletalPatchBreak.md) | SP-7: 선택 joint BreakConstraint, 자동 rig, 원본 숨김(상태 버퍼+치환 IB), A/B node 부착 | 진행 중 — SP-7e 게시·부착 및 연속 캡처 시연 옵션(미커밋, base `03b5c8a1`, 2026-11-06); 시연 후속 C 거절·실패 종료·진단 옵션 격리; 호출자 Release 관찰 기록, 리뷰 수정 빌드·실행 미수행 |
 | [AttachedPatchRecut.md](GPU/AttachedPatchRecut.md) | 부착 패치 조각 Static 재절단: node 쪽 부착 유지, 반대쪽 독립 낙하 | 완료 — AR-4 bb766e1b, Debug/Release 실행 PASS(2026-11-12) |
-| [MeshIslandMultiBoneCut.md](GPU/MeshIslandMultiBoneCut.md) | 격자 아일랜드를 실제 절단 loop·반공간 및 weight로 몸체에 배정하고 여러 본을 합쳐 자르기 | 완료 — MI-4 `e123cad1`, MI-5 미커밋(2026-11-17): 위팔491/167·허리90→A·cap54 drop, 양 허벅지300/187/175·constraint18→16·mask1회, 실제 척추182/337 및 P=1 옵션 비교18 PNG·Release 회귀6건 PASS·D3D12 ERROR0. 몸통 접힘·척추 절단 양팔 틈(uncapped17/loop fallback34)·작은 파편 미해결. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속 |
+| [MeshIslandMultiBoneCut.md](GPU/MeshIslandMultiBoneCut.md) | 격자 아일랜드를 실제 절단 loop·반공간 및 weight로 몸체에 배정하고 여러 본을 합쳐 자르기 | 완료 — MI-4 `e123cad1`, MI-5 `bffcf22f`(2026-11-17): 위팔491/167·허리90→A·cap54 drop, 양 허벅지300/187/175·constraint18→16·mask1회, 실제 척추182/337 및 P=1 옵션 비교18 PNG·Release 회귀6건 PASS·D3D12 ERROR0. 몸통 접힘·척추 절단 양팔 틈(uncapped17/loop fallback34)·작은 파편 미해결. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속 |
 | [PatchSkinning.md](GPU/PatchSkinning.md) | 스켈레탈 패치 조각 스키닝: 끊은 쪽 joint를 부착 node 상대로 고정, 새 정점은 강체 | 완료 — PS-0~PS-6·비용 측정, SP7e2 PASS, Debug/Release 회귀 PASS(2026-11-13) |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
