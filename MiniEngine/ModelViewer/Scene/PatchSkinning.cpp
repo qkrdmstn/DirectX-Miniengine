@@ -12,7 +12,8 @@ namespace Viewer
 {
     // 패치 출처와 원본 draw를 묶어 GPU에서 bind 속성을 복원한다.
     bool BuildPatchSkinVertices(const GeometryRevision& source, ByteAddressBuffer& triangleSources,
-        const GeometryBuffers& piece, const PatchSkinSnapshot& snapshot, PatchSkinVertices& out)
+        const GeometryBuffers& piece, const PatchSkinSnapshot& snapshot, PatchSkinVertices& out,
+        const std::vector<std::array<uint32_t, 2>>& triangleBodies)
     {
         // u16 강체 슬롯과 최초 원본 revision을 요구한다.
         if (!snapshot.SkinningAllowed || source.IsGenerated() || snapshot.JointsAtCut.empty()
@@ -28,11 +29,11 @@ namespace Viewer
         {
             Math::Matrix4 InverseNode;
             uint32_t FirstVertex, VertexCount, Flags, Stride;
-            uint32_t DrawCount, RigidJoint, Padding[2];
+            uint32_t DrawCount, RigidJoint, PatchTriangles, Padding;
         };
         static_assert(sizeof(DrawInput) == 40 && sizeof(Parameters) == 96, "Patch skin shader layout");
         std::vector<DrawInput> draws;
-        uint32_t flags = 259;
+        uint32_t flags = 259 | kSkinExtFlag;
         for (uint32_t s = 0; s < source.GetSections().size(); ++s)
         {
             const auto& mesh = source.GetMesh(s);
@@ -58,10 +59,20 @@ namespace Viewer
                 return false;
             end = std::max(end, mesh.vbOffset / 28 + mesh.vbSize / 28);
         }
-        const uint32_t stride = 32 + ((flags & 4) ? 4 : 0) + ((flags & 8) ? 4 : 0) + ((flags & 16) ? 4 : 0);
+        const uint32_t stride = 32 + kSkinExtSize + ((flags & 4) ? 4 : 0) + ((flags & 8) ? 4 : 0) + ((flags & 16) ? 4 : 0);
         if (!end || draws.empty() || uint64_t(end) * stride > UINT32_MAX
             || uint64_t(end) * 32 > piece.Provenance.GetBufferSize())
             return false;
+
+        // 기존 descriptor 뒤에 양쪽 body를 붙여 별도 GPU 버퍼를 만들지 않는다.
+        const uint32_t drawCount = uint32_t(draws.size());
+        for (const auto& bodies : triangleBodies)
+        {
+            DrawInput entry{};
+            entry.Section = bodies[0];
+            entry.Draw = bodies[1];
+            draws.push_back(entry);
+        }
 
         // 추출 셰이더와 같은 root descriptor 방식으로 compute 파이프라인을 재사용한다.
         static RootSignature root;
@@ -101,7 +112,7 @@ namespace Viewer
         compute.TransitionResource(out.Data, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         compute.SetBufferUAV(6, out.Data);
         Parameters c{ Math::Invert(snapshot.MeshNodeAtCut), 0, 0, flags, stride,
-            uint32_t(draws.size()), uint32_t(snapshot.JointsAtCut.size()), {} };
+            drawCount, uint32_t(snapshot.JointsAtCut.size()), uint32_t(triangleBodies.size()), 0 };
         for (const auto& mesh : piece.Meshes)
         {
             c.FirstVertex = mesh.vbOffset / 28;

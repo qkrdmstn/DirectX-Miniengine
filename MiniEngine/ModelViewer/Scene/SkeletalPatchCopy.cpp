@@ -1900,7 +1900,7 @@ namespace Viewer
         skin->Snapshot = snapshot;
         skin->Side = m_SkinSnapshots.size() == 1 ? "D5" : (body ? "B" : "A");
         const bool built = BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources,
-            geometry, snapshot, skin->Vertices);
+            geometry, snapshot, skin->Vertices, patch.Islands.TriangleSideBody);
         if (built)
         {
             for (const auto& section : piece.GetGeometry()->GetSections())
@@ -1979,6 +1979,34 @@ namespace Viewer
                         posed = posed + (palette[joints[k]].posXform * source) * (float(weights[k]) / total);
                     }
 
+                    // 내부 교점은 GPU와 같이 두 원본 끝점을 각각 skin한 뒤 t로 보간한다.
+                    if ((skin->Vertices.Flags & kSkinExtFlag) && *reinterpret_cast<const uint32_t*>(input + skin->Vertices.Stride - kSkinExtInternal))
+                    {
+                        Math::Vector4 endpoints[2];
+                        float t;
+                        std::memcpy(&t, input + skin->Vertices.Stride - kSkinExtT, 4);
+                        for (uint32_t e = 0; e < 2; ++e)
+                        {
+                            const auto* endpoint = input + skin->Vertices.Stride - kSkinExtEndpoint0 + e * kSkinEndpointSize;
+                            std::memcpy(position, endpoint, sizeof(position));
+                            std::memcpy(joints, endpoint + kSkinEndpointJoints, sizeof(joints));
+                            std::memcpy(weights, endpoint + kSkinEndpointWeights, sizeof(weights));
+                            const float sum = float(std::max(1u, uint32_t(weights[0]) + weights[1] + weights[2] + weights[3]));
+                            endpoints[e] = Math::Vector4(Math::kZero);
+                            for (uint32_t k = 0; k < 4; ++k)
+                            {
+                                if (joints[k] >= palette.size())
+                                {
+                                    valid = false;
+                                    continue;
+                                }
+                                endpoints[e] = endpoints[e] + (palette[joints[k]].posXform
+                                    * Math::Vector4(position[0], position[1], position[2], 1)) * (float(weights[k]) / sum);
+                            }
+                        }
+                        posed = endpoints[0] * (1 - t) + endpoints[1] * t;
+                    }
+
                     // N(t_cut) 적용 뒤 미터를 mm로 바꾸며 비유한 값과 잘못된 joint는 FAIL로 남긴다.
                     const Math::Vector3 actual(snapshot.MeshNodeAtCut * posed);
                     const double error = double(float(Math::Length(actual
@@ -1995,7 +2023,9 @@ namespace Viewer
                     else
                     {
                         ++split;
-                        rimVertices.push_back(v);
+                        // 실제 경계만 cap과 짝지으며 내부 교점은 표면 수에만 포함한다.
+                        if (!*reinterpret_cast<const uint32_t*>(input + skin->Vertices.Stride - kSkinExtInternal))
+                            rimVertices.push_back(v);
                     }
                     ++vertices;
                 }

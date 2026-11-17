@@ -2,7 +2,7 @@ cbuffer Parameters : register(b0)
 {
     float4x4 InverseNode;
     uint FirstVertex, VertexCount, Flags, Stride;
-    uint DrawCount, RigidJoint;
+    uint DrawCount, RigidJoint, PatchTriangles;
 };
 struct DrawInput
 {
@@ -16,6 +16,15 @@ ByteAddressBuffer Data : register(t2);
 ByteAddressBuffer Provenance : register(t3);
 StructuredBuffer<DrawInput> Inputs : register(t4);
 RWByteAddressBuffer Result : register(u0);
+// 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
+//   -96 내부 교점 표시(uint) | -92 보간 t(float)
+//   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
+//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16) | joints 8(+20) | weights 8(+28)
+static const uint ExtInternal = 96;
+static const uint ExtEndpoint0 = 88;
+static const uint ExtEndpoint1 = 52;
+static const uint EndpointTangent = 16;
+static const uint EndpointSkin = 20;
 
 // cutter와 같은 UNORM 프레임을 방향 벡터로 복원한다.
 float4 Frame(uint packed)
@@ -51,7 +60,32 @@ uint Index(DrawInput draw, uint i)
     return (draw.Index32 ? word : ((word >> ((at & 1) * 16)) & 65535)) + draw.BaseVertex;
 }
 
-// 복사 정점은 원본 bind 속성으로 복원하고 새 정점은 강체 슬롯 K에 붙인다.
+// 추출 패치 꼭짓점을 원본 draw와 bind 주소로 대응시킨다.
+uint SourceAddress(uint vertex, out DrawInput draw)
+{
+    // 기존 sourceTriangle 출처와 corner를 그대로 사용한다.
+    uint3 sourceTriangle = TriangleSources.Load3((vertex / 3) * 12);
+    uint d = 0;
+    while (d + 1 < DrawCount && any(uint2(Inputs[d].Section, Inputs[d].Draw) != sourceTriangle.xy))
+        d++;
+    draw = Inputs[d];
+    return draw.VbOffset + Index(draw, sourceTriangle.z * 3 + vertex % 3) * draw.SourceStride;
+}
+
+// 내부 교점의 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다.
+void StoreEndpoint(uint output, uint vertex)
+{
+    // 두 끝점의 weight를 합치지 않고 각각의 skin 입력을 복사한다.
+    DrawInput draw;
+    uint address = SourceAddress(vertex, draw);
+    Result.Store4(output, Source.Load4(address));
+    Result.Store(output + EndpointTangent, (draw.SourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff);
+    uint4 skin = Source.Load4(address + draw.SourceStride - 16);
+    uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
+    Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
+}
+
+// 복사 정점은 원본 bind로 복원하고 내부 교점만 끝점 보간 입력을 덧붙인다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -68,15 +102,11 @@ void main(uint3 id : SV_DispatchThreadID)
     uint startJoint = 0;
     uint4 skin = uint4(RigidJoint, 0, 65535, 0);
 
-    // 복사된 패치 정점을 section/draw/triangle과 corner로 원본 VB에 대응시킨다.
+    // 복사된 패치 정점을 section/draw/sourceTriangle과 corner로 원본 VB에 대응시킨다.
     if (copied)
     {
-        uint3 sourceTriangle = TriangleSources.Load3((origin.z / 3) * 12);
-        uint d = 0;
-        while (d + 1 < DrawCount && any(uint2(Inputs[d].Section, Inputs[d].Draw) != sourceTriangle.xy))
-            d++;
-        DrawInput draw = Inputs[d];
-        address = draw.VbOffset + Index(draw, sourceTriangle.z * 3 + origin.z % 3) * draw.SourceStride;
+        DrawInput draw;
+        address = SourceAddress(origin.z, draw);
         sourceFlags = draw.SourceFlags;
         startJoint = draw.StartJoint;
         skin = Source.Load4(address + draw.SourceStride - 16);
@@ -107,6 +137,21 @@ void main(uint3 id : SV_DispatchThreadID)
     }
     if (Flags & 16)
         Result.Store(at, uv1);
+
+    // 양쪽 삼각형이 같은 몸체로 귀속된 새 교점만 보간 대상으로 표시한다.
+    uint sourceTriangle = Provenance.Load(vertex * 32 + 20);
+    bool internal = false;
+    if (origin.x != 0xffffffff && !copied && sourceTriangle < PatchTriangles)
+    {
+        DrawInput bodies = Inputs[DrawCount + sourceTriangle];
+        internal = bodies.Section != 0xffffffff && bodies.Section == bodies.Draw;
+    }
+    Result.Store2(output + Stride - ExtInternal, uint2(internal ? 1 : 0, Provenance.Load(vertex * 32 + 16)));
+    if (internal)
+    {
+        StoreEndpoint(output + Stride - ExtEndpoint0, origin.z);
+        StoreEndpoint(output + Stride - ExtEndpoint1, origin.w);
+    }
 
     // 전체 팔레트를 직접 참조하도록 네 joint 모두에 section startJoint를 더한다.
     uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + startJoint;

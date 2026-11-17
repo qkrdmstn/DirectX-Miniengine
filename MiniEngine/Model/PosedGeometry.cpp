@@ -19,6 +19,10 @@
 
 namespace
 {
+    // PatchSkinBuildCS가 붙이는 확장 skin 정점 표시 비트와 추가 바이트 수다.
+    constexpr uint32_t kSkinExtFlag = 0x200;
+    constexpr uint32_t kSkinExtSize = 80;
+
     RootSignature s_PoseRootSignature;
     ComputePSO s_PosePSO(L"Prepare object-local pose");
 
@@ -363,7 +367,8 @@ PosedGeometry::PosedGeometry(const ByteAddressBuffer& skinVertices, uint32_t str
 {
     // 기존 모델의 packed 속성 뒤에 skin 16바이트가 오는 계약을 확인한다.
     const uint32_t expectedStride = 32 + ((flags & PSOFlags::kHasTangent) ? 4 : 0)
-        + ((flags & PSOFlags::kHasUV0) ? 4 : 0) + ((flags & PSOFlags::kHasUV1) ? 4 : 0);
+        + ((flags & PSOFlags::kHasUV0) ? 4 : 0) + ((flags & PSOFlags::kHasUV1) ? 4 : 0)
+        + ((flags & kSkinExtFlag) ? kSkinExtSize : 0);
     if (!(flags & PSOFlags::kHasSkin) || stride != expectedStride
         || skinVertices.GetBufferSize() % stride != 0)
         throw std::runtime_error("Unsupported skinned generated pose input");

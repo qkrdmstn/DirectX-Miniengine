@@ -1,4 +1,4 @@
-상태: 완료 — MI-4 완료(`e123cad1`), MI-5 시험·기록 완료(`bffcf22f`, 2026-11-17): 위팔·실제 허벅지·척추 평면 및 P=1 옵션 비교 18 PNG 확인·Release 회귀6건 PASS. 몸통 접힘·척추 절단 양팔 틈·작은 파편은 미해결이며 아래 남은 일에 기록. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속.
+상태: 완료 — MI-4 완료(`e123cad1`), MI-5 시험·기록 완료(`bffcf22f`, 2026-11-17): 위팔·실제 허벅지·척추 평면 및 P=1 옵션 비교 18 PNG 확인·Release 회귀6건 PASS. 몸통 접힘·척추 절단 양팔 틈·작은 파편은 미해결이며 아래 남은 일에 기록. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속. TW-1 구현(미커밋).
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -445,3 +445,10 @@ MI-3f(미커밋, base `63c2292b`, 2026-11-16):
 - 지정 `regress.sh Release`+기존 외부 exe 래퍼: 6실행 모두 종료0(11/12/10/11/10/10초), 수집64.57초. SP6 누적454 PASS/0 FAIL, Static 재절단/AR4·BC12a/b·Rig PASS. SP7e2 case2/3 publish/after60 모두0mm, case1 기존 N/A(noCoincidentKeptBoundary). PS2 7건 최대0.000234mm, PS3 6건 최대0.000189mm, PS4 12건 간격변화0mm PASS.
 - 세 데모·회귀 D3D12 ERROR/CORRUPTION 각0. 기존 DXGI #80·D3D12 경고는 남는다. Geometry/·신규 소스/셰이더·ModelViewer.cpp 편집 없음. 커밋·stash/reset·브랜치 변경 없음.
 - 근거: `%TEMP%/MI3f-{Debug,Release}-build.log`, `MI3f-{lattice,skeletal-Debug,skeletal-Release}.log`, `MI3f-{UpperArm,Thigh,DefaultArm}-{patch,debug,run}.log`, `MI3f-Release-regress{,-debug}.log`, `MI3f-UpperArm-demo-{000,001}-post.png`, `MI3f-report.md`.
+
+## 몸통 접힘 수정(TW-1)
+- 원인: 가짜 loop에 속한 원본 삼각형이 같은 몸체 안에서 분할되며, 새 교점이 `PatchSkinBuildCS::main`에서 모두 LCA 강체 슬롯 K, weight 1을 받아 척추 애니메이션을 따라가지 못하고 원본 면 안에서 접혔다.
+- 수정: 절단 변 양쪽 삼각형이 같은 몸체로 귀속된 내부 교점만 원래 변 두 끝점을 각자 Frozen 팔레트와 원래 weight로 skin한 뒤 t로 lerp한다. 법선·탄젠트도 같은 t로 보간 후 정규화한다. 실제 loop 경계 교점은 K를 유지해 rim/cap 간격 0mm 계약을 지킨다.
+- 구현: `PatchSkinBuildCS::main`이 `Inputs[DrawCount + sourceTriangle]`의 양쪽 body(`TriangleSideBody`)로 내부 여부를 판정하고, `StoreEndpoint`가 정점 끝에 내부 표시·t·끝점 2개(80B 확장, Flags 0x200)를 붙인다. `PreparePoseCS::main`의 `SkinEndpoint`가 이를 보간하고, `SkeletalPatchCopy.cpp`의 검증 루프가 같은 규칙으로 CPU 미러를 계산한다. 배치 상수는 `PatchSkinning.h`의 `kSkinExt*`와 각 셰이더의 `Ext*`에 모았다.
+- 측정(CesiumMan 위팔 절단, 게시/+60/+120/+180): 원본 면 대비 20° 초과 접힘 9/16/9/16개 → 0/0/0/0. A318 삼각형 139.91° → 1.2e-6° 이하. rim/cap 위치차 0.
+- 주의: `TriangleSideBody`가 비어(`PatchTriangles`=0) 있으면 내부 보간은 꺼지고 기존 동작(모든 새 교점 K)이 적용된다.
