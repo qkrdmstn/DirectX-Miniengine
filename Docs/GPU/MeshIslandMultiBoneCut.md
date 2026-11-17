@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1~MI-3 완료(MI-3f `ba2b976f`); MI-4a~MI-4f 완료; MI-4g 완료(`f72f28c2`); MI-4h1 완료(`0cd2efba`, 리뷰 포함); MI-4h2 완료(미커밋, base `0cd2efba`, 2026-11-17): batch·mask 1회·n+1 게시·거절 무변경·캡처·CPU/D/R/회귀 PASS; 리뷰 수정은 전체 게시 용량·component 사전 준비 및 다중 측정 N/A. 기본 off, MI-5 후속.
+상태: 완료 — MI-4 완료(`e123cad1`), MI-5 시험·기록 완료(미커밋, 2026-11-17): 위팔·실제 허벅지·척추 평면 및 P=1 옵션 비교 18 PNG 확인·Release 회귀6건 PASS. 몸통 접힘·척추 절단 양팔 틈·작은 파편은 미해결이며 아래 남은 일에 기록. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속.
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -95,9 +95,10 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-4e | 완료(`1d8c8ce2`): `PrepareConstraintBreak`/`CommitConstraintBreak`·`PrepareBreak`/`CommitBreak` 분리, 기존 진입점은 얇은 래퍼 | 단일 break 회귀·거절 무변경(CPU 959 checks), 세 데모·회귀 PASS |
 | MI-4f | 완료(`61dd8e91`): `BreakConstraints` 요청 전체 사전 검증·겹침 거절·핸들 생존 점검 후 순차 commit, 공개 `CommitBreak` 오래된 snapshot Stale | 두 번째 실패 시 첫 constraint도 보존, 같은 rig 독립 관절 batch 세대 +2·충돌 batch 무변경(CPU 996 checks), 세 데모·회귀 PASS |
 | MI-4g | 완료(`f72f28c2`): `QueueBreaks`·`TryGetBreakResults`, 단일 API는 래퍼 | pause·Stale·AlreadyBroken·Reset 무변경, 같은 rig 성공 +2, CPU·D/R·회귀 PASS |
-| MI-4h | 완료: h1(`0cd2efba`) 준비와 h2(미커밋) batch 게시로 분할 | 몸체별 skin·mask 1회·n+1 게시·거절 무변경·허벅지/몸통 시점 PNG·회귀 PASS |
+| MI-4h | 완료: h1(`0cd2efba`) 준비와 h2(`e123cad1`) batch 게시로 분할 | 몸체별 skin·mask 1회·n+1 게시·거절 무변경·허벅지/몸통 시점 PNG·회귀 PASS |
 | MI-4h1 | 완료(`0cd2efba`, 리뷰 포함): 명시 다중 옵션·n+1 숨긴 component/skin 준비 | 300/187/175 skin PASS·원본/mask/constraint 무변경·실패 정리·회귀 PASS |
-| MI-4h2 | 완료(미커밋): 모든 P incoming 고정·`QueueBreaks` 전부 Applied 후 mask 1회·빈 몸체 제외 n+1 게시 | Applied2·constraint18→16·세대+2·patch id1·300/187/175·Stale 정리·캡처·회귀 PASS |
+| MI-4h2 | 완료(`e123cad1`): 모든 P incoming 고정·`QueueBreaks` 전부 Applied 후 mask 1회·빈 몸체 제외 n+1 게시 | Applied2·constraint18→16·세대+2·patch id1·300/187/175·Stale 정리·캡처·회귀 PASS |
+| MI-5 | 완료(미커밋, 2026-11-17): CesiumMan 시험·기록 | 위팔·허벅지·실제 척추 평면 게시/+60 및 위팔+120/+180 PNG, P=1 옵션 비교·Release 회귀6건 기록. 시각 결함은 남은 일에 보존 |
 
 ### MI-3·MI-4 추가 결정 (Claude 판단, 2026-11-13; 근거 Codex 계획 메모 `%TEMP%/MI3-plan.md`)
 
@@ -112,7 +113,6 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 - 원본 mask는 합집합 패치 전체를 한 번 숨기고 patch id 하나를 유지한다.
 - 다중 본 A의 강체 부착 node = 모든 `P_i` 부모의 최소 공통 조상(n=1이면 현재와 같다).
 - 다중 break는 전부 성공 아니면 전부 거절(사전 검증 후 순차 commit). 부분 성공은 허용하지 않는다.
-| MI-5 | CesiumMan 시험·기록 | 위팔·허벅지·몸통 평면 캡처, 결과를 아래 "시험 결과"에 기록 |
 
 - 단계마다 Debug·Release 빌드, 회귀(`-skeletal-patch-break-checks 1`, `-skeletal-patch-checks 1`, `-attached-recut-checks 1`, 기존 Static 절단), 로컬 커밋.
 - 범위 밖: 이미 절단된 조각(generated)을 다음 절단 입력에 합치는 병합, 재절단 결과의 스키닝 승계, GPU union-find.
@@ -375,7 +375,57 @@ MI-3e2(미커밋, base `94f17ca0`, 2026-11-16):
 - 세 데모와 회귀의 debugger 수집에서 D3D12 ERROR/CORRUPTION 0. 기존 DXGI #80·D3D12 경고는 남아 있다. `ModelViewer.cpp` SHA256은 작업 전후 동일하다. 커밋·브랜치 변경 없음.
 - 근거: `%TEMP%/MI3e2-unit.log`, `MI3e2-{Debug,Release}-final-build.log`, `MI3e2-{UpperArm,Thigh,DefaultArm}-{patch,debug,run}.log`, `MI3e2-Release-regress{,-debug}.log`, `MI3e2-report.md`.
 
-(MI-5에서 추가 기록)
+### MI-5 — CesiumMan 시험·기록 (완료, 미커밋, 2026-11-17)
+
+- 완료 조건인 위팔·허벅지·실제 몸통 평면의 게시/+60 캡처와 기록을 수행했다. 아래 결함은 수정하지 않았다. 기존 MI-5 Torso 기록은 허벅지 절단의 몸통 시점이었으며 이번 실제 척추 절단으로 대체한다.
+- 환경: HEAD `e123cad1`, master, Release, 작업 디렉터리 `MiniEngine/ModelViewer`, NVIDIA GeForce MX450(1906 MB), `-debug 1`. 드라이버 591.86은 이전 기록이며 이번 재조회 값은 아니다.
+- 외부 exe: `%TEMP%/MI3e2-fix-build/Release/Output/ModelViewer/ModelViewer.exe`, SHA256 `7E702D9A5BC97E9C07FB98D2FBC3459E18625266997EF0187C31CCFD5A57E645`로 기존 MI-5 빌드와 일치하여 재빌드하지 않았다. 기존 빌드에는 타 세션의 `ModelViewer.cpp` 캡처 옵션 변경이 포함되어 있다. 순수 HEAD 바이너리와 구분한다.
+- 코드·진단 변경 없음. `ModelViewer.cpp` SHA256 `1C29C322F6CBCBF8181114194BF750B1F8AA0B9030AFC2703EA766D13C855509` 보존. 저장소 Build 변경·stash/reset·브랜치 변경·커밋 없음.
+- 재현 공통: 위 작업 디렉터리에서 외부 exe에 `-debug 1 -skeletal-break-demo 2 -physics-query-exit 180 -capture C:/Users/Pes/AppData/Local/Temp/MI5-<사례> -capture-count 2 -capture-step 60` 및 아래 추가 옵션을 전달한다. UpperArm만 뒤 프레임 관찰을 위해 exit=300/count=4로 연장했다.
+- PNG 공통 절대 경로: `C:/Users/Pes/AppData/Local/Temp/MI5-<사례>-demo-{000,001}-post.png`. 전부 게시 f64/+60 f124이며, UpperArm의 `002/003`은 +120 f184/+180 f244다. 8개 성공 실행·18 PNG를 각각 직접 열어 확인했다.
+- RAW 변환은 기존 `scratchpad/raw2png.ps1 -Dir $env:TEMP -Pattern 'MI5-*-post.raw' -Scale 1`을 사용했다(1920×1080). 아래 P 번호는 원본 glTF 배열이 아닌 런타임 DFS NodeId다.
+
+| 사례(캡처 이름) | 추가 옵션 | P 집합·경로 | 몸체별 tris | 아일랜드/loop·cap | constraint·mask | 결과 |
+| --- | --- | --- | --- | --- | --- | --- |
+| UpperArm | `-skeletal-break-demo-bone Skeleton_arm_joint_L__4_` | {7}, 단일 | 491/167 | 허리90→A; keep/drop=1/1; cap A/B 각14, 총54 drop | Applied1, −1 추론; patch 값1 추론 | 기대 수치 PASS; 몸통 접힘 관찰 |
+| UpperArm-Multi | 위 옵션 + `-skeletal-multi-cut 1` | {7}, P=1 단일 게시 | 491/167 | 위와 동일 | 위와 동일 | 수치·PNG 동등 |
+| SingleP(요청의 기존 c) | 없음 | {8}, 단일; 팔8→9 | 161/170 | keep/drop=1/0; cap A/B 각14 | Applied1, −1 추론; patch 값1 추론 | 수치 PASS; 허벅지 절단이 아님 |
+| SingleP-Multi | `-skeletal-multi-cut 1` | {8}, P=1 단일 게시 | 161/170 | 위와 동일 | 위와 동일 | 수치·PNG 동등 |
+| Thigh | `-skeletal-break-demo-bone leg_joint_R_1 -skeletal-union-checks 1 -skeletal-multi-cut 1` | {13,17}, 다중 batch | 300/187/175 | keep/drop=2/0; cap A/B1/B2=32/18/14 | Applied2, 실측18→16, 세대+2, maskCalls1, patchIds1개 | 기대 수치·같은 side B1/B2 cap 분리 PASS |
+| Torso | `-skeletal-break-demo-bone Skeleton_torso_joint_2` | {3}, 단일; 척추3→4 | 182/337 | keep/drop=1/4; cap A/B 각22, cap drop0; loop fallback34 | Applied1, −1 추론; patch 값1 추론 | 실제 몸통 절단; 양팔 틈·uncapped17 |
+| Torso-Multi | 위 옵션 + `-skeletal-multi-cut 1` | {3}, P=1 단일 게시 | 182/337 | 위와 동일 | 위와 동일 | 수치·PNG 동등, 같은 결함 |
+| Thigh-Single(추가 대조) | `-skeletal-break-demo-bone leg_joint_R_1` | {17}, 단일 | 243/169 | keep/drop=1/0; cap A/B 각14 | Applied1, −1 추론; patch 값1 추론 | 실제 오른 허벅지 단일 절단 |
+
+- 기본 c 평면: `BuildSkeletalBreakPlane`은 demo2에서 node8/child9 중점·본 방향 법선을 사용한다. 로그 `target=CesiumMan NodeId=8 ... child=9`, 대표 본 `Skeleton_arm_joint_L__3_`/`Skeleton_arm_joint_L__2_`로 팔 절단임을 확인했다. `demo1`은 ModelViewer의 대상 선택이 Xbot이고 기존 1475/869도 Xbot 허벅지 결과이므로 CesiumMan 몸통 근거가 아니다.
+- 몸통 평면: `BuildSkeletalBonePlane`의 `Skeleton_torso_joint_2`(3)→`torso_joint_3`(4) 중점, 월드 교점=(12.423952,0.417974,−0.007242). 두 실행 모두 `MI3d publish` 단일 경로이며 `MI4h2 published` 다중 게시가 아니다. `Skeleton_torso_joint_1` 후보는 `SP7b rejected: incoming=2 (RigRoot)`로 거절됐다(근거 `%TEMP%/MI5-TorsoRoot-{options,patch,debug}.log`, 게시/새 캡처 없음).
+- 다중 Thigh는 `CheckJointUnion`이 planeY=0.470281의 P13/P17 평면으로 교체한다. 몸통250 tris→A, 왼다리159→B1, 오른다리153→B2, attach=2/13/17, Frozen=8/15/15, skin 모두 PASS. 합계662=입력662, cap drop0이다.
+- 아일랜드 진단: UpperArm islands3/초기 reassigned1, SingleP 2/0, Thigh 3/1, Torso 4/2, Thigh-Single 2/0. 모든 성공 실행에서 실제 loop 재라벨 islands/tris=0/0·conflicts0이며 초기 귀속과 실제 loop 요구가 같았다. Torso의 side1 팔 아일랜드5/13 tris는 B에 남는다.
+- fallback 구분: Torso/Torso-Multi의 loop 판정만34, 나머지 사례 loop0. 모든 사례 cap 분류 fallback/invalid0·삼각형 invalid/idMismatch0·게시 fallback0. 다중은 세 몸체 skin/압축 성공과 N/A 경계 로그로 확인했다. Torso cap은 실제 생성된 22개/side만 유지되어 drop loop4가 cap 삼각형 제거로 이어지지는 않았다.
+- 단일 constraint 전후 개수와 mask ID 값의 직접 로그는 없다. Applied1 및 `CommitConstraintBreak`의 handle 하나 제거에서 감소1을 추론한다. 다중 `patchIds=1`은 고유 ID 개수이며 값이 아니다. 새 모델 첫 패치와 `SkeletalPatchCopy::Update`의 max(mask low16)+1 규칙에서 값1을 추론하며 실측으로 주장하지 않는다.
+
+직접 연 PNG의 관찰:
+- UpperArm 000: 팔의 주황 cap과 절단 틈이 보이고 허리 가짜 cap은 없다. 복부·옆구리에 큰 사선 삼각형 음영/접힘이 이미 보인다. 001은 팔 조각이 시야에서 사라지고 복부 접힘 모양이 변한다. 002는 000과, 003은 001과 비슷하게 반복된다. 링 밖 복부·허리까지 보여 링 주변만의 현상으로 판정할 수 없다. 가슴 전체가 균일하게 찌그러진다는 증거는 없다.
+- UpperArm-Multi 000/001도 같은 모양이다. 4장 시간 비교에서 몸통에 남는 주황 cap이나 뚜렷한 새 구멍은 없고, 분리 팔의 화면 밖 이후 궤적은 판정하지 못한다. 허리 옆 작은 보라 돌출은 보이지만 독립 조각인지는 불명이다.
+- SingleP/SingleP-Multi 000: 팔 cap 외에 골반 오른쪽 공중에 작은 보라 조각이 보인다. 001에서는 보이지 않으며 남은 팔 단면이 보인다. 기원은 불명이고 완전 무결 PASS로 처리하지 않는다.
+- Thigh 000/001: 양 허벅지 틈과 화면 오른쪽 주황 cap이 보이며, +60에서는 팔이 일부 가린다. 뚜렷한 몸통 동반 이탈이나 별도 떠 있는 파편은 관찰되지 않는다. Thigh-Single은 한쪽 허벅지만 절단되고 반대 다리는 이어져 있다.
+- Torso/Torso-Multi 000: 가슴 아래 가로 절단선과 양팔 중간의 찢어진 틈, 화면 오른쪽 팔의 배경이 통하는 삼각형 구멍이 보인다. 001: 상체/머리는 오른쪽 아래로 쓰러지고 하체 쪽 몸통 cap은 주황색으로 닫힌다. 잘린 상체의 다른 cap은 가려져 육안 확정 불가다. 로그 `caps=1 uncapped=17 error=0`과 함께 시각 결함으로 기록한다.
+- 원인 추정만 기록: `%TEMP%/TorsoWobble-memo.md`의 A 혼합 weight33개/팔 최대59%·Frozen 가설은 국소 링 변형 후보다. 이번 복부 범위를 전부 설명하지 못하며 원본 잔여 메시의 라이브 팔레트·애니메이션/물리 구동도 대조해야 한다. 절단 전 같은 카메라/포즈 대조가 없어 절단이 접힘을 새로 만들었는지는 확정하지 않는다.
+
+회귀·경계·진단:
+- 지정 `bash C:/Users/Pes/AppData/Local/Temp/claude/80629d7db37982f2/f78e5679-53b8-4682-ab5d-fe31132b4413/scratchpad/regress.sh Release`에 `BASH_ENV=$TEMP/MI3e2-fix-regress-env.sh` 적용. 6실행 모두 exit0, 수집58.87초, SP6 비교 누적1162 PASS/0 FAIL, BC-12a/b·AR4·Rig PASS. 근거 `%TEMP%/MI5-Release-regress{,-debug,-run}.log`.
+- 전체 PS4 보존을 위해 `-debug 1 -skeletal-patch-break-checks 1`도 별도 실행했다(exit0). `%TEMP%/MI5-Boundary-patch.log`: SP7e2 case2/3 publish/after60 모두0mm(pass4/fail0), case1 기존 N/A2건; PS4 전 case A/B publish/after60 12건 간격 변화0mm PASS, unmatched0. PS2/PS3 최대0.000234/0.000189mm.
+- 경계 수치 적용 범위: case3은 기본 팔 P8(SingleP)이며 위팔 P7과 다르다. 따라서 UpperArm·Torso·Thigh-Single의 해당 데모 평면 수치는 N/A(기존 옵션에 계측 없음), Thigh 다중은 명시적 `boundary/PS4 measure N/A (multi)`다. 측정 가능한 기존 회귀값을 다른 평면의 PASS로 바꾸지 않는다.
+- 이번 사례·별도 경계·회귀의 수집 로그에서 D3D12 ERROR/CORRUPTION=0/0. 기존 DXGI GetContainingOutput ERROR #80 및 D3D12 경고는 남는다. GPU API 오류0이 시각 결함 없음을 의미하지 않는다.
+
+남은 일(수정 없이 후속 판단용):
+- 다중 게시 경계 측정: PairBoundary·MeasureBoundaryAt·PS4를 n+1 몸체로 확장하고 위팔 P7·몸통 P3·실제 허벅지 P17 평면도 정량화한다.
+- Applied 이후 복구 계약: rig·mask·component의 예외/원본 revision 변경 복구를 단일 경로와 함께 설계한다.
+- 기본값 on 결정: 현재 `skeletal-multi-cut` 기본 off 유지. 시각 결함과 측정 공백을 포함해 별도 판단한다.
+- 몸통 우글거림: 위 UpperArm 재현 명령과 `%TEMP%/MI5-UpperArm-{patch,debug}.log`, `MI5-UpperArm-demo-{000,001,002,003}-post.png`로 복부·옆구리까지의 반복 접힘을 추적한다. 혼합 weight/Frozen과 원본 팔레트·물리 원인은 가설이며 이번에 수정하지 않았다.
+- 몸통 절단 양팔 틈: Torso 재현 명령(옵션 on도 동일), `%TEMP%/MI5-Torso{,-Multi}-{patch,debug}.log`, 동명000/001 PNG. loop fallback34·uncapped17와 팔 구멍/찢어짐을 조사한다.
+- 기본 c의 떠 있는 작은 조각: SingleP 재현 명령(옵션 on도 동일), `%TEMP%/MI5-SingleP{,-Multi}-{patch,debug}.log`, 동명000 PNG의 골반 오른쪽 보라 조각을 조사한다.
+
+근거는 위 공통 경로의 사례별 `MI5-<사례>-{options,patch,debug,run}.log`, PNG와 동명 RAW, `%TEMP%/MI5-report.md`다. 시험·기록 완료와 렌더링 결함 해결 완료를 구분한다.
 
 MI-3e2 리뷰 3건 수정(미커밋, base `94f17ca0`, 2026-11-16):
 - `SmallestContainingLatticeLoop`로 중첩 시 최소 면적 유효 loop 하나만 고른다. `Submit`은 선택 자식을 보존하고 `DiagnoseIslands`는 그 선분을 우선한다. `IntersectLatticeSegment`는 끝점 허용오차와 선분 진행 방향으로 B side를 정한다.
