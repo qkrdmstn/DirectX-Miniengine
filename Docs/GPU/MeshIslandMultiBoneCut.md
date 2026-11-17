@@ -1,4 +1,4 @@
-상태: 진행 중 — MI-1~MI-3 완료(MI-3e2 `63c2292b`, MI-3f `ba2b976f`); MI-4a 완료(`7728485a`); MI-4b 완료(`86522153`); MI-4c 완료(`caa6f681`); MI-4d1 완료(`58807a5e`); MI-4d2 완료(`188adc01`); MI-4e 완료(`1d8c8ce2`); MI-4f 완료(`61dd8e91`); MI-4g 미커밋(base `61dd8e91`, 2026-11-17): `QueueBreaks` batch·결과 수집 완료. MI-4h1 미커밋(2026-11-17): 명시 다중 옵션·n+1 숨긴 몸체별 skin 준비 완료; batch·mask 1회·n+1 게시는 MI-4h2. MI-4h1 리뷰 수정 미커밋: 모서리 local 변환·준비 실패 정리 경로 보강.
+상태: 진행 중 — MI-1~MI-3 완료(MI-3f `ba2b976f`); MI-4a~MI-4f 완료; MI-4g 완료(`f72f28c2`); MI-4h1 완료(`0cd2efba`, 리뷰 포함); MI-4h2 완료(미커밋, base `0cd2efba`, 2026-11-17): batch·mask 1회·n+1 게시·거절 무변경·캡처·CPU/D/R/회귀 PASS; 리뷰 수정은 전체 게시 용량·component 사전 준비 및 다중 측정 N/A. 기본 off, MI-5 후속.
 
 # 메시 아일랜드와 다중 본 합쳐 자르기 (격자 토폴로지 맵)
 
@@ -94,10 +94,10 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 | MI-4d2 | 완료(`188adc01`): P_i 교차점 snapshot·아일랜드 재라벨·loop별 side 몸체·`-skeletal-union-checks` n=2 진단(몸체별 skin 준비는 미연결) | P13/P17 실제 합집합 절단·분류·압축 진단, B1/B2 cap 분리·빈 몸체 로그; break·mask·n+1 게시 미연결 |
 | MI-4e | 완료(`1d8c8ce2`): `PrepareConstraintBreak`/`CommitConstraintBreak`·`PrepareBreak`/`CommitBreak` 분리, 기존 진입점은 얇은 래퍼 | 단일 break 회귀·거절 무변경(CPU 959 checks), 세 데모·회귀 PASS |
 | MI-4f | 완료(`61dd8e91`): `BreakConstraints` 요청 전체 사전 검증·겹침 거절·핸들 생존 점검 후 순차 commit, 공개 `CommitBreak` 오래된 snapshot Stale | 두 번째 실패 시 첫 constraint도 보존, 같은 rig 독립 관절 batch 세대 +2·충돌 batch 무변경(CPU 996 checks), 세 데모·회귀 PASS |
-| MI-4g | 완료(미커밋, base `61dd8e91`): `QueueBreaks`·`TryGetBreakResults`, 단일 API는 래퍼 | pause·Stale·AlreadyBroken·Reset 무변경, 같은 rig 성공 +2, CPU·D/R·세 데모·회귀 PASS |
-| MI-4h | MI-4h1/4h2로 분할: 준비와 batch 게시를 분리 | h1 완료(미커밋), h2 후속 |
-| MI-4h1 | 완료(미커밋, base `61dd8e91` + 미커밋 MI-4g): 명시 다중 옵션·n+1 숨긴 component/skin 준비 진단 | 300/187/175 skin PASS·원본/mask/constraint 무변경·거절·회귀 PASS |
-| MI-4h2 | 후속: `QueueBreaks` 전부 Applied 후 mask 1회·빈 몸체 제외 n+1 게시 | batch 거절 무변경·constraint n개 감소·허벅지/몸통 PNG·회귀 |
+| MI-4g | 완료(`f72f28c2`): `QueueBreaks`·`TryGetBreakResults`, 단일 API는 래퍼 | pause·Stale·AlreadyBroken·Reset 무변경, 같은 rig 성공 +2, CPU·D/R·회귀 PASS |
+| MI-4h | 완료: h1(`0cd2efba`) 준비와 h2(미커밋) batch 게시로 분할 | 몸체별 skin·mask 1회·n+1 게시·거절 무변경·허벅지/몸통 시점 PNG·회귀 PASS |
+| MI-4h1 | 완료(`0cd2efba`, 리뷰 포함): 명시 다중 옵션·n+1 숨긴 component/skin 준비 | 300/187/175 skin PASS·원본/mask/constraint 무변경·실패 정리·회귀 PASS |
+| MI-4h2 | 완료(미커밋): 모든 P incoming 고정·`QueueBreaks` 전부 Applied 후 mask 1회·빈 몸체 제외 n+1 게시 | Applied2·constraint18→16·세대+2·patch id1·300/187/175·Stale 정리·캡처·회귀 PASS |
 
 ### MI-3·MI-4 추가 결정 (Claude 판단, 2026-11-13; 근거 Codex 계획 메모 `%TEMP%/MI3-plan.md`)
 
@@ -119,7 +119,27 @@ IslandLabels LabelPatchIslands(const LatticeTopology&, const PatchTriangleSpan&,
 
 ## 시험 결과
 
-MI-4h1(미커밋, base `61dd8e91` + 미커밋 MI-4g, 2026-11-17):
+MI-4h2(완료, 미커밋, base `0cd2efba`, 2026-11-17):
+- `SkeletalPatchCopy::Request`는 명시 옵션과 P≥2에서만 모든 incoming·Rig/Topology 세대를 고정한다. 대표 incoming·반공간 확인도 P 집합 기준이며 하나라도 incoming이 없으면 기존 로그로 전체를 거절한다.
+- `FinishCutResult`는 `PrepareMultiBodies`와 `DiscardStaleCutResult` 뒤 `QueueBreaks`를 한 번 호출한다. 기존 단일은 `m_Break`·`m_RequestId`와 `QueueBreak`/`TryGetBreakResult` 래퍼를 유지한다. 다중도 batch당 ID 하나를 사용하므로 pause·Reset의 `CancelBreak`는 MI-4g 계약을 따른다.
+- `PrepareMultiPublication`은 `QueueBreaks` 전에 비어 있지 않은 전체 게시 수만큼 owner 용량을 첫 준비에서 예약하고, component 생성·Attachment 복사·변환·skin 활성화를 끝낸다. 미게시 component는 Request/Reset/공통 폐기에서 해제한다. 기존 단일 경로의 2칸 예약은 유지한다.
+- Pending 복사·patch id 기록은 기존 `Update`의 `m_Removal` 구성에서 제출 전에 끝난다. `ConsumeMultiBreak`는 전부 Applied일 때 mask 1회와 준비된 component commit을 수행한다.
+- 이동 불가: `SetTriangleMask`는 원본 변경과 GPU mask 생성·Pending 대입을 함께 수행하므로 거절 무변경을 지키려면 게시 때 남겨야 한다. GPU 갱신(`PrepareMeshes`)과 rig·mask 진단도 게시 결과에 의존하며 할당·예외 가능성이 남는다. 이를 분리하려면 범위 밖 MeshComponent API 계약 변경이 필요하다.
+- 후속 과제: 제출 뒤 source revision 변경 및 Applied 이후 예외의 rig·mask·component 복구 계약은 기존 단일 경로와 함께 별도 설계한다.
+- 남은 일: PairBoundary·MeasureBoundaryAt·PS4의 n+1 확장은 후속이며 다중 게시 로그는 `MI4h2 boundary/PS4 measure N/A (multi)`를 명시한다.
+- CesiumMan P13/P17: Applied2, 실제 runtime constraint handle18→16, TopologyGeneration+2, maskCalls1·고유 patchIds1, A/B1/B2=300/187/175 tris, attach2/13/17·Frozen8/15/15·skin PASS.
+- 기본 off인 `-skeletal-multi-reject 1`은 마지막 기대 세대만 변경한다. BatchRejected/Stale로 publish0·mask0·constraintDelta0, `ReadOriginalState` 무변경·`DiscardPreparedBodies` 정리 PASS. `-skeletal-multi-stale 1`의 제출 전 revision 거절도 무변경 PASS.
+- CPU: 지정 cpu.ps1/build.ps1, SkeletalBreakTests Debug/Release 각996/996(11/17초), SkeletalPatchTests 각118, LatticeTopologyTests PASS. 외부 props 최종 Debug52초·Release54초, msbuild 각각 exit0, 기존 경고 유지.
+- Release 기본 데모 (a)491/167 (b)1475/869 (c)161/170, 모두 fallback0·exit0; SP7b/SP7e/MI3d 로그는 h1과 동일. 옵션 on/P1개도491/167·fallback0. union-only300/187/175·same-side B1/B2 cap split PASS.
+- 최종 Release 회귀6실행 exit0(51.31초), BC-12a/b·AR4·Rig·MI4g PASS, SP6 누적1110 PASS/0 FAIL. SP7e2 case2/3 publish/after60=0mm(case1 기존 N/A), PS2 최대0.000203mm·PS3 최대0.000146mm·PS4 간격 변화0mm.
+- PNG: `%TEMP%/MI4h2-Thigh-demo-000-post.png`(publish f64), `001-post.png`(+60 f124); `%TEMP%/MI4h2-Torso-demo-000-post.png`, `001-post.png`도 같은 시점이다. 네 장 육안 확인. 몸통은 동일 P13/P17 절단의 몸통 중심 시점이며 별도 몸통 평면 절단 검증은 아니다. 다중 경계 수치는 별도 측정하지 않았다.
+- 재현: `-debug 1 -skeletal-break-demo 2 -skeletal-union-checks 1 -skeletal-multi-cut 1 -physics-query-exit 180 -capture <TEMP>/MI4h2-Thigh -capture-count 2 -capture-step 60`; 허벅지 카메라는 `-skeletal-break-demo-bone leg_joint_R_1`, 몸통은 `Skeleton_torso_joint_1` 추가. 기존 raw2png.ps1로 원본 해상도 변환.
+- GPU NVIDIA MX450·Release, 드라이버 이전 기록591.86(이번 재조회 불가). 직접 실행·회귀 DBWIN의 D3D12 ERROR/CORRUPTION 모두0, 기존 DXGI #80 유지. 근거: `%TEMP%/MI4h2-{cpu,tests,final-build}.log`, `MI4h2-*-{patch,debug,run}.log`, `MI4h2-regress.log`, `MI4h2-d3d12.json`, `MI4h2-report.md`.
+- 리뷰 재검증: Debug/Release 다중 성공 포함 직접 각7건 모두 종료0·assert/abort 없음; Applied2·constraint18→16·patch id1·300/187/175와 두 Stale 거절 무변경 확인. CPU 전체 PASS, 지정 외부 props 빌드 Debug49초/Release63초 종료0, 지정 Release 회귀6건 종료0(51.62초), 직접14건·회귀6건 D3D12 ERROR/CORRUPTION 0. 근거: `%TEMP%/MI4h2-report.md` 리뷰 수정 절 및 `MI4h2-fix-*` 로그.
+- 코드 SkeletalPatchCopy.cpp·.h 약231줄, CRLF/BOM 보존. ModelViewer.cpp 해시 불변, 저장소 Build 변경·stash/reset·브랜치 변경·커밋 없음. 기본값 on·다른 모델·재절단은 범위 밖, MI-5 후속.
+
+
+MI-4h1(완료 `0cd2efba`, MI-4g `f72f28c2` 기반, 2026-11-17):
 - 리뷰 수정: `SelectMultiCut`은 평면 모서리도 component-local로 변환한다. 이동·회전 진단은 `CheckJointUnion`의 루트·자식·side와 대조한다.
 - 리뷰 재검증: CPU·Debug/Release 빌드·3데모·union·다중 준비·강제 skin 실패 정리·Stale 격리·Release 회귀 6실행 PASS, D3D12 ERROR/CORRUPTION 0. 근거: `%TEMP%/MI4h-report.md`의 리뷰 수정 절.
 - `DiscardPreparedBodies`는 owner·압축 자원·준비 상태를 완료 기록보다 먼저 폐기한다. `-skeletal-multi-fail 1`은 두 번째 몸체의 skin을 거절해 부분 생성물 정리를 검사한다.
@@ -148,7 +168,7 @@ MI-4h1(미커밋, base `61dd8e91` + 미커밋 MI-4g, 2026-11-17):
 
 
 
-MI-4g(미커밋, base `61dd8e91`, 2026-11-17):
+MI-4g(완료 `f72f28c2`, base `61dd8e91`, 2026-11-17):
 - API: `PhysicsSystem::QueueBreaks(requests, keepResult)`가 batch당 RequestId 하나를 발급하고 입력·기대 세대를 복사한다. `TryGetBreakResults`는 요청 순서의 상태 배열을 한 번 소비한다. `QueueBreak`는 원소 하나 제출, `TryGetBreakResult`는 배열의 첫 결과를 소비하는 래퍼다. 빈 batch도 번호를 발급하고 처리 뒤 빈 결과를 돌려주며 단일 조회는 이를 소비하지 않는다.
 - 처리·계수: `AdvanceSimulation`의 기존 fixed step 경계에서 `ProcessQueuedBreaks`가 batch당 `BreakConstraints`를 정확히 한 번 호출한다. `Processed`와 `NotFound`는 요청당 누적하고 취소·pause는 누적하지 않는다. 단일 경로의 번호·소비 시점·로그·계수는 유지하며 SkeletalPatchCopy 호출부는 그대로다. batch 성공 로그의 body/sensor 수는 batch 적용 완료 상태다.
 - 무변경 검사: `QueuedBreakChecks::Run`이 MI-4f와 같은 분기 fixture로 pause(실제 `AdvanceSimulation` 포함), Stale, 제출 후 끼어든 break, AlreadyBroken, Reset의 `CancelBreak` 전체 취소를 검사한다. 전후 Rig/Topology 세대·관절 수/handle/enable·body 수/운동/전체 pose/속도/sensor·Pairs 수 snapshot이 정확히 같고, 문제 요청은 자기 사유·나머지는 BatchRejected다. 독립 관절 둘 성공은 Applied 두 개·세대 +2이며 소비는 한 번뿐이다.

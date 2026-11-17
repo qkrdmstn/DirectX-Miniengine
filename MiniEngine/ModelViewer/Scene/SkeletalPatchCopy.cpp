@@ -1220,6 +1220,8 @@ namespace Viewer
             PatchLog("SP7b C waiting RequestId=%llu\n", m_RequestId);
             return;
         }
+        m_MultiBreaks.clear();
+        m_MultiPieces.clear();
         m_MultiPrepare = false;
         m_Mode = mode;
         m_DiagnosticCase = diagnosticCase;
@@ -1520,7 +1522,7 @@ namespace Viewer
             // 등록된 rig의 incoming 관절과 C 시점 세대를 저장한다.
             if (skeletal.IsRegistered(target->GetId()))
             {
-                m_Incoming = skeletal.FindIncomingJoint(target->GetId(), selected.NodeId);
+                m_Incoming = skeletal.FindIncomingJoint(target->GetId(), m_MultiPrepare ? cutRoots.front() : selected.NodeId);
                 if (m_Incoming.Status != IncomingJointStatus::Ok)
                 {
                     PatchLog("SP7b rejected: incoming=%u (NoBody=1 RigRoot=2 AlreadyBroken=3 NotRegistered=4)\n", unsigned(m_Incoming.Status));
@@ -1528,6 +1530,24 @@ namespace Viewer
                 }
                 m_Break = { target->GetId(), m_Incoming.JointId, skeletal.GetRigGeneration(target->GetId()),
                     skeletal.GetTopologyGeneration(target->GetId()) };
+
+                // 다중 요청은 모든 incoming과 동일한 요청 시점 세대를 먼저 고정한다.
+                if (m_MultiPrepare)
+                {
+                    for (const auto root : cutRoots)
+                    {
+                        const auto incoming = skeletal.FindIncomingJoint(target->GetId(), root);
+                        if (incoming.Status != IncomingJointStatus::Ok)
+                        {
+                            PatchLog("SP7b rejected: incoming=%u (NoBody=1 RigRoot=2 AlreadyBroken=3 NotRegistered=4)\n", unsigned(incoming.Status));
+                            m_MultiBreaks.clear();
+                            return;
+                        }
+                        auto request = m_Break;
+                        request.JointId = incoming.JointId;
+                        m_MultiBreaks.push_back(request);
+                    }
+                }
                 m_BreakReady = true;
             }
         }
@@ -1551,22 +1571,23 @@ namespace Viewer
             const auto frame = Matrix4(mesh->GetWorldTransform(target->GetTransform()))
                 * Invert(Matrix4(mesh->GetDeformBinding().SourceFrame.ToAffine()))
                 * nodes[mesh->GetGeometry()->GetMesh(section).meshCBV];
-            uint32_t sideNode = selected.NodeId;
-            if (selected.Kind == SegmentJointKind::Leaf)
+            uint32_t sideNode = m_MultiPrepare ? cutRoots.front() : selected.NodeId;
+            if (!m_MultiPrepare && selected.Kind == SegmentJointKind::Leaf)
             {
                 sideNode = parents[sideNode];
                 while (sideNode != UINT32_MAX && !instance.GetModel()->m_InfluencingJoints[sideNode])
                     sideNode = parents[sideNode];
             }
-            if (sideNode == UINT32_MAX || parents[selected.NodeId] == UINT32_MAX)
+            if (sideNode == UINT32_MAX || parents[m_MultiPrepare ? cutRoots.front() : selected.NodeId] == UINT32_MAX)
             {
                 PatchLog("SP7e rejected: no influencing ancestor\n");
                 return;
             }
             const float side = Math::Dot(frame * nodes[sideNode].GetW(), plane.WorldPlane);
-            const uint32_t other = selected.Kind == SegmentJointKind::Segment ? selected.ChildNodeId : selected.NodeId;
+            const uint32_t other = m_MultiPrepare ? unionCut.Children.front()
+                : selected.Kind == SegmentJointKind::Segment ? selected.ChildNodeId : selected.NodeId;
             const float opposite = Math::Dot(frame * nodes[other].GetW(), plane.WorldPlane);
-            if (selected.Kind == SegmentJointKind::Leaf ? std::abs(side) <= 0.001f
+            if (!m_MultiPrepare && selected.Kind == SegmentJointKind::Leaf ? std::abs(side) <= 0.001f
                 : std::abs(side) <= 0.001f && std::abs(opposite) <= 0.001f)
             {
                 PatchLog("SP7e rejected: ambiguous side within 1mm\n");
@@ -2067,6 +2088,8 @@ namespace Viewer
         // 준비물을 버릴 때 아직 실행하지 않은 break도 취소한다.
         physics.CancelBreak(m_RequestId);
         m_RequestId = 0;
+        m_MultiBreaks.clear();
+        m_MultiPieces.clear();
         m_BreakReady = false;
 
         // 사용자 owner 삭제와 같은 절단 취소·물리 매핑 제거 경로를 사용한다.
@@ -2268,6 +2291,15 @@ namespace Viewer
                 MeasureBoundaryAt(scene, "after60");
                 if (m_BreakCheck >= 2)
                     m_CaptureRequest = m_BreakCheck - 1;
+            }
+        }
+
+        // 다중 결과는 batch 전체를 소비하고 단일 결과 소비 경로와 분리한다.
+        if (m_RequestId && m_MultiPrepare)
+        {
+            if (!ConsumeMultiBreak(scene))
+            {
+                return false;
             }
         }
 
@@ -3235,6 +3267,145 @@ namespace Viewer
         m_BreakReady = false;
         m_SkinPatch.reset();
         m_PreparedIds.clear();
+        m_MultiPieces.clear();
+    }
+
+    // batch 제출 전에 전체 게시 용량과 조각 component 및 부착 값을 준비한다.
+    void SkeletalPatchCopy::PrepareMultiPublication(Scene& scene)
+    {
+        // 원본 owner와 숨긴 몸체의 대응을 확인한다.
+        auto* owner = scene.FindObject(m_Break.Owner);
+        auto* staging = scene.FindObject(m_CopyOwner);
+        if (!staging || m_PreparedIds.size() != m_Attachments.size())
+        {
+            throw std::runtime_error("MI4h2 missing prepared bodies");
+        }
+
+        // 빈 몸체를 제외한 전체 수를 첫 준비에서 한 번에 예약한다.
+        const auto publishCount = size_t(std::count_if(m_PreparedIds.begin(), m_PreparedIds.end(), [](ComponentId id)
+        {
+            // 빈 몸체는 준비 ID가 없으므로 실제 게시 수에 포함하지 않는다.
+            return id != InvalidComponentId;
+        }));
+        m_MultiPieces.reserve(publishCount);
+
+        // 게시 전 조각의 변환과 부착 및 skin 활성화를 모두 끝낸다.
+        for (size_t body = 0; body < m_PreparedIds.size(); ++body)
+        {
+            // 몸체 순서를 보존하면서 각자의 geometry와 Attachment 및 skin을 사용한다.
+            if (m_PreparedIds[body] == InvalidComponentId)
+            {
+                continue;
+            }
+            const auto* prepared = staging->FindMeshComponent(m_PreparedIds[body]);
+            auto piece = owner->PrepareMeshComponent(prepared->GetGeometry(), m_MultiPieces.empty() ? publishCount : 0);
+            if (!piece->SetTransform(m_World, MeshTransformMode::WorldIndependent))
+            {
+                throw std::runtime_error("MI4h2 invalid piece world");
+            }
+            piece->SetInheritedCollision({}, piece->GetGeometry()->GetId(), "node attached");
+            piece->Attachment = std::make_unique<NodeAttachment>(m_Attachments[body]);
+            piece->PatchSkin = prepared->PatchSkin;
+            piece->ActivatePatchSkin();
+            piece->PublishVisible = true;
+            m_PieceIds[body] = piece->GetId();
+            m_MultiPieces.push_back(std::move(piece));
+        }
+    }
+
+    // batch 전체 Applied 뒤 합집합 mask와 비어 있지 않은 몸체를 함께 게시한다.
+    bool SkeletalPatchCopy::ConsumeMultiBreak(Scene& scene)
+    {
+        // pause 중에는 결과를 소비하지 않고 기존 요청 ID를 보존한다.
+        std::vector<BreakStatus> statuses;
+        if (!m_Physics->TryGetBreakResults(m_RequestId, statuses))
+        {
+            return false;
+        }
+        m_RequestId = 0;
+        const bool applied = statuses.size() == m_MultiBreaks.size()
+            && std::all_of(statuses.begin(), statuses.end(), [](BreakStatus status)
+            {
+                // 모든 요청의 commit 성공만 게시를 허용한다.
+                return status == BreakStatus::Applied;
+            });
+        for (size_t i = 0; i < statuses.size(); ++i)
+        {
+            PatchLog("MI4h2 batch index=%zu BreakStatus=%u Applied=%u\n", i, unsigned(statuses[i]), statuses[i] == BreakStatus::Applied);
+        }
+
+        // batch 거절은 공통 폐기 후 원본과 constraint 상태가 그대로인지 검증한다.
+        if (!applied)
+        {
+            const auto preparedOwner = m_CopyOwner;
+            DiscardPreparedBodies(scene);
+            const bool unchanged = m_MultiBefore == ReadOriginalState(scene, *m_Physics);
+            const bool clean = !scene.FindObject(preparedOwner) && !m_CopyOwner
+                && m_PreparedIds.empty() && !m_SkinPatch && !GetBodyResult();
+            PatchLog("MI4h2 rejected original/mask/constraint=%s cleanup=%s publish=0 mask=0 constraintDelta=0\n",
+                unchanged ? "PASS" : "FAIL", clean ? "PASS" : "FAIL");
+            if (!unchanged || !clean)
+            {
+                throw std::runtime_error("MI4h2 batch rejection changed original or leaked preparation");
+            }
+            return true;
+        }
+
+        // 단일 경로와 같은 revision 규칙과 준비 ID로 게시 가능 여부를 확인한다.
+        if (DiscardStaleCutResult(scene))
+        {
+            return true;
+        }
+        auto* owner = scene.FindObject(m_Break.Owner);
+        auto* source = owner->FindMeshComponent(m_SourceMesh);
+
+        // 합집합 전체를 mask 호출 한 번과 patch ID 하나로 숨긴다.
+        if (!source->SetTriangleMask(m_Removal))
+        {
+            throw std::runtime_error("MI4h2 invalid removal mask");
+        }
+        const auto published = m_MultiPieces.size();
+        for (auto& piece : m_MultiPieces)
+        {
+            owner->CommitMeshComponent(std::move(piece));
+        }
+        auto& context = GraphicsContext::Begin(L"Publish multi skeletal pieces");
+        scene.PrepareMeshes(context);
+        context.Finish();
+
+        // 다중 경계 대응과 PS4 측정은 아직 지원하지 않음을 명시한다.
+        PatchLog("MI4h2 boundary/PS4 measure N/A (multi)\n");
+
+        // rig의 실제 끊긴 관절 수와 topology 증가를 게시 시점에 기록한다.
+        SkeletalRigState state;
+        auto& skeletal = m_Physics->GetSkeletalPhysics();
+        skeletal.ReadDiagnosticState(m_Break.Owner, state);
+        size_t constraints = 0;
+        for (uint32_t joint = 0; joint < state.Joints.size(); ++joint)
+        {
+            constraints += skeletal.GetConstraintHandle(m_Break.Owner, joint) != MiniPhysics::InvalidConstraint;
+        }
+        std::set<uint32_t> patchIds;
+        for (const auto value : source->GetTriangleMask()->Pending)
+        {
+            if (value & 0x80000000u)
+            {
+                patchIds.insert(value & 65535u);
+            }
+        }
+        const auto topologyDelta = skeletal.GetTopologyGeneration(m_Break.Owner) - m_Break.ExpectedTopologyGeneration;
+        PatchLog("MI4h2 published pieces=%zu maskCalls=1 patchIds=%zu topologyDelta=%llu constraints=%zu->%zu\n",
+            published, patchIds.size(), topologyDelta, m_MultiConstraints, constraints);
+        if (topologyDelta != m_MultiBreaks.size() || m_MultiConstraints - constraints != m_MultiBreaks.size())
+        {
+            throw std::runtime_error("MI4h2 unexpected rig delta");
+        }
+
+        // 기존 demo 캡처가 게시 프레임과 지정 간격의 후속 프레임을 수집하게 한다.
+        m_DemoPublished = true;
+        m_CaptureRequest = m_Demo;
+        DiscardPreparedBodies(scene);
+        return true;
     }
 
     // n+1 압축 몸체의 숨긴 component와 skin을 검증하고 원본 상태 보존을 확인한다.
@@ -3310,7 +3481,7 @@ namespace Viewer
         }
     }
 
-    // 요청 몸체 수의 준비 ID를 확보한 뒤 기존 단일 break·게시 순서를 진행한다.
+    // 요청 몸체 수의 준비 ID와 skin을 확보한 뒤 단일 또는 batch break를 제출한다.
     void SkeletalPatchCopy::FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped)
     {
         // 지연 처리에서도 동일한 절단 기록으로 성공과 실패 이유를 복원한다.
@@ -3322,7 +3493,7 @@ namespace Viewer
             // body 0/1은 A/B이며 cutter side 순서와 독립이다.
             auto* staging = scene.FindObject(m_CopyOwner);
 
-            // n+1 게시 연결 전의 다중 몸체 진단은 압축 결과만 확인하고 게시·break·mask 없이 끝낸다.
+            // 다중 몸체는 숨긴 skin 준비 뒤 batch 제출 또는 기존 합집합 진단으로 나눈다.
             if (m_BodySides.size() != 2)
             {
                 // 준비 중 어느 예외가 발생해도 완료 기록 전에 부분 생성물을 폐기한다.
@@ -3339,6 +3510,7 @@ namespace Viewer
                         {
                             return;
                         }
+                        PrepareMultiPublication(scene);
                     }
                     if (!GetBodyResult())
                     {
@@ -3376,6 +3548,41 @@ namespace Viewer
                     DiscardPreparedBodies(scene);
                     LogCutResult(scene, "multi body preparation failed", caps, uncapped, 1);
                     throw;
+                }
+
+                // 모든 skin 준비와 원본 revision 검사가 끝난 뒤 batch를 한 번 제출한다.
+                if (m_MultiPrepare)
+                {
+                    if (DiscardStaleCutResult(scene))
+                    {
+                        return;
+                    }
+                    m_MultiBefore = ReadOriginalState(scene, *m_Physics);
+
+                    // 실제 runtime constraint handle 수를 제출 전 기준으로 보관한다.
+                    SkeletalRigState rig;
+                    auto& skeletal = m_Physics->GetSkeletalPhysics();
+                    skeletal.ReadDiagnosticState(m_Break.Owner, rig);
+                    m_MultiConstraints = 0;
+                    for (uint32_t joint = 0; joint < rig.Joints.size(); ++joint)
+                    {
+                        m_MultiConstraints += skeletal.GetConstraintHandle(m_Break.Owner, joint) != MiniPhysics::InvalidConstraint;
+                    }
+
+                    // 기본 off인 거절 진단은 마지막 요청의 세대만 틀리게 한다.
+                    auto requests = m_MultiBreaks;
+                    uint32_t reject = 0;
+                    CommandLineArgs::GetInteger(L"skeletal-multi-reject", reject);
+                    if (reject)
+                    {
+                        ++requests.back().ExpectedTopologyGeneration;
+                    }
+                    m_RequestId = m_Physics->QueueBreaks(requests, true);
+                    m_BreakReady = false;
+                    PatchLog("MI4h2 queued RequestId=%llu count=%zu %s\n", m_RequestId,
+                        requests.size(), m_Physics->IsSimulationRunning() ? "" : "paused: waiting");
+                    LogCutResult(scene, "multi bodies awaiting batch", caps, uncapped, result.Error);
+                    return;
                 }
 
                 // 성공 진단도 자원과 준비 상태를 먼저 폐기한 뒤 완료를 기록한다.

@@ -227,7 +227,15 @@ namespace Viewer
         void DiscardPreparedBodies(Scene& scene);
         // 명시 다중 경로는 숨긴 몸체별 skin 준비와 원본 보존만 검증한다.
         void PrepareMultiBodies(Scene& scene);
+        // batch 제출 전에 원래 owner에 게시할 component와 전체 삽입 용량을 준비한다.
+        void PrepareMultiPublication(Scene& scene);
+        std::vector<std::unique_ptr<MeshComponent>> m_MultiPieces;
         bool m_MultiPrepare = false;
+        // 다중 batch 결과를 단일 소비 경로와 분리하여 원자적으로 게시한다.
+        bool ConsumeMultiBreak(Scene& scene);
+        std::vector<BreakRequest> m_MultiBreaks;
+        std::vector<uint64_t> m_MultiBefore;
+        size_t m_MultiConstraints = 0;
         // 압축 완료 뒤 스키닝과 break 준비를 이어서 수행한다.
         void FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped);
         // 원본 revision 불일치 시 미게시 결과를 정리하고 취소 여부를 반환한다.
