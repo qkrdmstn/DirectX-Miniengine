@@ -1,4 +1,4 @@
-상태: 진행 중 — 미커밋(base `927592b2`, 2026-11-18): CesiumMan 양쪽 허벅지 구도·데이터 확인 완료, 빌드·GPU 검증은 Claude 담당. 기존 Xbot Release GPU 검증 완료(ON 2096/90, OFF 2006/0).
+상태: 진행 중 — 미커밋(base `607dc038`, 2026-11-18): Solid 재복사 소유 ID 보존·카메라 입력 고정, 빌드·GPU 검증은 Claude 담당. 첫 패치 소실의 근본 원인은 미확정.
 # 양쪽 허벅지 순차 절단 재복사 녹화
 
 ## CesiumMan 양쪽 허벅지 녹화
@@ -31,9 +31,61 @@ Xbot ON 2118 후 2096/90, OFF 2006/0도 그대로다.
 `SetTriangleMask`는 이 비트를 허용하고 `TriangleMaskCS`의 진단 선택 2가 이 면만 `RecopiedIB`에 보존한다.
 `MeshComponent::Render`가 뒤쪽 노랑 상수 절반으로 한 번 더 그린다. `-patch-recopy-bug 0`은 재복사가 없어 노랑이 없다.
 패치(초록) 쪽 노랑은 구현하지 않았다. 확인: CesiumMan ON은 190개 면이 노랑, Xbot ON은 고관절 90개가 노랑, OFF는 노랑 없음.
-Solid 뷰는 원본을 정상 마스킹한 최종 결과를 그대로 보이며 색 변경은 없다: `-view`·`-show-masked-region` 없이
-`-patch-recopy-bug 1`(비교 0)로 녹화한다. Xbot은 늘어난 얇은 면이 보이고 CesiumMan은 ON/OFF 차이가 거의 안 보인다
-(190개 면이 같은 정강이 위에 겹쳐 같은 재질로 그려지기 때문).
+### Solid 최종 결과 (진행 중 — 미커밋)
+
+`-view`와 `-show-masked-region`을 모두 생략한다. 원본 제거 마스크와 실제 부착 패치를 그린다.
+완료 조건은 cut2 `007`에서 **몸통 쪽 양쪽 허벅지 패치가 모두 남고**, ON에서는 재복사된
+고관절 면이 새 패치에 포함되어 기존 패치와 겹치거나 늘어나는 것이다. OFF는 두 패치가 정상 부착된다.
+CesiumMan은 같은 재질로 겹쳐 차이가 작을 수 있다. 원본 전체를 다시 그려 구멍을 가리지 않는다.
+
+조사 결과와 수정 범위:
+- `SkeletalPatchCopy::Update`는 숨긴 원본 삼각형의 하위 16비트 소유 ID를 새 ID로 덮어썼다.
+  이번에는 **명시적 `-patch-recopy-bug 1`에서만** 기존 ID에 재복사 비트 `0x40000000`을 더한다.
+  새 삼각형에는 새 ID를 배정하며 추출/절단/새 A/B 추가는 유지한다. 생략/0은 기존 코드와 같다.
+- 다만 ID 덮어쓰기가 첫 패치 소실을 유발한다는 연결은 확인되지 않았다.
+  `SkeletalPatchJob::Submit` Mode 5와 `Poll`의 인접 집계, `ConsumeMultiBreak`의 `patchIds`는 로그용이다.
+  `Update`의 SP7e는 `GameObject::CommitMeshComponent`로 추가하며 이전 패치를 retire/replace하지 않는다.
+  `MeshComponent::ValidatePatchSkinSource`도 마스크 ID 대신 source revision/binding을 검사한다.
+- ON 게시 후 `Patch recopy retained` 로그를 추가했다. 첫 게시의 두 mesh/revision이 두 번째 게시에도
+  같은 값으로 남고 `visible=1 skin=1 ready=1`인지 확인한다. 이 로그는 픽셀 가시성 판정이 아니다.
+  소실의 근본 원인과 수정 효과는 아직 GPU 실행으로 확정하지 않았다.
+- `ModelViewer::Startup`은 이미 양다리 구도를 한 번 설정한다. ON/OFF 카메라 분기는 없다.
+  우클릭+WASD 이동은 녹화 중 구도 조정을 위해 그대로 허용한다(자동 이동만 없음).
+  시작 eye/forward와 캡처 eye/target을 소수 6자리로 기록한다. 절단 시 재초점/텔레포트는 없다.
+  관측된 ON/OFF 구도 차이는 캡처 실행 중 입력이 아니면 원인 미확정이다.
+
+Claude 검증 명령 (이 worktree의 Developer PowerShell):
+
+```powershell
+Set-Location C:\Users\Pes\Desktop\DirectX-Miniengine-multicut-repro
+msbuild MiniEngine/ModelViewer/ModelViewer.slnx /restore /m /p:Configuration=Debug /p:Platform=Windows
+msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Release /p:Platform=Windows
+Set-Location MiniEngine/ModelViewer
+$out = '..\..\multicut_capture\solid-retained'
+New-Item -ItemType Directory -Force -Path $out | Out-Null
+foreach ($config in 'Debug', 'Release') {
+    $exe = "../Build/x64/$config/Output/ModelViewer/ModelViewer.exe"
+    foreach ($model in 1, 2) {
+        $left = if ($model -eq 1) { 'mixamorig:LeftUpLeg' } else { 'leg_joint_L_1' }
+        $right = if ($model -eq 1) { 'mixamorig:RightUpLeg' } else { 'leg_joint_R_1' }
+        $common = @('-debug', '1', '-skeletal-break-demo', "$model",
+            '-skeletal-break-demo-bone', $left, '-skeletal-break-demo-next-bone', $right,
+            '-skeletal-break-demo-delay-sec', '10', '-skeletal-break-demo-next-sec', '3')
+        foreach ($bug in 0, 1) {
+            $prefix = "$out/$config-model$model-bug$bug"
+            & $exe @common -patch-recopy-bug $bug -physics-query-exit 1800 -capture $prefix *> "$prefix-console.log"
+            Copy-Item "$env:TEMP/SP6-SkeletalPatchChecks.log" "$prefix.log"
+        }
+    }
+}
+```
+
+`-capture`는 디렉터리 아래 **파일 prefix**다. cut1/cut2 `000`~`007`의 eye/target이
+ON/OFF 및 절단 전후 동일해야 한다. `*-cut2-demo-007-post.raw`에서 위 완료 조건을 확인한다.
+Xbot 두 번째 추출은 ON 2096/90, OFF 2006/0, CesiumMan은 ON 352/190, OFF 162/0을 비교한다.
+애니메이션은 프레임 단위, 요청은 실제 시간 단위라 요청 pose까지 같다는 보장은 없다.
+GPU·드라이버·구성, 프로세스 종료 코드와 D3D12 오류 여부를 기록한다.
+Codex는 빌드·실행·커밋하지 않았으며 정적 경로 조사와 diff 검사만 수행했다.
 
 ### 데이터 확인 (GPU 실측 아님)
 

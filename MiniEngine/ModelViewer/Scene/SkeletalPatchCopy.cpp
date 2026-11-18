@@ -2239,7 +2239,7 @@ namespace Viewer
         });
     }
 
-    // 복사본을 절단하고 break 성공 시 A/B의 전용 스키닝 PG를 게시한다.
+    // 복사본을 절단하고 break 성공 시 A/B의 전용 스키닝 PG와 재복사 소유 상태를 게시한다.
     bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
         // 압축과 취소 작업은 기존 게시 진행 여부와 관계없이 매 프레임 회수한다.
@@ -2402,6 +2402,18 @@ namespace Viewer
                     scene.PrepareMeshes(context);
                     context.Finish();
 
+                    // 재복사 시연은 이전 조각도 남아 있는지 ID와 렌더 준비 상태로 확인한다.
+                    uint32_t recopyBug = 0;
+                    CommandLineArgs::GetInteger(L"patch-recopy-bug", recopyBug);
+                    if (recopyBug == 1)
+                        for (const auto& piece : owner->GetMeshComponents())
+                            if (piece->Attachment && piece->Attachment->SourceMesh == m_SourceMesh)
+                                PatchLog("Patch recopy retained mesh=%llu revision=%llu visible=%u skin=%u ready=%u\n",
+                                    static_cast<unsigned long long>(piece->GetId()),
+                                    static_cast<unsigned long long>(piece->GetGeometry()->GetId()),
+                                    piece->PublishVisible ? 1u : 0u, piece->HasSkinnedPatch() ? 1u : 0u,
+                                    piece->HasPoseBounds() ? 1u : 0u);
+
                     // 시연 캡처는 A/B 게시와 렌더 준비가 완료된 프레임부터 시작한다.
                     if (m_Demo)
                     {
@@ -2542,10 +2554,18 @@ namespace Viewer
                 PatchLog("SP7e rejected: patch id exhausted\n");
                 return true;
             }
+            // 재현 모드에서도 이미 게시된 패치의 소유 ID를 유지하고 새 면에만 ID를 배정한다.
+            uint32_t recopyBug = 0;
+            CommandLineArgs::GetInteger(L"patch-recopy-bug", recopyBug);
             for (uint32_t triangle : patch->Triangles)
             {
                 // 이미 숨겨진 원본을 다시 복사하면 표시용 재복사 비트를 함께 둔다.
                 const uint32_t recopied = (m_Removal.at(triangle) & 0x80000000u) ? 0x40000000u : 0u;
+                if (recopyBug == 1 && recopied)
+                {
+                    m_Removal.at(triangle) |= recopied;
+                    continue;
+                }
                 m_Removal.at(triangle) = 0x80000000u | recopied | patchId;
             }
         }

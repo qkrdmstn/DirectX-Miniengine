@@ -363,7 +363,7 @@ static std::string GetDeviceGpuName()
     return std::string(name) + " (" + std::to_string(desc.DedicatedVideoMemory >> 20) + " MB)";
 }
 
-// 시작 옵션과 녹화 대기 시간을 준비하고 최종 배치 pose로 rig를 사전 등록한다.
+// 시작 옵션과 녹화 대기 시간을 준비하고 최종 배치 pose로 rig와 양다리 구도를 고정한다.
 void ModelViewer::Startup( void )
 {
     // 초기화 시간도 포함하는 단조 시계로 시연 시작 대기를 잰다.
@@ -852,6 +852,13 @@ void ModelViewer::Startup( void )
                     center += (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.25f;
                 }
                 FocusBreakCamera(center, true);
+
+                // ON/OFF 비교의 시작 카메라를 캡처 로그와 같은 정밀도로 남긴다.
+                const Vector3 eye = m_Camera.GetPosition();
+                const Vector3 forward = m_Camera.GetForwardVec();
+                Utility::Printf("Demo camera startup eye=(%.6f,%.6f,%.6f) forward=(%.6f,%.6f,%.6f)\n",
+                    float(eye.GetX()), float(eye.GetY()), float(eye.GetZ()),
+                    float(forward.GetX()), float(forward.GetY()), float(forward.GetZ()));
                 break;
             }
 }
@@ -1600,7 +1607,7 @@ void ModelViewer::RenderScene( void )
             // 현재 카메라와 전방 2.5 m 시선 대상 및 물리 누적 step을 짧게 기록한다.
             const Vector3 eye = m_Camera.GetPosition();
             const Vector3 target = eye + m_Camera.GetForwardVec() * 2.5f;
-            Utility::Printf("Demo cap f=%u i=%u +%u eye=(%.3g,%.3g,%.3g) target=(%.3g,%.3g,%.3g) sim=%u run=%u steps=%llu\n",
+            Utility::Printf("Demo cap f=%u i=%u +%u eye=(%.6f,%.6f,%.6f) target=(%.6f,%.6f,%.6f) sim=%u run=%u steps=%llu\n",
                 m_QueryFrame, m_DemoCaptured - 1, m_QueryFrame - m_DemoAppliedFrame,
                 float(eye.GetX()), float(eye.GetY()), float(eye.GetZ()),
                 float(target.GetX()), float(target.GetY()), float(target.GetZ()),
