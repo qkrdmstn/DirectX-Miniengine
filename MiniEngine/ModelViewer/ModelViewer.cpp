@@ -395,9 +395,16 @@ void ModelViewer::Startup( void )
     // 양쪽 허벅지 시연은 순서와 무관하게 같은 골반 중심 구도를 사용한다.
     std::wstring firstBone;
     CommandLineArgs::GetString(L"skeletal-break-demo-bone", firstBone);
-    m_SkeletalDemoBothLegs = m_SkeletalBreakDemo == 1
-        && ((firstBone == L"mixamorig:LeftUpLeg" && m_SkeletalDemoNextBone == L"mixamorig:RightUpLeg")
-            || (firstBone == L"mixamorig:RightUpLeg" && m_SkeletalDemoNextBone == L"mixamorig:LeftUpLeg"));
+    const wchar_t* thighBones[][2] =
+    {
+        { L"mixamorig:LeftUpLeg", L"mixamorig:RightUpLeg" },
+        { L"leg_joint_L_1", L"leg_joint_R_1" }
+    };
+    m_SkeletalDemoBothLegs = m_SkeletalBreakDemo >= 1 && m_SkeletalBreakDemo <= 2
+        && ((firstBone == thighBones[m_SkeletalBreakDemo - 1][0]
+                && m_SkeletalDemoNextBone == thighBones[m_SkeletalBreakDemo - 1][1])
+            || (firstBone == thighBones[m_SkeletalBreakDemo - 1][1]
+                && m_SkeletalDemoNextBone == thighBones[m_SkeletalBreakDemo - 1][0]));
 
     // 기존 부착 재절단 검사 여부를 읽는다.
     uint32_t attachedRecut = 0;
@@ -829,13 +836,14 @@ void ModelViewer::Startup( void )
     // 녹화 대기 중부터 두 허벅지 절단 중심의 중간에 카메라를 고정한다.
     if (m_SkeletalDemoBothLegs)
         for (const auto& object : m_Scene.GetObjects())
-            if (object->GetName() == "Xbot")
+            if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
             {
-                const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/Xbot.glb");
+                const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
                 Vector3 center(kZero);
-                for (const char* bone : { "mixamorig:LeftUpLeg", "mixamorig:RightUpLeg" })
+                for (const auto& boneValue : { firstBone, m_SkeletalDemoNextBone })
                 {
                     // 기존 절단 평면과 같은 본 좌표에서 구도 중심을 구한다.
+                    const std::string bone(boneValue.begin(), boneValue.end());
                     const auto found = std::find(names.begin(), names.end(), bone);
                     if (found == names.end() || found + 1 == names.end())
                         throw std::invalid_argument("skeletal demo thigh bone not found");
@@ -1395,10 +1403,12 @@ void ModelViewer::Update( float deltaT )
 // 절단 중심 또는 골반·양다리를 담는 카메라와 이동 제어기를 동기화한다.
 void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
 {
-    // 양다리는 정면 3 m에서 중심을 낮추고 기존 시연은 30도 구도를 유지한다.
+    // CesiumMan은 절단 평면 중점 근처로 2.4 m까지 당겨 잘린 정강이 조각과 골반 마스킹 영역을 크게 담는다.
+    // 반지름 정규화 뒤에도 본 비율이 달라 실측 구도에 맞춘 모델별 보정을 쓴다.
     const bool bothLegs = demo && m_SkeletalDemoBothLegs;
-    const Vector3 target = center + (bothLegs ? Vector3(0, -0.35f, 0) : Vector3(kZero));
-    const Vector3 offset = bothLegs ? Normalize(Vector3(0, 0.12f, 1)) * 3.0f
+    const bool cesiumBothLegs = bothLegs && m_SkeletalBreakDemo == 2;
+    const Vector3 target = center + (bothLegs ? Vector3(0, cesiumBothLegs ? 0.15f : -0.35f, 0) : Vector3(kZero));
+    const Vector3 offset = bothLegs ? Normalize(Vector3(0, 0.12f, 1)) * (cesiumBothLegs ? 2.4f : 3.0f)
         : (demo ? Normalize(Vector3(0.5f, 0.2f, 0.8660254f)) * 2.5f : Vector3(0, 0, 5.5f));
     m_Camera.SetEyeAtUp(target + offset, target, Vector3(kYUnitVector));
     m_Camera.Update();

@@ -66,7 +66,7 @@ namespace Viewer
             for (uint32_t d = 0; d < mesh.numDraws; ++d) triangles += mesh.draw[d].primCount / 3;
         }
         if (!triangles || triangles != state.size()) return false;
-        for (uint32_t value : state) if (value & 0x7fff0000u) return false;
+        for (uint32_t value : state) if (value & 0x3fff0000u) return false;
 
         // 최초 변경에만 IB 구간과 삼각형 상태 버퍼를 할당한다.
         if (!m_TriangleMask)
@@ -83,8 +83,9 @@ namespace Viewer
             {
                 const uint32_t nodes = m_Geometry->GetSource()->m_NumNodes;
                 m_TriangleMask->MaskedIB.Create(L"Masked original IB", (last - first) / 4, 4);
-                m_TriangleMask->MaskedConstantsCPU.Create(L"Masked constants upload", nodes * sizeof(MeshConstants));
-                m_TriangleMask->MaskedConstantsGPU.Create(L"Masked constants", nodes, sizeof(MeshConstants));
+                m_TriangleMask->RecopiedIB.Create(L"Recopied original IB", (last - first) / 4, 4);
+                m_TriangleMask->MaskedConstantsCPU.Create(L"Masked constants upload", nodes * 2 * sizeof(MeshConstants));
+                m_TriangleMask->MaskedConstantsGPU.Create(L"Masked constants", nodes * 2, sizeof(MeshConstants));
             }
         }
         if (m_TriangleMask->Pending == state) return true;
@@ -171,6 +172,14 @@ namespace Viewer
             compute.SetBufferUAV(4, mask.MaskedIB);
             compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
             context.TransitionResource(mask.MaskedIB, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+            // 이미 복사된 원본을 다시 복사한 삼각형만 별도 IB로 보존한다.
+            for (auto& draw : draws) draw[15] = 2;
+            compute.TransitionResource(mask.RecopiedIB, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.SetDynamicSRV(2, draws.size() * sizeof(draws[0]), draws.data());
+            compute.SetBufferUAV(4, mask.RecopiedIB);
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            context.TransitionResource(mask.RecopiedIB, D3D12_RESOURCE_STATE_INDEX_BUFFER);
         }
         context.TransitionResource(source, D3D12_RESOURCE_STATE_GENERIC_READ);
         mask.AppliedRevision = mask.Revision;
@@ -1026,22 +1035,28 @@ namespace Viewer
         for (uint32_t i = 0; i < model.m_NumNodes; ++i)
             constants[i].UsePosedVertices = Renderer::UseComputePose && m_PosedGeometry->IsReady();
 
-        // 원본과 동일한 현재 pose 상수에서 선 색상만 주황색으로 바꾼다.
+        // 원본과 동일한 현재 pose 상수에서 선 색상만 주황색(재복사 면은 노랑)으로 바꾼다.
         if (m_ShowMaskedRegion && m_TriangleMask)
         {
             auto& mask = *m_TriangleMask;
             auto* masked = static_cast<MeshConstants*>(mask.MaskedConstantsCPU.Map());
             std::memcpy(masked, constants, model.m_NumNodes * sizeof(MeshConstants));
+            std::memcpy(masked + model.m_NumNodes, constants, model.m_NumNodes * sizeof(MeshConstants));
             for (uint32_t i = 0; i < model.m_NumNodes; ++i)
             {
                 masked[i].OverlayColor[0] = 1.0f;
                 masked[i].OverlayColor[1] = 0.25f;
                 masked[i].OverlayColor[2] = 0.05f;
+
+                // 뒤쪽 절반은 이미 복사된 면을 다시 복사한 삼각형용 노랑이다.
+                masked[model.m_NumNodes + i].OverlayColor[0] = 1.0f;
+                masked[model.m_NumNodes + i].OverlayColor[1] = 1.0f;
+                masked[model.m_NumNodes + i].OverlayColor[2] = 0.0f;
             }
             mask.MaskedConstantsCPU.Unmap();
             context.TransitionResource(mask.MaskedConstantsGPU, D3D12_RESOURCE_STATE_COPY_DEST, true);
             context.GetCommandList()->CopyBufferRegion(mask.MaskedConstantsGPU.GetResource(), 0,
-                mask.MaskedConstantsCPU.GetResource(), 0, model.m_NumNodes * sizeof(MeshConstants));
+                mask.MaskedConstantsCPU.GetResource(), 0, model.m_NumNodes * 2 * sizeof(MeshConstants));
             context.TransitionResource(mask.MaskedConstantsGPU, D3D12_RESOURCE_STATE_GENERIC_READ);
         }
         m_ConstantsCPU.Unmap();
@@ -1097,6 +1112,17 @@ namespace Viewer
                     posed ? &m_PosedGeometry->GetBuffer() : nullptr,
                     posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0,
                     m_TriangleMask->MaskedIB.GetGpuVirtualAddress() - m_TriangleMask->FirstByte);
+
+            // 재복사된 원본 삼각형은 뒤쪽 상수 절반을 써서 노랑으로 겹쳐 그린다.
+            if (showMasked)
+                sorter.AddMesh(mesh, -sphereVS.GetCenter().GetZ() - sphereVS.GetRadius(),
+                    m_TriangleMask->MaskedConstantsGPU.GetGpuVirtualAddress()
+                        + sizeof(MeshConstants) * (m_Geometry->GetSource()->m_NumNodes + mesh.meshCBV),
+                    m_Geometry->GetMaterialAddress(mesh),
+                    m_Geometry->GetDataBuffer().GetGpuVirtualAddress(), joints,
+                    posed ? &m_PosedGeometry->GetBuffer() : nullptr,
+                    posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0,
+                    m_TriangleMask->RecopiedIB.GetGpuVirtualAddress() - m_TriangleMask->FirstByte);
         }
     }
 }

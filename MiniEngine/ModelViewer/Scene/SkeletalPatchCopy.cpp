@@ -2543,7 +2543,11 @@ namespace Viewer
                 return true;
             }
             for (uint32_t triangle : patch->Triangles)
-                m_Removal.at(triangle) = 0x80000000u | patchId;
+            {
+                // 이미 숨겨진 원본을 다시 복사하면 표시용 재복사 비트를 함께 둔다.
+                const uint32_t recopied = (m_Removal.at(triangle) & 0x80000000u) ? 0x40000000u : 0u;
+                m_Removal.at(triangle) = 0x80000000u | recopied | patchId;
+            }
         }
 
         // 복사본의 월드 오프셋과 생성 geometry를 게시한다.

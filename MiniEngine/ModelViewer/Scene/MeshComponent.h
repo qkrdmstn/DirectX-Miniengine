@@ -43,6 +43,7 @@ namespace Viewer
         StructuredBuffer State;
         ByteAddressBuffer ReplacedIB;
         ByteAddressBuffer MaskedIB;
+        ByteAddressBuffer RecopiedIB;
         UploadBuffer MaskedConstantsCPU;
         ByteAddressBuffer MaskedConstantsGPU;
         uint32_t TriangleCount = 0, Revision = 0, AppliedRevision = 0;

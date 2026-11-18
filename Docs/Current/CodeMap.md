@@ -2,11 +2,16 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
-추가 상태: 진행 중 — 미커밋(base `74e2db5a`), 원본 마스크 표시 빌드·GPU 검증 대기.
+추가 상태: 진행 중 — 미커밋(base `927592b2`), CesiumMan 양쪽 허벅지 고정 구도 추가, Claude 빌드·GPU 검증 대기. 기존 Xbot 원본 마스크 표시 Release 검증 완료.
 `MeshComponent::UpdateTriangleMask`는 `TriangleMaskCS::Replacement`의 선택을 반전해 전용 IB를
 만든다. `Update`의 주황색 상수와 `Render`의 추가 draw가 원본 pose를 공유하며
 `MeshSorter::IsWireframe`은 메인 선 배치만 허용한다. 옵션·녹화·검증은
 [PatchRecopyRepro.md](../GPU/PatchRecopyRepro.md)를 따른다.
+
+`ModelViewer::Startup`은 demo별 허벅지 이름 쌍으로 `m_SkeletalDemoBothLegs`를 판별한다.
+CesiumMan P13/P17도 시작부터 절단 중심 중간에 카메라를 고정하며 후속 요청에서 재배치하지 않는다.
+두 모델은 반지름 2 m로 정규화하므로 `FocusBreakCamera`의 기존 3 m 거리·0.35 m 하향을 공유한다.
+GLB/MINI 데이터 확인은 364/352·교집합190, 두 번째 ON 352/190·OFF 162/0은 GPU 검증 전 예상값이다.
 
 인접 본 순차 절단 재현: `ModelViewer::Startup`의 데모 전용 시작 지연(기본 0초)·다음 게시 간격(기본 3초)·양다리 고정 구도, `ModelViewer::Update`의 `skeletal-break-demo-next-bone`·첫 게시 이후 실제 경과 초 비교와 원본 owner/component 고정, `SkeletalPatchJob::Submit`의 기본-off `patch-recopy-bug`, `SkeletalPatchJob::Poll`의 실측 재복사 로그. Release GPU 검증 완료(2026-11-18): 10초 지연·33초 실행(`-physics-query-exit 1800`), 첫 절단2118·두 번째 NodeId=65 ON 2096/90·OFF 2006/0. OFF에서도 떨어진 다리의 긴 패치 선은 기존 현상으로 잔존(미커밋, base `98183ff0`). [명령·실측 결과](../GPU/PatchRecopyRepro.md).
 

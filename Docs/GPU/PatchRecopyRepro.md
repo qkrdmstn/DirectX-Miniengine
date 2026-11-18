@@ -1,5 +1,97 @@
-상태: 완료 — Release GPU 검증(2026-11-18): -show-masked-region 1/2 캡처에서 늘어난 마스크 원본(주황) 확인, 재복사 수치 불변(ON 2096/90, OFF 2006/0)
+상태: 진행 중 — 미커밋(base `927592b2`, 2026-11-18): CesiumMan 양쪽 허벅지 구도·데이터 확인 완료, 빌드·GPU 검증은 Claude 담당. 기존 Xbot Release GPU 검증 완료(ON 2096/90, OFF 2006/0).
 # 양쪽 허벅지 순차 절단 재복사 녹화
+
+## CesiumMan 양쪽 허벅지 녹화
+
+`ModelViewer::Startup`은 demo 1/2별 허벅지 이름 쌍을 판별하고, 지정한 두 본의
+절단 중심 중간으로 카메라를 한 번 고정한다. 반대 순서도 같은 구도다.
+`FocusBreakCamera`는 Xbot에서 중심보다 0.35 m 아래를 보고 정면 약 3 m 거리를 유지한다.
+CesiumMan은 중심보다 0.15 m 위를 보고 약 2.4 m까지 당긴다(아래 원인 참조).
+CesiumMan MINI 반지름은 0.7725211, Xbot은 0.01127856으로 원본 크기가 다르지만,
+Startup이 모두 반지름 2 m로 정규화한다. CesiumMan 배율은 약 2.58893,
+정규화한 rest 경계 높이는 약 3.90035 m다. 기존 월드 거리·오프셋을 유지하며
+걷는 pose와 절단 후 다리까지 담기는지는 Claude가 캡처로 확인한다.
+`PlayAnimation(0)`은 기본 loop=true이며 시연은 정지하지 않는다.
+`ModelViewer::Update`는 애니메이션·물리를 렌더 프레임마다 고정 1/60초 진행한다.
+10초 시작 지연과 첫 Applied 후 3초 간격은 실제 경과 시간이므로 요청 pose는 FPS에 따라 달라진다.
+
+### CesiumMan 조각 안 보임: 원인과 확인 (Release 실측)
+
+원인은 `FocusBreakCamera`의 양 다리 구도였다. CesiumMan의 `leg_joint_L_1`/`R_1` 절단은 정강이 부근이라
+조각이 짧은데, 기존 구도(중심 +1.0 m, 5 m 거리)는 화면의 약 40 px에 불과해 와이어프레임에서 조각과
+주황 영역이 묻혔다. 지연 시간(1초/10초)·검은 배경·옵션 조합은 원인이 아니었다(지연 1초에서도 동일).
+수정은 `FocusBreakCamera`의 CesiumMan 분기(목표 +0.15 m, 거리 2.4 m)뿐이며 카메라는 시작 때 한 번만 잡는다.
+Xbot과 옵션 없는 기본 구도는 그대로다. 로그는 그대로: 첫 절단 364, 두 번째 ON 352/alreadyHidden 190, OFF 162/0.
+Xbot ON 2118 후 2096/90, OFF 2006/0도 그대로다.
+
+### 재복사 색 규칙 (`-show-masked-region 1`, 와이어프레임 원본만)
+
+비마스크 원본은 흰색, 마스크된 원본은 주황, 이미 복사됐는데 또 복사된(두 번 마스크된) 원본은 노랑이다.
+`SkeletalPatchCopy`가 원본 상태에 표시 전용 비트 `0x40000000`을 새 숨김 시 이미 숨겨진 삼각형에만 더한다.
+`SetTriangleMask`는 이 비트를 허용하고 `TriangleMaskCS`의 진단 선택 2가 이 면만 `RecopiedIB`에 보존한다.
+`MeshComponent::Render`가 뒤쪽 노랑 상수 절반으로 한 번 더 그린다. `-patch-recopy-bug 0`은 재복사가 없어 노랑이 없다.
+패치(초록) 쪽 노랑은 구현하지 않았다. 확인: CesiumMan ON은 190개 면이 노랑, Xbot ON은 고관절 90개가 노랑, OFF는 노랑 없음.
+Solid 뷰는 원본을 정상 마스킹한 최종 결과를 그대로 보이며 색 변경은 없다: `-view`·`-show-masked-region` 없이
+`-patch-recopy-bug 1`(비교 0)로 녹화한다. Xbot은 늘어난 얇은 면이 보이고 CesiumMan은 ON/OFF 차이가 거의 안 보인다
+(190개 면이 같은 정강이 위에 겹쳐 같은 재질로 그려지기 때문).
+
+### 데이터 확인 (GPU 실측 아님)
+
+`Models/CesiumMan.glb` accessor offset/stride와 skin palette, 실제 `CesiumMan.mini`의
+section VB/IB·R16 인덱스·draw startIndex/baseVertex·정점 끝 16바이트의 uint16 joint/weight를 읽었다.
+`PatchExtractCS::Selected`처럼 세 정점 중 하나라도 해당 본 weight>0이면 포함했다.
+MINI palette의 19개 NodeId를 GLB scene DFS 이름에 대응시켰다.
+
+| 본 | DFS NodeId | 실제 첫 자식 | GLB 삼각형 | MINI 삼각형 |
+| --- | --- | --- | --- | --- |
+| leg_joint_L_1 | 13 | leg_joint_L_2 (14) | 364 | 364 |
+| leg_joint_R_1 | 17 | leg_joint_R_2 (18) | 352 | 352 |
+
+**왼쪽 ∩ 오른쪽 = 190개**로 GLB/MINI 모두 일치한다. 허벅지 쌍을 그대로 쓴다.
+같은 파서로 Xbot도 2118/2096/90을 재확인했다. 자손 본의 영향은 합산하지 않는다.
+CesiumMan MINI는 mesh/section 1개, draw 1개, stride 40, joint 19개다.
+`GameObject::GameObject`는 원본 MeshComponent 하나를 만든다.
+`ModelViewer::Update`는 첫 요청에서 owner와 front component ID를 저장하고 두 번째에도
+같은 ID로 `SkeletalPatchCopy::Request`를 호출한다. Request의 후보 필터가 생성 조각을 제외한다.
+두 번째 요청 전 원본 Pending의 숨김 비트와 AppliedRevision==Revision도 검사한다.
+
+### VS 녹화 인수 (작업 디렉터리 MiniEngine/ModelViewer)
+
+```text
+-debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone leg_joint_L_1 -skeletal-break-demo-next-bone leg_joint_R_1 -skeletal-break-demo-delay-sec 10 -skeletal-break-demo-next-sec 3 -view 1 -show-masked-region 1 -patch-recopy-bug 1
+```
+
+`-patch-recopy-bug 0`으로 OFF를 녹화한다. `-show-masked-region 2`는 초록 본 부착 패치도 표시한다.
+1/2 모두 숨겨진 원본을 주황색으로 표시한다. `-skeletal-break-demo-unmask`는 생략한다.
+
+### Claude 검증 명령 (빌드 후)
+
+```powershell
+Set-Location C:\Users\Pes\Desktop\DirectX-Miniengine-multicut-repro\MiniEngine\ModelViewer
+$exe = '..\Build\x64\Release\Output\ModelViewer\ModelViewer.exe'
+$common = @('-debug', '1', '-skeletal-break-demo', '2', '-skeletal-break-demo-bone', 'leg_joint_L_1',
+    '-skeletal-break-demo-next-bone', 'leg_joint_R_1', '-skeletal-break-demo-delay-sec', '10',
+    '-skeletal-break-demo-next-sec', '3', '-view', '1')
+$out = '..\..\multicut_capture\cesium-both-legs'
+New-Item -ItemType Directory -Force -Path $out | Out-Null
+foreach ($mode in 1, 2) {
+    foreach ($bug in 0, 1) {
+        $prefix = "$out/mode$mode-bug$bug"
+        & $exe @common -show-masked-region $mode -patch-recopy-bug $bug -physics-query-exit 1800 -capture $prefix
+        Copy-Item "$env:TEMP/SP6-SkeletalPatchChecks.log" "$prefix.log"
+    }
+}
+```
+
+`-capture`는 디렉터리 자체가 아니라 기존 디렉터리 아래 파일 prefix다.
+예상 첫 요청: `Patch recopy NodeId=13 triangles=364 alreadyHidden=0`.
+예상 두 번째: ON `Patch recopy NodeId=17 triangles=352 alreadyHidden=190`,
+OFF `Patch recopy NodeId=17 triangles=162 alreadyHidden=0`.
+두 번째 source 로그는 두 실행 모두 같은 원본 mesh, `hasState=1 hiddenTotal=364`여야 한다.
+콘솔의 두 `Skeletal demo request` owner/mesh도 같아야 한다.
+이는 데이터 기반 예상값이며 이번 작업에서 빌드·실행하지 않았다.
+`*-cut2-demo-000-post.raw`~`007`에서 주황색 원본 늘어짐, 골반·양다리 구도,
+cut1/cut2 카메라 점프 없음, D3D12 오류 없음을 확인한다. GPU·드라이버·구성을 실행 기록에 남긴다.
 
 ## 숨겨진 원본 영역 표시 (새 옵션, 검증 대기)
 
