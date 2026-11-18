@@ -150,8 +150,9 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
 
-    // 시연 요청 전까지 실제 경과 시간과 선택적 지연 시간을 보관한다.
-    float m_DemoDelaySeconds = 0.0f, m_DemoElapsedSeconds = 0.0f;
+    // 시연 시작 틱과 선택적 지연 시간을 보관한다.
+    float m_DemoDelaySeconds = 0.0f;
+    int64_t m_DemoStartTick = 0;
 
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
@@ -386,6 +387,9 @@ void ModelViewer::Startup( void )
     // 지연 옵션은 골격 절단 시연과 함께 지정해야 한다.
     if (CommandLineArgs::GetFloat(L"skeletal-break-demo-delay", m_DemoDelaySeconds) && !m_SkeletalBreakDemo)
         throw std::invalid_argument("skeletal-break-demo-delay requires skeletal-break-demo");
+
+    // 지연 옵션을 읽은 직후 실제 경과 시간의 기준 틱을 기록한다.
+    m_DemoStartTick = SystemTime::GetCurrentTick();
 
     // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
     if (m_SkeletalBreakDemo || m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
@@ -1091,13 +1095,9 @@ void ModelViewer::Update( float deltaT )
         ++m_AutoCutIndex;
     }
 
-    // 시연 요청 전까지 실제 프레임 경과 시간을 누적한다.
-    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested)
-        m_DemoElapsedSeconds += deltaT;
-
     // 60프레임과 선택적 실제 시간 지연을 충족하면 정상 C를 한 번 요청한다.
     if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60
-        && (m_DemoDelaySeconds <= 0.0f || m_DemoElapsedSeconds >= m_DemoDelaySeconds) && !m_Cutting.IsBusy())
+        && (m_DemoDelaySeconds <= 0.0f || SystemTime::TimeBetweenTicks(m_DemoStartTick, SystemTime::GetCurrentTick()) >= m_DemoDelaySeconds) && !m_Cutting.IsBusy())
     {
         // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
         m_SkeletalDemoRequested = true;
@@ -1123,7 +1123,13 @@ void ModelViewer::Update( float deltaT )
                     plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
                 }
                 m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
-                FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+
+                // 지연을 지정하면 사용자가 잡은 카메라 구도를 유지한다.
+                if (m_DemoDelaySeconds <= 0.0f)
+                {
+                    FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+                }
+
                 Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
                 break;
             }
