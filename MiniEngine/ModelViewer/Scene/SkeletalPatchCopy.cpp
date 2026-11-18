@@ -1249,13 +1249,21 @@ namespace Viewer
         CommandLineArgs::GetInteger(L"skeletal-patch-offset-copy", offsetCopy);
         m_OffsetCopy = offsetCopy != 0;
 
-        // 시연은 정상 C 경로를 사용하고 unmask 비교는 원본 제거 상태 게시를 생략한다.
+        // 시연의 unmask는 마스크를 생략하고 값 2는 부착 조각 게시도 생략한다.
         uint32_t unmask = 0;
         CommandLineArgs::GetInteger(L"skeletal-break-demo", m_Demo);
         uint32_t attachedRecut = 0;
         if (CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut) && attachedRecut) m_Demo = 1;
         CommandLineArgs::GetInteger(L"skeletal-break-demo-unmask", unmask);
         m_DemoUnmask = m_Demo && unmask != 0;
+        m_DemoStretchOnly = m_Demo && unmask == 2;
+
+        // 늘어남 전용 시연은 마스크와 부착 조각을 게시하는 다중 절단과 함께 사용할 수 없다.
+        uint32_t stretchMultiCut = 0;
+        if (m_DemoStretchOnly && CommandLineArgs::GetInteger(L"skeletal-multi-cut", stretchMultiCut) && stretchMultiCut != 0)
+        {
+            throw std::invalid_argument("skeletal-break-demo-unmask 2 cannot be combined with skeletal-multi-cut");
+        }
         if (m_Demo) m_OffsetCopy = false;
 
         // 평면 로컬에서 가장 가까운 사각형 점을 월드로 돌려 경계 구와 비교한다.
@@ -2234,7 +2242,7 @@ namespace Viewer
         });
     }
 
-    // 복사본을 절단하고 break 성공 시 A/B의 전용 스키닝 PG를 게시한다.
+    // 복사본을 절단하고 break 성공 시 A/B를 게시하되 늘어남 시연은 관절만 끊는다.
     bool SkeletalPatchCopy::Update(Scene& scene, CuttingSystem& cutting, SkeletalPatchResult& result)
     {
         // 압축과 취소 작업은 기존 게시 진행 여부와 관계없이 매 프레임 회수한다.
@@ -2360,9 +2368,9 @@ namespace Viewer
                     && (source->GetTriangleMask() ? source->GetTriangleMask()->Revision : 0) == m_MaskRevision;
                 if (status == BreakStatus::Applied && current && staging && staging->GetMeshComponents().size() == m_Attachments.size())
                 {
-                    // 준비된 두 geometry의 원래 배치와 본 snapshot을 게시 전에 구성한다.
+                    // 늘어남 시연에서는 게시용 조각을 생성하지 않고 빈 목록을 유지한다.
                     std::vector<std::unique_ptr<MeshComponent>> pieces;
-                    for (size_t i = 0; i < m_Attachments.size(); ++i)
+                    for (size_t i = 0; !m_DemoStretchOnly && i < m_Attachments.size(); ++i)
                     {
                         // 원래 배치와 부착 노드에 맞춰 게시할 조각을 준비한다.
                         auto* prepared = staging->FindMeshComponent(m_PreparedIds[i]);
@@ -2385,19 +2393,22 @@ namespace Viewer
                         // 게시 전 준비 목록에 조각을 보관한다.
                         pieces.push_back(std::move(piece));
                     }
+
+                    // 시연 모드에 맞춰 원본 마스크와 준비된 조각만 게시한다.
                     if (!m_DemoUnmask && !source->SetTriangleMask(m_Removal))
                         throw std::runtime_error("SP7e invalid removal mask");
                     for (auto& piece : pieces)
                         owner->CommitMeshComponent(std::move(piece));
-                    PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=%u nodes=%u/%u\n",
-                        m_Break.Owner, m_Result.PatchTriangles, m_DemoUnmask ? 0u : 1u, m_Attachments[0].NodeId, m_Attachments[1].NodeId);
+                    PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=%u nodes=%u/%u pieces=%u mode=%s\n",
+                        m_Break.Owner, m_Result.PatchTriangles, m_DemoUnmask ? 0u : 1u, m_Attachments[0].NodeId, m_Attachments[1].NodeId,
+                        unsigned(pieces.size()), m_DemoStretchOnly ? "stretch-only" : "attached");
 
                     // 같은 프레임에 치환 IB와 새 조각의 렌더 상수 준비를 끝낸다.
                     auto& context = GraphicsContext::Begin(L"Publish attached skeletal pieces");
                     scene.PrepareMeshes(context);
                     context.Finish();
 
-                    // 시연 캡처는 A/B 게시와 렌더 준비가 완료된 프레임부터 시작한다.
+                    // 조각 게시 여부와 관계없이 시연 완료를 기록하고 캡처를 시작한다.
                     if (m_Demo)
                     {
                         m_DemoPublished = true;

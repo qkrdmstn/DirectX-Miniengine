@@ -276,7 +276,7 @@ namespace Viewer
         std::vector<uint32_t> m_Removal;
         std::vector<NodeAttachment> m_Attachments;
         std::vector<uint32_t> m_BodySides{ 0, 1 }; // 기존 side 폴백용 몸체별 반공간이다.
-        bool m_OffsetCopy = false, m_DemoUnmask = false;
+        bool m_OffsetCopy = false, m_DemoUnmask = false, m_DemoStretchOnly = false;
         uint32_t m_Demo = 0;
         bool m_DemoPublished = false;
         BreakRequest m_Break;
