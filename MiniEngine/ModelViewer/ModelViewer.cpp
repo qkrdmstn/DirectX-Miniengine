@@ -131,7 +131,7 @@ public:
             return true;
 
         // 시연 연속 캡처를 마친 뒤 기존 자동 종료 조건을 평가한다.
-        const bool demoReady = !m_SkeletalBreakDemo || (m_DemoAppliedFrame && (m_CapturePath.empty() || m_DemoCaptured == 8));
+        const bool demoReady = !m_CutStageSequence && (!m_SkeletalBreakDemo || (m_DemoAppliedFrame && (m_CapturePath.empty() || m_DemoCaptured == 8)));
 
         // 기존 GPU 작업 완료와 사용자 종료 요청을 확인한다.
         return (demoReady && m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished() && m_EditApplyChecks.Finished() && m_EditDeleteChecks.Finished())
@@ -150,6 +150,18 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+    enum class CutStage { Off, Plane, Copy, Cut, Mask };
+    uint32_t m_CutStageSequence = 0, m_CutStageFrame = 0;
+    CutStage m_CutStage = CutStage::Off;
+    int64_t m_CutStageBeginTick = 0, m_CutStageTick = 0;
+    uint32_t m_CutStageCaptured = 0;
+    Viewer::ObjectId m_CutStageDisplayPlane = Viewer::InvalidObjectId;
+    float m_CutStageSeconds = 2.5f, m_CutStageOffset = 0.45f;
+    MeshCutting::CutPlaneData m_CutStagePlane;
+    // 단계 진입 시 타이머를 초기화하고 실제 경과 시간과 프레임을 남긴다.
+    void EnterCutStage(CutStage stage);
+    // 실제 시계의 경과 시간과 준비 gate로 시연 단계를 진행한다.
+    void UpdateCutStage();
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
     void FocusBreakCamera(const Vector3& center, bool demo);
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
@@ -363,6 +375,16 @@ void ModelViewer::Startup( void )
 
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
+
+    // 시퀀스 옵션은 정상 시연에서만 허용하고 간격과 후속 표시 거리를 보관한다.
+    CommandLineArgs::GetInteger(L"cut-stage-sequence", m_CutStageSequence);
+    CommandLineArgs::GetFloat(L"cut-stage-sec", m_CutStageSeconds);
+    CommandLineArgs::GetFloat(L"cut-stage-offset", m_CutStageOffset);
+    m_CutStageSeconds = std::max(0.5f, m_CutStageSeconds);
+    if (m_CutStageSequence && !m_SkeletalBreakDemo)
+        throw std::invalid_argument("cut-stage-sequence requires skeletal-break-demo");
+
+    // 검사 전용 옵션은 시연과 분리해서 읽는다.
     uint32_t attachedRecut = 0;
     CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut);
     m_AttachedRecutChecks.Enabled = attachedRecut != 0;
@@ -405,7 +427,8 @@ void ModelViewer::Startup( void )
             L"capture", L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
             L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
             L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
-            L"cut-empty-side", L"collision-log", L"demo-cut-sec" })
+            L"cut-empty-side", L"collision-log", L"demo-cut-sec",
+            L"cut-stage-sequence", L"cut-stage-sec", L"cut-stage-offset" })
             if (CommandLineArgs::GetString(option, value))
                 throw std::invalid_argument("attached-recut-checks cannot be combined with diagnostics or demos");
 
@@ -461,6 +484,18 @@ void ModelViewer::Startup( void )
     m_Physics.Initialize(m_UsePhysicsQuery != 0,m_PhysicsCapacity);
     m_Physics.ValidateQueries = physicsQueryChecks != 0;
     CommandLineArgs::GetString(L"capture", m_CapturePath);
+
+    // 시퀀스 캡처는 저장 디렉터리가 있을 때만 시작한다.
+    if (m_CutStageSequence && !m_CapturePath.empty())
+    {
+        const auto separator = m_CapturePath.find_last_of(L"/\\");
+        const auto directory = separator == std::wstring::npos ? L"." : m_CapturePath.substr(0, separator + 1);
+        const DWORD attributes = GetFileAttributesW(directory.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+            throw std::invalid_argument("cut-stage-sequence capture directory does not exist");
+    }
+
+    // 기존 캡처의 pose와 프레임 옵션을 적용한다.
     uint32_t computePose;
     if (CommandLineArgs::GetInteger(L"compute-pose", computePose))
         Renderer::UseComputePose = computePose != 0;
@@ -867,6 +902,7 @@ Viewer::PickHit ModelViewer::PickAtCursor(float x, float y)
 // 완료된 절단을 게시하고 최신 pose의 collider를 동기화한 뒤 후보를 제출한다.
 void ModelViewer::Update( float deltaT )
 {
+    // 현재 프레임 번호와 절단 전 상태를 기록한다.
     ScopedTimer _prof(L"Update State");
     ++m_QueryFrame;
     if (m_QuerySelfTest)
@@ -887,7 +923,7 @@ void ModelViewer::Update( float deltaT )
     }
 
     // 새 C는 모드를 기록하고 이전 복사본을 공통 삭제 경로로 무효화한다.
-    bool cutKey = GameInput::IsFirstPressed(GameInput::kKey_c);
+    bool cutKey = !m_CutStageSequence && GameInput::IsFirstPressed(GameInput::kKey_c);
     if (cutKey && m_SkeletalPatchCopy.IsUnmaskDemoPublished())
     {
         Utility::Printf("Skeletal demo C rejected: unmask demo already published; restart to cut again\n");
@@ -1008,6 +1044,10 @@ void ModelViewer::Update( float deltaT )
     if (GameInput::IsFirstPressed(GameInput::kKey_p)) g_PhysicsRunning = !bool(g_PhysicsRunning);
     const int scenarioRunState = m_CutScenario.WantedRunState(m_Physics, m_CutOwner, m_CutMesh);
     if (scenarioRunState >= 0) g_PhysicsRunning = scenarioRunState != 0;
+
+    // 시퀀스의 1~3단계에서는 키와 디버그 UI로도 물리를 재개하지 않는다.
+    if (m_CutStageSequence && m_CutStage != CutStage::Off && m_CutStage != CutStage::Mask)
+        g_PhysicsRunning = false;
     if (!m_SkeletalPatchBreakChecks) m_Physics.SetSimulationRunning(g_PhysicsRunning);
 
     // H 키와 디버그 UI는 같은 충돌 표시 플래그를 토글한다.
@@ -1056,9 +1096,19 @@ void ModelViewer::Update( float deltaT )
     // 공통 프레임 경로에서 고정 step과 GPU pose 준비를 완료한다.
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
     m_SkeletalChecks.BeforeStep(m_Physics);
-    const unsigned steps = m_Physics.UpdateFrame(gfxContext,
-        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
-        (m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
+    unsigned steps = 0;
+    if (m_CutStageSequence && m_CutStage != CutStage::Off && m_CutStage != CutStage::Mask && !m_Physics.IsSimulationEnabled())
+    {
+        // SDK 초기화 실패로 animation fallback이 활성화되어도 정지 pose의 GPU 준비만 한다.
+        m_Scene.PrepareMeshes(gfxContext);
+    }
+    else
+    {
+        // 정상 물리는 실행 토글로 animation 평가도 함께 멈추며 기존 프레임 경로를 유지한다.
+        steps = m_Physics.UpdateFrame(gfxContext,
+            (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+            (m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
+    }
     m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
 
     // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
@@ -1082,7 +1132,7 @@ void ModelViewer::Update( float deltaT )
     }
 
     // 60프레임의 재생 pose에서 기존 case 평면으로 정상 C를 한 번 요청한다.
-    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60 && !m_Cutting.IsBusy())
+    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_CutStage == CutStage::Off && m_QueryFrame >= 60 && !m_Cutting.IsBusy())
     {
         // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
         m_SkeletalDemoRequested = true;
@@ -1107,9 +1157,36 @@ void ModelViewer::Update( float deltaT )
                 {
                     plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
                 }
-                m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
+
+                // 시퀀스는 같은 평면을 표시·보관하고 실제 절단 요청은 1단계 뒤로 미룬다.
+                if (m_CutStageSequence)
+                {
+                    // 같은 평면의 월드 변환과 로컬 크기로 기존 기본 평면을 교체한다.
+                    Viewer::SceneTransform transform;
+                    if (!Viewer::SceneTransform::TryFromAffine(AffineTransform(Invert(plane.WorldToPlane)), transform))
+                        throw std::runtime_error("cut stage plane transform invalid");
+                    m_CutPlanes.RemovePlane(m_ActiveCutPlane);
+                    m_ActiveCutPlane = m_CutPlanes.CreatePlane({ 2 * plane.HalfWidth, 2 * plane.HalfHeight }, transform);
+                    if (!m_ActiveCutPlane) throw std::runtime_error("cut stage plane registration failed");
+
+                    // 절단 입력과 pose를 고정한 뒤 첫 표시 단계로 들어간다.
+                    m_CutStagePlane = plane;
+                    m_SkeletalDemoRequested = false;
+                    m_SkeletalPatchCopy.SetStageHold(true);
+                    g_PhysicsRunning = false;
+                    m_Physics.SetSimulationRunning(false);
+                    EnterCutStage(CutStage::Plane);
+                }
+                else
+                {
+                    // 기존 시연은 60프레임에 곧바로 같은 인자로 요청한다.
+                    m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
+                }
+
+                // 평면을 만든 pose의 절단 위치로 카메라를 맞춘다.
                 FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
-                Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
+                if (!m_CutStageSequence)
+                    Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
                 break;
             }
     }
@@ -1125,6 +1202,9 @@ void ModelViewer::Update( float deltaT )
         // 새 geometry가 일반 프레임 준비 경로를 지난 뒤 캡처한다.
         m_CaptureFrame = 0;
     }
+
+    // 실제 gate 대기가 시작된 프레임부터 각 표시 단계의 시간을 센다.
+    if (m_CutStageSequence) UpdateCutStage();
 
     // 부착 게시와 GPU 준비가 끝난 프레임에서 재절단 검사 상태를 진행한다.
     m_AttachedRecutChecks.Tick(m_Scene, m_Physics, m_Cutting, m_SkeletalPatchCopy.IsPending(), m_QueryFrame);
@@ -1297,11 +1377,88 @@ void ModelViewer::Update( float deltaT )
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
+// 단계 진입을 기록하고 준비 완료 시점부터 표시 시간을 새로 센다.
+void ModelViewer::EnterCutStage(CutStage stage)
+{
+    // Plane과 각 gate 대기 시작을 실제 시계로 기록한다.
+    m_CutStage = stage;
+    m_CutStageTick = SystemTime::GetCurrentTick();
+    if (stage == CutStage::Plane) m_CutStageBeginTick = m_CutStageTick;
+    m_CutStageFrame = m_QueryFrame;
+
+    // 이전 복사 평면은 제거하고 원래 절단 평면은 마지막 단계에도 유지한다.
+    if (m_CutStageDisplayPlane) m_CutPlanes.RemovePlane(m_CutStageDisplayPlane);
+    m_CutStageDisplayPlane = Viewer::InvalidObjectId;
+
+    // 현재 카메라 오른쪽으로 staging과 복사 평면을 같은 거리만큼 옮긴다.
+    if (stage == CutStage::Copy || stage == CutStage::Cut)
+    {
+        const Vector3 offset = m_Camera.GetRightVec() * m_CutStageOffset;
+        m_SkeletalPatchCopy.SetStageDisplay(m_Scene, offset, true);
+        if (m_CutStageOffset != 0)
+        {
+            Viewer::SceneTransform transform;
+            if (!Viewer::SceneTransform::TryFromAffine(AffineTransform(Invert(m_CutStagePlane.WorldToPlane)), transform))
+                throw std::runtime_error("cut stage display plane transform invalid");
+            transform.SetTranslation(transform.GetTranslation() + offset);
+            m_CutStageDisplayPlane = m_CutPlanes.CreatePlane(
+                { 2 * m_CutStagePlane.HalfWidth, 2 * m_CutStagePlane.HalfHeight }, transform);
+            if (!m_CutStageDisplayPlane) throw std::runtime_error("cut stage display plane registration failed");
+        }
+    }
+
+    // VSync나 고정 물리 step과 독립인 실제 경과 시간을 로그에 남긴다.
+    const char* names[] = { "Off", "Plane", "Copy", "Cut", "Mask" };
+    const unsigned index = static_cast<unsigned>(stage);
+    Utility::Printf("Cut stage %u %s t=%.2f frame=%u\n", index, names[index],
+        SystemTime::TicksToSeconds(m_CutStageTick - m_CutStageBeginTick), m_QueryFrame);
+}
+
+// 평면 요청을 늦추고 실제 gate 도착부터 측정한 간격마다 한 단계씩 진행한다.
+void ModelViewer::UpdateCutStage()
+{
+    // 시작 전과 마지막 단계는 유지하고 실제 gate 진입 시각부터 표시 시간을 센다.
+    if (m_CutStage == CutStage::Off || m_CutStage == CutStage::Mask) return;
+    const double elapsed = SystemTime::TicksToSeconds(SystemTime::GetCurrentTick() - m_CutStageTick);
+
+    // 느린 프레임에서도 단계 캡처를 마친 다음 전환하여 네 장을 모두 남긴다.
+    const bool captured = m_CapturePath.empty() || (m_CutStageCaptured & (1u << static_cast<unsigned>(m_CutStage)));
+    const bool advance = elapsed >= m_CutStageSeconds && captured;
+
+    // 평면 표시 시간을 마치면 보관한 평면을 기존 시연과 같은 인자로 제출한다.
+    if (m_CutStage == CutStage::Plane && !m_SkeletalDemoRequested && advance)
+    {
+        m_SkeletalDemoRequested = true;
+        m_SkeletalPatchCopy.Request(m_Scene, m_CutStagePlane, false,
+            Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
+        Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
+    }
+
+    // GPU 준비 시간을 표시 시간에 섞지 않고 실제 대기 지점에 도착하면 단계를 바꾼다.
+    using StageGate = Viewer::SkeletalPatchCopy::StageGate;
+    const StageGate gate = m_SkeletalPatchCopy.GetStageGate();
+    if (m_CutStage == CutStage::Plane && gate == StageGate::CopyReady)
+        EnterCutStage(CutStage::Copy);
+    else if (m_CutStage == CutStage::Copy && gate == StageGate::CutReady)
+        EnterCutStage(CutStage::Cut);
+    else if (m_CutStage == CutStage::Copy && gate == StageGate::CopyReady && advance)
+        m_SkeletalPatchCopy.ReleaseStageGate(m_Scene);
+    else if (m_CutStage == CutStage::Cut && gate == StageGate::CutReady && advance)
+    {
+        // 마지막 gate를 통과시킨 뒤 애니메이션과 물리를 재개해 기존 break 게시를 허용한다.
+        m_SkeletalPatchCopy.ReleaseStageGate(m_Scene);
+        g_PhysicsRunning = true;
+        m_Physics.SetSimulationRunning(true);
+        EnterCutStage(CutStage::Mask);
+    }
+}
+
 // 절단 중심을 향한 카메라와 이동 제어기의 자세를 한 번 동기화한다.
 void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
 {
-    // 시연은 수평 30도·약간 위에서 2.5 m 거리로 절단 부위를 담는다.
-    const Vector3 offset = demo ? Normalize(Vector3(0.5f, 0.2f, 0.8660254f)) * 2.5f : Vector3(0, 0, 5.5f);
+    // 시퀀스 시연만 높이를 올려 수평 절단 평면과 조각을 함께 담는다.
+    const Vector3 offset = demo ? Normalize(Vector3(0.5f, m_CutStageSequence ? 0.9f : 0.2f, 0.8660254f)) * 2.5f
+        : Vector3(0, 0, 5.5f);
     m_Camera.SetEyeAtUp(center + offset, center, Vector3(kYUnitVector));
     m_Camera.Update();
 
@@ -1311,8 +1468,7 @@ void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
         std::atan2(-float(forward.GetX()), -float(forward.GetZ())), std::asin(float(forward.GetY())), m_Camera.GetPosition());
 }
 
-// solid 깊이 뒤 배경과 선택한 표시 모드를 그리고 평면·후처리를 수행한다.
-// opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
+// 장면과 평면을 그린 뒤 기존 진단 또는 시퀀스 단계별 HDR 캡처를 예약한다.
 void ModelViewer::RenderScene( void )
 {
     // 시연의 게시 프레임을 기록하고 기존 진단 캡처만 모델 중심으로 재배치한다.
@@ -1455,10 +1611,17 @@ void ModelViewer::RenderScene( void )
     else
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-    // 시연은 게시 후 지정 간격으로 저장하고 기존 진단은 자체 캡처 조건을 유지한다.
-    const bool demoCapture = m_SkeletalBreakDemo && !m_CapturePath.empty() && m_DemoAppliedFrame && m_DemoCaptured < 8
+    // 단계 표시는 진입 후 10프레임, 마지막 결과는 Applied 후 20프레임에 한 번 저장한다.
+    const unsigned stageIndex = static_cast<unsigned>(m_CutStage);
+    const bool stageCapture = m_CutStageSequence && stageIndex && !m_CapturePath.empty()
+        && !(m_CutStageCaptured & (1u << stageIndex))
+        && (m_CutStage == CutStage::Mask ? m_DemoAppliedFrame && m_QueryFrame - m_DemoAppliedFrame >= 20
+            : m_QueryFrame - m_CutStageFrame >= 10);
+
+    // 기존 시연은 게시 후 지정 간격으로 저장하고 진단은 자체 캡처 조건을 유지한다.
+    const bool demoCapture = !m_CutStageSequence && m_SkeletalBreakDemo && !m_CapturePath.empty() && m_DemoAppliedFrame && m_DemoCaptured < 8
         && m_QueryFrame - m_DemoAppliedFrame == m_DemoCaptured * 20;
-    const bool capture = demoCapture || (!m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
+    const bool capture = stageCapture || demoCapture || (!m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
         && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())))));
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
@@ -1466,6 +1629,14 @@ void ModelViewer::RenderScene( void )
     {
         // 패치 진단은 45도 blend-zone의 A/B 간격을 모델별 파일에 저장한다.
         m_ActiveCapturePath = m_CapturePath;
+
+        // 시퀀스 파일 이름은 기존 진단의 모델별 접미사와 독립적으로 만든다.
+        if (stageCapture)
+        {
+            // 저장한 단계는 비트로 기록하여 창이 계속 열려 있어도 다시 찍지 않는다.
+            m_ActiveCapturePath += L"-stage-" + std::to_wstring(stageIndex);
+            m_CutStageCaptured |= 1u << stageIndex;
+        }
         if (breakCapture && !m_SkeletalBreakDemo)
         {
             wchar_t directory[MAX_PATH];
@@ -1489,13 +1660,14 @@ void ModelViewer::RenderScene( void )
                 m_Physics.IsSimulationEnabled() ? 1u : 0u, m_Physics.IsSimulationRunning() ? 1u : 0u,
                 static_cast<unsigned long long>(m_Physics.GetSimulationStepCount()));
         }
-        if (m_SkeletalPatchChecks)
+        if (!stageCapture && m_SkeletalPatchChecks)
         {
             m_ActiveCapturePath += L"-model" + std::to_wstring(m_SkeletalPatchCaptured / 2 + 1)
                 + (m_SkeletalPatchCaptured % 2 ? L"-influence" : L"-parent");
             ++m_SkeletalPatchCaptured;
         }
-        m_CaptureComplete = !m_SkeletalPatchChecks || m_SkeletalPatchCaptured == 4;
+        m_CaptureComplete = stageCapture ? m_CutStageCaptured == 0x1eu
+            : !m_SkeletalPatchChecks || m_SkeletalPatchCaptured == 4;
         g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-hdr.raw");
         auto& restore = GraphicsContext::Begin(L"Restore capture state");
         restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -1512,6 +1684,7 @@ void ModelViewer::RenderScene( void )
 // 편집 안내와 절단 처리·거절 사유를 화면에 표시한다.
 void ModelViewer::RenderUI(GraphicsContext& context)
 {
+    // 저장 예약된 후처리 버퍼를 UI를 그리기 전에 내보낸다.
     if (m_CapturePostPending)
     {
         g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-post.raw");
@@ -1533,6 +1706,17 @@ void ModelViewer::RenderUI(GraphicsContext& context)
         float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
     TextContext text(context);
     text.Begin();
+
+    // 녹화 시연의 현재 단계를 기존 안내보다 큰 글자로 왼쪽 위에 표시한다.
+    if (m_CutStageSequence && m_CutStage != CutStage::Off)
+    {
+        const char* labels[] = { "", "1/4 Cut plane", "2/4 Patch copy", "3/4 Patch cut", "4/4 Mask original" };
+        text.SetTextSize(32.0f);
+        text.ResetCursor(20.0f, 30.0f);
+        text.DrawString(labels[static_cast<unsigned>(m_CutStage)]);
+    }
+
+    // 기존 편집·물리 안내는 원래 위치와 크기를 유지한다.
     text.SetTextSize(22.0f);
     text.ResetCursor(20.0f, 80.0f);
     text.DrawString("Left click: select object | Hold right mouse + WASD/QE: camera\n");

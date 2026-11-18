@@ -1228,6 +1228,7 @@ namespace Viewer
         PatchLog("Skeletal patch C mode=%s\n", mode == SkeletalJointMode::Rig ? "Rig" : mode == SkeletalJointMode::Parent ? "Parent" : "Influence");
         m_Job.Cancel();
         m_ReadyCut.reset();
+        SetStageHold(m_StageHold);
         DiscardBodyCompaction();
         m_Name.clear();
         m_Physics = physics;
@@ -2093,12 +2094,97 @@ namespace Viewer
             ValidatePieceSkinPose(built ? piece.PatchSkin.get() : nullptr, geometry, m_SkinCheckCase, label);
     }
 
-    // 다음 Static 후보 조회 전에 작업 무효화와 owner 삭제를 완료한다.
+    // staging owner와 결과 조각의 수명을 검사하고 누락된 준비물을 실패로 정리한다.
+    bool SkeletalPatchCopy::ValidateStaging(Scene& scene, const CutResultEntry* result)
+    {
+        // gate A는 복사본을, gate B와 결과 소비는 절단 A/B를 모두 요구한다.
+        const auto* owner = scene.FindObject(m_CopyOwner);
+        bool valid = owner && !owner->GetMeshComponents().empty();
+        if (valid && result && result->Status == CutResultStatus::Published)
+            valid = owner->FindMeshComponent(result->Mesh) && owner->FindMeshComponent(result->Other);
+        for (const auto& saved : m_StageVisibility)
+            valid = valid && owner->FindMeshComponent(saved.first);
+        if (valid) return true;
+
+        // 남은 표시를 복원하고 압축 자원과 gate를 비워 기존 실패 완료로 넘긴다.
+        SetStageDisplay(scene, Math::Vector3(Math::kZero), false);
+        DiscardPreparedBodies(scene);
+        m_CutPending = m_CutInFlight = false;
+        SetStageHold(m_StageHold);
+        PatchLog("Skeletal patch ERROR: staging owner or result component deleted; cut cancelled\n");
+        LogCutResult(scene, "staging owner or result component deleted", 0, 0, 1);
+        return false;
+    }
+
+    // 대기 중인 staging의 owner 위치와 가시성만 바꾸고 해제 시 정확히 복원한다.
+    void SkeletalPatchCopy::SetStageDisplay(Scene& scene, const Math::Vector3& offset, bool highlight)
+    {
+        // gate 밖에서는 새 표시를 시작하지 않고 중복 적용도 막는다.
+        if (highlight && (m_StageGate == StageGate::None || m_StageDisplayOwner)) return;
+        if (!highlight && !m_StageDisplayOwner) return;
+        auto* owner = scene.FindObject(highlight ? m_CopyOwner : m_StageDisplayOwner);
+
+        // 절단 전후 staging은 owner 종속이며 물리나 부착 편집 없이 이동할 수 있다.
+        if (highlight && owner)
+        {
+            for (const auto& piece : owner->GetMeshComponents())
+                if (piece->GetTransformMode() != MeshTransformMode::Attached || piece->IsSimulating()
+                    || piece->Attachment || piece->HasSkinnedPatch())
+                    throw std::runtime_error("cut stage display requires unattached staging");
+
+            // 원래 owner 배치를 저장하고 표시할 위치만 임시로 적용한다.
+            m_StageDisplayWorld = owner->GetTransform();
+            auto display = m_StageDisplayWorld;
+            display.SetTranslation(display.GetTranslation() + offset);
+            if (!owner->SetTransform(display)) throw std::runtime_error("cut stage display transform invalid");
+            m_StageDisplayOwner = owner->GetId();
+
+            // A와 B의 전체 geometry를 cap까지 표시하며 원래 가시성을 각각 보관한다.
+            for (const auto& piece : owner->GetMeshComponents())
+            {
+                m_StageVisibility.emplace_back(piece->GetId(), piece->PublishVisible);
+                piece->PublishVisible = true;
+                piece->StageHighlight = m_StageGate == StageGate::CutReady && m_ReadyCut
+                    && piece->GetId() == m_ReadyCut->Other ? 2u : 1u;
+            }
+        }
+        else if (!highlight)
+        {
+            // 삭제된 staging도 저장 상태를 비워 다음 요청에 영향을 주지 않는다.
+            if (owner)
+            {
+                if (!owner->SetTransform(m_StageDisplayWorld)) throw std::runtime_error("cut stage restore transform invalid");
+                for (const auto& saved : m_StageVisibility)
+                    if (auto* piece = owner->FindMeshComponent(saved.first))
+                    {
+                        piece->PublishVisible = saved.second;
+                        piece->StageHighlight = 0;
+                    }
+            }
+            m_StageDisplayOwner = InvalidObjectId;
+            m_StageVisibility.clear();
+        }
+
+        // 이미 공통 GPU 준비가 끝난 진입 프레임에도 표시와 컬링 위치를 함께 갱신한다.
+        if (owner)
+        {
+            auto& context = GraphicsContext::Begin(L"Prepare cut stage display");
+            for (const auto& piece : owner->GetMeshComponents())
+                piece->Update(context, *owner->GetModelInstance(), owner->GetTransform());
+            context.Finish();
+        }
+    }
+
+    // 다음 Static 후보 조회 전에 표시 복원과 작업 무효화 및 owner 삭제를 완료한다.
     void SkeletalPatchCopy::Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting)
     {
+        // 중단된 시연도 임시 표시 상태를 먼저 원래대로 되돌린다.
+        SetStageDisplay(scene, Math::Vector3(Math::kZero), false);
+
         // 추출 완료를 기다려 임시 자원을 해제하고 미게시 배치 snapshot도 버린다.
         m_Job.Cancel();
         m_ReadyCut.reset();
+        SetStageHold(m_StageHold);
         DiscardBodyCompaction();
         m_Name.clear();
         m_SkinPatch.reset();
@@ -2244,6 +2330,15 @@ namespace Viewer
         if (m_ReadyCut && !DiscardStaleCutResult(scene))
         {
             if (GetBodyState() == PatchBodyState::InProgress) return false;
+
+            // 압축 완료 결과를 보관한 채 게시와 break 제출 직전에 기다린다.
+            if (m_StageHold && !m_Diagnostic && m_ReleasedStageGate != StageGate::CutReady)
+            {
+                m_StageGate = StageGate::CutReady;
+                return false;
+            }
+
+            // 해제된 결과만 기존 게시 준비 경로에 전달한다.
             auto ready = std::move(m_ReadyCut);
             FinishCutResult(scene, *ready, m_ReadyCaps, m_ReadyUncapped);
         }
@@ -2449,6 +2544,14 @@ namespace Viewer
         // Static batch 완료 전에는 직접 요청하지 않아 Busy 거절을 피한다.
         if (m_CutPending && !cutting.IsBusy())
         {
+            // 준비된 복사본을 유지하며 GPU 절단 요청 직전에 기다린다.
+            if (m_StageHold && !m_Diagnostic && m_ReleasedStageGate != StageGate::CopyReady)
+            {
+                m_StageGate = StageGate::CopyReady;
+                return false;
+            }
+
+            // 대기 중에는 pending을 보존하고 해제된 요청만 제출한다.
             m_CutPending = false;
             auto* owner = scene.FindObject(m_CopyOwner);
             auto* component = owner && !owner->GetMeshComponents().empty() ? owner->GetMeshComponents().front().get() : nullptr;
@@ -3210,6 +3313,10 @@ namespace Viewer
 
         // batch가 비었을 때 단독 제출했으므로 Last 진단은 이 결과에 대응한다.
         m_CutInFlight = false;
+
+        // 공개된 staging이 삭제되었으면 A/B 참조 전에 준비물을 폐기한다.
+        if (!ValidateStaging(scene, &result)) return true;
+
         // A는 양의 반공간이므로 B를 음의 법선으로 0.1 m 이동해 간격을 만든다.
         if (result.Status == CutResultStatus::Published)
         {
@@ -3514,6 +3621,9 @@ namespace Viewer
     // 요청 몸체 수의 준비 ID와 skin을 확보한 뒤 단일 또는 batch break를 제출한다.
     void SkeletalPatchCopy::FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped)
     {
+        // gate 대기 뒤에도 owner와 A/B가 모두 살아 있을 때만 결과를 소비한다.
+        if (!ValidateStaging(scene, &result)) return;
+
         // 지연 처리에서도 동일한 절단 기록으로 성공과 실패 이유를 복원한다.
         const char* reason = result.Status == CutResultStatus::Published ? "published A/B" :
             result.Reason ? result.Reason : result.Error & 1 ? "finite rectangle endpoints outside" :

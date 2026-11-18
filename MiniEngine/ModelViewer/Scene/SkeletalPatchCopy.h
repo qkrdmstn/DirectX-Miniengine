@@ -6,6 +6,7 @@
 #include "SkeletalBoundaryChecks.h"
 #include "PatchSkinning.h"
 #include "../../MeshCutting/Geometry/CutPlane.h"
+#include <utility>
 
 namespace Viewer
 {
@@ -140,6 +141,34 @@ namespace Viewer
     class SkeletalPatchCopy
     {
     public:
+        enum class StageGate { None, CopyReady, CutReady };
+
+        // 시연의 두 대기 지점을 켜거나 끄고 이전 통과 이력을 비운다.
+        void SetStageHold(bool hold)
+        {
+            // 다음 요청은 복사 완료 지점부터 다시 기다린다.
+            m_StageHold = hold;
+            m_StageGate = m_ReleasedStageGate = StageGate::None;
+        }
+        // 현재 시연이 실제로 기다리는 지점을 읽는다.
+        StageGate GetStageGate() const
+        {
+            // 준비 중에는 대기 지점이 아직 없다.
+            return m_StageGate;
+        }
+        // 현재 대기 지점 하나만 통과시키고 다음 지점의 대기는 유지한다.
+        void ReleaseStageGate(Scene& scene)
+        {
+            // 대기 중이 아닐 때 호출해도 통과 이력을 바꾸지 않는다.
+            if (m_StageGate == StageGate::None || !ValidateStaging(scene, m_ReadyCut.get())) return;
+
+            // 절단 제출과 게시 준비 전에 표시 배치와 원래 가시성을 복원한다.
+            SetStageDisplay(scene, Math::Vector3(Math::kZero), false);
+            m_ReleasedStageGate = m_StageGate;
+            m_StageGate = StageGate::None;
+        }
+        // 대기 중인 staging만 옮겨 강조하거나 저장한 표시 상태로 되돌린다.
+        void SetStageDisplay(Scene& scene, const Math::Vector3& offset, bool highlight);
         // 새 C의 Static 후보 조회 전에 이전 작업과 owner를 공통 삭제 경로로 정리한다.
         void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
@@ -206,6 +235,8 @@ namespace Viewer
             return m_BodyState == PatchBodyState::Done ? &m_BodyResult : nullptr;
         }
     private:
+        // staging 삭제 시 기존 실패 정리 경로로 취소하고 결과 소비를 막는다.
+        bool ValidateStaging(Scene& scene, const CutResultEntry* result);
         // 출력 반공간의 provenance로 몸체를 판정하고 작은 진단 카운터만 읽는다.
         void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
             const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount);
@@ -302,6 +333,11 @@ namespace Viewer
         SkeletalPatchResult m_Result;
         std::vector<ObjectId> m_RetiredOwners;
         bool m_CutPending = false, m_CutInFlight = false, m_Completed = false;
+        bool m_StageHold = false;
+        StageGate m_StageGate = StageGate::None, m_ReleasedStageGate = StageGate::None;
+        ObjectId m_StageDisplayOwner = InvalidObjectId;
+        SceneTransform m_StageDisplayWorld;
+        std::vector<std::pair<ComponentId, bool>> m_StageVisibility;
         ObjectId m_CopyOwner = 0;
         SceneTransform m_World;
         std::string m_Name, m_ModelName;

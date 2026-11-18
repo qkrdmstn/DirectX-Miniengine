@@ -2,6 +2,8 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
+CS-1+CS-2 시퀀스 시연(완료, base `0112e7ba`, 2026-11-18): `ReleaseStageGate`·`OnCutResult`·`FinishCutResult`는 `ValidateStaging`으로 삭제된 준비물을 폐기한다. `SetStageDisplay`·`MeshComponent::Update`는 A 주황/B 보라와 명암을 표시하며, `Startup`은 시퀀스 캡처 디렉터리를 검사하고 `FocusBreakCamera`는 시퀀스 시연만 높인다. Release 실행에서 단계 1→4·캡처 4장·기존 시연 유지를 확인했다. [결정·진행 상태](../GPU/CutStageSequence.md).
+
 MI-5(시험·기록 완료, 미커밋, MI-4 완료 `e123cad1`): 기존 외부 Release exe로 위팔491/167, 기본 c 팔161/170, 양 허벅지300/187/175·constraint18→16·mask1회, 실제 척추182/337을 확인했다. `Skeleton_torso_joint_2`의 P3→4는 단일 게시이며 옵션 on도 P=1로 결과가 같다. 기존 Torso 몸통 카메라 기록을 실제 척추 절단으로 대체했다. 위팔·기본 c·척추 옵션 비교 및 추가 실제 허벅지 단일243/169까지18 PNG를 직접 확인하고 회귀6건 PASS·D3D12 ERROR0을 기록했다. 몸통 복부 접힘, 척추 절단 양팔 틈(uncapped17·loop fallback34), 기본 c 작은 보라 파편을 수정 없이 남겼다. 다중 경계 측정·Applied 이후 복구·기본값 on 결정은 후속이다. 단일 constraint 감소1·patch ID 값1은 추론이며 타 세션 ModelViewer.cpp 변경은 보존했다([시험 표·재현·PNG·남은 일](../GPU/MeshIslandMultiBoneCut.md)).
 
 MI-4h2(완료 `e123cad1`, base `0cd2efba`): `SkeletalPatchCopy::Request`는 P≥2인 명시 다중 경로에서 모든 incoming·세대를 고정한다. `FinishCutResult`가 숨긴 몸체 준비·`PrepareMultiPublication`의 전체 게시 용량/component 준비 및 `DiscardStaleCutResult` 검사 후 `PhysicsSystem::QueueBreaks`를 제출하고 `ConsumeMultiBreak`가 `TryGetBreakResults` 전부 Applied일 때 mask1회와 몸체별 Attachment·skin·`PublishVisible`을 게시한다. 빈 준비 ID는 건너뛰고 거절은 `DiscardPreparedBodies`로 폐기한다. 단일은 기존 `QueueBreak`/`TryGetBreakResult`와 값을 유지한다. 기본 off인 `-skeletal-multi-reject 1`은 마지막 기대 세대의 Stale 진단이다. Applied2·constraint18→16·세대+2·patch id1·300/187/175 게시·거절 무변경·허벅지/몸통 시점 PNG·CPU/D/R/회귀 PASS([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).

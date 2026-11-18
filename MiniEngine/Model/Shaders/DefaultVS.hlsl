@@ -26,6 +26,7 @@ cbuffer MeshConstants : register(b0)
     float3x3 ObjectWorldIT : packoffset(c11);
     uint UsePosedVertices : packoffset(c14.x);
     float3 OverlayColor : packoffset(c14.y);
+    uint StageHighlight : packoffset(c15.x);
 };
 
 cbuffer GlobalConstants : register(b1)
@@ -78,10 +79,11 @@ struct VSOutput
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
     nointerpolation float3 overlayColor : COLOR0;
+    nointerpolation uint stageHighlight : COLOR1;
 };
 
 [RootSignature(Renderer_RootSig)]
-// 공통 pose에 객체 변환을 적용하고 메시의 선·점 색상을 다음 단계에 전달한다.
+// 공통 pose와 객체 변환을 적용하고 표시 색상과 시연 강조 여부를 전달한다.
 VSOutput main(VSInput vsInput, uint vertexId : SV_VertexID)
 {
     // 원본 정점의 위치와 표면 방향을 준비한다.
@@ -148,7 +150,8 @@ VSOutput main(VSInput vsInput, uint vertexId : SV_VertexID)
     vsOutput.uv1 = vsInput.uv1;
 #endif
 
-    // 보간 없는 메시 색상은 선과 점의 PS에서만 사용한다.
+    // 보간 없는 표시 색상은 선·점과 시연 중 Solid 강조에 사용한다.
     vsOutput.overlayColor = OverlayColor;
+    vsOutput.stageHighlight = StageHighlight;
     return vsOutput;
 }

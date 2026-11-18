@@ -64,6 +64,8 @@ struct VSOutput
 #endif
     float3 worldPos : TEXCOORD2;
     float3 sunShadowCoord : TEXCOORD3;
+    nointerpolation float3 overlayColor : COLOR0;
+    nointerpolation uint stageHighlight : COLOR1;
 };
 
 // Numeric constants
@@ -240,6 +242,7 @@ float3 ComputeNormal(VSOutput vsOutput)
 }
 
 [RootSignature(Renderer_RootSig)]
+// 기존 재질 조명을 계산하고 시연 강조가 켜진 staging만 표시 색상으로 덮어쓴다.
 float4 main(VSOutput vsOutput) : SV_Target0
 {
     // Load and modulate textures
@@ -276,6 +279,8 @@ float4 main(VSOutput vsOutput) : SV_Target0
     // Old-school ambient light
     colorAccum += Surface.c_diff * 0.1;
 
+    // TODO: Shade each light using Forward+ tiles
+
 #else
 
     uint2 pixelPos = uint2(vsOutput.position.xy);
@@ -289,7 +294,9 @@ float4 main(VSOutput vsOutput) : SV_Target0
     colorAccum += Specular_IBL(Surface);
 #endif
 
-    // TODO: Shade each light using Forward+ tiles
+    // 시연 강조색에 시선과 법선의 명암을 남겨 절단 조각의 형태를 표시한다.
+    if (vsOutput.stageHighlight != 0)
+        colorAccum = vsOutput.overlayColor * (0.25 + 0.75 * Surface.NdotV);
 
     return float4(colorAccum, baseColor.a);
 }

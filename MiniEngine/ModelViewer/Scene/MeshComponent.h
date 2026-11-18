@@ -65,6 +65,7 @@ namespace Viewer
     {
     public:
         bool PublishVisible = true; // 미게시 절단 준비물은 모든 pass에서 숨긴다.
+        uint32_t StageHighlight = 0; // 시연 강조: 0 끔, 1 주황, 2 보라.
         std::unique_ptr<NodeAttachment> Attachment;
         std::shared_ptr<PatchSkinPublication> PatchSkin; // 게시 전에는 입력만 보관하고 게시 시 PG를 활성화한다.
         std::wstring PatchSkinTimingName; // break 진단에서만 owner/component ID로 지정한다.

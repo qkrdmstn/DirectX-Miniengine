@@ -818,7 +818,7 @@ namespace Viewer
             static_cast<unsigned long long>(m_Id));
     }
 
-    // 확정 CPU pose와 재사용 팔레트로 PG를 갱신하고 스키닝 조각에 원본의 W와 N을 적용한다.
+    // 확정 pose와 배치를 GPU에 준비하고 시연 강조를 표시 상수에만 반영한다.
     void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner,
         const MeshComponent* patchSource)
     {
@@ -842,8 +842,11 @@ namespace Viewer
         if (!pose.HasValidPose() || pose.GetModel() != m_Geometry->GetSource())
             return;
 
-        // 본 부착 조각은 초록색이며 원본과 Static 절단 조각은 흰색이다.
-        const float overlayColor[3] = { Attachment ? 0.25f : 1.0f, 1.0f, Attachment ? 0.35f : 1.0f };
+        // 시연 A/B는 주황·보라를 쓰고 평상시 부착 초록과 기본 흰색을 유지한다.
+        const float overlayColor[3] = {
+            StageHighlight == 2 ? 0.55f : StageHighlight ? 1.0f : Attachment ? 0.25f : 1.0f,
+            StageHighlight == 2 ? 0.35f : StageHighlight ? 0.55f : 1.0f,
+            StageHighlight == 2 ? 1.0f : StageHighlight ? 0.1f : Attachment ? 0.35f : 1.0f };
 
         // 생성 조각의 월드 상수를 업로드하고 Data 디코드 결과를 렌더 입력으로 준비한다.
         if (m_Geometry->IsGenerated())
@@ -908,6 +911,7 @@ namespace Viewer
             cb.WorldIT = cb.ObjectWorldIT = InverseTranspose(world.Get3x3());
             cb.UsePosedVertices = 1;
             std::memcpy(cb.OverlayColor, overlayColor, sizeof(overlayColor));
+            cb.StageHighlight = StageHighlight;
             auto* mapped = static_cast<MeshConstants*>(m_ConstantsCPU.Map());
             mapped[0] = cb;
             m_ConstantsCPU.Unmap();
@@ -964,6 +968,7 @@ namespace Viewer
             constants[i].ObjectWorld = world;
             constants[i].ObjectWorldIT = InverseTranspose(world.Get3x3());
             std::memcpy(constants[i].OverlayColor, overlayColor, sizeof(overlayColor));
+            constants[i].StageHighlight = StageHighlight;
         }
 
         // 비음수 정규화 LBS는 본별 변환 구의 convex hull 안에 있다. 전체 팔레트 union은 느슨하지만 누락을 막는다.
