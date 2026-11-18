@@ -149,6 +149,10 @@ private:
     uint32_t m_SkeletalPatchBreakChecks = 0;
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
+
+    // 시연 요청 전까지 실제 경과 시간과 선택적 지연 시간을 보관한다.
+    float m_DemoDelaySeconds = 0.0f, m_DemoElapsedSeconds = 0.0f;
+
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
     void FocusBreakCamera(const Vector3& center, bool demo);
@@ -379,6 +383,10 @@ void ModelViewer::Startup( void )
     if (CommandLineArgs::GetString(L"skeletal-break-demo-unmask", unmaskValue) && !m_SkeletalBreakDemo)
         throw std::invalid_argument("skeletal-break-demo-unmask requires skeletal-break-demo");
 
+    // 지연 옵션은 골격 절단 시연과 함께 지정해야 한다.
+    if (CommandLineArgs::GetFloat(L"skeletal-break-demo-delay", m_DemoDelaySeconds) && !m_SkeletalBreakDemo)
+        throw std::invalid_argument("skeletal-break-demo-delay requires skeletal-break-demo");
+
     // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
     if (m_SkeletalBreakDemo || m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
     {
@@ -401,7 +409,7 @@ void ModelViewer::Startup( void )
     if (m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
     {
         std::wstring value;
-        for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
+        for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"skeletal-break-demo-delay", L"model",
             L"capture", L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
             L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
             L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
@@ -534,13 +542,15 @@ void ModelViewer::Startup( void )
             throw std::runtime_error("skeletal-joint-mode must be rig, parent or influence");
         m_SkeletalJointMode = jointMode == L"rig" ? Viewer::SkeletalJointMode::Rig : jointMode == L"influence" ? Viewer::SkeletalJointMode::Influence : Viewer::SkeletalJointMode::Parent;
     }
+
+    // 시연 지연을 포함한 진단 옵션으로 기본 장면 구성을 구분한다.
     bool diagnosticScene = false;
     std::wstring diagnosticValue;
     for (const wchar_t* option : { L"edit-target-checks", L"edit-apply-checks", L"edit-delete-checks",
         L"physics-sim-checks", L"skeletal-break-checks", L"skeletal-break-xbot", L"xbot-arm-checks",
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
         L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"skeletal-break-demo-bone",
-        L"capture", L"capture-frame", L"animation-step-ms",
+        L"skeletal-break-demo-delay", L"capture", L"capture-frame", L"animation-step-ms",
         L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cap-threads",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
         L"cut-step-y", L"cut-gap", L"cut-expect-publications", L"physics-cut-checks",
@@ -1081,8 +1091,13 @@ void ModelViewer::Update( float deltaT )
         ++m_AutoCutIndex;
     }
 
-    // 60프레임의 재생 pose에서 기존 case 평면으로 정상 C를 한 번 요청한다.
-    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60 && !m_Cutting.IsBusy())
+    // 시연 요청 전까지 실제 프레임 경과 시간을 누적한다.
+    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested)
+        m_DemoElapsedSeconds += deltaT;
+
+    // 60프레임과 선택적 실제 시간 지연을 충족하면 정상 C를 한 번 요청한다.
+    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60
+        && (m_DemoDelaySeconds <= 0.0f || m_DemoElapsedSeconds >= m_DemoDelaySeconds) && !m_Cutting.IsBusy())
     {
         // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
         m_SkeletalDemoRequested = true;
