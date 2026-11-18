@@ -55,6 +55,7 @@
 #include "Scene/tests/AttachedRecutChecks.h"
 #include "Scene/tests/RigBoneCutChecks.h"
 #include <cmath>
+#include <chrono>
 
 using namespace GameCore;
 using namespace Math;
@@ -154,7 +155,9 @@ private:
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
     std::wstring m_SkeletalDemoNextBone;
     uint32_t m_SkeletalDemoCut = 0;
-    float m_SkeletalDemoWait = 0.0f;
+    float m_SkeletalDemoDelaySec = 0.0f, m_SkeletalDemoNextSec = 3.0f;
+    std::chrono::steady_clock::time_point m_SkeletalDemoStart, m_SkeletalDemoFirstApplied;
+    bool m_SkeletalDemoBothLegs = false;
     Viewer::ObjectId m_SkeletalDemoOwner = Viewer::InvalidObjectId;
     Viewer::ComponentId m_SkeletalDemoSource = Viewer::InvalidComponentId;
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
@@ -360,9 +363,12 @@ static std::string GetDeviceGpuName()
     return std::string(name) + " (" + std::to_string(desc.DedicatedVideoMemory >> 20) + " MB)";
 }
 
-// 시작 옵션과 연속 절단 시연을 준비하고 최종 배치 pose로 rig를 사전 등록한다.
+// 시작 옵션과 녹화 대기 시간을 준비하고 최종 배치 pose로 rig를 사전 등록한다.
 void ModelViewer::Startup( void )
 {
+    // 초기화 시간도 포함하는 단조 시계로 시연 시작 대기를 잰다.
+    m_SkeletalDemoStart = std::chrono::steady_clock::now();
+
     // 파이프라인 사전 준비보다 먼저 단면 스레드 그룹 크기를 적용한다.
     uint32_t capThreads = 512;
     CommandLineArgs::GetInteger(L"cap-threads", capThreads);
@@ -371,10 +377,27 @@ void ModelViewer::Startup( void )
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
 
-    // 다음 본을 지정한 시연만 첫 게시 후 3초 간격으로 두 번 절단한다.
+    // 다음 본을 지정한 시연만 첫 게시 후 지정 간격으로 두 번 절단한다.
     CommandLineArgs::GetString(L"skeletal-break-demo-next-bone", m_SkeletalDemoNextBone);
     if (!m_SkeletalDemoNextBone.empty() && !m_SkeletalBreakDemo)
         throw std::invalid_argument("skeletal-break-demo-next-bone requires skeletal-break-demo");
+
+    // 시연 전용 대기 시간은 유한한 음수 아닌 초 단위 값만 받는다.
+    if (m_SkeletalBreakDemo)
+    {
+        CommandLineArgs::GetFloat(L"skeletal-break-demo-delay-sec", m_SkeletalDemoDelaySec);
+        CommandLineArgs::GetFloat(L"skeletal-break-demo-next-sec", m_SkeletalDemoNextSec);
+        if (!std::isfinite(m_SkeletalDemoDelaySec) || m_SkeletalDemoDelaySec < 0.0f
+            || !std::isfinite(m_SkeletalDemoNextSec) || m_SkeletalDemoNextSec < 0.0f)
+            throw std::invalid_argument("skeletal demo delays must be finite and nonnegative");
+    }
+
+    // 양쪽 허벅지 시연은 순서와 무관하게 같은 골반 중심 구도를 사용한다.
+    std::wstring firstBone;
+    CommandLineArgs::GetString(L"skeletal-break-demo-bone", firstBone);
+    m_SkeletalDemoBothLegs = m_SkeletalBreakDemo == 1
+        && ((firstBone == L"mixamorig:LeftUpLeg" && m_SkeletalDemoNextBone == L"mixamorig:RightUpLeg")
+            || (firstBone == L"mixamorig:RightUpLeg" && m_SkeletalDemoNextBone == L"mixamorig:LeftUpLeg"));
 
     // 기존 부착 재절단 검사 여부를 읽는다.
     uint32_t attachedRecut = 0;
@@ -802,6 +825,27 @@ void ModelViewer::Startup( void )
             }
         }
     }
+
+    // 녹화 대기 중부터 두 허벅지 절단 중심의 중간에 카메라를 고정한다.
+    if (m_SkeletalDemoBothLegs)
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == "Xbot")
+            {
+                const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/Xbot.glb");
+                Vector3 center(kZero);
+                for (const char* bone : { "mixamorig:LeftUpLeg", "mixamorig:RightUpLeg" })
+                {
+                    // 기존 절단 평면과 같은 본 좌표에서 구도 중심을 구한다.
+                    const auto found = std::find(names.begin(), names.end(), bone);
+                    if (found == names.end() || found + 1 == names.end())
+                        throw std::invalid_argument("skeletal demo thigh bone not found");
+                    const uint32_t node = uint32_t(found - names.begin());
+                    const auto plane = Viewer::BuildSkeletalBonePlane(*object, node, node + 1);
+                    center += (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.25f;
+                }
+                FocusBreakCamera(center, true);
+                break;
+            }
 }
 
 // GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.
@@ -878,7 +922,7 @@ Viewer::PickHit ModelViewer::PickAtCursor(float x, float y)
     return Viewer::IsCutPlaneDepthVisible(planeDepth, sceneDepth) ? plane : object;
 }
 
-// 완료된 절단을 게시하고 최신 pose의 collider와 연속 시연 요청을 갱신한다.
+// 완료된 절단을 게시하고 실제 경과 시간의 녹화 대기·게시 간격에 맞춰 연속 시연을 요청한다.
 void ModelViewer::Update( float deltaT )
 {
     ScopedTimer _prof(L"Update State");
@@ -1095,11 +1139,14 @@ void ModelViewer::Update( float deltaT )
         ++m_AutoCutIndex;
     }
 
-    // 첫 게시 뒤 실제 프레임 시간으로 3초를 기다려 다른 본을 순서대로 자른다.
-    if (m_DemoAppliedFrame && m_SkeletalDemoCut == 1 && !m_SkeletalDemoNextBone.empty())
-        m_SkeletalDemoWait += deltaT;
-    const bool nextDemoCut = m_SkeletalDemoCut == 1 && !m_SkeletalDemoNextBone.empty() && m_SkeletalDemoWait >= 3.0f;
-    if (m_SkeletalBreakDemo && ((!m_SkeletalDemoRequested && m_QueryFrame >= 60) || nextDemoCut)
+    // 시작 대기와 첫 게시 이후 간격을 단조 시계의 실제 경과 시간으로 잰다.
+    const float demoElapsed = m_SkeletalBreakDemo
+        ? std::chrono::duration<float>(std::chrono::steady_clock::now() - m_SkeletalDemoStart).count() : 0.0f;
+    const bool nextDemoCut = m_DemoAppliedFrame && m_SkeletalDemoCut == 1 && !m_SkeletalDemoNextBone.empty()
+        && std::chrono::duration<float>(std::chrono::steady_clock::now() - m_SkeletalDemoFirstApplied).count()
+            >= m_SkeletalDemoNextSec;
+    if (m_SkeletalBreakDemo && ((!m_SkeletalDemoRequested && m_QueryFrame >= 60
+        && demoElapsed >= m_SkeletalDemoDelaySec) || nextDemoCut)
         && !m_Cutting.IsBusy() && !m_SkeletalPatchCopy.IsPending())
     {
         // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
@@ -1151,7 +1198,8 @@ void ModelViewer::Update( float deltaT )
                     &m_Physics, m_SkeletalDemoOwner, m_SkeletalDemoSource);
 
                 // 촬영 중 카메라를 고정하고 두 번째 요청의 게시 여부도 다시 확인한다.
-                if (!nextDemoCut) FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+                if (!nextDemoCut && !m_SkeletalDemoBothLegs)
+                    FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
                 ++m_SkeletalDemoCut;
                 m_DemoAppliedFrame = 0;
                 Utility::Printf("Skeletal demo request frame=%u model=%u cut=%u owner=%llu mesh=%llu\n",
@@ -1344,12 +1392,15 @@ void ModelViewer::Update( float deltaT )
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
-// 절단 중심을 향한 카메라와 이동 제어기의 자세를 한 번 동기화한다.
+// 절단 중심 또는 골반·양다리를 담는 카메라와 이동 제어기를 동기화한다.
 void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
 {
-    // 시연은 수평 30도·약간 위에서 2.5 m 거리로 절단 부위를 담는다.
-    const Vector3 offset = demo ? Normalize(Vector3(0.5f, 0.2f, 0.8660254f)) * 2.5f : Vector3(0, 0, 5.5f);
-    m_Camera.SetEyeAtUp(center + offset, center, Vector3(kYUnitVector));
+    // 양다리는 정면 3 m에서 중심을 낮추고 기존 시연은 30도 구도를 유지한다.
+    const bool bothLegs = demo && m_SkeletalDemoBothLegs;
+    const Vector3 target = center + (bothLegs ? Vector3(0, -0.35f, 0) : Vector3(kZero));
+    const Vector3 offset = bothLegs ? Normalize(Vector3(0, 0.12f, 1)) * 3.0f
+        : (demo ? Normalize(Vector3(0.5f, 0.2f, 0.8660254f)) * 2.5f : Vector3(0, 0, 5.5f));
+    m_Camera.SetEyeAtUp(target + offset, target, Vector3(kYUnitVector));
     m_Camera.Update();
 
     // 다음 마우스 이동도 새 카메라 자세에서 시작한다.
@@ -1358,7 +1409,7 @@ void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
         std::atan2(-float(forward.GetX()), -float(forward.GetZ())), std::asin(float(forward.GetY())), m_Camera.GetPosition());
 }
 
-// solid 깊이 뒤 배경·표시 모드를 그리고 연속 절단별 캡처를 기록한다.
+// solid 깊이 뒤 배경·표시 모드를 그리고 첫 게시 시각과 연속 절단별 캡처를 기록한다.
 // opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
@@ -1367,6 +1418,10 @@ void ModelViewer::RenderScene( void )
     if (breakCapture && m_SkeletalBreakDemo)
     {
         m_DemoAppliedFrame = m_QueryFrame;
+
+        // 첫 게시 시각을 저장해 다음 절단까지 실제 초 단위 간격을 유지한다.
+        if (m_SkeletalDemoCut == 1)
+            m_SkeletalDemoFirstApplied = std::chrono::steady_clock::now();
 
         // 각 게시 후 연속 캡처 번호를 다시 시작하되 첫 절단 파일을 보존한다.
         m_DemoCaptured = 0;
