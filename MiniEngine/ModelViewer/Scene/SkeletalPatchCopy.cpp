@@ -48,7 +48,7 @@ namespace Viewer
             Math::Matrix4 LocalToWorld;
             float Epsilon, HalfWidth, HalfHeight;
             uint32_t Triangles, Draws, DepthOffset, IndexOffset, Mode;
-            uint32_t NodeCount, Influence, HasState, Padding1;
+            uint32_t NodeCount, Influence, HasState, RecopyBug;
         };
         static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 192, "Patch shader layout");
         static_assert(sizeof(SkeletalPatchResult) == 12, "Patch counts readback layout");
@@ -1200,9 +1200,10 @@ namespace Viewer
         return result;
     }
 
-    // 평면과 선택 본을 고정하고 비동기 패치 추출을 요청한다.
+    // 평면과 선택 본을 고정하고 진단에서 지정한 원본으로 비동기 추출을 제한한다.
     void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& requestedPlane, bool diagnostic,
-        SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics)
+        SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics,
+        ObjectId sourceOwner, ComponentId sourceMesh)
     {
         // 명시 다중 옵션의 진단 평면만 요청 내부에서 교체한다.
         auto plane = requestedPlane;
@@ -1275,6 +1276,10 @@ namespace Viewer
         for (const auto& object : scene.GetObjects())
             for (const auto& component : object->GetMeshComponents())
             {
+                // 연속 시연은 두 평면 모두 첫 요청의 owner와 원본 컴포넌트만 조회한다.
+                if ((sourceOwner != InvalidObjectId && object->GetId() != sourceOwner)
+                    || (sourceMesh != InvalidComponentId && component->GetId() != sourceMesh)) continue;
+
                 // 비교 대상은 등록 여부와 관계없이 기존 경계 구로 검사한다.
                 bool skin = false;
                 for (size_t section = 0; section < component->GetGeometry()->GetSections().size(); ++section)
@@ -3869,7 +3874,7 @@ namespace Viewer
         m_IslandLabels = {};
     }
 
-    // 컴포넌트 제거 상태를 반영해 GPU 선택·추출과 기존 패치 인접 집계를 제출한다.
+    // 컴포넌트 제거 상태를 반영하고 재현 옵션의 진단 활성 여부를 저장해 GPU 추출을 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
         uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child,
@@ -3973,7 +3978,25 @@ namespace Viewer
         c.Influence = influence;
         const auto* triangleMask = source.GetTriangleMask();
         c.HasState = triangleMask != nullptr;
+
+        // 기본값 0은 제거 삼각형 제외를 유지하고 명시한 진단에서만 우회한다.
+        CommandLineArgs::GetInteger(L"patch-recopy-bug", c.RecopyBug);
         m_State = triangleMask ? triangleMask->Pending : std::vector<uint32_t>{};
+
+        // 재현 옵션에서 원본 식별자와 제출 시 숨김 총량을 기록해 상태 전달을 확인한다.
+        std::wstring nextBone;
+        m_RecopyDiagnostic = CommandLineArgs::GetString(L"skeletal-break-demo-next-bone", nextBone);
+        if (m_RecopyDiagnostic)
+        {
+            // 재현 진단이 활성화된 제출에서만 숨김 총량과 원본 상태를 기록한다.
+            uint32_t hidden = 0;
+            for (const uint32_t value : m_State) hidden += (value & 0x80000000u) != 0;
+            PatchLog("Patch recopy source mesh=%llu hasState=%u revision=%llu hiddenTotal=%u bug=%u\n",
+                static_cast<unsigned long long>(source.GetId()), c.HasState,
+                static_cast<unsigned long long>(triangleMask ? triangleMask->Revision : 0), hidden, c.RecopyBug);
+        }
+
+        // 추출 상한과 출력 버퍼 레이아웃은 기존 경로와 동일하게 유지한다.
         c.Triangles = uint32_t(triangles); c.Draws = uint32_t(draws.size());
         c.DepthOffset = vertices * 28; c.IndexOffset = vertices * 44;
         geometry.Data.Create(L"Patch packed geometry", vertices * 48, 1);
@@ -4092,7 +4115,7 @@ namespace Viewer
         return true;
     }
 
-    // fence 완료 뒤 카운터·경계·인접 패치 집계와 GPU 출력을 수집한다.
+    // fence 완료 뒤 GPU 출력을 수집하고 재현 진단에서만 숨긴 원본의 재복사 개수를 기록한다.
     bool SkeletalPatchJob::Poll(SkeletalPatchResult& result, std::shared_ptr<SkeletalPatchBuffers>& patch)
     {
         // GPU가 아직 쓰는 readback은 매핑하지 않는다.
@@ -4127,6 +4150,7 @@ namespace Viewer
             m_AdjacentReadback.Unmap();
         }
         // section과 draw 출처를 원본 mask의 누적 삼각형 번호로 변환한다.
+        uint32_t recopied = 0;
         const auto* origins = static_cast<const uint32_t*>(m_OriginsReadback.Map());
         for (uint32_t t = 0; t < result.PatchTriangles; ++t)
         {
@@ -4135,6 +4159,15 @@ namespace Viewer
                 for (uint32_t d = 0; d < m_Input->GetMesh(s).numDraws; ++d)
                     if (s < origins[t * 3] || d < origins[t * 3 + 1]) first += m_Input->GetMesh(s).draw[d].primCount / 3;
             m_Output->Triangles.push_back(first + origins[t * 3 + 2]);
+
+            // 재현 진단에서만 제출 당시 숨김 상태와 실제 GPU 출처의 겹침을 계수한다.
+            if (m_RecopyDiagnostic)
+            {
+                // 제출 시 원본 마스크에서 이미 숨겨진 삼각형인지 확인한다.
+                const uint32_t original = m_Output->Triangles.back();
+                if (original < m_State.size() && (m_State[original] & 0x80000000u)) ++recopied;
+            }
+
             // draw별 번호를 MI-1이 보존한 skin section 연속 삼각형 번호로 바꾼다.
             uint32_t local = origins[t * 3 + 2];
             for (uint32_t d = 0; d < origins[t * 3 + 1]; ++d)
@@ -4142,6 +4175,12 @@ namespace Viewer
             m_Output->IslandSources.push_back({ m_SkinSections.at(origins[t * 3]), local });
         }
         m_OriginsReadback.Unmap();
+
+        // 재현 진단 실행의 각 절단에서만 추출량과 재복사량을 함께 남긴다.
+        if (m_RecopyDiagnostic)
+            PatchLog("Patch recopy NodeId=%u triangles=%u alreadyHidden=%u\n", m_Node, result.PatchTriangles, recopied);
+
+        // 기존 진단 검증과 출력 geometry의 경계 계산을 이어간다.
         if (m_Diagnostic) Validate(result);
         auto& mesh = m_Output->Geometry->Meshes[0];
 

@@ -110,6 +110,7 @@ namespace Viewer
         std::vector<uint32_t> m_CutRoots, m_CutChildren;
         bool m_UnionSubmit = false; // 합집합 제출이면 P_i를 제출 인자로 고정한다.
         bool m_Diagnostic = false;
+        bool m_RecopyDiagnostic = false;
         uint64_t m_Fence = 0;
     };
     class PhysicsSystem;
@@ -142,10 +143,11 @@ namespace Viewer
     public:
         // 새 C의 Static 후보 조회 전에 이전 작업과 owner를 공통 삭제 경로로 정리한다.
         void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
-        // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
+        // 현재 skin 대상과 본을 선택하고 진단에서만 지정한 원본 컴포넌트로 제한한다.
         void Request(const Scene& scene, const MeshCutting::CutPlaneData& plane, bool diagnostic,
             SkeletalJointMode mode = SkeletalJointMode::Rig, uint32_t diagnosticCase = UINT32_MAX,
-            PhysicsSystem* physics = nullptr);
+            PhysicsSystem* physics = nullptr, ObjectId sourceOwner = InvalidObjectId,
+            ComponentId sourceMesh = InvalidComponentId);
         // 실제 C 경로로 두 모델의 break와 거절 조건을 순서대로 검증한다.
         bool RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // SP7e2 실패 집계를 진단 프로세스의 종료 판정에 전달한다.

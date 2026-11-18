@@ -131,7 +131,9 @@ public:
             return true;
 
         // 시연 연속 캡처를 마친 뒤 기존 자동 종료 조건을 평가한다.
-        const bool demoReady = !m_SkeletalBreakDemo || (m_DemoAppliedFrame && (m_CapturePath.empty() || m_DemoCaptured == 8));
+        const bool demoReady = !m_SkeletalBreakDemo || (m_DemoAppliedFrame
+            && (m_SkeletalDemoNextBone.empty() || m_SkeletalDemoCut == 2)
+            && (m_CapturePath.empty() || m_DemoCaptured == 8));
 
         // 기존 GPU 작업 완료와 사용자 종료 요청을 확인한다.
         return (demoReady && m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished() && m_EditApplyChecks.Finished() && m_EditDeleteChecks.Finished())
@@ -150,6 +152,11 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+    std::wstring m_SkeletalDemoNextBone;
+    uint32_t m_SkeletalDemoCut = 0;
+    float m_SkeletalDemoWait = 0.0f;
+    Viewer::ObjectId m_SkeletalDemoOwner = Viewer::InvalidObjectId;
+    Viewer::ComponentId m_SkeletalDemoSource = Viewer::InvalidComponentId;
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
     void FocusBreakCamera(const Vector3& center, bool demo);
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
@@ -353,7 +360,7 @@ static std::string GetDeviceGpuName()
     return std::string(name) + " (" + std::to_string(desc.DedicatedVideoMemory >> 20) + " MB)";
 }
 
-// 시작 옵션과 모델·물리를 준비하고 최종 배치 pose로 skin owner의 rig를 사전 등록한다.
+// 시작 옵션과 연속 절단 시연을 준비하고 최종 배치 pose로 rig를 사전 등록한다.
 void ModelViewer::Startup( void )
 {
     // 파이프라인 사전 준비보다 먼저 단면 스레드 그룹 크기를 적용한다.
@@ -363,6 +370,13 @@ void ModelViewer::Startup( void )
 
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
+
+    // 다음 본을 지정한 시연만 첫 게시 후 3초 간격으로 두 번 절단한다.
+    CommandLineArgs::GetString(L"skeletal-break-demo-next-bone", m_SkeletalDemoNextBone);
+    if (!m_SkeletalDemoNextBone.empty() && !m_SkeletalBreakDemo)
+        throw std::invalid_argument("skeletal-break-demo-next-bone requires skeletal-break-demo");
+
+    // 기존 부착 재절단 검사 여부를 읽는다.
     uint32_t attachedRecut = 0;
     CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut);
     m_AttachedRecutChecks.Enabled = attachedRecut != 0;
@@ -864,7 +878,7 @@ Viewer::PickHit ModelViewer::PickAtCursor(float x, float y)
     return Viewer::IsCutPlaneDepthVisible(planeDepth, sceneDepth) ? plane : object;
 }
 
-// 완료된 절단을 게시하고 최신 pose의 collider를 동기화한 뒤 후보를 제출한다.
+// 완료된 절단을 게시하고 최신 pose의 collider와 연속 시연 요청을 갱신한다.
 void ModelViewer::Update( float deltaT )
 {
     ScopedTimer _prof(L"Update State");
@@ -1081,18 +1095,44 @@ void ModelViewer::Update( float deltaT )
         ++m_AutoCutIndex;
     }
 
-    // 60프레임의 재생 pose에서 기존 case 평면으로 정상 C를 한 번 요청한다.
-    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60 && !m_Cutting.IsBusy())
+    // 첫 게시 뒤 실제 프레임 시간으로 3초를 기다려 다른 본을 순서대로 자른다.
+    if (m_DemoAppliedFrame && m_SkeletalDemoCut == 1 && !m_SkeletalDemoNextBone.empty())
+        m_SkeletalDemoWait += deltaT;
+    const bool nextDemoCut = m_SkeletalDemoCut == 1 && !m_SkeletalDemoNextBone.empty() && m_SkeletalDemoWait >= 3.0f;
+    if (m_SkeletalBreakDemo && ((!m_SkeletalDemoRequested && m_QueryFrame >= 60) || nextDemoCut)
+        && !m_Cutting.IsBusy() && !m_SkeletalPatchCopy.IsPending())
     {
         // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
         m_SkeletalDemoRequested = true;
         for (const auto& object : m_Scene.GetObjects())
             if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
             {
+                // 연속 재현의 두 요청을 같은 원본에 고정하고 첫 게시의 숨김 상태를 확인한다.
+                if (!m_SkeletalDemoNextBone.empty())
+                {
+                    if (!nextDemoCut)
+                    {
+                        m_SkeletalDemoOwner = object->GetId();
+                        m_SkeletalDemoSource = object->GetMeshComponents().front()->GetId();
+                    }
+                    const auto* source = object->FindMeshComponent(m_SkeletalDemoSource);
+                    const auto* mask = source ? source->GetTriangleMask() : nullptr;
+                    bool hidden = false;
+                    if (mask)
+                        for (const uint32_t value : mask->Pending) hidden |= (value & 0x80000000u) != 0;
+                    if (nextDemoCut && (object->GetId() != m_SkeletalDemoOwner || !mask
+                        || !hidden || mask->AppliedRevision != mask->Revision))
+                        throw std::runtime_error("Patch recopy requires the first source's hidden mask");
+                }
+
                 // -skeletal-break-demo-bone이 있으면 그 이름의 node와 DFS 첫 자식(다음 번호) 사이를 자른다.
                 std::wstring boneValue;
                 MeshCutting::CutPlaneData plane;
-                if (CommandLineArgs::GetString(L"skeletal-break-demo-bone", boneValue))
+
+                // 두 번째 요청은 별도 본을 사용하고 첫 요청은 기존 옵션을 유지한다.
+                CommandLineArgs::GetString(L"skeletal-break-demo-bone", boneValue);
+                if (nextDemoCut) boneValue = m_SkeletalDemoNextBone;
+                if (!boneValue.empty())
                 {
                     const std::string bone(boneValue.begin(), boneValue.end());
                     const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
@@ -1107,9 +1147,16 @@ void ModelViewer::Update( float deltaT )
                 {
                     plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
                 }
-                m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
-                FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
-                Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
+                m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX,
+                    &m_Physics, m_SkeletalDemoOwner, m_SkeletalDemoSource);
+
+                // 촬영 중 카메라를 고정하고 두 번째 요청의 게시 여부도 다시 확인한다.
+                if (!nextDemoCut) FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+                ++m_SkeletalDemoCut;
+                m_DemoAppliedFrame = 0;
+                Utility::Printf("Skeletal demo request frame=%u model=%u cut=%u owner=%llu mesh=%llu\n",
+                    m_QueryFrame, m_SkeletalBreakDemo, m_SkeletalDemoCut,
+                    static_cast<unsigned long long>(m_SkeletalDemoOwner), static_cast<unsigned long long>(m_SkeletalDemoSource));
                 break;
             }
     }
@@ -1311,7 +1358,7 @@ void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
         std::atan2(-float(forward.GetX()), -float(forward.GetZ())), std::asin(float(forward.GetY())), m_Camera.GetPosition());
 }
 
-// solid 깊이 뒤 배경과 선택한 표시 모드를 그리고 평면·후처리를 수행한다.
+// solid 깊이 뒤 배경·표시 모드를 그리고 연속 절단별 캡처를 기록한다.
 // opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
@@ -1320,6 +1367,9 @@ void ModelViewer::RenderScene( void )
     if (breakCapture && m_SkeletalBreakDemo)
     {
         m_DemoAppliedFrame = m_QueryFrame;
+
+        // 각 게시 후 연속 캡처 번호를 다시 시작하되 첫 절단 파일을 보존한다.
+        m_DemoCaptured = 0;
         Utility::Printf("Skeletal demo Applied frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
     }
 
@@ -1415,7 +1465,8 @@ void ModelViewer::RenderScene( void )
             gfxContext.ClearColor(g_SceneColorBuffer);
 
             // 깊이를 쓰지 않는 선·점의 실루엣 가장자리를 배경이 덮지 않도록 먼저 그린다.
-            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+            // 연속 절단 촬영은 검은 clear 배경을 사용한다.
+            if (m_SkeletalDemoNextBone.empty()) Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
 
             {
                 ScopedTimer _prof(L"Render Color", gfxContext);
@@ -1476,6 +1527,8 @@ void ModelViewer::RenderScene( void )
         // 게시 프레임부터 20프레임 간격의 순번을 세 자리 파일 이름에 붙인다.
         if (demoCapture)
         {
+            // 두 절단의 동일 번호 캡처가 서로 덮어쓰지 않게 구분한다.
+            if (!m_SkeletalDemoNextBone.empty()) m_ActiveCapturePath += L"-cut" + std::to_wstring(m_SkeletalDemoCut);
             const auto number = std::to_wstring(m_DemoCaptured++);
             m_ActiveCapturePath += L"-demo-" + std::wstring(3 - number.size(), L'0') + number;
 

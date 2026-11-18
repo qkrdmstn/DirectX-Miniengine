@@ -6,7 +6,7 @@ cbuffer Parameters : register(b0)
     float Epsilon, HalfWidth, HalfHeight;
     uint Triangles;
     uint Draws, DepthOffset, IndexOffset, Mode;
-    uint NodeCount, Influence, HasState, Padding1;
+    uint NodeCount, Influence, HasState, RecopyBug;
 };
 struct DrawInput
 {
@@ -112,6 +112,7 @@ uint Ordered(float x)
     uint b=asuint(x); return b&0x80000000?~b:b^0x80000000;
 }
 // 투표·선택·추출과 기존 제거 패치의 인접 집계를 같은 입력으로 실행한다.
+// 재복사 진단에서만 이미 숨긴 원본의 추출을 허용한다.
 [numthreads(64,1,1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -217,7 +218,7 @@ void main(uint3 id : SV_DispatchThreadID)
         }
 
         // 제거 상태를 선택 조건에 더해 prefix와 모든 출력에 함께 반영한다.
-        bool available=!HasState || !(State[t]&0x80000000u);
+        bool available=RecopyBug || !HasState || !(State[t]&0x80000000u);
         bool selected=available && (Selected(s,indices.x)||Selected(s,indices.y)||Selected(s,indices.z));
         bool crossing=available && Crossing(asfloat(SourcePose.Load3(s.PoseOffset+indices.x*40)),
             asfloat(SourcePose.Load3(s.PoseOffset+indices.y*40)),asfloat(SourcePose.Load3(s.PoseOffset+indices.z*40)));
