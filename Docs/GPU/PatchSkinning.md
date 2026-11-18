@@ -1,4 +1,4 @@
-상태: 완료 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 `cfffd37f`, PS-4a `cfd3e682`, PS-4b `84e95a1d`, PS-4c `2c2b2d71`, PS-5 `21be6675`, PS-6 `f00a1993`, 비용 측정 커밋; SP7e2 PASS, Debug/Release 회귀 6종 PASS (2026-11-13). 기준 master `f2b4d2ec`
+상태: 완료 — PS-0 `42b3c9ab`, PS-1 `0bdb795c`, PS-2a `62e60db3`, PS-2b `cbe54cda`, PS-3 `cfffd37f`, PS-4a `cfd3e682`, PS-4b `84e95a1d`, PS-4c `2c2b2d71`, PS-5 `21be6675`, PS-6 `f00a1993`, 비용 측정 커밋; SP7e2 PASS, Debug/Release 회귀 6종 PASS (2026-11-13). 기준 master `f2b4d2ec`; 녹화용 지연 시연 옵션 추가(미커밋, 2026-11-18; 빌드·실행 미수행)
 
 # 스켈레탈 패치 조각 스키닝 (NDC25 "프로시저럴 메시 스키닝")
 
@@ -119,6 +119,7 @@ void BuildPatchPalette(const PatchSkinSnapshot& snap, const Joint* current,
 ## 시각 확인 (2026-11-13)
 
 - 시연 옵션: `-patch-skinning 0`은 스키닝을 켜지 않고 이전 강체 부착으로 그린다(비교용). `-skeletal-break-demo-bone <이름>`은 `-skeletal-break-demo 1|2`에서 그 이름의 node와 DFS 첫 자식 사이 중점을 자른다.
+- 녹화 지연: `-skeletal-break-demo-delay-sec N`은 `-skeletal-break-demo 1|2` 전용 정수 초(기본 0)다. `ModelViewer::Startup` 끝부터 실제 시간 N초와 기존 60프레임을 모두 기다린 뒤 `ModelViewer::Update`에서 절단한다. N>0은 `ModelViewer::BuildSkeletalDemoPlane`으로 첫 유효 pose의 평면 중심 구도를 한 번 잡고 이후 카메라를 재배치하지 않는다. 녹화 비교는 `-patch-skinning 0`(리지드, 갈라짐) / `1`(정상)로 한다.
 - CesiumMan(걷기) 팔·위팔·허벅지 좌우·목·몸통: 강체는 패치–원본 경계가 찢어지고(어깨·허리·목 둘레 틈), 스키닝은 매끈하게 이어져 걷는 동작을 따른다. 정강이는 두 모드 모두 화면상 절단 흔적이 작다.
 - Xbot(거의 정지 자세) 허벅지·정강이·위팔·전완·목·척추: 두 모드가 거의 같아 애니메이션 차이는 확인하지 못했다.
 - 스키닝과 무관한 기존 문제(추정): CesiumMan 위팔 절단에서 허리 쪽 삼각형이 패치에 들어가 B(팔)와 함께 움직인다(두 모드 동일). 패치 아일랜드 구분이 필요하다.

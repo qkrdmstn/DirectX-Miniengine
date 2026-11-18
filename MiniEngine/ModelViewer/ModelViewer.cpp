@@ -55,6 +55,7 @@
 #include "Scene/tests/AttachedRecutChecks.h"
 #include "Scene/tests/RigBoneCutChecks.h"
 #include <cmath>
+#include <chrono>
 
 using namespace GameCore;
 using namespace Math;
@@ -150,6 +151,13 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+    uint32_t m_SkeletalDemoDelaySeconds = 0;
+    std::chrono::steady_clock::time_point m_SkeletalDemoStart;
+    bool m_SkeletalDemoCameraFocused = false;
+    // 시연 옵션에 맞는 현재 pose의 절단 평면을 계산한다.
+    void BuildSkeletalDemoPlane(const Viewer::GameObject& object, MeshCutting::CutPlaneData& plane);
+    // 지연 시연의 첫 유효 pose에서 시작 구도를 한 번만 잡는다.
+    void TryFocusSkeletalDemoCamera();
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
     void FocusBreakCamera(const Vector3& center, bool demo);
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
@@ -379,6 +387,17 @@ void ModelViewer::Startup( void )
     if (CommandLineArgs::GetString(L"skeletal-break-demo-unmask", unmaskValue) && !m_SkeletalBreakDemo)
         throw std::invalid_argument("skeletal-break-demo-unmask requires skeletal-break-demo");
 
+    // 지연 옵션은 시연 전용이며 음수나 소수 없이 정수 초만 허용한다.
+    std::wstring delayValue;
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-delay-sec", delayValue))
+    {
+        if (!m_SkeletalBreakDemo)
+            throw std::invalid_argument("skeletal-break-demo-delay-sec requires skeletal-break-demo");
+        if (delayValue.empty() || delayValue.find_first_not_of(L"0123456789") != std::wstring::npos)
+            throw std::invalid_argument("skeletal-break-demo-delay-sec must be nonnegative integer seconds");
+        CommandLineArgs::GetInteger(L"skeletal-break-demo-delay-sec", m_SkeletalDemoDelaySeconds);
+    }
+
     // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
     if (m_SkeletalBreakDemo || m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
     {
@@ -401,7 +420,8 @@ void ModelViewer::Startup( void )
     if (m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
     {
         std::wstring value;
-        for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
+        for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask",
+            L"skeletal-break-demo-delay-sec", L"model",
             L"capture", L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
             L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
             L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
@@ -540,6 +560,7 @@ void ModelViewer::Startup( void )
         L"physics-sim-checks", L"skeletal-break-checks", L"skeletal-break-xbot", L"xbot-arm-checks",
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
         L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"skeletal-break-demo-bone",
+        L"skeletal-break-demo-delay-sec",
         L"capture", L"capture-frame", L"animation-step-ms",
         L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cap-threads",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
@@ -787,6 +808,13 @@ void ModelViewer::Startup( void )
                 Utility::Printf("RigPreload owner=%s failed: %s\n", object->GetName().c_str(), error.what());
             }
         }
+    }
+
+    // 시작 pose가 준비되었으면 구도를 잡고 초기화가 끝난 시각부터 지연을 잰다.
+    if (m_SkeletalDemoDelaySeconds > 0)
+    {
+        TryFocusSkeletalDemoCamera();
+        m_SkeletalDemoStart = std::chrono::steady_clock::now();
     }
 }
 
@@ -1081,34 +1109,28 @@ void ModelViewer::Update( float deltaT )
         ++m_AutoCutIndex;
     }
 
-    // 60프레임의 재생 pose에서 기존 case 평면으로 정상 C를 한 번 요청한다.
-    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60 && !m_Cutting.IsBusy())
+    // 시작 pose가 없었던 경우 첫 유효 프레임에서 구도를 잡고 실제 경과 시간을 확인한다.
+    if (m_SkeletalDemoDelaySeconds > 0)
+        TryFocusSkeletalDemoCamera();
+    const bool demoDelayElapsed = m_SkeletalDemoDelaySeconds == 0
+        || std::chrono::steady_clock::now() - m_SkeletalDemoStart >= std::chrono::seconds(m_SkeletalDemoDelaySeconds);
+
+    // 60프레임의 재생 pose와 선택한 실제 시간 지연을 모두 만족하면 정상 C를 한 번 요청한다.
+    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60 && demoDelayElapsed && !m_Cutting.IsBusy())
     {
         // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
         m_SkeletalDemoRequested = true;
         for (const auto& object : m_Scene.GetObjects())
             if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
             {
-                // -skeletal-break-demo-bone이 있으면 그 이름의 node와 DFS 첫 자식(다음 번호) 사이를 자른다.
-                std::wstring boneValue;
+                // 시작 구도와 같은 계산으로 절단 시점의 현재 pose 평면을 만든다.
                 MeshCutting::CutPlaneData plane;
-                if (CommandLineArgs::GetString(L"skeletal-break-demo-bone", boneValue))
-                {
-                    const std::string bone(boneValue.begin(), boneValue.end());
-                    const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
-                    const auto found = std::find(names.begin(), names.end(), bone);
-                    if (found == names.end() || found + 1 == names.end())
-                        throw std::invalid_argument("skeletal-break-demo-bone not found: " + bone);
-                    const uint32_t node = uint32_t(found - names.begin());
-                    plane = Viewer::BuildSkeletalBonePlane(*object, node, node + 1);
-                    Utility::Printf("Skeletal demo bone=%s node=%u child=%u\n", bone.c_str(), node, node + 1);
-                }
-                else
-                {
-                    plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
-                }
+                BuildSkeletalDemoPlane(*object, plane);
+
+                // 지연 시연은 사용자 구도를 유지하고 기존 시연만 절단 부위로 이동한다.
                 m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
-                FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+                if (m_SkeletalDemoDelaySeconds == 0)
+                    FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
                 Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
                 break;
             }
@@ -1295,6 +1317,53 @@ void ModelViewer::Update( float deltaT )
     m_MainScissor.top = 0;
     m_MainScissor.right = (LONG)g_SceneColorBuffer.GetWidth();
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
+}
+
+// 본 이름 옵션 또는 기존 case를 사용해 시연의 현재 pose 평면을 만든다.
+void ModelViewer::BuildSkeletalDemoPlane(const Viewer::GameObject& object, MeshCutting::CutPlaneData& plane)
+{
+    // 지정한 본이 없으면 기본 시연 case의 평면을 사용한다.
+    std::wstring boneValue;
+    if (!CommandLineArgs::GetString(L"skeletal-break-demo-bone", boneValue))
+    {
+        plane = Viewer::BuildSkeletalBreakPlane(object, m_SkeletalBreakDemo);
+        return;
+    }
+
+    // 기존 본 이름 검증과 node 선택을 시작 구도 및 절단 요청에서 공유한다.
+    const std::string bone(boneValue.begin(), boneValue.end());
+    const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object.GetName() + ".glb");
+    const auto found = std::find(names.begin(), names.end(), bone);
+    if (found == names.end() || found + 1 == names.end())
+        throw std::invalid_argument("skeletal-break-demo-bone not found: " + bone);
+    const uint32_t node = uint32_t(found - names.begin());
+    plane = Viewer::BuildSkeletalBonePlane(object, node, node + 1);
+    Utility::Printf("Skeletal demo bone=%s node=%u child=%u\n", bone.c_str(), node, node + 1);
+}
+
+// 지연 시연은 첫 유효 pose의 평면 중심으로만 카메라를 배치한다.
+void ModelViewer::TryFocusSkeletalDemoCamera()
+{
+    // 한 번 구도를 잡은 뒤에는 사용자 카메라 이동을 그대로 유지한다.
+    if (!m_SkeletalBreakDemo || m_SkeletalDemoCameraFocused)
+        return;
+
+    // Startup에서 pose가 준비되지 않았다면 Update의 pose 확정 뒤 다시 시도한다.
+    for (const auto& object : m_Scene.GetObjects())
+    {
+        if (object->GetName() != (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
+            continue;
+        const auto* pose = object->GetModelInstance();
+        if (!pose || !pose->HasValidPose() || object->GetMeshComponents().empty())
+            return;
+
+        // 절단 요청과 같은 평면 계산으로 시작 구도를 한 번 확정한다.
+        MeshCutting::CutPlaneData plane;
+        BuildSkeletalDemoPlane(*object, plane);
+        FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+        m_SkeletalDemoCameraFocused = true;
+        return;
+    }
 }
 
 // 절단 중심을 향한 카메라와 이동 제어기의 자세를 한 번 동기화한다.
