@@ -19,12 +19,13 @@ StructuredBuffer<DrawInput> Inputs : register(t1);
 StructuredBuffer<uint> State : register(t2);
 RWByteAddressBuffer ReplacedIB : register(u0);
 
-// 제거 비트가 있으면 해당 삼각형의 첫 원본 인덱스를 반환한다.
+// 제거 비트와 진단 선택에 따라 해당 삼각형을 원본 또는 퇴화 인덱스로 반환한다.
 uint Replacement(DrawInput draw, uint index, uint original)
 {
-    // 패치 소유권 하위 비트는 보존하고 제거 여부만 판정한다.
+    // 기본 경로는 제거되지 않은 면을 보존하고 진단 경로는 제거된 면을 보존한다.
     uint triangleId = index / 3;
-    if ((State[draw.FirstTriangle + triangleId] & 0x80000000u) == 0)
+    bool hidden = (State[draw.FirstTriangle + triangleId] & 0x80000000u) != 0;
+    if (draw.Reserved1 != 0 ? hidden : !hidden)
         return original;
 
     // baseVertex는 DrawIndexed에서 더하므로 IB에는 원래 상대 인덱스를 쓴다.

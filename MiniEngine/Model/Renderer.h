@@ -108,6 +108,13 @@ namespace Renderer
         const Frustum& GetViewFrustum() const { return m_Camera->GetViewSpaceFrustum(); }
         const Matrix4& GetViewMatrix() const { return m_Camera->GetViewMatrix(); }
 
+        // 메인 와이어프레임 배치에서만 진단용 원본 마스크를 추가한다.
+        bool IsWireframe() const
+        {
+            // 그림자 배치에는 진단 삼각형을 등록하지 않는다.
+            return m_BatchType == kDefault && m_RenderMode == RenderMode::Wireframe;
+        }
+
         // 원본 draw와 객체별 posed SRV를 보관하고 렌더 패스별로 분류한다.
         void AddMesh( const Mesh& mesh, float distance,
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV,

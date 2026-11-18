@@ -1,5 +1,72 @@
-상태: 완료 — Release GPU 검증(2026-11-18)
+상태: 완료 — Release GPU 검증(2026-11-18): -show-masked-region 1/2 캡처에서 늘어난 마스크 원본(주황) 확인, 재복사 수치 불변(ON 2096/90, OFF 2006/0)
 # 양쪽 허벅지 순차 절단 재복사 녹화
+
+## 숨겨진 원본 영역 표시 (새 옵션, 검증 대기)
+
+`-show-masked-region 0|1|2`는 기본 0(생략과 동일)이며 `-view 1`과 함께 사용한다.
+- 1: 비마스크 원본은 기존 흰색, 마스크 원본은 주황색 `(1, 0.25, 0.05)` 선으로 표시한다.
+  본 부착 패치는 시뮬레이션·게시를 유지하며 렌더·그림자만 숨긴다.
+- 2: 같은 원본 표시와 기존 초록색 본 부착 패치를 함께 그린다.
+- 주황색은 제거 비트가 설정된 **원본 삼각형**이다. 현재 원본 PG 또는 legacy VS 팔레트를
+  공유하므로 분리된 몸체 사이에서 늘어난 원본이 보인다. 카메라·예약·종료 로직은 바꾸지 않는다.
+- 주황색 추가는 메인 Wireframe에만 적용한다. Solid/Vertices에는 추가하지 않는다.
+  값 1의 패치 숨김은 모든 표시 모드에 적용한다. 기존 깊이 검사·가림은 유지한다.
+
+기존 `-skeletal-break-demo-unmask 1`은 `SkeletalPatchCopy::Update`의 SP7e 게시에서
+`SetTriangleMask(m_Removal)` 자체를 생략한다. 원본 전체와 초록 패치가 함께 보이지만
+마스크 면 색상 구분이 없으며 `IsUnmaskDemoPublished`가 후속 C 요청도 거절한다.
+새 옵션은 실제 마스크를 정상 게시하여 양쪽 다리와 recopy ON/OFF를 유지한다.
+unmask는 생략하거나 0을 지정한다. 새 옵션과 unmask 1의 혼용은 시작 오류로 거절한다.
+
+`TriangleMask::Pending`은 제거 비트와 마지막 패치 ID만 저장한다. 새 패치 ID는 덮어쓰며,
+정상 recopy OFF는 이미 숨겨진 90개를 두 번째 추출에서 제외한다. ON의 재선택만 세면
+ON/OFF 색 의미도 달라진다. 같은 의미의 교집합 표시는 제외 전 선택이나 별도 이력이 필요하므로
+이번 변경에서는 세 번째 색을 생략한다. 주황색은 마스크 합집합이며 90개를 중복 draw하지 않는다.
+
+`MeshComponent::UpdateTriangleMask`는 `TriangleMaskCS::Replacement`를
+`DrawInput::Reserved1` 선택 반전으로 한 번 더 실행해 마스크 전용 IB를 만든다.
+`MeshComponent::Update`는 기존 `MeshConstants::OverlayColor`만 바꾼 상수를 준비하고,
+`MeshComponent::Render`는 동일 VB·pose·재질·컬링으로 추가 등록한다.
+기본 옵션에는 추가 GPU 버퍼·dispatch·draw가 없다. 새 셰이더·프로젝트 항목도 없다.
+
+### 새 옵션 녹화 명령 (자동 종료 없음)
+
+Claude가 Debug/Release 빌드 후 실행한다. 각 창을 닫은 뒤 다음 명령을 실행한다.
+```powershell
+Set-Location C:\Users\Pes\Desktop\DirectX-Miniengine-multicut-repro\MiniEngine\ModelViewer
+$exe = '..\Build\x64\Release\Output\ModelViewer\ModelViewer.exe'
+$common = @('-debug', '1', '-skeletal-break-demo', '1', '-skeletal-break-demo-bone', 'mixamorig:LeftUpLeg',
+    '-skeletal-break-demo-next-bone', 'mixamorig:RightUpLeg', '-skeletal-break-demo-delay-sec', '10',
+    '-skeletal-break-demo-next-sec', '3', '-view', '1')
+& $exe @common -show-masked-region 1 -patch-recopy-bug 1
+& $exe @common -show-masked-region 1 -patch-recopy-bug 0
+& $exe @common -show-masked-region 2 -patch-recopy-bug 1
+& $exe @common -show-masked-region 2 -patch-recopy-bug 0
+```
+
+### Claude 검증 명령과 예상 캡처
+
+위 `$common`을 재사용한다. `-capture`는 파일 prefix이므로 부모 폴더를 먼저 만든다.
+```powershell
+$out = '..\..\multicut_capture\masked-original'
+New-Item -ItemType Directory -Force -Path $out | Out-Null
+foreach ($mode in 0, 1, 2) {
+    foreach ($bug in 0, 1) {
+        $prefix = "$out/mode$mode-bug$bug"
+        & $exe @common -show-masked-region $mode -patch-recopy-bug $bug -physics-query-exit 1800 -capture $prefix
+        Copy-Item "$env:TEMP/SP6-SkeletalPatchChecks.log" "$prefix.log"
+    }
+}
+```
+
+- mode0: 기존 흰 원본·초록 패치. 옵션 생략과 같은 결과여야 한다.
+- mode1: cut1부터 마스크 원본이 주황색이며 초록 패치는 없다. cut2의
+  `*-cut2-demo-000-post.raw`~`007`에서 다리·몸통 사이의 늘어난 주황 선과 골반 겹침을 확인한다.
+- mode2: 같은 주황 원본에 초록 패치가 추가된다. 앞쪽 면에 가려진 선은 보이지 않을 수 있다.
+- 두 번째 로그는 기존 ON `2096/90`, OFF `2006/0`을 유지해야 한다. 카메라 점프와 D3D12 오류도 확인한다.
+  원본 마스크 합집합은 ON/OFF가 같을 수 있으므로 주황 선 차이만으로 recopy 여부를 판단하지 않는다.
+
+이번 변경은 빌드·실행·캡처하지 않았다. 아래 기존 Release 실측과 구분한다.
 
 ## 데이터 근거
 

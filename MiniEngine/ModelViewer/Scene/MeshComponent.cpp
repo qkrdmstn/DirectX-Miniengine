@@ -32,6 +32,15 @@ namespace Viewer
         if (model.m_NumNodes == 0)
             throw std::invalid_argument("Mesh component requires nodes");
 
+        // 진단 표시는 실제 제거 마스크를 유지하며 기존 unmask와의 혼용을 거절한다.
+        CommandLineArgs::GetInteger(L"show-masked-region", m_ShowMaskedRegion);
+        if (m_ShowMaskedRegion > 2)
+            throw std::invalid_argument("show-masked-region must be 0, 1 or 2");
+        uint32_t unmask = 0;
+        CommandLineArgs::GetInteger(L"skeletal-break-demo-unmask", unmask);
+        if (m_ShowMaskedRegion && unmask)
+            throw std::invalid_argument("show-masked-region requires skeletal-break-demo-unmask 0 or absent");
+
         // 컴포넌트 전용 pose 버퍼와 렌더 상수 버퍼를 만든다.
         m_PosedGeometry = m_Geometry->IsGenerated() ? std::make_unique<PosedGeometry>(*m_Geometry->GetGenerated())
             : std::make_unique<PosedGeometry>(model);
@@ -68,6 +77,15 @@ namespace Viewer
             m_TriangleMask->ByteCount = last - first;
             m_TriangleMask->State.Create(L"Component triangle state", uint32_t(triangles), 4);
             m_TriangleMask->ReplacedIB.Create(L"Component replacement IB", (last - first) / 4, 4);
+
+            // 명시적 진단에서만 숨겨진 원본 인덱스와 주황색 상수 저장 공간을 추가한다.
+            if (m_ShowMaskedRegion)
+            {
+                const uint32_t nodes = m_Geometry->GetSource()->m_NumNodes;
+                m_TriangleMask->MaskedIB.Create(L"Masked original IB", (last - first) / 4, 4);
+                m_TriangleMask->MaskedConstantsCPU.Create(L"Masked constants upload", nodes * sizeof(MeshConstants));
+                m_TriangleMask->MaskedConstantsGPU.Create(L"Masked constants", nodes, sizeof(MeshConstants));
+            }
         }
         if (m_TriangleMask->Pending == state) return true;
         m_TriangleMask->Pending = state;
@@ -143,6 +161,17 @@ namespace Viewer
         const uint32_t groups = (mask.ByteCount / 4 + 63) / 64;
         compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
         context.TransitionResource(mask.ReplacedIB, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+        // 같은 치환 커널의 선택을 반전해 제거된 삼각형만 원본 인덱스로 보존한다.
+        if (m_ShowMaskedRegion)
+        {
+            for (auto& draw : draws) draw[15] = 1;
+            compute.TransitionResource(mask.MaskedIB, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.SetDynamicSRV(2, draws.size() * sizeof(draws[0]), draws.data());
+            compute.SetBufferUAV(4, mask.MaskedIB);
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            context.TransitionResource(mask.MaskedIB, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        }
         context.TransitionResource(source, D3D12_RESOURCE_STATE_GENERIC_READ);
         mask.AppliedRevision = mask.Revision;
     }
@@ -996,6 +1025,25 @@ namespace Viewer
             m_PosedGeometry->Update(context, model, localNodes.data(), joints);
         for (uint32_t i = 0; i < model.m_NumNodes; ++i)
             constants[i].UsePosedVertices = Renderer::UseComputePose && m_PosedGeometry->IsReady();
+
+        // 원본과 동일한 현재 pose 상수에서 선 색상만 주황색으로 바꾼다.
+        if (m_ShowMaskedRegion && m_TriangleMask)
+        {
+            auto& mask = *m_TriangleMask;
+            auto* masked = static_cast<MeshConstants*>(mask.MaskedConstantsCPU.Map());
+            std::memcpy(masked, constants, model.m_NumNodes * sizeof(MeshConstants));
+            for (uint32_t i = 0; i < model.m_NumNodes; ++i)
+            {
+                masked[i].OverlayColor[0] = 1.0f;
+                masked[i].OverlayColor[1] = 0.25f;
+                masked[i].OverlayColor[2] = 0.05f;
+            }
+            mask.MaskedConstantsCPU.Unmap();
+            context.TransitionResource(mask.MaskedConstantsGPU, D3D12_RESOURCE_STATE_COPY_DEST, true);
+            context.GetCommandList()->CopyBufferRegion(mask.MaskedConstantsGPU.GetResource(), 0,
+                mask.MaskedConstantsCPU.GetResource(), 0, model.m_NumNodes * sizeof(MeshConstants));
+            context.TransitionResource(mask.MaskedConstantsGPU, D3D12_RESOURCE_STATE_GENERIC_READ);
+        }
         m_ConstantsCPU.Unmap();
         context.TransitionResource(m_ConstantsGPU, D3D12_RESOURCE_STATE_COPY_DEST, true);
         context.GetCommandList()->CopyBufferRegion(m_ConstantsGPU.GetResource(), 0,
@@ -1010,6 +1058,14 @@ namespace Viewer
         // break 성공 전의 준비물은 렌더 목록에 넣지 않는다.
         if (!m_Ready || !PublishVisible)
             return;
+
+        // 원본 단독 진단에서는 패치를 시뮬레이션에 남기고 렌더와 그림자만 숨긴다.
+        if (m_ShowMaskedRegion == 1 && Attachment)
+            return;
+
+        // 진단 삼각형은 메인 와이어프레임에서만 기존 원본과 동일한 pose로 그린다.
+        const bool showMasked = m_ShowMaskedRegion && m_TriangleMask
+            && m_TriangleMask->AppliedRevision && sorter.IsWireframe();
         const auto& sections = m_Geometry->GetSections();
         const Matrix4& viewMatrix = sorter.GetViewMatrix();
         const AffineTransform view((Vector3)viewMatrix.GetX(), (Vector3)viewMatrix.GetY(),
@@ -1031,6 +1087,16 @@ namespace Viewer
                 posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0,
                 m_TriangleMask && m_TriangleMask->AppliedRevision
                     ? m_TriangleMask->ReplacedIB.GetGpuVirtualAddress() - m_TriangleMask->FirstByte : 0);
+
+            // 원본 VB와 팔레트는 공유하고 마스크 IB와 기존 색상 상수 경로만 바꾼다.
+            if (showMasked)
+                sorter.AddMesh(mesh, -sphereVS.GetCenter().GetZ() - sphereVS.GetRadius(),
+                    m_TriangleMask->MaskedConstantsGPU.GetGpuVirtualAddress() + sizeof(MeshConstants) * mesh.meshCBV,
+                    m_Geometry->GetMaterialAddress(mesh),
+                    m_Geometry->GetDataBuffer().GetGpuVirtualAddress(), joints,
+                    posed ? &m_PosedGeometry->GetBuffer() : nullptr,
+                    posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0,
+                    m_TriangleMask->MaskedIB.GetGpuVirtualAddress() - m_TriangleMask->FirstByte);
         }
     }
 }

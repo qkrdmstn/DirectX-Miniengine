@@ -42,6 +42,9 @@ namespace Viewer
     {
         StructuredBuffer State;
         ByteAddressBuffer ReplacedIB;
+        ByteAddressBuffer MaskedIB;
+        UploadBuffer MaskedConstantsCPU;
+        ByteAddressBuffer MaskedConstantsGPU;
         uint32_t TriangleCount = 0, Revision = 0, AppliedRevision = 0;
         uint32_t FirstByte = 0, ByteCount = 0;
         std::vector<uint32_t> Pending;
@@ -191,6 +194,7 @@ namespace Viewer
         // 같은 그래픽 명령 목록에서 치환 IB를 갱신한다.
         void UpdateTriangleMask(GraphicsContext& context);
         std::unique_ptr<TriangleMask> m_TriangleMask;
+        uint32_t m_ShowMaskedRegion = 0;
         ComponentId m_Id;
         uint64_t m_EditGeneration = 1;
         uint64_t m_PhysicsPoseGeneration = 1;

@@ -1,6 +1,12 @@
-상태: 완료 — 본 부착 패치 조각의 선·점 초록색 표시(base `b0f61524`, 2026-11-06): Debug/Release 빌드, Xbot `-skeletal-break-demo 1 -view 1/2` 캡처에서 패치 초록 확인, unmask 단독 시작 예외 확인. Compute pose 연결은 `673b56b6`; 기존 검증 이력을 유지하며 최신 pose 검증은 GPU 설계 11·14절, 생성 Static 절단 geometry 검증은 StaticCutImplementation.md 참조.
+상태: 진행 중 — 미커밋(base `74e2db5a`): 원본 마스크 표시 추가, 빌드·GPU 검증 대기. 기존 완료 기록 — 본 부착 패치 조각의 선·점 초록색 표시(base `b0f61524`, 2026-11-06): Debug/Release 빌드, Xbot `-skeletal-break-demo 1 -view 1/2` 캡처에서 패치 초록 확인, unmask 단독 시작 예외 확인. Compute pose 연결은 `673b56b6`; 기존 검증 이력을 유지하며 최신 pose 검증은 GPU 설계 11·14절, 생성 Static 절단 geometry 검증은 StaticCutImplementation.md 참조.
 
 # ModelViewer 표시 모드
+
+추가 상태: 진행 중 — 미커밋(base `74e2db5a`): `-show-masked-region 1|2 -view 1`은
+실제 제거 마스크를 유지하며 숨겨진 원본 면을 주황색으로 추가한다. 1은 본 부착 패치 렌더·그림자를
+숨기고 2는 기존 초록 패치를 함께 표시한다. 기본 0이며 Solid/Vertices에는 주황 면을 추가하지 않는다.
+unmask 1과 혼용할 수 없고 중복 마스크 색은 생략했다. 빌드·GPU 검증은 Claude 대기.
+함수·명령·예상 캡처는 [PatchRecopyRepro.md](../GPU/PatchRecopyRepro.md)를 따른다.
 
 `V`는 Solid → Wireframe → Vertices → Solid로 순환하며 overlay에 현재 모드를 표시한다.
 `-view 0|1|2`는 시작 모드만 선택한다. 생략·범위 밖은 Solid다.
