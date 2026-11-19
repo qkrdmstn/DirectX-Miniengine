@@ -3869,7 +3869,7 @@ namespace Viewer
         m_IslandLabels = {};
     }
 
-    // 컴포넌트 제거 상태를 반영해 GPU 선택·추출과 기존 패치 인접 집계를 제출한다.
+    // 컴포넌트 제거 상태를 반영해 GPU 선택·병렬 prefix·추출과 패치 인접 집계를 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
         uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child,
@@ -3990,7 +3990,12 @@ namespace Viewer
         alignas(16) const uint32_t metadata[] = { 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, 0, 0, 0, UINT32_MAX, 0, 0 };
         m_Output->LocalBounds.Create(L"Patch counts and local bounds", 11, 4, metadata);
         m_Output->TriangleSources.Create(L"Patch triangle sources", uint32_t(triangles), 12);
-        m_Scan.Create(L"Patch inclusive prefix", uint32_t(triangles), 8);
+
+        // 삼각형 prefix 뒤에 블록별 합계와 offset을 위한 16바이트 영역을 확보한다.
+        const uint32_t blocks = uint32_t((triangles + 63) / 64);
+        m_Scan.Create(L"Patch inclusive prefix", uint32_t(triangles + 2 * blocks), 8);
+
+        // draw와 팔레트 입력 및 선택 결과 버퍼를 준비한다.
         m_Descriptors.Create(L"Patch draw inputs", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
         if (masks.empty()) masks.push_back(0);
         m_Masks.Create(L"Patch palette mask", uint32_t(masks.size()), 4, masks.data());
@@ -4030,7 +4035,8 @@ namespace Viewer
             compute.TransitionResource(*outputs[i], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.SetBufferUAV(i + 5, *outputs[i]);
         }
-        const uint32_t groups = (c.Triangles + 63) / 64;
+        const uint32_t groups = blocks;
+
         // GPU 선택 결과를 CPU 대기 없이 추출에 연결한다.
         if (influence)
         {
@@ -4043,13 +4049,20 @@ namespace Viewer
             compute.Dispatch(1);
             compute.InsertUAVBarrier(m_Selected);
         }
-        for (c.Mode = 0; c.Mode < 3; ++c.Mode)
+
+        // 블록 scan·블록 offset scan·offset 적용을 거친 뒤 삼각형을 추출한다.
+        const uint32_t modes[] = { 0, 1, 6, 7, 2 };
+        for (uint32_t mode : modes)
         {
+            // 블록 합계 scan만 한 그룹을 쓰고 나머지는 기존 2D 분할을 유지한다.
+            c.Mode = mode;
             compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
-            compute.Dispatch(c.Mode == 1 ? 1 : std::min(groups, 65535u), c.Mode == 1 ? 1 : (groups + 65534) / 65535);
-            if (c.Mode < 2)
+            if (c.Mode == 6) compute.Dispatch(1);
+            else compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+
+            // 다음 패스가 읽을 scan과 기존 bounds 초기화의 UAV 의존성을 보장한다.
+            if (c.Mode != 2)
             {
-                // 다음 패스가 읽을 UAV만 동기화하고 마지막 패스는 상태 전환으로 마친다.
                 compute.InsertUAVBarrier(m_Scan);
                 compute.InsertUAVBarrier(m_Output->LocalBounds);
             }

@@ -27,6 +27,31 @@ RWByteAddressBuffer Meta : register(u2); // counts 0..8, local AABB 12..32, sour
 RWByteAddressBuffer Scan : register(u3); // inclusive prefix, crossing flag
 RWByteAddressBuffer Votes : register(u4); // NodeId별 uint64 (lo, hi)
 RWByteAddressBuffer Chosen : register(u5);
+groupshared uint Prefix[64];
+groupshared uint2 Counts[64];
+
+// 그룹의 선택·교차·미포함 합계를 Hillis-Steele inclusive scan으로 계산한다.
+uint3 ScanTotals(uint lane, uint3 value)
+{
+    // 범위 밖 lane도 0을 기록하고 모든 lane이 초기화를 마칠 때까지 기다린다.
+    Prefix[lane]=value.x;
+    Counts[lane]=value.yz;
+    GroupMemoryBarrierWithGroupSync();
+
+    // 이전 단계 값을 모두 읽은 뒤 덮어쓰고 다음 단계 전에 동기화한다.
+    [unroll] for(uint offset=1;offset<64;offset*=2)
+    {
+        uint3 previous=0;
+        if(lane>=offset) previous=uint3(Prefix[lane-offset],Counts[lane-offset]);
+        GroupMemoryBarrierWithGroupSync();
+        Prefix[lane]+=previous.x;
+        Counts[lane]+=previous.yz;
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    // 각 lane의 누적 합계를 반환한다.
+    return uint3(Prefix[lane],Counts[lane]);
+}
 
 // 원본 draw의 R16/R32 인덱스와 baseVertex를 해석한다.
 uint Index(DrawInput s, uint i)
@@ -111,7 +136,7 @@ uint Ordered(float x)
     // 음수 구간은 비트를 반전하고 양수는 부호 비트를 뒤집는다.
     uint b=asuint(x); return b&0x80000000?~b:b^0x80000000;
 }
-// 투표·선택·추출과 기존 제거 패치의 인접 집계를 같은 입력으로 실행한다.
+// 투표·선택·병렬 prefix·추출과 기존 제거 패치의 인접 집계를 실행한다.
 [numthreads(64,1,1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -135,18 +160,56 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    // 순차 prefix sum으로 원본 삼각형 순서를 보존한다.
+    // 블록 안 prefix와 세 종류의 블록 합계를 계산한다.
     if(Mode==1)
     {
-        if(t!=0) return;
-        uint sum=0,crossing=0,uncovered=0;
-        for(uint i=0;i<Triangles;i++)
+        // 초과 그룹과 마지막 블록의 빈 lane은 0으로 scan에 참여한다.
+        uint lane=t%64,b=t/64,blocks=(Triangles+63)/64;
+        uint2 flags=0;
+        if(t<Triangles) flags=Scan.Load2(t*8);
+        uint3 total=ScanTotals(lane,uint3(flags,flags.y*(1-flags.x)));
+
+        // 삼각형 영역과 블록 영역의 쓰기 경계를 각각 제한한다.
+        if(t<Triangles) Scan.Store(t*8,total.x);
+        if(lane==63 && b<blocks) Scan.Store3(Triangles*8+b*16,total);
+        return;
+    }
+
+    // 한 그룹이 연속 블록 구간의 합계를 scan해 전역 offset과 총계를 만든다.
+    if(Mode==6)
+    {
+        // lane마다 연속 구간을 맡아 세 종류의 합계를 먼저 읽는다.
+        uint lane=t%64,blocks=(Triangles+63)/64;
+        uint count=(blocks+63)/64;
+        uint begin=lane*count,end=min(begin+count,blocks);
+        uint3 sum=0;
+        for(uint b=begin;b<end;b++) sum+=Scan.Load3(Triangles*8+b*16);
+
+        // 구간 inclusive 합계에서 자신의 합계를 빼 exclusive 시작점을 얻는다.
+        uint3 total=ScanTotals(lane,sum);
+        uint offset=total.x-sum.x;
+
+        // 구간을 앞에서부터 순회하며 블록 선택 합계를 exclusive offset으로 바꾼다.
+        for(uint b=begin;b<end;b++)
         {
-            uint2 flags=Scan.Load2(i*8);
-            sum+=flags.x; crossing+=flags.y; uncovered+=flags.y*(1-flags.x);
-            Scan.Store(i*8,sum);
+            uint address=Triangles*8+b*16;
+            uint selected=Scan.Load(address);
+            Scan.Store(address,offset);
+            offset+=selected;
         }
-        Meta.Store3(0,uint3(sum,crossing,uncovered));
+
+        // 마지막 lane이 빈 구간이어도 그룹 전체 총계를 한 번 기록한다.
+        if(lane==63) Meta.Store3(0,total);
+        return;
+    }
+
+    // 앞 블록의 합계를 더해 원본 삼각형 순서의 전역 inclusive prefix를 완성한다.
+    if(Mode==7)
+    {
+        // 첫 블록은 이미 완성되어 있으며 초과 lane은 읽기와 쓰기를 모두 건너뛴다.
+        uint b=t/64;
+        if(t<Triangles && b!=0)
+            Scan.Store(t*8,Scan.Load(t*8)+Scan.Load(Triangles*8+b*16));
         return;
     }
     if(t>=Triangles) return;
