@@ -67,7 +67,7 @@ MI-1(base `2a1620cd`, 2026-11-13): `BuildInfluencingJoints`는 skin section에 d
 | --- | --- |
 | `ModelViewer/Scene/Scene.*`의 `Scene`, `GameObject` | Scene이 객체를 소유한다. GameObject는 TRS의 원본이며 모델 없이도 존재한다. 모델이 있으면 ModelInstance를 가진다. |
 | `ModelViewer/Scene/SkeletalPhysicsSystem.*` | 공통 PhysicsSystem의 world에서 owner별 rig를 등록·정리하고 Kinematic 목표, 동기 BreakConstraint, 배율을 복원한 Dynamic 본 override, 실제 상태 조회를 제공한다. |
-| `Physics/PhysicsWorldStep.cpp`, `ModelViewer/Scene/SkeletalPhysicsSystem.*` | `CollideOrientedBox`로 Moving body를 조회하고, `FindBody`로 owner·body·node를 찾으며, `BuildKinematicSegments`로 살아 있는 kinematic constraint의 world 끝점을 만든다. |
+| `Physics/PhysicsWorldStep.cpp`, `ModelViewer/Scene/SkeletalPhysicsSystem.*` | `CollideOrientedBox`로 Moving body를 조회하고, `FindBody`로 owner·body·node를 찾으며, `BuildKinematicSegments`로 선택 body가 Kinematic이고 incoming 관절이 살아 있는 선분의 world 끝점을 만든다(root는 기존 조건, Dynamic 자식 끝점은 `UpdateKinematicTargets`가 덮어쓰기 전에 보관한 `AnimationFrame` 사용, [설계](../GPU/RigRecutSelection.md)). |
 | `ModelViewer/Scene/SkeletalPatchCopy.*`, `PhysicsSimulation.cpp` | `RegisterAutoRig`는 로드·C 입력 공용 등록이다. `RefreshPreloadedRig`는 배율 변경 시 끊김 없는 rig를 재등록한다. rig kinematic body는 sensor이며 break 시 해제하고, 이미 겹친 Dynamic 쌍은 분리까지 임시 충돌 제외한다. |
 | `ModelViewer/Scene/tests/SkeletalPhysicsChecks.h`의 `SkeletalPhysicsChecks` | fixture/Xbot을 실제 공통 fixed-step 경로로 구동하고 본·COM·관절 anchor overlay와 낙하·팔레트 수치 PASS/FAIL을 기록한다. |
 | `-skeletal-break-checks 1` / `-skeletal-break-xbot 1` | 각각 3-body fixture / 기존 Xbot 왼팔을 60 tick 뒤 분리하고 180 tick에 판정 후 정상 종료한다. |

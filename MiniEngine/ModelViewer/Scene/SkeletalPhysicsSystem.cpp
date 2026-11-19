@@ -93,7 +93,11 @@ namespace Viewer
             rig.Asset = asset;
             rig.NodeParents = nodeParents;
             rig.Targets.resize(asset.Bodies.size());
-            for (size_t i = 0; i < bodyWorldFrames.size(); ++i) rig.Targets[i].Frame = bodyWorldFrames[i];
+            for (size_t i = 0; i < bodyWorldFrames.size(); ++i)
+            {
+                // 첫 갱신 전에도 물리 목표와 애니메이션 기준을 같은 초기 자세로 둔다.
+                rig.Targets[i].Frame = rig.Targets[i].AnimationFrame = bodyWorldFrames[i];
+            }
             rig.Bodies.reserve(asset.Bodies.size());
             rig.Joints.reserve(asset.Joints.size());
             inserted = m_Rigs.emplace(owner, Rig{}).first;
@@ -156,7 +160,7 @@ namespace Viewer
             const auto& body = asset.Bodies[i];
             if (body.Node >= nodePoses.size() || !SkeletalFrames::TryBuildBodyFrame(modelToWorld,
                 nodePoses[body.Node], body.BoneFromBody, frames[i], targets[i].Scale)) return false;
-            targets[i].Frame = frames[i];
+            targets[i].Frame = targets[i].AnimationFrame = frames[i];
         }
 
         // 성공한 등록에만 이미 확보한 목표와 배율을 게시한다.
@@ -193,6 +197,9 @@ namespace Viewer
                 targets[i].Frame, scale) ||
                 std::abs(scale - rig.Targets[i].Scale) > rig.Targets[i].Scale * 1e-4f ||
                 !m_World.GetBodyMotion(rig.Bodies[i], motions[i]) || motions[i] == MiniPhysics::BodyMotion::Static) return false;
+
+            // Dynamic 물리 자세로 덮기 전에 선분 끝점에 쓸 애니메이션 자세를 보관한다.
+            targets[i].AnimationFrame = targets[i].Frame;
             if (motions[i] == MiniPhysics::BodyMotion::Dynamic &&
                 (!m_World.GetBodyPose(rig.Bodies[i], targets[i].Frame.Position, targets[i].Frame.Rotation) ||
                 !m_World.GetBodyVelocity(rig.Bodies[i], targets[i].Linear, targets[i].Angular))) return false;
@@ -230,7 +237,7 @@ namespace Viewer
         return false;
     }
 
-    // Kinematic 목표와 같은 frame 기준으로 살아 있는 관절의 본 원점 선분을 만든다.
+    // 선택 body와 incoming으로 후보를 판정하고 Kinematic 부모의 Dynamic 자식에만 애니메이션 끝점을 쓴다.
     void SkeletalPhysicsSystem::BuildKinematicSegments(ObjectId owner, std::vector<RigSegment>& out,
         std::vector<RigSegment>* unavailable) const
     {
@@ -243,33 +250,60 @@ namespace Viewer
 
         // 각 body 목표에서 월드 미터 단위 offset을 제거해 현재 본 원점을 복원한다.
         std::vector<Math::Vector3> origins(rig.Bodies.size(), Math::Vector3(Math::kZero));
+        std::vector<Math::Vector3> endpoints = origins;
         std::vector<bool> kinematic(rig.Bodies.size(), false), valid(rig.Bodies.size(), false);
+        std::vector<bool> endpointValid(rig.Bodies.size(), false);
+        std::vector<bool> dynamic(rig.Bodies.size(), false);
         for (size_t i = 0; i < rig.Bodies.size(); ++i)
         {
+            // 선분별 끝점 선택을 위해 body 상태와 애니메이션 원점을 보관한다.
             MiniPhysics::BodyMotion motion;
             Math::Matrix4 node;
             auto frame = rig.Targets[i].Frame;
             if (!m_World.GetBodyMotion(rig.Bodies[i], motion)) continue;
+            kinematic[i] = motion == MiniPhysics::BodyMotion::Kinematic;
+            dynamic[i] = motion == MiniPhysics::BodyMotion::Dynamic;
+            const auto& endpoint = motion == MiniPhysics::BodyMotion::Dynamic ? rig.Targets[i].AnimationFrame : frame;
+            if (SkeletalFrames::TryRestoreNodePose(rig.ModelToWorld, endpoint,
+                rig.Asset.Bodies[i].BoneFromBody, rig.Targets[i].Scale, node))
+            {
+                endpoints[i] = Math::Vector3((rig.ModelToWorld * node).GetW());
+                endpointValid[i] = true;
+            }
+
+            // 탈락 선분의 부모도 조회할 수 있도록 Dynamic 물리 원점을 따로 복원한다.
             if (motion != MiniPhysics::BodyMotion::Kinematic &&
                 (!unavailable || !m_World.GetBodyPose(rig.Bodies[i], frame.Position, frame.Rotation))) continue;
             if (!SkeletalFrames::TryRestoreNodePose(rig.ModelToWorld, frame,
                     rig.Asset.Bodies[i].BoneFromBody, rig.Targets[i].Scale, node)) continue;
             origins[i] = Math::Vector3((rig.ModelToWorld * node).GetW());
-            kinematic[i] = motion == MiniPhysics::BodyMotion::Kinematic;
             valid[i] = true;
         }
 
-        // 비활성 Kinematic 관절도 포함하되 제거된 관절과 Dynamic endpoint는 제외한다.
+        // incoming이 있는 선택 본은 자신의 body와 incoming만 검사하고 root는 기존 조건을 쓴다.
         for (uint32_t i = 0; i < rig.Asset.Joints.size(); ++i)
         {
             const auto& joint = rig.Asset.Joints[i];
+            const auto incoming = FindIncomingJoint(owner, rig.Asset.Bodies[joint.ParentBody].Node);
+            const bool root = incoming.Status == IncomingJointStatus::RigRoot;
+            const auto handle = root ? rig.Joints[i] : incoming.Status == IncomingJointStatus::Ok
+                ? rig.Joints[incoming.JointId] : MiniPhysics::InvalidConstraint;
             MiniPhysics::ConstraintState state;
-            if (!valid[joint.ParentBody] || !valid[joint.ChildBody]) continue;
-            const bool live = m_World.GetConstraintState(rig.Joints[i], state) &&
-                kinematic[joint.ParentBody] && kinematic[joint.ChildBody];
+            const bool constraintFound = m_World.GetConstraintState(handle, state);
+
+            // Kinematic 부모의 Dynamic 자식만 애니메이션 끝점을 쓰고 나머지는 물리 원점을 쓴다.
+            const bool useAnimationEndpoint = kinematic[joint.ParentBody] && dynamic[joint.ChildBody];
+            const auto& childOrigin = useAnimationEndpoint ? endpoints[joint.ChildBody] : origins[joint.ChildBody];
+            const bool poseFound = valid[joint.ParentBody] &&
+                (useAnimationEndpoint ? endpointValid[joint.ChildBody] : valid[joint.ChildBody]);
+            const bool live = poseFound && constraintFound && kinematic[joint.ParentBody] &&
+                (!root || kinematic[joint.ChildBody]);
+
+            // 조회 실패도 탈락 목록에 보존하되 유효하지 않은 원점은 교차 판정에 쓰지 않는다.
             auto* destination = live ? &out : unavailable;
             if (destination) destination->push_back({ rig.Asset.Bodies[joint.ParentBody].Node, rig.Asset.Bodies[joint.ChildBody].Node,
-                i, origins[joint.ParentBody], origins[joint.ChildBody] });
+                i, origins[joint.ParentBody], childOrigin, !poseFound,
+                handle != MiniPhysics::InvalidConstraint && !constraintFound });
         }
     }
 

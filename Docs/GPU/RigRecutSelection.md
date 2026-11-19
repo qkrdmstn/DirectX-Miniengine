@@ -1,4 +1,4 @@
-상태: 진행 중 — RR-1 커밋(재현 옵션 완료, 해시는 `git log`), RR-2 대기. 자식 관절이 이미 끊긴 뼈를 Rig 모드에서 다시 자를 수 있게 하는 선택 조건 수정(base `b649eaf7`, 2026-11-19)
+상태: 완료 — RR-1 `d82176fc`(재현 옵션), RR-2 로컬 커밋(해시는 `git log`). 자식 관절이 이미 끊긴 뼈를 Rig 모드에서 다시 자를 수 있게 한 선택 조건 수정(base `b649eaf7`, 2026-11-19)
 
 # Rig 모드 재절단 선택 결정
 
@@ -120,3 +120,22 @@ D3D12 ERROR 0, Release·Debug 빌드 오류 0.
 - root 선분 `-second mixamorig:Hips`: 선택은 되고 `SP7b rejected: incoming=2`(RigRoot). FAIL(거절)이 기대 결과다.
 - 말단 선분 `-second mixamorig:LeftToeBase`(부모→말단): `RigSelect result=no_candidates reason=legacy_leaf`, FAIL(거절).
 - 말단 body 평면 `-second mixamorig:LeftToe_End`(DFS 다음 본이 반대쪽 다리라 평면이 맞지 않음, 참고용): `AlreadyBroken`, `incoming=3` 거절.
+
+## 9. RR-2 결과 (2026-11-19, MX450, `-debug 1`, Release·Debug 빌드 오류 0, D3D12 ERROR 0)
+
+변경: `BuildKinematicSegments`(후보 = 선택 body Kinematic + incoming 생존, root는 기존 조건, 자식 끝점은 부모 Kinematic·자식 Dynamic일 때만 `AnimationFrame`), `UpdateKinematicTargets`(덮어쓰기 전 `AnimationFrame` 보관), `SelectRigSegment`·`Request` 로그(`rejected=` 사유, `legacy_endpoint_Dynamic` 설명 교체). 첫 구현은 탈락 선분의 끝점까지 애니메이션 자세로 만들어 `-skeletal-patch-break-checks 1 -skeletal-joint-mode rig`가 예외로 끝났고(수정 전엔 PASS), 부모가 Dynamic이면 기존 물리 자세를 쓰도록 고쳤다.
+
+| 항목 | 판정 | 핵심 |
+|---|---|---|
+| Xbot Rig(`1`) | PASS | 관절 43, 2118, nodes 3/60 (Parent와 동일, Release·Debug) |
+| CesiumMan Rig(`2`) | PASS | 관절 10, 154, nodes 2/13 (Release·Debug) |
+| Parent `1`·`2` | RR-1과 동일 | Release PASS·PASS; Debug `2`만 D5 leaf 거절(RR-1과 같음) |
+| patch-break-checks 기본·`rig` | PASS | 세 모델 모두 `second C AlreadyBroken PASS` (Release·Debug) |
+| root `-second mixamorig:Hips` | 수정 전과 같음 | `incoming=2`(RigRoot) 거절 |
+| 말단 `-second mixamorig:LeftToeBase` | 수정 전과 같음 | `no_candidates`, `legacy_leaf` 거절 |
+| 말단 body 평면 | 미확인(새 기준 없음) | 옵션이 DFS 다음 본으로 평면을 잡아 말단 본(`LeftToe_End`)은 같은 다리 평면을 만들 수 없음. 참고로 `LeftToe_End` 실행은 수정 전과 같이 `AlreadyBroken`, `incoming=3` |
+| MI-4h2 허벅지 다중 컷(Rig) | PASS | constraint 18→16, 300/187/175 (Release·Debug) |
+| 회귀 5종 | PASS | mask·patch(offset-copy)·union+demo 2(게시 없는 진단 종료, RR-1과 동일)·demo 1·2(timeout까지 Applied) |
+| 캡처(Xbot Rig 2차 뒤) | 대체로 확인 | Parent와 거의 같은 모습: 엉덩이 쪽에 허벅지 윗부분과 절단면이 남고 아래쪽이 떨어짐(단일 시점) |
+
+리뷰(Codex 새 실행): 지적 없음.

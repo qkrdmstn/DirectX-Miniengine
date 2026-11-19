@@ -418,9 +418,10 @@ namespace Viewer
         RigSelectionReason Reason = RigSelectionReason::NoHits;
         std::map<ObjectId, std::set<uint32_t>> OriginalHits, DynamicNodes;
         std::map<ObjectId, std::vector<RigSegment>> Unavailable;
+        std::set<std::string> Rejections;
     };
 
-    // 유한 평면 hit에서 Kinematic 선분을 선택하고 재요청 거절 근거를 수집한다.
+    // 유한 평면 hit에서 선분을 선택하고 body·incoming·조회 실패 사유를 구분해 보존한다.
     static RigSelection SelectRigSegment(const Scene& scene, PhysicsSystem& physics,
         const MeshCutting::CutPlaneData& plane)
     {
@@ -451,12 +452,31 @@ namespace Viewer
             result.OriginalHits[owner].insert(node);
             auto& hitNodes = nodes[owner];
             SkeletalRigState state;
-            if (!skeletal.ReadDiagnosticState(owner, state) || body >= state.Bodies.size()) continue;
+            if (!skeletal.ReadDiagnosticState(owner, state) || body >= state.Bodies.size())
+            {
+                // 진단 상태 조회 실패는 끊긴 incoming과 별도 사유로 기록한다.
+                result.Rejections.insert("pose_or_constraint_lookup_failed");
+                continue;
+            }
+
+            // 원래 hit의 body 상태와 incoming 유무를 후보 판정과 별도로 보관한다.
             for (const auto& stateBody : state.Bodies)
                 if (stateBody.Motion == MiniPhysics::BodyMotion::Dynamic)
                     result.DynamicNodes[owner].insert(stateBody.Node);
+            const auto hitIncoming = skeletal.FindIncomingJoint(owner, node);
+            if (hitIncoming.Status == IncomingJointStatus::AlreadyBroken)
+                result.Rejections.insert("incoming_joint_broken");
+            if (hitIncoming.Status == IncomingJointStatus::RigRoot)
+                result.Rejections.insert("root_no_incoming");
             const auto& hitBody = state.Bodies[body];
-            if (hitBody.Motion == MiniPhysics::BodyMotion::Dynamic) continue;
+            if (hitBody.Motion == MiniPhysics::BodyMotion::Dynamic)
+            {
+                // Dynamic hit는 선택 본으로 쓸 수 없지만 자식 끝점으로는 쓸 수 있다.
+                result.Rejections.insert("selected_node_body_Dynamic");
+                continue;
+            }
+
+            // Kinematic hit는 root를 포함해 기존 거리 기준으로 D5 후보에 보관한다.
             hitNodes.insert(node);
             const auto& c = hitBody.Frame.Position;
             closest = std::min(closest, std::make_tuple(float(LengthSquare(
@@ -495,13 +515,32 @@ namespace Viewer
                 result.Selected.Intersection = point;
             }
 
-            // 원래 hit에 끝점이 포함된 끊김 또는 Dynamic 선분만 거절 근거로 쓴다.
+            // 원래 hit와 관련된 탈락 선분에서 조회 실패와 실제 후보 제외 사유를 구분한다.
             for (const auto& segment : unavailable)
             {
                 const auto& original = result.OriginalHits.at(entry.first);
                 if (!original.count(segment.ParentNode) && !original.count(segment.ChildNode)) continue;
+                if (segment.ConstraintLookupFailed)
+                    result.Rejections.insert("constraint_lookup_failed");
+                if (segment.PoseLookupFailed)
+                {
+                    // 복원되지 않은 원점으로는 교차 여부를 판단하지 않는다.
+                    result.Rejections.insert("pose_lookup_failed");
+                    continue;
+                }
+
+                // 교차하는 탈락 선분만 기존 AlreadyBroken 상태 판정에 반영한다.
                 Vector3 point;
-                if (intersect(segment, point)) result.AlreadyBroken = true;
+                if (!intersect(segment, point)) continue;
+                result.AlreadyBroken = true;
+                const auto dynamic = result.DynamicNodes.find(entry.first);
+                if (dynamic != result.DynamicNodes.end() && dynamic->second.count(segment.ParentNode))
+                    result.Rejections.insert("selected_node_body_Dynamic");
+                const auto incoming = skeletal.FindIncomingJoint(entry.first, segment.ParentNode);
+                if (incoming.Status == IncomingJointStatus::AlreadyBroken)
+                    result.Rejections.insert("incoming_joint_broken");
+                if (incoming.Status == IncomingJointStatus::RigRoot)
+                    result.Rejections.insert("root_no_incoming");
             }
         }
 
@@ -522,12 +561,18 @@ namespace Viewer
                     ? SafeDiagnosticNodeName(object->GetName(), std::get<2>(closest)) : std::string("none")) + "\n";
             });
         }
+
         // D5 요청도 선택된 owner와 node를 추출 입력으로 전달한다.
         if (result.Reason == RigSelectionReason::D5)
         {
             result.Owner = std::get<1>(closest);
             result.Selected.NodeId = std::get<2>(closest);
         }
+
+        // 선택된 root도 Request의 기존 RigRoot 거절 전에 진단 사유를 남긴다.
+        if (result.Owner != InvalidObjectId &&
+            skeletal.FindIncomingJoint(result.Owner, result.Selected.NodeId).Status == IncomingJointStatus::RigRoot)
+            result.Rejections.insert("root_no_incoming");
         return result;
     }
 
@@ -1327,6 +1372,9 @@ namespace Viewer
                     && rig.Selected.ChildNodeId == legacy.ChildNodeId && rigJoint.JointId == legacyJoint.JointId;
                 line << " compare=" << (same ? "match" : "mismatch");
 
+                // 기존 상태 코드와 비교 필드 뒤에 후보 탈락의 구체적인 근거를 덧붙인다.
+                for (const auto& rejection : rig.Rejections) line << " rejected=" << rejection;
+
                 // 불일치는 실제 hit와 body 상태 및 선택 거리로 설명한다.
                 if (!same)
                 {
@@ -1340,8 +1388,12 @@ namespace Viewer
                         if (hit == rig.OriginalHits.end() || (!hit->second.count(legacy.NodeId) && !hit->second.count(legacy.ChildNodeId)))
                             line << " reason=legacy_segment_outside_hit";
                         const auto dynamic = rig.DynamicNodes.find(owner);
-                        if (dynamic != rig.DynamicNodes.end() && (dynamic->second.count(legacy.NodeId) || dynamic->second.count(legacy.ChildNodeId)))
-                            line << " reason=legacy_endpoint_Dynamic";
+                        if (dynamic != rig.DynamicNodes.end())
+                        {
+                            // 선택 본의 Dynamic은 탈락 사유이며 자식 Dynamic은 애니메이션 끝점 사용 정보다.
+                            if (dynamic->second.count(legacy.NodeId)) line << " reason=legacy_selected_node_body_Dynamic";
+                            if (dynamic->second.count(legacy.ChildNodeId)) line << " info=legacy_child_Dynamic_animation_endpoint";
+                        }
                         const auto unavailable = rig.Unavailable.find(owner);
                         if (unavailable != rig.Unavailable.end())
                             for (const auto& segment : unavailable->second)
