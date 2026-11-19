@@ -6,14 +6,14 @@ cbuffer Parameters : register(b0)
     float Epsilon, HalfWidth, HalfHeight;
     uint Triangles;
     uint Draws, DepthOffset, IndexOffset, Mode;
-    uint NodeCount, Influence, HasState, Padding1;
+    uint NodeCount, Influence, HasState, VertexMarkWords;
 };
 struct DrawInput
 {
     uint VbOffset, Stride, IbOffset, Index32;
     uint StartIndex, BaseVertex, Triangles, PoseOffset;
     uint FirstTriangle, MaskOffset, Flags, SectionId;
-    uint DrawId, JointCount, VertexCount, Reserved1;
+    uint DrawId, JointCount, VertexCount, VertexBase;
 };
 ByteAddressBuffer Source : register(t0);
 ByteAddressBuffer SourcePose : register(t1);
@@ -21,6 +21,7 @@ StructuredBuffer<DrawInput> Inputs : register(t2);
 StructuredBuffer<uint> Mask : register(t3);
 StructuredBuffer<uint> State : register(t4);
 RWByteAddressBuffer Adjacent : register(u6); // patch id별 인접 제거 삼각형 수
+RWByteAddressBuffer VertexMarks : register(u7); // VB 구간별 선택 정점 비트
 RWByteAddressBuffer Data : register(u0);
 RWByteAddressBuffer Sources : register(u1);
 RWByteAddressBuffer Meta : register(u2); // counts 0..8, local AABB 12..32, source world X 36..40
@@ -219,25 +220,30 @@ void main(uint3 id : SV_DispatchThreadID)
     while(sId+1<Draws && t>=Inputs[sId+1].FirstTriangle) sId++;
     DrawInput s=Inputs[sId]; uint triangleId=t-s.FirstTriangle;
     uint3 indices=uint3(Index(s,triangleId*3),Index(s,triangleId*3+1),Index(s,triangleId*3+2));
-    // 제거 삼각형마다 새 패치와 공유하는 원본 정점이 있으면 소유 패치에 한 번 집계한다.
-    if(Mode==5)
+    // 선택 정점 표시와 제거 삼각형 조회는 동일한 VB 구간의 비트만 사용한다.
+    if (Mode == 8 || Mode == 5)
     {
-        if(!(State[t]&0x80000000u) || Meta.Load(0)==0) return;
-        for(uint d=0;d<Draws;d++)
+        // 최종 선택이 없거나 해당 모드의 대상 삼각형이 아니면 접근하지 않는다.
+        if (Meta.Load(0) == 0) return;
+        if (Mode == 5 && !(State[t] & 0x80000000u)) return;
+        if (Mode == 8 && Scan.Load(t * 8) == (t ? Scan.Load((t - 1) * 8) : 0)) return;
+
+        // 범위 밖 번호와 덧셈 overflow를 배제하고 정점별 표시 또는 조회를 수행한다.
+        [unroll] for (uint corner = 0; corner < 3; ++corner)
         {
-            DrawInput other=Inputs[d];
-            if(s.VbOffset!=other.VbOffset || s.Stride!=other.Stride) continue;
-            for(uint j=0;j<other.Triangles;j++)
+            uint index = indices[corner];
+            if (index >= s.VertexCount || index > 0xffffffffu - s.VertexBase) continue;
+            uint vertex = s.VertexBase + index, address = (vertex / 32) * 4;
+            if (vertex / 32 >= VertexMarkWords) continue;
+            uint bit = 1u << (vertex % 32), ignored;
+            if (Mode == 8)
             {
-                uint global=other.FirstTriangle+j;
-                if(Scan.Load(global*8)==(global?Scan.Load((global-1)*8):0)) continue;
-                uint3 v=uint3(Index(other,j*3),Index(other,j*3+1),Index(other,j*3+2));
-                if(any(indices.x==v)||any(indices.y==v)||any(indices.z==v))
-                {
-                    uint ignored;
-                    Adjacent.InterlockedAdd((State[t]&65535u)*4,1,ignored);
-                    return;
-                }
+                VertexMarks.InterlockedOr(address, bit, ignored);
+            }
+            else if (VertexMarks.Load(address) & bit)
+            {
+                Adjacent.InterlockedAdd((State[t] & 65535u) * 4, 1, ignored);
+                return;
             }
         }
         return;

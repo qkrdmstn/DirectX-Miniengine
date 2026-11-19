@@ -38,7 +38,7 @@
 | [MeshIslandMultiBoneCut.md](GPU/MeshIslandMultiBoneCut.md) | 격자 아일랜드를 실제 절단 loop·반공간 및 weight로 몸체에 배정하고 여러 본을 합쳐 자르기 | 완료 — MI-4 `e123cad1`, MI-5 `bffcf22f`(2026-11-17): 위팔491/167·허리90→A·cap54 drop, 양 허벅지300/187/175·constraint18→16·mask1회, 실제 척추182/337 및 P=1 옵션 비교18 PNG·Release 회귀6건 PASS·D3D12 ERROR0. 몸통 접힘·척추 절단 양팔 틈(uncapped17/loop fallback34)·작은 파편 미해결. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속 |
 | [PatchSkinning.md](GPU/PatchSkinning.md) | 스켈레탈 패치 조각 스키닝: 끊은 쪽 joint를 부착 node 상대로 고정, 새 정점은 강체 | 완료 — PS-0~PS-6·비용 측정, SP7e2 PASS, Debug/Release 회귀 PASS(2026-11-13) |
 | [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 Mode 1 순차 prefix를 3단계 병렬 block scan으로 교체(측정: Xbot 추출 4.7 ms 중 4.4 ms) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19) |
-| [PatchAdjacentMarks.md](GPU/PatchAdjacentMarks.md) | 패치 추출 Mode 5 인접 집계를 정점 표시 비트로 O(N)화(부분 제거 시 Mode 5 12.6~34.5 ms) | 설계안 — AD-0 기준 측정 전 (2026-11-19) |
+| [PatchAdjacentMarks.md](GPU/PatchAdjacentMarks.md) | 패치 추출 Mode 5 인접 집계를 정점 표시 비트로 O(N)화(부분 제거 시 Mode 5 12.6~34.5 ms) | 진행 중 — AD-1 커밋, AD-2 재측정 전 (2026-11-19) |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계

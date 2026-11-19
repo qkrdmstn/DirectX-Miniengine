@@ -39,7 +39,7 @@ namespace Viewer
             uint32_t VbOffset, Stride, IbOffset, Index32;
             uint32_t StartIndex, BaseVertex, Triangles, PoseOffset;
             uint32_t FirstTriangle, MaskOffset, Flags, SectionId;
-            uint32_t DrawId, JointCount, VertexCount, Reserved1;
+            uint32_t DrawId, JointCount, VertexCount, VertexBase;
         };
         struct Parameters
         {
@@ -48,7 +48,7 @@ namespace Viewer
             Math::Matrix4 LocalToWorld;
             float Epsilon, HalfWidth, HalfHeight;
             uint32_t Triangles, Draws, DepthOffset, IndexOffset, Mode;
-            uint32_t NodeCount, Influence, HasState, Padding1;
+            uint32_t NodeCount, Influence, HasState, VertexMarkWords;
         };
         static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 192, "Patch shader layout");
         static_assert(sizeof(SkeletalPatchResult) == 12, "Patch counts readback layout");
@@ -371,12 +371,13 @@ namespace Viewer
             // 여러 C 요청 사이에 파이프라인을 재사용한다.
             static bool initialized = false;
             if (initialized) return;
-            PatchRoot.Reset(13);
+            PatchRoot.Reset(14);
             PatchRoot[0].InitAsConstantBuffer(0);
             for (uint32_t i = 0; i < 4; ++i) PatchRoot[i + 1].InitAsBufferSRV(i);
             for (uint32_t i = 0; i < 6; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
             PatchRoot[11].InitAsBufferSRV(4);
             PatchRoot[12].InitAsBufferUAV(6);
+            PatchRoot[13].InitAsBufferUAV(7);
             PatchRoot.Finalize(L"Skeletal patch extraction");
             PatchPSO.SetRootSignature(PatchRoot);
             PatchPSO.SetComputeShader(g_pPatchExtractCS, sizeof(g_pPatchExtractCS));
@@ -3924,6 +3925,29 @@ namespace Viewer
         if (!triangles || triangles > UINT32_MAX / (3 * 48ull)
             || !input.GetSource()->m_NumNodes || input.GetSource()->m_NumNodes > UINT32_MAX / 8) return false;
 
+        // 같은 VB와 stride를 쓰는 draw의 최대 정점 수로 공유 구간 길이를 정한다.
+        std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> vertexRanges;
+        for (const auto& draw : draws)
+        {
+            auto& range = vertexRanges[{ draw.VbOffset, draw.Stride }];
+            range.second = std::max(range.second, draw.VertexCount);
+        }
+
+        // 구간 합을 64비트로 검사한 뒤 겹치지 않는 시작 번호를 배정한다.
+        uint64_t totalVertices = 0;
+        for (auto& entry : vertexRanges)
+        {
+            entry.second.first = uint32_t(totalVertices);
+            totalVertices += entry.second.second;
+            if (totalVertices > UINT32_MAX) return false;
+        }
+        for (auto& draw : draws)
+        {
+            const auto& range = vertexRanges.at({ draw.VbOffset, draw.Stride });
+            draw.VertexBase = range.first;
+            draw.VertexCount = range.second;
+        }
+
         // 대상 전체 삼각형 수를 상한으로 잡아 compaction 출력 overflow를 없앤다.
         m_Input = source.GetGeometry();
         m_Plane = plane; m_Node = node; m_Diagnostic = diagnostic;
@@ -4011,6 +4035,11 @@ namespace Viewer
         const std::vector<uint32_t> adjacent(c.HasState ? 65536 : 4, 0);
         m_Adjacent.Create(L"Adjacent patch counts", uint32_t(adjacent.size()), 4, adjacent.data());
 
+        // 제거 상태가 있을 때만 전체 정점 비트를 만들고 나머지는 UAV 슬롯만 채운다.
+        c.VertexMarkWords = c.HasState ? uint32_t((totalVertices + 31) / 32) : 1;
+        const std::vector<uint32_t> vertexMarks(c.VertexMarkWords, 0);
+        m_VertexMarks.Create(L"Patch selected vertex marks", uint32_t(vertexMarks.size()), 4, vertexMarks.data());
+
         // 같은 graphics queue에서 pose 준비 뒤 추출하고 패스 사이 UAV 의존성을 보장한다.
         auto& graphics = GraphicsContext::Begin(L"Extract skeletal patch");
         auto& compute = graphics.GetComputeContext();
@@ -4029,6 +4058,8 @@ namespace Viewer
         compute.SetBufferSRV(11, state);
         compute.TransitionResource(m_Adjacent, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         compute.SetBufferUAV(12, m_Adjacent);
+        compute.TransitionResource(m_VertexMarks, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.SetBufferUAV(13, m_VertexMarks);
         GpuBuffer* outputs[] = { &geometry.Data, &m_Output->TriangleSources, &m_Output->LocalBounds, &m_Scan, &m_Votes, &m_Selected };
         for (uint32_t i = 0; i < 6; ++i)
         {
@@ -4071,6 +4102,12 @@ namespace Viewer
         if (c.HasState)
         {
             compute.InsertUAVBarrier(m_Output->LocalBounds);
+            c.Mode = 8;
+            compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            compute.InsertUAVBarrier(m_VertexMarks);
+
+            // 표시가 완료된 뒤 제거 삼각형의 인접 비트를 조회한다.
             c.Mode = 5;
             compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
             compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
