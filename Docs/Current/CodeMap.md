@@ -114,4 +114,6 @@ SP-7d: `PatchExtractCS::main`·`ExtractPatchReference`는 전역 State의 제거
 
 PF: `PatchExtractCS::main`의 prefix는 3단계 block scan이다. Mode 1이 64개 삼각형 블록 안 inclusive prefix를 기존 삼각형 영역에, 블록 합계를 `m_Scan` 뒤쪽 블록 영역에 쓰고, Mode 6이 블록 합계를 exclusive scan해 `Meta` 총계를 쓰며, Mode 7이 블록 offset을 삼각형 prefix에 더한다. `SkeletalPatchJob::Submit`은 Mode 0→1→6→7→2 순서로 dispatch하고 `InitializePatch`의 root signature는 그대로다([설계](../GPU/PatchPrefixScan.md)).
 
+AD: `PatchExtractCS`의 Mode 8은 선택 삼각형의 정점 3개 비트를 `VertexMarks`(u7)에 `InterlockedOr`로 켜고, Mode 5는 제거 삼각형이 자기 정점 비트만 읽어 `Adjacent`를 올려 O(N)이다. `SkeletalPatchJob::Submit`은 `(VbOffset, Stride)` 쌍마다 `DrawInput.VertexBase` 구간을 배정(같은 쌍의 `VertexCount`는 최댓값으로 통일, 64비트 합 검사)하고 `m_VertexMarks`를 0으로 만들며 `Parameters.VertexMarkWords`로 크기를 넘긴다. 실행 순서는 Mode 0→1→6→7→2→8→(UAV barrier)→5다. 부분 제거 Mode 5는 34.35 ms에서 Mode 8+5 0.28 ms로 줄었다([결정·측정](../GPU/PatchAdjacentMarks.md)).
+
 SP-7e: `SkeletalPatchCopy::Request`는 C snapshot·side를 보관하고 `OnCutResult`는 숨긴 A/B 준비 뒤 break를 요청한다. `Update`는 Applied·revision 일치 후 원본 mask와 원래 owner의 A/B를 함께 게시한다. `Reset`은 `PhysicsSystem::CancelBreak`로 미실행 요청도 취소한다. `Scene::PrepareMeshes`는 최종 node pose로 부착을 갱신한다. `PhysicsSystem::IsEligible`은 부착 조각도 Static 절단 후보로 허용하고 `SyncBodies`는 부착 조각의 body 등록을 제외한다. `ResolveEditTarget`은 owner 선택을 유지한다. offset·B 간격은 `-skeletal-patch-offset-copy 1` 전용이다. 경계 오차·강제 Stale·캡처 진단은 미완료다.
