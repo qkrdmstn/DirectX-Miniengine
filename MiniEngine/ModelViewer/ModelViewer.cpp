@@ -131,7 +131,7 @@ public:
             return true;
 
         // 시연 연속 캡처를 마친 뒤 기존 자동 종료 조건을 평가한다.
-        const bool demoReady = !m_SkeletalBreakDemo || (m_DemoAppliedFrame && (m_CapturePath.empty() || m_DemoCaptured == 8));
+        const bool demoReady = !m_SkeletalBreakDemo || (m_DemoAppliedFrame && (m_CapturePath.empty() || m_DemoCaptured == (m_CaptureCount ? m_CaptureCount : 8u)));
 
         // 기존 GPU 작업 완료와 사용자 종료 요청을 확인한다.
         return (demoReady && m_QueryExitFrame && m_QueryFrame >= m_QueryExitFrame && !m_Cutting.IsBusy() && !m_AutoCuts && !m_BenchmarkRemaining && m_EditTargetChecks.Finished() && m_EditApplyChecks.Finished() && m_EditDeleteChecks.Finished())
@@ -217,6 +217,8 @@ private:
     std::wstring m_CapturePath, m_ActiveCapturePath;
     uint32_t m_CaptureFrame = 0;
     uint32_t m_CaptureTargetFrame = 60;
+    // 영상용 연속 캡처: -capture-count 장을 -capture-step 프레임 간격으로 저장한다(0이면 기존 단일·시연 규칙).
+    uint32_t m_CaptureCount = 0, m_CaptureStep = 1, m_SequenceCaptured = 0;
     uint32_t m_AnimationStepMs = 0;
     bool m_CapturePostPending = false;
     bool m_ComponentChecksPending = false;
@@ -470,6 +472,11 @@ void ModelViewer::Startup( void )
         if (CommandLineArgs::GetInteger(L"capture-frame", targetFrame) && targetFrame > 0)
             m_CaptureTargetFrame = targetFrame;
         CommandLineArgs::GetInteger(L"animation-step-ms", m_AnimationStepMs);
+
+        // 영상용 연속 캡처 장수와 간격을 읽는다.
+        CommandLineArgs::GetInteger(L"capture-count", m_CaptureCount);
+        CommandLineArgs::GetInteger(L"capture-step", m_CaptureStep);
+        m_CaptureStep = std::max(1u, m_CaptureStep);
         Utility::Printf("ModelViewer capture: computePose=%u, frame=%u, animationStepMs=%u\n",
             Renderer::UseComputePose ? 1u : 0u, m_CaptureTargetFrame, m_AnimationStepMs);
     }
@@ -1456,10 +1463,14 @@ void ModelViewer::RenderScene( void )
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
     // 시연은 게시 후 지정 간격으로 저장하고 기존 진단은 자체 캡처 조건을 유지한다.
-    const bool demoCapture = m_SkeletalBreakDemo && !m_CapturePath.empty() && m_DemoAppliedFrame && m_DemoCaptured < 8
-        && m_QueryFrame - m_DemoAppliedFrame == m_DemoCaptured * 20;
+    // 시연은 기본 8장·20프레임 간격이고, -capture-count가 있으면 그 장수와 -capture-step 간격을 쓴다.
+    const uint32_t demoCount = m_CaptureCount ? m_CaptureCount : 8;
+    const uint32_t demoStep = m_CaptureCount ? m_CaptureStep : 20;
+    const bool demoCapture = m_SkeletalBreakDemo && !m_CapturePath.empty() && m_DemoAppliedFrame && m_DemoCaptured < demoCount
+        && m_QueryFrame - m_DemoAppliedFrame == m_DemoCaptured * demoStep;
     const bool capture = demoCapture || (!m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
+        && (!m_CaptureCount || (m_CaptureFrame - m_CaptureTargetFrame) % m_CaptureStep == 0)
         && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())))));
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
@@ -1495,8 +1506,19 @@ void ModelViewer::RenderScene( void )
                 + (m_SkeletalPatchCaptured % 2 ? L"-influence" : L"-parent");
             ++m_SkeletalPatchCaptured;
         }
-        m_CaptureComplete = !m_SkeletalPatchChecks || m_SkeletalPatchCaptured == 4;
-        g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-hdr.raw");
+
+        // 일반 연속 캡처는 순번을 붙이고 지정 장수를 채운 뒤에만 완료로 둔다.
+        const bool sequence = m_CaptureCount && !m_SkeletalBreakDemo && !m_SkeletalPatchChecks && !breakCapture;
+        if (sequence)
+        {
+            const auto number = std::to_wstring(m_SequenceCaptured++);
+            m_ActiveCapturePath += L"-seq-" + std::wstring(number.size() < 4 ? 4 - number.size() : 0, L'0') + number;
+        }
+        m_CaptureComplete = (!m_SkeletalPatchChecks || m_SkeletalPatchCaptured == 4) && (!sequence || m_SequenceCaptured >= m_CaptureCount);
+
+        // 연속 캡처는 용량을 줄이려고 HDR 파일을 생략하고 post만 저장한다.
+        if (!m_CaptureCount)
+            g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-hdr.raw");
         auto& restore = GraphicsContext::Begin(L"Restore capture state");
         restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         restore.Finish(true);
