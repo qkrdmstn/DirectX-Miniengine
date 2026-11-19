@@ -1,4 +1,4 @@
-상태: 진행 중 — PF-1 구현·검증 완료(로컬 커밋, 2026-11-19), PF-2 재측정(7절 7항)은 미수행; 7절 9항의 T=1·63·64·65·B<64·65535그룹 경계는 코드 리뷰로만 확인
+상태: 완료 — PF-1 구현·검증(2aaef989), PF-2 재측정(2026-11-19)에서 7절 7항 기준 통과(Xbot Mode 1+6+7 평균 36.8 µs ≤ 200 µs); 7절 9항의 T=1·63·64·65·B<64·65535그룹 경계는 코드 리뷰로만 확인
 
 # 패치 추출 prefix 병렬화 결정
 
@@ -20,6 +20,19 @@
 - 정점 중복 판정이 있는 Mode 0은 2% 안팎이라 이번 범위에서 제외한다.
 - Mode 5(제거 상태 인접 집계, 부분 제거 12.6 ms)는 별도 결정으로 미룬다.
 - 측정 원자료: `%TEMP%\vertex-dedup-measure\result-timing.md`(임시, 저장소 밖).
+
+### PF-1 이후 재측정 (MX450, Release, 같은 임시 timestamp 방식, 데모당 3회 평균, 단위 µs)
+
+| 대상 | Mode 0 | Mode 1 | Mode 6 | Mode 7 | Mode 2 | Mode 1+6+7 | 전체 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Xbot 데모 T=49112 | 85.7 | 19.3 | 8.7 | 8.8 | 33.7 | 36.8 | 341.1 |
+| CesiumMan 데모 T=4672 | 22.6 | 6.2 | 6.1 | 5.5 | 12.0 | 17.8 | 71.4 |
+
+- Xbot Mode 1 4411 → 19.3 µs, 전체 4713 → 341 µs. CesiumMan 전체 299 → 71 µs. Meta는 기존과 같다(2118/47/0, 271/16/0).
+- 회차별 Mode 1+6+7 합은 Xbot 36.6·34.8·39.1 µs로 모두 기준 200 µs 이하다.
+- 전체 구간에는 모드 시간 외에 barrier·상태 전환·복사가 포함된다. 그 내역은 따로 측정하지 않았다.
+- `-skeletal-mask-checks 1` 실행에서도 PASS했고 Meta는 934/373/373, 135/373/373, 0/0/0, 934/373/373, 934/373/373이다. 진단 readback이 섞여 있어 이 실행의 시간은 평균에 넣지 않았다.
+- 어댑터는 NVIDIA GeForce MX450이고 `Influence`·`HasState` 경로(Mode 3/4/5)는 이번 데모에서 쓰이지 않아 재측정하지 않았다. 원자료: `%TEMP%\vertex-dedup-measure\result-pf2.md`(임시).
 
 ## 3. 결정과 이유
 
@@ -103,7 +116,7 @@ m_Scan.Create(L"Patch inclusive prefix", uint32_t(triangles + 2 * blocks), 8);
 2. `-skeletal-mask-checks 1` PASS. 기존 5개 요청(기준·부분 제거·전체 제거·0 마스크·해제)의 `Meta` 선택/교차/미포함 수가 측정 표와 같다(934/373/373, 135/373/373, 0/0/0, 934/373/373, 934/373/373).
 3. `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1`의 20개 요청이 `SkeletalPatchJob::Validate`의 GPU==CPU를 통과한다(출력 순서와 출처가 prefix에 의존하므로 prefix 오류를 잡는다).
 4. `-skeletal-break-demo 1`(Xbot P60)과 `2`(CesiumMan)가 기존처럼 게시되고, `Meta`가 2118/47/0, 271/16/0이다.
-5. `-skeletal-union-checks 1`의 `CheckJointUnion`이 PASS한다. 단독·합집합·중복 P 추출(364/352→526, 공유190, 중복0), n=1 unionRoots 출처 목록·순서 비교가 기존과 같아야 한다.
+5. `-skeletal-union-checks 1 -skeletal-break-demo 2`(단독으로는 실행되지 않음)의 `CheckJointUnion`이 PASS한다. 단독·합집합·중복 P 추출(364/352→526, 공유190, 중복0), n=1 unionRoots 출처 목록·순서 비교가 기존과 같아야 한다.
 6. D3D12 debug layer ERROR/CORRUPTION 0.
 7. 재측정: 기존과 같은 임시 timestamp 방식(모드별 timestamp 전에 barrier를 flush하고, barrier는 구간 밖에 둠)으로 `-skeletal-break-demo 1`을 3회 실행한다. 회차마다 Mode 1+6+7 합을 구하고, 그 평균이 200 µs 이하여야 한다(현재 Mode 1만 4411 µs).
 8. Mode 0·2·5, `m_Scan`의 삼각형 영역 배치, root signature, CPU readback 코드는 바뀌지 않는다.

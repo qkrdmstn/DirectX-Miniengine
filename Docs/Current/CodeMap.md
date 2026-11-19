@@ -112,4 +112,6 @@ SP-7c: `Scene/Shaders/TriangleMaskCS.hlsl`의 `main`·`Replacement`는 누적 `F
 
 SP-7d: `PatchExtractCS::main`·`ExtractPatchReference`는 전역 State의 제거 비트를 선택 조건에 반영하며 교차·미포함 카운터도 제거 삼각형을 제외한다. `SkeletalPatchJob::Submit`·`Poll`은 공유 정점 번호를 기준으로 인접 제거 삼각형을 소유 패치별로 집계·기록하며 `Validate`가 독립 CPU 집계와 비교한다. `CheckMaskedPatch`는 `RunSkeletalMaskChecks`에서 Xbot 부모 제거 후 자식 추출과 없음/0/해제 출력 바이트 불변·전체 제거의 빈 카운터를 검증한다.
 
+PF: `PatchExtractCS::main`의 prefix는 3단계 block scan이다. Mode 1이 64개 삼각형 블록 안 inclusive prefix를 기존 삼각형 영역에, 블록 합계를 `m_Scan` 뒤쪽 블록 영역에 쓰고, Mode 6이 블록 합계를 exclusive scan해 `Meta` 총계를 쓰며, Mode 7이 블록 offset을 삼각형 prefix에 더한다. `SkeletalPatchJob::Submit`은 Mode 0→1→6→7→2 순서로 dispatch하고 `InitializePatch`의 root signature는 그대로다([설계](../GPU/PatchPrefixScan.md)).
+
 SP-7e: `SkeletalPatchCopy::Request`는 C snapshot·side를 보관하고 `OnCutResult`는 숨긴 A/B 준비 뒤 break를 요청한다. `Update`는 Applied·revision 일치 후 원본 mask와 원래 owner의 A/B를 함께 게시한다. `Reset`은 `PhysicsSystem::CancelBreak`로 미실행 요청도 취소한다. `Scene::PrepareMeshes`는 최종 node pose로 부착을 갱신한다. `PhysicsSystem::IsEligible`은 부착 조각도 Static 절단 후보로 허용하고 `SyncBodies`는 부착 조각의 body 등록을 제외한다. `ResolveEditTarget`은 owner 선택을 유지한다. offset·B 간격은 `-skeletal-patch-offset-copy 1` 전용이다. 경계 오차·강제 Stale·캡처 진단은 미완료다.
