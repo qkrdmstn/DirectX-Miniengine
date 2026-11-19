@@ -1,4 +1,4 @@
-상태: 진행 중 — RM-1 커밋(RM-2 대기). 패치 추출의 진단 전용 계산(Mode 5/8 인접 집계, 기본 경로 평면 교차 수) 제거(base `78c4bfe9`, 2026-11-19)
+상태: 완료 — RM-1 `49c8a002`, RM-2 커밋은 아래 4절 표 아래 기록. 패치 추출의 진단 전용 계산(Mode 5/8 인접 집계, 기본 경로 평면 교차 수) 제거(base `78c4bfe9`, 2026-11-19)
 
 # 패치 추출 진단 계산 제거 결정
 
@@ -63,6 +63,7 @@
 | RM-1 | (B) 제거 + `PatchAdjacentMarks.md` 상태를 "폐기"로, `SkeletalPatchBreak.md` SP-7d·CodeMap·README 정리 (약 190~245줄, 추정) | Codex 구현 15~25분, D/R 빌드·검사 15~20분, 리뷰 2~5분 |
 | RM-2 | (A) 제거 + `SkeletalPatchCopyCut.md`(D7/D7a/D12, 완료 조건, 이미 틀린 "`CrossingTriangles==0`이면 게시 생략" 설명 포함)·`PatchPrefixScan.md` D5·CodeMap·README 정리 (약 190~270줄, 추정) | 같음 |
 
+- RM-2 결과(MX450, 2026-11-19): 실제 diff 4개 파일 +42/-79(121줄), 코드 외 문서 5개 동기화. 검증은 5절 1~7항 기준이며 Release·Debug 모두 PASS였다(마스크 934/135/0/934/934, 20개 GPU==CPU, X/P/0 1556·X/I/2 2736·C/P/0 412, 유니온 364/352→526, 데모 2118·271, D3D12 ERROR 0). 새 Codex 리뷰는 지적 없음. 구현 단계의 `SkeletalPatchResult` 크기 static_assert(12→4)는 필드 제거에 따른 필수 수정이어서 직접 고쳤다.
 - 빌드는 한 번에 하나씩, 기존 `MiniEngine/Build`에서 한다.
 - 단계마다 새 세션에서 Codex 구현 → 빌드·검사 → 새 Codex 리뷰 → 로컬 커밋 순으로 진행한다. push는 하지 않는다.
 

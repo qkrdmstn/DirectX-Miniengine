@@ -25,8 +25,6 @@ namespace Viewer
     struct SkeletalPatchResult
     {
         uint32_t PatchTriangles = 0;
-        uint32_t CrossingTriangles = 0;
-        uint32_t UncoveredCrossing = 0;
     };
 
     struct SkeletalPatchBuffers
@@ -38,7 +36,7 @@ namespace Viewer
         };
         std::shared_ptr<GeometryBuffers> Geometry;
         ByteAddressBuffer TriangleSources; // section, draw, triangle; 12 bytes per triangle
-        ByteAddressBuffer LocalBounds; // counts 0..8, local AABB 12..32, source world X min/max 36..40
+        ByteAddressBuffer LocalBounds; // 선택 수 0, 예약 영역 4..11(항상 0), local AABB 12..32, source world X min/max 36..40
         float SourceWorldWidth = 0;
         std::vector<uint32_t> Triangles;
         std::vector<std::array<uint32_t, 2>> IslandSources; // skin CPU section, section 로컬 삼각형

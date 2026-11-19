@@ -116,4 +116,6 @@ PF: `PatchExtractCS::main`의 prefix는 3단계 block scan이다. Mode 1이 64�
 
 AD: 폐기 — Mode 8 정점 표시·Mode 5 인접 집계와 `Adjacent`(u6)·`VertexMarks`(u7)·`VertexBase`·`VertexMarkWords`는 RM-1에서 제거됐다(`PatchRoot` 12개, `Reserved1`·`Padding1` 복원). 실행 순서는 Mode 0→1→6→7→2다([기록](../GPU/PatchAdjacentMarks.md), [제거 결정](../GPU/PatchDiagnosticRemoval.md)).
 
+RM-2: 기본 경로의 평면 교차 수·미포함 교차 수 집계도 제거됐다. Mode 0은 선택 플래그만 쓰고, Mode 1·6은 선택 합계 하나를 scan하며, `SkeletalPatchResult`는 `PatchTriangles`만 가진다(`Meta` byte 4~11은 항상 0인 예약 영역). 셰이더 `Crossing`·`Overlaps`는 Influence 투표(Mode 3)용으로 남는다([제거 결정](../GPU/PatchDiagnosticRemoval.md)).
+
 SP-7e: `SkeletalPatchCopy::Request`는 C snapshot·side를 보관하고 `OnCutResult`는 숨긴 A/B 준비 뒤 break를 요청한다. `Update`는 Applied·revision 일치 후 원본 mask와 원래 owner의 A/B를 함께 게시한다. `Reset`은 `PhysicsSystem::CancelBreak`로 미실행 요청도 취소한다. `Scene::PrepareMeshes`는 최종 node pose로 부착을 갱신한다. `PhysicsSystem::IsEligible`은 부착 조각도 Static 절단 후보로 허용하고 `SyncBodies`는 부착 조각의 body 등록을 제외한다. `ResolveEditTarget`은 owner 선택을 유지한다. offset·B 간격은 `-skeletal-patch-offset-copy 1` 전용이다. 경계 오차·강제 Stale·캡처 진단은 미완료다.

@@ -64,6 +64,7 @@
 - 삼각형 영역 `[0, T*8)`의 배치는 지금과 같다. Mode 2·5는 계속 `Scan.Load(t*8)`로 최종 inclusive prefix를 읽는다.
 
 ### D5. 교차·미포함 교차 총계도 블록 합계로 구한다
+- (RM-2 2026-11-19: 교차·미포함 합산을 제거했다. Mode 1·6은 선택 합계 하나만 scan하고 Mode 6은 `Meta.Store3(0, uint3(sum, 0, 0))`을 쓴다. 블록 간격 16바이트와 Scan 원소 8바이트는 그대로다. [결정](PatchDiagnosticRemoval.md))
 - atomic 없이 Mode 6이 블록 합계를 더해 `Meta.Store3(0, uint3(sum, crossing, uncovered))`를 한 번 쓴다.
 - 그래서 `Meta` 0~11바이트를 미리 0으로 지울 필요가 없고, 결과 순서도 결정적이다.
 

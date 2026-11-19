@@ -22,34 +22,31 @@ StructuredBuffer<uint> Mask : register(t3);
 StructuredBuffer<uint> State : register(t4);
 RWByteAddressBuffer Data : register(u0);
 RWByteAddressBuffer Sources : register(u1);
-RWByteAddressBuffer Meta : register(u2); // counts 0..8, local AABB 12..32, source world X 36..40
-RWByteAddressBuffer Scan : register(u3); // inclusive prefix, crossing flag
+RWByteAddressBuffer Meta : register(u2); // 선택 수 0, 예약 영역 4..11(항상 0), local AABB 12..32, source world X 36..40
+RWByteAddressBuffer Scan : register(u3); // inclusive prefix, 예약 값 0
 RWByteAddressBuffer Votes : register(u4); // NodeId별 uint64 (lo, hi)
 RWByteAddressBuffer Chosen : register(u5);
 groupshared uint Prefix[64];
-groupshared uint2 Counts[64];
 
-// 그룹의 선택·교차·미포함 합계를 Hillis-Steele inclusive scan으로 계산한다.
-uint3 ScanTotals(uint lane, uint3 value)
+// 그룹의 선택 합계를 Hillis-Steele inclusive scan으로 계산한다.
+uint ScanTotals(uint lane, uint value)
 {
     // 범위 밖 lane도 0을 기록하고 모든 lane이 초기화를 마칠 때까지 기다린다.
-    Prefix[lane]=value.x;
-    Counts[lane]=value.yz;
+    Prefix[lane]=value;
     GroupMemoryBarrierWithGroupSync();
 
     // 이전 단계 값을 모두 읽은 뒤 덮어쓰고 다음 단계 전에 동기화한다.
     [unroll] for(uint offset=1;offset<64;offset*=2)
     {
-        uint3 previous=0;
-        if(lane>=offset) previous=uint3(Prefix[lane-offset],Counts[lane-offset]);
+        uint previous=0;
+        if(lane>=offset) previous=Prefix[lane-offset];
         GroupMemoryBarrierWithGroupSync();
-        Prefix[lane]+=previous.x;
-        Counts[lane]+=previous.yz;
+        Prefix[lane]+=previous;
         GroupMemoryBarrierWithGroupSync();
     }
 
     // 각 lane의 누적 합계를 반환한다.
-    return uint3(Prefix[lane],Counts[lane]);
+    return Prefix[lane];
 }
 
 // 원본 draw의 R16/R32 인덱스와 baseVertex를 해석한다.
@@ -159,34 +156,34 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    // 블록 안 prefix와 세 종류의 블록 합계를 계산한다.
+    // 블록 안 prefix와 블록 선택 합계를 계산한다.
     if(Mode==1)
     {
         // 초과 그룹과 마지막 블록의 빈 lane은 0으로 scan에 참여한다.
         uint lane=t%64,b=t/64,blocks=(Triangles+63)/64;
-        uint2 flags=0;
-        if(t<Triangles) flags=Scan.Load2(t*8);
-        uint3 total=ScanTotals(lane,uint3(flags,flags.y*(1-flags.x)));
+        uint selected=0;
+        if(t<Triangles) selected=Scan.Load(t*8);
+        uint total=ScanTotals(lane,selected);
 
         // 삼각형 영역과 블록 영역의 쓰기 경계를 각각 제한한다.
-        if(t<Triangles) Scan.Store(t*8,total.x);
-        if(lane==63 && b<blocks) Scan.Store3(Triangles*8+b*16,total);
+        if(t<Triangles) Scan.Store(t*8,total);
+        if(lane==63 && b<blocks) Scan.Store(Triangles*8+b*16,total);
         return;
     }
 
     // 한 그룹이 연속 블록 구간의 합계를 scan해 전역 offset과 총계를 만든다.
     if(Mode==6)
     {
-        // lane마다 연속 구간을 맡아 세 종류의 합계를 먼저 읽는다.
+        // lane마다 연속 구간을 맡아 선택 합계를 먼저 읽는다.
         uint lane=t%64,blocks=(Triangles+63)/64;
         uint count=(blocks+63)/64;
         uint begin=lane*count,end=min(begin+count,blocks);
-        uint3 sum=0;
-        for(uint b=begin;b<end;b++) sum+=Scan.Load3(Triangles*8+b*16);
+        uint subtotal=0;
+        for(uint b=begin;b<end;b++) subtotal+=Scan.Load(Triangles*8+b*16);
 
         // 구간 inclusive 합계에서 자신의 합계를 빼 exclusive 시작점을 얻는다.
-        uint3 total=ScanTotals(lane,sum);
-        uint offset=total.x-sum.x;
+        uint sum=ScanTotals(lane,subtotal);
+        uint offset=sum-subtotal;
 
         // 구간을 앞에서부터 순회하며 블록 선택 합계를 exclusive offset으로 바꾼다.
         for(uint b=begin;b<end;b++)
@@ -197,8 +194,8 @@ void main(uint3 id : SV_DispatchThreadID)
             offset+=selected;
         }
 
-        // 마지막 lane이 빈 구간이어도 그룹 전체 총계를 한 번 기록한다.
-        if(lane==63) Meta.Store3(0,total);
+        // 마지막 lane이 선택 총계를 기록하고 byte 4~11의 예약 영역은 0으로 고정한다.
+        if(lane==63) Meta.Store3(0,uint3(sum,0,0));
         return;
     }
 
@@ -261,9 +258,7 @@ void main(uint3 id : SV_DispatchThreadID)
         // 제거 상태를 선택 조건에 더해 prefix와 모든 출력에 함께 반영한다.
         bool available=!HasState || !(State[t]&0x80000000u);
         bool selected=available && (Selected(s,indices.x)||Selected(s,indices.y)||Selected(s,indices.z));
-        bool crossing=available && Crossing(asfloat(SourcePose.Load3(s.PoseOffset+indices.x*40)),
-            asfloat(SourcePose.Load3(s.PoseOffset+indices.y*40)),asfloat(SourcePose.Load3(s.PoseOffset+indices.z*40)));
-        Scan.Store2(t*8,uint2(selected,crossing)); return;
+        Scan.Store2(t*8,uint2(selected,0)); return;
     }
 
     // 누적값이 증가한 삼각형만 고유 출력 슬롯에 기록한다.

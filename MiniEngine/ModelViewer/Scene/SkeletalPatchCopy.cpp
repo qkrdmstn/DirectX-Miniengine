@@ -51,7 +51,7 @@ namespace Viewer
             uint32_t NodeCount, Influence, HasState, Padding1;
         };
         static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 192, "Patch shader layout");
-        static_assert(sizeof(SkeletalPatchResult) == 12, "Patch counts readback layout");
+        static_assert(sizeof(SkeletalPatchResult) == 4, "Patch counts readback layout");
 
         // GPU AABB의 정렬 가능한 정수 비트를 원래 float 좌표로 복원한다.
         float BoundsCoordinate(uint32_t ordered)
@@ -2493,12 +2493,12 @@ namespace Viewer
         m_SelectedNode = m_Job.SelectedNode();
         if (!result.PatchTriangles)
         {
-            PatchLog("Skeletal patch publish skipped: %s; no copy or cut requested\n",
-                result.CrossingTriangles ? "no influenced triangles" : "no finite rectangle crossing triangles");
+            // 빈 선택 결과는 복사와 절단 요청 없이 사유를 기록한다.
+            PatchLog("Skeletal patch publish skipped: no influenced triangles; no copy or cut requested\n");
             PatchLog("Skeletal patch cut result: rejected %s components=0 caps=0 uncapped=0 error=0 gap=0\n",
                 "no influenced triangles");
             if (m_Diagnostic && scene.FindObject(m_CopyOwner))
-                throw std::runtime_error("Skeletal patch zero crossing created a copy");
+                throw std::runtime_error("Skeletal patch empty selection created a copy");
             return true;
         }
 
@@ -3751,11 +3751,12 @@ namespace Viewer
         const size_t components = owner ? owner->GetMeshComponents().size() : 0;
         PatchLog("Skeletal patch cut result: %s components=%zu caps=%u uncapped=%u error=%u\n",
             reason, components, caps, uncapped, error);
+
+        // 선택 수와 게시 결과를 CPU 비교 진단에 기록한다.
         if (m_Diagnostic)
-            PatchLog("SP6 comparison case=%u model=%s mode=%s NodeId=%u name=%s patch/crossing/uncovered=%u/%u/%u GPU==CPU=PASS components/caps/uncapped/error=%zu/%u/%u/%u\n",
+            PatchLog("SP6 comparison case=%u model=%s mode=%s NodeId=%u name=%s patch=%u GPU==CPU=PASS components/caps/uncapped/error=%zu/%u/%u/%u\n",
                 m_DiagnosticCase, m_ModelName.c_str(), m_Mode == SkeletalJointMode::Rig ? "Rig" : m_Mode == SkeletalJointMode::Parent ? "Parent" : "Influence", m_SelectedNode,
-                DiagnosticNodeName(m_ModelName, m_SelectedNode).c_str(), m_Result.PatchTriangles, m_Result.CrossingTriangles,
-                m_Result.UncoveredCrossing, components, caps, uncapped, error);
+                DiagnosticNodeName(m_ModelName, m_SelectedNode).c_str(), m_Result.PatchTriangles, components, caps, uncapped, error);
         m_Completed = true;
         if (m_Diagnostic && components != 2 && (!reason || !*reason || std::strcmp(reason, "published A/B") == 0))
             throw std::runtime_error("Skeletal patch cut diagnostic missing rejection reason");
@@ -4099,7 +4100,7 @@ namespace Viewer
         if (!m_Fence || !Graphics::g_CommandManager.IsFenceComplete(m_Fence))
             return false;
 
-        // 기본 경로는 정점 대신 세 카운터와 로컬 경계·원본 월드 X 경계만 읽는다.
+        // 기본 경로는 정점 대신 선택 수와 로컬 경계·원본 월드 X 경계만 읽는다.
         uint32_t metadata[12];
         std::memcpy(metadata, m_Readback.Map(), sizeof(metadata));
         std::memcpy(&result, metadata, sizeof(result));
@@ -4116,8 +4117,7 @@ namespace Viewer
         PatchLog("Skeletal patch source posed world X=[%.6f,%.6f] width=%.6f offset=%.6f\n",
             BoundsCoordinate(metadata[9]), BoundsCoordinate(metadata[10]), m_Output->SourceWorldWidth,
             m_Output->SourceWorldWidth + 0.5f);
-        PatchLog("Skeletal patch GPU patch=%u crossing=%u uncovered=%u\n", result.PatchTriangles,
-            result.CrossingTriangles, result.UncoveredCrossing);
+        PatchLog("Skeletal patch GPU patch=%u\n", result.PatchTriangles);
 
         // section과 draw 출처를 원본 mask의 누적 삼각형 번호로 변환한다.
         const auto* origins = static_cast<const uint32_t*>(m_OriginsReadback.Map());
@@ -4522,12 +4522,12 @@ namespace Viewer
             float(crossMin.GetX()), float(crossMax.GetX()), float(crossMin.GetZ()), float(crossMax.GetZ()));
 
         // CPU 기준의 개수와 출처 및 게시 위치를 모두 성공 조건에 포함한다.
-        uint32_t crossing = 0, uncovered = 0, infiniteCrossing = 0;
         const auto* origins = static_cast<const uint32_t*>(m_OriginsReadback.Map());
         bool pass = expected.size() == result.PatchTriangles && maxError < 1e-4f && widthError < 1e-4f;
         for (uint32_t i = 0; i < expected.size() && i < result.PatchTriangles; ++i)
             pass &= origins[i * 3] == expected[i].SectionId && origins[i * 3 + 1] == expected[i].DrawId
                 && origins[i * 3 + 2] == expected[i].TriangleId;
+
         // 내부 Mesh별 출처 개수도 기록하여 모든 팔레트가 비교에 포함됐는지 확인한다.
         for (uint32_t section = 0; section < input.Sections.size(); ++section)
         {
@@ -4538,35 +4538,10 @@ namespace Viewer
                 section, input.Sections[section].StartJoint, cpu, gpu, cpu == gpu ? "PASS" : "FAIL");
         }
         m_OriginsReadback.Unmap();
-        // 제거 삼각형은 선택 여부뿐 아니라 교차·미포함 카운터에서도 제외한다.
-        size_t selected = 0;
-        uint32_t global = 0;
-        for (uint32_t s = 0; s < input.Sections.size(); ++s)
-            for (uint32_t d = 0; d < input.Sections[s].Draws.size(); ++d)
-                for (uint32_t t = 0; t < input.Sections[s].Draws[d].IndexCount / 3; ++t, ++global)
-                {
-                    if (!input.State.empty() && (input.State[global] & 0x80000000u)) continue;
-                    const bool include = selected < expected.size() && expected[selected].SectionId == s
-                        && expected[selected].DrawId == d && expected[selected].TriangleId == t;
-                    if (include) ++selected;
-                    const auto indices = TriangleIndices(input.Sections[s], input.Sections[s].Draws[d], t);
-                    float minimum = FLT_MAX, maximum = -FLT_MAX;
-                    for (uint32_t index : indices)
-                    {
-                        const float distance = float(Math::Dot(Math::Vector4(input.Sections[s].Vertices[index].Position, 1), input.Plane.WorldPlane));
-                        minimum = std::min(minimum, distance); maximum = std::max(maximum, distance);
-                    }
-                    if (minimum < -input.Epsilon && maximum > input.Epsilon) ++infiniteCrossing;
-                    if (CrossesRectangle(input, input.Sections[s], indices))
-                    {
-                        ++crossing;
-                        if (!include) ++uncovered;
-                    }
-                }
-        pass &= crossing == result.CrossingTriangles && uncovered == result.UncoveredCrossing;
-        PatchLog("Skeletal patch diagnostic infinite-plane crossings=%u\n", infiniteCrossing);
-        PatchLog("Skeletal patch CPU patch=%zu crossing=%u uncovered=%u sources=%s %s\n", expected.size(),
-            crossing, uncovered, pass ? "match" : "mismatch", pass ? "PASS" : "FAIL");
+
+        // 선택 수와 출처 및 위치 비교 결과를 최종 진단으로 기록한다.
+        PatchLog("Skeletal patch CPU patch=%zu sources=%s %s\n", expected.size(),
+            pass ? "match" : "mismatch", pass ? "PASS" : "FAIL");
         if (!pass) throw std::runtime_error("Skeletal patch GPU/CPU diagnostic FAIL");
         PatchLog("MI4b GPU==CPU PASS triangles=%zu duplicates=%zu\n", expected.size(), duplicates);
     }
