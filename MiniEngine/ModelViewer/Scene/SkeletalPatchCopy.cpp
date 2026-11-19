@@ -39,7 +39,7 @@ namespace Viewer
             uint32_t VbOffset, Stride, IbOffset, Index32;
             uint32_t StartIndex, BaseVertex, Triangles, PoseOffset;
             uint32_t FirstTriangle, MaskOffset, Flags, SectionId;
-            uint32_t DrawId, JointCount, VertexCount, VertexBase;
+            uint32_t DrawId, JointCount, VertexCount, Reserved1;
         };
         struct Parameters
         {
@@ -48,7 +48,7 @@ namespace Viewer
             Math::Matrix4 LocalToWorld;
             float Epsilon, HalfWidth, HalfHeight;
             uint32_t Triangles, Draws, DepthOffset, IndexOffset, Mode;
-            uint32_t NodeCount, Influence, HasState, VertexMarkWords;
+            uint32_t NodeCount, Influence, HasState, Padding1;
         };
         static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 192, "Patch shader layout");
         static_assert(sizeof(SkeletalPatchResult) == 12, "Patch counts readback layout");
@@ -371,13 +371,11 @@ namespace Viewer
             // 여러 C 요청 사이에 파이프라인을 재사용한다.
             static bool initialized = false;
             if (initialized) return;
-            PatchRoot.Reset(14);
+            PatchRoot.Reset(12);
             PatchRoot[0].InitAsConstantBuffer(0);
             for (uint32_t i = 0; i < 4; ++i) PatchRoot[i + 1].InitAsBufferSRV(i);
             for (uint32_t i = 0; i < 6; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
             PatchRoot[11].InitAsBufferSRV(4);
-            PatchRoot[12].InitAsBufferUAV(6);
-            PatchRoot[13].InitAsBufferUAV(7);
             PatchRoot.Finalize(L"Skeletal patch extraction");
             PatchPSO.SetRootSignature(PatchRoot);
             PatchPSO.SetComputeShader(g_pPatchExtractCS, sizeof(g_pPatchExtractCS));
@@ -3870,7 +3868,7 @@ namespace Viewer
         m_IslandLabels = {};
     }
 
-    // 컴포넌트 제거 상태를 반영해 GPU 선택·병렬 prefix·추출과 패치 인접 집계를 제출한다.
+    // 컴포넌트 제거 상태를 반영해 GPU 선택·병렬 prefix·추출을 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
         uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child,
@@ -3924,29 +3922,6 @@ namespace Viewer
         }
         if (!triangles || triangles > UINT32_MAX / (3 * 48ull)
             || !input.GetSource()->m_NumNodes || input.GetSource()->m_NumNodes > UINT32_MAX / 8) return false;
-
-        // 같은 VB와 stride를 쓰는 draw의 최대 정점 수로 공유 구간 길이를 정한다.
-        std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> vertexRanges;
-        for (const auto& draw : draws)
-        {
-            auto& range = vertexRanges[{ draw.VbOffset, draw.Stride }];
-            range.second = std::max(range.second, draw.VertexCount);
-        }
-
-        // 구간 합을 64비트로 검사한 뒤 겹치지 않는 시작 번호를 배정한다.
-        uint64_t totalVertices = 0;
-        for (auto& entry : vertexRanges)
-        {
-            entry.second.first = uint32_t(totalVertices);
-            totalVertices += entry.second.second;
-            if (totalVertices > UINT32_MAX) return false;
-        }
-        for (auto& draw : draws)
-        {
-            const auto& range = vertexRanges.at({ draw.VbOffset, draw.Stride });
-            draw.VertexBase = range.first;
-            draw.VertexCount = range.second;
-        }
 
         // 대상 전체 삼각형 수를 상한으로 잡아 compaction 출력 overflow를 없앤다.
         m_Input = source.GetGeometry();
@@ -4029,16 +4004,9 @@ namespace Viewer
         alignas(16) const uint32_t selectedNode[4] = { node, 0, 0, 0 };
         m_Selected.Create(L"Patch selected NodeId", 1, 4, selectedNode);
 
-        // 마스크가 없으면 읽지 않는 0 버퍼를 바인딩하고 인접 카운터를 초기화한다.
+        // 마스크가 없으면 State SRV에 바인딩할 0 버퍼를 준비한다.
         const std::vector<uint32_t> emptyState(triangleMask ? 4 : (size_t(triangles) + 3) & ~size_t(3), 0);
         m_EmptyState.Create(L"Empty triangle state", uint32_t(emptyState.size()), 4, emptyState.data());
-        const std::vector<uint32_t> adjacent(c.HasState ? 65536 : 4, 0);
-        m_Adjacent.Create(L"Adjacent patch counts", uint32_t(adjacent.size()), 4, adjacent.data());
-
-        // 제거 상태가 있을 때만 전체 정점 비트를 만들고 나머지는 UAV 슬롯만 채운다.
-        c.VertexMarkWords = c.HasState ? uint32_t((totalVertices + 31) / 32) : 1;
-        const std::vector<uint32_t> vertexMarks(c.VertexMarkWords, 0);
-        m_VertexMarks.Create(L"Patch selected vertex marks", uint32_t(vertexMarks.size()), 4, vertexMarks.data());
 
         // 같은 graphics queue에서 pose 준비 뒤 추출하고 패스 사이 UAV 의존성을 보장한다.
         auto& graphics = GraphicsContext::Begin(L"Extract skeletal patch");
@@ -4056,10 +4024,6 @@ namespace Viewer
         auto& state = triangleMask ? const_cast<StructuredBuffer&>(triangleMask->State) : m_EmptyState;
         compute.TransitionResource(state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.SetBufferSRV(11, state);
-        compute.TransitionResource(m_Adjacent, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        compute.SetBufferUAV(12, m_Adjacent);
-        compute.TransitionResource(m_VertexMarks, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        compute.SetBufferUAV(13, m_VertexMarks);
         GpuBuffer* outputs[] = { &geometry.Data, &m_Output->TriangleSources, &m_Output->LocalBounds, &m_Scan, &m_Votes, &m_Selected };
         for (uint32_t i = 0; i < 6; ++i)
         {
@@ -4098,22 +4062,8 @@ namespace Viewer
                 compute.InsertUAVBarrier(m_Output->LocalBounds);
             }
         }
-        // 기존 패치와 맞닿아도 출력은 그대로 두고 패치별 인접 제거 삼각형 수만 읽는다.
-        if (c.HasState)
-        {
-            compute.InsertUAVBarrier(m_Output->LocalBounds);
-            c.Mode = 8;
-            compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
-            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
-            compute.InsertUAVBarrier(m_VertexMarks);
 
-            // 표시가 완료된 뒤 제거 삼각형의 인접 비트를 조회한다.
-            c.Mode = 5;
-            compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
-            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
-            m_AdjacentReadback.Create(L"Adjacent patch readback", 65536, 4);
-            graphics.CopyBuffer(m_AdjacentReadback, m_Adjacent);
-        }
+        // 추출 카운터와 선택 본을 같은 제출의 readback 버퍼에 복사한다.
         graphics.TransitionResource(m_Output->LocalBounds, D3D12_RESOURCE_STATE_COPY_SOURCE);
         graphics.CopyBufferRegion(m_Readback, 0, m_Output->LocalBounds, 0, 44);
         graphics.TransitionResource(m_Selected, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -4142,7 +4092,7 @@ namespace Viewer
         return true;
     }
 
-    // fence 완료 뒤 카운터·경계·인접 패치 집계와 GPU 출력을 수집한다.
+    // fence 완료 뒤 카운터·경계와 GPU 출력을 수집한다.
     bool SkeletalPatchJob::Poll(SkeletalPatchResult& result, std::shared_ptr<SkeletalPatchBuffers>& patch)
     {
         // GPU가 아직 쓰는 readback은 매핑하지 않는다.
@@ -4168,14 +4118,7 @@ namespace Viewer
             m_Output->SourceWorldWidth + 0.5f);
         PatchLog("Skeletal patch GPU patch=%u crossing=%u uncovered=%u\n", result.PatchTriangles,
             result.CrossingTriangles, result.UncoveredCrossing);
-        // 0도 유효한 소유 id로 기록하며 병합이나 마스크 변경은 하지 않는다.
-        if (!m_State.empty())
-        {
-            const auto* adjacent = static_cast<const uint32_t*>(m_AdjacentReadback.Map());
-            for (uint32_t id = 0; id < 65536; ++id)
-                if (adjacent[id]) PatchLog("adjacentPatch id=%u removedNeighbors=%u separatePatch=1\n", id, adjacent[id]);
-            m_AdjacentReadback.Unmap();
-        }
+
         // section과 draw 출처를 원본 mask의 누적 삼각형 번호로 변환한다.
         const auto* origins = static_cast<const uint32_t*>(m_OriginsReadback.Map());
         for (uint32_t t = 0; t < result.PatchTriangles; ++t)
@@ -4471,34 +4414,6 @@ namespace Viewer
                 }
                 m_Output->BoundarySkins.push_back(skin);
             }
-
-        // 원본 정점 번호 집합으로 인접 제거 삼각형을 독립 계산해 GPU 집계를 대조한다.
-        if (!input.State.empty())
-        {
-            std::set<std::tuple<uint32_t, uint32_t, uint32_t>> vertices;
-            for (const auto& triangle : expected)
-            {
-                const auto& mesh = m_Input->GetMesh(triangle.SectionId);
-                for (uint32_t index : triangle.Vertices) vertices.emplace(mesh.vbOffset, mesh.vbStride, index);
-            }
-            std::vector<uint32_t> counts(65536, 0);
-            uint32_t global = 0;
-            for (uint32_t s = 0; s < input.Sections.size(); ++s)
-                for (const auto& draw : input.Sections[s].Draws)
-                    for (uint32_t t = 0; t < draw.IndexCount / 3; ++t, ++global)
-                    {
-                        if (!(input.State[global] & 0x80000000u)) continue;
-                        const auto& mesh = m_Input->GetMesh(s);
-                        bool adjacent = false;
-                        for (uint32_t index : TriangleIndices(input.Sections[s], draw, t))
-                            adjacent |= vertices.count({ mesh.vbOffset, mesh.vbStride, index }) != 0;
-                        counts[input.State[global] & 65535u] += adjacent;
-                    }
-            const bool same = std::memcmp(m_AdjacentReadback.Map(), counts.data(), counts.size() * 4) == 0;
-            m_AdjacentReadback.Unmap();
-            PatchLog("SP7d adjacentPatch GPU==CPU=%s id=1 removedNeighbors=%u\n", same ? "PASS" : "FAIL", counts[1]);
-            if (!same) throw std::runtime_error("Adjacent patch GPU/CPU mismatch");
-        }
 
         // 원본 pose와 실제 packed VB를 게시 TRS로 변환해 오프셋 제거 후 월드 경계를 대조한다.
         const auto* packed = static_cast<const uint8_t*>(m_OutputReadback.Map());

@@ -232,7 +232,7 @@ struct NodeAttachment { uint32_t NodeId; Math::Matrix4 NodeWorldAtCut; Math::Mat
 
 ## SP-7d 구현·검증 (2026-11-03, base `f83ecf1e`, 미커밋)
 - `PatchExtractCS::main`·`ExtractPatchReference`는 전역 삼각형 State의 bit31을 선택에서 제외하며 마스크 없음은 0 버퍼로 처리한다. 교차·미포함 카운터에서도 제거 삼각형을 제외한다. Influence 투표 규칙은 유지한다.
-- `SkeletalPatchJob::Submit`·`Poll`은 VB 시작·stride와 baseVertex 적용 후 정점 번호가 같은 제거 삼각형을 소유 id별로 한 번씩 집계하고 `adjacentPatch`를 기록한다. draw/section 경계도 같은 조건으로 비교하며 공유 정점 하나면 인접이다(변 공유나 위치 용접은 요구하지 않음). GPU 비용은 제거 수×전체 삼각형 수, 최악 O(N²)이며 대형 입력 성능은 미검증이다. 병합과 C 게시 변경은 없다.
+- `SkeletalPatchJob::Submit`·`Poll`은 VB 시작·stride와 baseVertex 적용 후 정점 번호가 같은 제거 삼각형을 소유 id별로 한 번씩 집계하고 `adjacentPatch`를 기록한다. draw/section 경계도 같은 조건으로 비교하며 공유 정점 하나면 인접이다(변 공유나 위치 용접은 요구하지 않음). GPU 비용은 제거 수×전체 삼각형 수, 최악 O(N²)이며 대형 입력 성능은 미검증이다. 병합과 C 게시 변경은 없다. **이 인접 집계(Mode 5·8, `adjacentPatch` 로그, `Validate` 인접 비교)는 RM-1에서 제거됐다([결정](PatchDiagnosticRemoval.md)).**
 - `CheckMaskedPatch`·`RunSkeletalMaskChecks`: Xbot Spine2(P=6)→LeftShoulder(Q=12), 범위 934−제거 799=추출 135, `adjacentPatch id=1 removedNeighbors=64 separatePatch=1`, GPU==CPU 및 없음/0/해제 출력 바이트 비교 PASS.
 - D/R 빌드(53.3/50.7초)·AutoRig 55·SkeletalPatch 63·SkeletalBreak 915·CutPlaneTests·TriangleMask 26표본/3,328 DWORD·마스크·SP-6 20행 기존 로그 일치·patch-break·Static PASS, D3D12 ERROR 0(MX450, 32.0.15.9186, `-debug 1`). 산출물은 `%TEMP%/SP7b`; 대형 입력 인접 집계 성능·실제 C 게시(SP-7e)는 미검증이다.
 - 독립 리뷰: 제거 삼각형이 교차·미포함 카운터에 남는 GPU/CPU 누락과 0 버퍼 업로드의 16바이트 올림 범위 초과 읽기를 수정했다. 기존 metadata/selectedNode 정렬·패딩 변경도 `InitializeBuffer`의 SIMD 복사 계약상 필요하다. 실제 교차 평면으로 진단을 보강해 전체 제거 시 교차 373→0, 출력/교차/미포함 0/0/0을 확인했다.

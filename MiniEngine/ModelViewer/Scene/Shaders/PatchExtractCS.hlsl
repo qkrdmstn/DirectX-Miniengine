@@ -6,22 +6,20 @@ cbuffer Parameters : register(b0)
     float Epsilon, HalfWidth, HalfHeight;
     uint Triangles;
     uint Draws, DepthOffset, IndexOffset, Mode;
-    uint NodeCount, Influence, HasState, VertexMarkWords;
+    uint NodeCount, Influence, HasState, Padding1;
 };
 struct DrawInput
 {
     uint VbOffset, Stride, IbOffset, Index32;
     uint StartIndex, BaseVertex, Triangles, PoseOffset;
     uint FirstTriangle, MaskOffset, Flags, SectionId;
-    uint DrawId, JointCount, VertexCount, VertexBase;
+    uint DrawId, JointCount, VertexCount, Reserved1;
 };
 ByteAddressBuffer Source : register(t0);
 ByteAddressBuffer SourcePose : register(t1);
 StructuredBuffer<DrawInput> Inputs : register(t2);
 StructuredBuffer<uint> Mask : register(t3);
 StructuredBuffer<uint> State : register(t4);
-RWByteAddressBuffer Adjacent : register(u6); // patch id별 인접 제거 삼각형 수
-RWByteAddressBuffer VertexMarks : register(u7); // VB 구간별 선택 정점 비트
 RWByteAddressBuffer Data : register(u0);
 RWByteAddressBuffer Sources : register(u1);
 RWByteAddressBuffer Meta : register(u2); // counts 0..8, local AABB 12..32, source world X 36..40
@@ -137,7 +135,7 @@ uint Ordered(float x)
     // 음수 구간은 비트를 반전하고 양수는 부호 비트를 뒤집는다.
     uint b=asuint(x); return b&0x80000000?~b:b^0x80000000;
 }
-// 투표·선택·병렬 prefix·추출과 기존 제거 패치의 인접 집계를 실행한다.
+// 투표·선택·병렬 prefix·추출을 실행한다.
 [numthreads(64,1,1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -220,35 +218,8 @@ void main(uint3 id : SV_DispatchThreadID)
     while(sId+1<Draws && t>=Inputs[sId+1].FirstTriangle) sId++;
     DrawInput s=Inputs[sId]; uint triangleId=t-s.FirstTriangle;
     uint3 indices=uint3(Index(s,triangleId*3),Index(s,triangleId*3+1),Index(s,triangleId*3+2));
-    // 선택 정점 표시와 제거 삼각형 조회는 동일한 VB 구간의 비트만 사용한다.
-    if (Mode == 8 || Mode == 5)
-    {
-        // 최종 선택이 없거나 해당 모드의 대상 삼각형이 아니면 접근하지 않는다.
-        if (Meta.Load(0) == 0) return;
-        if (Mode == 5 && !(State[t] & 0x80000000u)) return;
-        if (Mode == 8 && Scan.Load(t * 8) == (t ? Scan.Load((t - 1) * 8) : 0)) return;
 
-        // 범위 밖 번호와 덧셈 overflow를 배제하고 정점별 표시 또는 조회를 수행한다.
-        [unroll] for (uint corner = 0; corner < 3; ++corner)
-        {
-            uint index = indices[corner];
-            if (index >= s.VertexCount || index > 0xffffffffu - s.VertexBase) continue;
-            uint vertex = s.VertexBase + index, address = (vertex / 32) * 4;
-            if (vertex / 32 >= VertexMarkWords) continue;
-            uint bit = 1u << (vertex % 32), ignored;
-            if (Mode == 8)
-            {
-                VertexMarks.InterlockedOr(address, bit, ignored);
-            }
-            else if (VertexMarks.Load(address) & bit)
-            {
-                Adjacent.InterlockedAdd((State[t] & 65535u) * 4, 1, ignored);
-                return;
-            }
-        }
-        return;
-    }
-
+    // 유한 사각형과 교차하는 삼각형에서 선택 본 투표를 모은다.
     if(Mode==3)
     {
         // 추출 카운터와 같은 유한 사각형 교차 판정을 사용한다.
@@ -275,6 +246,8 @@ void main(uint3 id : SV_DispatchThreadID)
         }
         return;
     }
+
+    // 제거 상태와 선택 본의 영향을 반영해 삼각형 플래그를 기록한다.
     if(Mode==0)
     {
         // 선택 여부와 무관하게 원본 전체 posed 정점의 월드 X 폭을 집계한다.

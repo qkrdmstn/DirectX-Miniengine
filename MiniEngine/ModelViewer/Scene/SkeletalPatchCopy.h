@@ -87,9 +87,8 @@ namespace Viewer
         void Validate(const SkeletalPatchResult& result);
         ReadbackBuffer m_Readback;
         ReadbackBuffer m_SourceReadback, m_PoseReadback, m_OriginsReadback;
-        ReadbackBuffer m_OutputReadback, m_AdjacentReadback;
+        ReadbackBuffer m_OutputReadback;
         StructuredBuffer m_EmptyState;
-        ByteAddressBuffer m_Adjacent, m_VertexMarks;
         std::vector<uint32_t> m_State;
         std::vector<std::vector<uint32_t>> m_SelectionMasks;
         Math::Matrix4 m_SourceWorld;
