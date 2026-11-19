@@ -107,6 +107,29 @@ namespace Viewer
             const std::vector<Math::Matrix4>& nodePoses, float fixedDt);
         // 저장한 목표와 COM 속도를 읽으며 실패하면 출력을 보존한다.
         bool GetBodyTarget(ObjectId owner, uint32_t bodyId, SkeletalBodyTarget& target) const;
+        // 진단 평면 배치를 위해 BuildBoxBody의 월드 중심과 축별 전체 크기를 읽는다.
+        bool GetBodyBox(ObjectId owner, uint32_t node, Math::Vector3& center, Math::Vector3& size) const
+        {
+            // 등록된 자산에서 요청한 본의 convex 상자를 찾는다.
+            const auto found = m_Rigs.find(owner);
+            if (found == m_Rigs.end()) return false;
+            const auto& rig = found->second;
+            for (size_t i = 0; i < rig.Asset.Bodies.size(); ++i)
+            {
+                const auto& body = rig.Asset.Bodies[i];
+                if (body.Node != node) continue;
+
+                // body 원점이 상자 중심이며 크기는 등록된 미터 단위를 그대로 쓴다.
+                std::array<double, 3> position;
+                std::array<double, 4> rotation;
+                if (!m_World.GetBodyPose(rig.Bodies[i], position, rotation)) return false;
+                center = Math::Vector3(float(position[0]), float(position[1]), float(position[2]));
+                size = Math::Vector3(float(body.HalfExtentMeters[0] * 2),
+                    float(body.HalfExtentMeters[1] * 2), float(body.HalfExtentMeters[2] * 2));
+                return true;
+            }
+            return false;
+        }
         // 등록된 runtime body를 owner와 자산 body 및 node 번호로 역조회한다.
         bool FindBody(MiniPhysics::BodyHandle body, ObjectId& owner, uint32_t& bodyId, uint32_t& nodeId) const;
         // 양 끝이 Kinematic이며 runtime 관절이 살아 있는 본 선분으로 출력을 교체한다.

@@ -78,6 +78,10 @@ public:
     // 정상 종료 뒤 자동 판정과 SP7e2 실패 집계를 종료 코드로 바꾼다.
     int DiagnosticExitCode() const
     {
+        // 재현은 두 번째 게시까지 통과해야 성공 종료 코드다.
+        if (m_RecutRepro)
+            return m_RecutApplied[1] && !m_RecutFailed[0] && !m_RecutFailed[1] ? 0 : 1;
+
         // break 진단의 경계 FAIL을 기존 자동 판정과 함께 종료 코드에 반영한다.
         if (m_SkeletalPatchBreakChecks && m_SkeletalPatchCopy.HasBoundaryCheckFailure())
         {
@@ -112,6 +116,11 @@ public:
     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
     virtual bool IsDone() override
     {
+        // 재현은 결과 이후 최대 120프레임만 관찰하고 독립적으로 종료한다.
+        if (m_RecutRepro)
+            return (m_RecutResultFrame && m_QueryFrame >= m_RecutResultFrame + 120)
+                || IGameApp::IsDone();
+
         // 재절단 검사는 모든 판정을 기록한 뒤 기존 정리 경로로 종료한다.
         if (m_RigBoneCutChecks.Enabled)
             return m_RigBoneCutChecks.Done;
@@ -150,6 +159,21 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+    uint32_t m_RecutRepro = 0, m_RecutRequested[2]{}, m_RecutApplied[2]{};
+    uint32_t m_RecutResultFrame = 0, m_RecutCaptured = 0;
+    Viewer::ObjectId m_RecutOwner = Viewer::InvalidObjectId;
+    size_t m_RecutBeforePieces = 0;
+    bool m_RecutFailed[2]{};
+    std::wstring m_RecutBones[2], m_RecutMode;
+    // 재현 실패의 요청 번호와 이유를 한 번 기록하고 종료 관찰을 시작한다.
+    void FailRecut(const char* reason, uint32_t request)
+    {
+        // 최초 실패만 최종 판정으로 보존한다.
+        if (m_RecutResultFrame) return;
+        m_RecutFailed[request - 1] = true;
+        m_RecutResultFrame = m_QueryFrame;
+        Utility::Printf("RecutRepro FAIL reason=%s request=%u frame=%u\n", reason, request, m_QueryFrame);
+    }
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
     void FocusBreakCamera(const Vector3& center, bool demo);
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
@@ -363,6 +387,33 @@ void ModelViewer::Startup( void )
     CommandLineArgs::GetInteger(L"cap-threads", capThreads);
     MeshCutting::SetCapThreads(capThreads);
 
+    // 재현 종속 옵션과 모델 번호를 부작용 전에 검증한다.
+    std::wstring recutValue;
+    if (CommandLineArgs::GetString(L"skeletal-recut-repro", recutValue))
+    {
+        if (recutValue != L"1" && recutValue != L"2")
+            throw std::invalid_argument("skeletal-recut-repro must be 1 or 2");
+        m_RecutRepro = recutValue == L"1" ? 1u : 2u;
+    }
+    const bool recutFirst = CommandLineArgs::GetString(L"skeletal-recut-repro-first", m_RecutBones[0]);
+    const bool recutSecond = CommandLineArgs::GetString(L"skeletal-recut-repro-second", m_RecutBones[1]);
+    const bool recutMode = CommandLineArgs::GetString(L"skeletal-recut-repro-mode", m_RecutMode);
+    if (!m_RecutRepro && (recutFirst || recutSecond || recutMode))
+        throw std::invalid_argument("skeletal-recut-repro-first/second/mode require skeletal-recut-repro");
+    if (recutMode && m_RecutMode != L"rig" && m_RecutMode != L"parent")
+        throw std::invalid_argument("skeletal-recut-repro-mode must be rig or parent");
+
+    // 재현은 기존 데모 플래그를 켜지 않고 단독 실행만 허용한다.
+    if (m_RecutRepro)
+    {
+        for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-bone",
+            L"skeletal-break-demo-unmask", L"attached-recut-checks", L"rig-bone-cut-checks",
+            L"skeletal-union-checks", L"skeletal-patch-offset-copy", L"model", L"demo-cut-sec",
+            L"skeletal-multi-cut", L"skeletal-multi-stale", L"skeletal-multi-fail", L"skeletal-multi-reject" })
+            if (CommandLineArgs::GetString(option, recutValue))
+                throw std::invalid_argument("skeletal-recut-repro cannot be combined with other demos or checks");
+    }
+
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
     uint32_t attachedRecut = 0;
@@ -382,7 +433,7 @@ void ModelViewer::Startup( void )
         throw std::invalid_argument("skeletal-break-demo-unmask requires skeletal-break-demo");
 
     // 시연과 자동 검사·벤치마크의 동시 지정을 부작용 발생 전에 거절한다.
-    if (m_SkeletalBreakDemo || m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
+    if (m_SkeletalBreakDemo || m_RecutRepro || m_AttachedRecutChecks.Enabled || m_RigBoneCutChecks.Enabled)
     {
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-patch-break-checks", L"skeletal-patch-checks",
@@ -395,7 +446,7 @@ void ModelViewer::Startup( void )
             L"cut-expect-loops", L"cut-expect-publications", L"demo-tower" })
         {
             if (CommandLineArgs::GetString(option, value))
-                throw std::invalid_argument("skeletal-break-demo cannot be combined with automatic checks, cuts or benchmarks");
+                throw std::invalid_argument("skeletal-break-demo/skeletal-recut-repro cannot be combined with automatic checks, cuts or benchmarks");
         }
     }
 
@@ -530,7 +581,7 @@ void ModelViewer::Startup( void )
     if (m_SkeletalBreakDemo) m_DemoTower = 0;
 
     // 실제 절단과 낙하 진단에는 물리 시뮬레이션을 준비한다.
-    if (m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled)
+    if (m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled)
         m_UsePhysicsSim = 1;
 
     // 시작 모드를 검증하며 생략 시 Rig를 유지한다.
@@ -553,7 +604,7 @@ void ModelViewer::Startup( void )
         L"cut-step-y", L"cut-gap", L"cut-expect-publications", L"physics-cut-checks",
         L"physics-cut-scenario", L"cut-transform-checks", L"cut-validate", L"cut-expect-loops", L"cap-mode" })
         diagnosticScene |= CommandLineArgs::GetString(option, diagnosticValue);
-    const bool defaultScene = m_SkeletalBreakDemo || (!m_DemoTower && !CommandLineArgs::GetString(L"model", gltfFileName));
+    const bool defaultScene = m_SkeletalBreakDemo || m_RecutRepro || (!m_DemoTower && !CommandLineArgs::GetString(L"model", gltfFileName));
 
     if (m_DemoTower)
         CreateDemoTower(m_Scene, Renderer::LoadModel(L"Models/cube.glb", forceRebuild), m_DemoTower);
@@ -566,7 +617,7 @@ void ModelViewer::Startup( void )
         m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
 
         // 기존 네 모델 뒤에 연속 피부 검증 모델을 추가하고 첫 클립을 반복한다.
-        if (!diagnosticScene || m_SkeletalPatchChecks || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || autoRigChecks)
+        if (!diagnosticScene || m_SkeletalPatchChecks || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || autoRigChecks)
         {
             const auto model = Renderer::LoadModel(L"Models/CesiumMan.glb", forceRebuild);
             m_Scene.CreateObject("CesiumMan", model).PlayAnimation(0);
@@ -645,7 +696,7 @@ void ModelViewer::Startup( void )
     // 세 검사 옵션의 기본 실행 상태를 정하고 명시적인 시작 옵션을 우선 적용한다.
     uint32_t physicsRunning = (m_PhysicsSimChecks != 0 || m_PhysicsCutChecks != 0 || m_CutScenario.Active() || m_DemoTower != 0) ? 1u : 0u;
     CommandLineArgs::GetInteger(L"physics-running",physicsRunning);
-    g_PhysicsRunning = m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled || physicsRunning != 0;
+    g_PhysicsRunning = m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled || physicsRunning != 0;
 
     // 절단 대상의 변환 검사 옵션을 적용한다.
     uint32_t transformChecks = 0;
@@ -1064,8 +1115,8 @@ void ModelViewer::Update( float deltaT )
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
     m_SkeletalChecks.BeforeStep(m_Physics);
     const unsigned steps = m_Physics.UpdateFrame(gfxContext,
-        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
-        (m_SkeletalBreakDemo || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
+        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+        (m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
     m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
 
     // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
@@ -1086,6 +1137,75 @@ void ModelViewer::Update( float deltaT )
     {
         --m_AutoCuts;
         ++m_AutoCutIndex;
+    }
+
+    // 독립 재현은 첫 게시 후 45프레임에 같은 다리의 두 번째 C를 보낸다.
+    const uint32_t recutIndex = m_RecutApplied[0] ? 1u : 0u;
+    if (m_RecutRepro && !m_RecutResultFrame && !m_RecutRequested[recutIndex]
+        && m_QueryFrame == (recutIndex ? m_RecutApplied[0] + 45 : 60))
+    {
+        // 요청 시점을 먼저 기록해 대상 누락도 독립 실패로 판정한다.
+        m_RecutRequested[recutIndex] = m_QueryFrame;
+        bool foundModel = false;
+        for (const auto& object : m_Scene.GetObjects())
+        {
+            if (object->GetName() != (m_RecutRepro == 1 ? "Xbot" : "CesiumMan")) continue;
+            foundModel = true;
+            m_RecutOwner = object->GetId();
+            m_RecutBeforePieces = object->GetMeshComponents().size();
+
+            // 기본 이름과 override 모두 지정 본과 DFS 다음 본 사이의 선분을 사용한다.
+            const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
+            const std::string bone = m_RecutBones[recutIndex].empty()
+                ? (m_RecutRepro == 1 ? (recutIndex ? "mixamorig:LeftUpLeg" : "mixamorig:LeftLeg")
+                    : (recutIndex ? "leg_joint_L_1" : "leg_joint_L_2"))
+                : std::string(m_RecutBones[recutIndex].begin(), m_RecutBones[recutIndex].end());
+            const auto found = std::find(names.begin(), names.end(), bone);
+            if (found == names.end() || found + 1 == names.end())
+            {
+                FailRecut("bone_missing", recutIndex + 1);
+                break;
+            }
+            const uint32_t node = uint32_t(found - names.begin()), child = node + 1;
+            auto plane = Viewer::BuildSkeletalBonePlane(*object, node, child);
+            Vector3 center = (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f;
+            Vector3 size(kZero);
+
+            // CesiumMan은 convex 상자의 실제 body 원점을 지나도록 평면을 평행 이동한다.
+            if (m_RecutRepro == 2)
+            {
+                if (!m_Physics.GetSkeletalPhysics().GetBodyBox(m_RecutOwner, node, center, size))
+                {
+                    FailRecut("box_missing", recutIndex + 1);
+                    break;
+                }
+                const Matrix4 transform = Invert(plane.WorldToPlane);
+                if (!MeshCutting::TryBuildCutPlaneData({ 0.3f, 0.3f },
+                    AffineTransform(Vector3(transform.GetX()), Vector3(transform.GetY()), Vector3(transform.GetZ()), center), plane))
+                {
+                    FailRecut("invalid_plane", recutIndex + 1);
+                    break;
+                }
+            }
+
+            // 강제 모드를 우선하고 평면과 상자의 월드 미터 단위 값을 기록한다.
+            const auto mode = m_RecutMode.empty() ? m_SkeletalJointMode
+                : m_RecutMode == L"parent" ? Viewer::SkeletalJointMode::Parent : Viewer::SkeletalJointMode::Rig;
+
+            // Utility::Printf 버퍼가 256자라 요청 정보를 두 줄로 나눠 기록한다.
+            Utility::Printf("RecutRepro request=%u frame=%u model=%u bone=%s node=%u child=%s/%u mode=%s\n",
+                recutIndex + 1, m_QueryFrame, m_RecutRepro, bone.c_str(), node, names[child].c_str(), child,
+                mode == Viewer::SkeletalJointMode::Rig ? "rig" : mode == Viewer::SkeletalJointMode::Parent ? "parent" : "influence");
+            Utility::Printf("RecutRepro plane boxCenter=(%.4f,%.4f,%.4f) boxSize=(%.4f,%.4f,%.4f) normal=(%.4f,%.4f,%.4f) d=%.4f centerDist=%.6f\n",
+                float(center.GetX()), float(center.GetY()), float(center.GetZ()),
+                float(size.GetX()), float(size.GetY()), float(size.GetZ()),
+                float(plane.WorldPlane.GetX()), float(plane.WorldPlane.GetY()), float(plane.WorldPlane.GetZ()),
+                float(plane.WorldPlane.GetW()), float(Dot(Vector3(plane.WorldPlane), center)) + float(plane.WorldPlane.GetW()));
+            m_SkeletalPatchCopy.Request(m_Scene, plane, false, mode, UINT32_MAX, &m_Physics);
+            FocusBreakCamera(center, true);
+            break;
+        }
+        if (!foundModel) FailRecut("model_missing", recutIndex + 1);
     }
 
     // 60프레임의 재생 pose에서 기존 case 평면으로 정상 C를 한 번 요청한다.
@@ -1322,6 +1442,31 @@ void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
 // opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
+    // 원래 owner에 조각이 commit된 것을 확인해 데모 캡처 신호 없이 게시를 판정한다.
+    if (m_RecutRepro && !m_RecutResultFrame)
+    {
+        const uint32_t index = m_RecutRequested[1] ? 1u : 0u;
+        const auto* owner = m_Scene.FindObject(m_RecutOwner);
+        if (m_RecutRequested[index] && !m_RecutApplied[index])
+        {
+            // staging 조각은 세지 않고 원래 owner의 게시된 컴포넌트만 비교한다.
+            if (owner && owner->GetMeshComponents().size() > m_RecutBeforePieces)
+            {
+                m_RecutApplied[index] = m_QueryFrame;
+                Utility::Printf("RecutRepro published request=%u frame=%u\n", index + 1, m_QueryFrame);
+                if (index == 1)
+                {
+                    m_RecutResultFrame = m_QueryFrame;
+                    Utility::Printf("RecutRepro PASS request=2 frame=%u\n", m_QueryFrame);
+                }
+            }
+            else if (!m_SkeletalPatchCopy.IsPending() && !m_Cutting.IsBusy())
+                FailRecut("rejected", index + 1);
+            else if (m_QueryFrame >= m_RecutRequested[index] + 600)
+                FailRecut("timeout", index + 1);
+        }
+    }
+
     // 시연의 게시 프레임을 기록하고 기존 진단 캡처만 모델 중심으로 재배치한다.
     const uint32_t breakCapture = m_SkeletalPatchCopy.TakeCaptureRequest();
     if (breakCapture && m_SkeletalBreakDemo)
@@ -1337,7 +1482,7 @@ void ModelViewer::RenderScene( void )
         m_SkeletalDemoFailed = true;
     }
 
-    if (breakCapture && !m_SkeletalBreakDemo)
+    if (breakCapture && !m_SkeletalBreakDemo && !m_RecutRepro)
         for (const auto& object : m_Scene.GetObjects())
             if (object->GetName() == (breakCapture == 1 ? "Xbot" : "CesiumMan"))
             {
@@ -1468,7 +1613,11 @@ void ModelViewer::RenderScene( void )
     const uint32_t demoStep = m_CaptureCount ? m_CaptureStep : 20;
     const bool demoCapture = m_SkeletalBreakDemo && !m_CapturePath.empty() && m_DemoAppliedFrame && m_DemoCaptured < demoCount
         && m_QueryFrame - m_DemoAppliedFrame == m_DemoCaptured * demoStep;
-    const bool capture = demoCapture || (!m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
+
+    // 두 번째 게시 캡처는 별도 순번으로 세고 120프레임 관찰 범위 안에서 저장한다.
+    const bool recutCapture = m_RecutRepro && !m_CapturePath.empty() && m_RecutApplied[1]
+        && m_RecutCaptured < demoCount && m_QueryFrame - m_RecutApplied[1] == m_RecutCaptured * demoStep;
+    const bool capture = recutCapture || demoCapture || (!m_RecutRepro && !m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
         && (!m_CaptureCount || (m_CaptureFrame - m_CaptureTargetFrame) % m_CaptureStep == 0)
         && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())))));
@@ -1477,11 +1626,19 @@ void ModelViewer::RenderScene( void )
     {
         // 패치 진단은 45도 blend-zone의 A/B 간격을 모델별 파일에 저장한다.
         m_ActiveCapturePath = m_CapturePath;
-        if (breakCapture && !m_SkeletalBreakDemo)
+        if (breakCapture && !m_SkeletalBreakDemo && !m_RecutRepro)
         {
             wchar_t directory[MAX_PATH];
             GetTempPathW(MAX_PATH, directory);
             m_ActiveCapturePath = std::wstring(directory) + L"SP7b/SP7e2-" + (breakCapture == 1 ? L"Xbot" : L"CesiumMan");
+        }
+
+        // 재현 전용 파일명과 순번은 기존 데모 카운터와 독립적으로 유지한다.
+        if (recutCapture)
+        {
+            m_ActiveCapturePath += L"-recut-second-" + std::to_wstring(m_RecutCaptured++);
+            Utility::Printf("RecutRepro capture request=2 frame=%u index=%u age=%u\n",
+                m_QueryFrame, m_RecutCaptured - 1, m_QueryFrame - m_RecutApplied[1]);
         }
 
         // 게시 프레임부터 20프레임 간격의 순번을 세 자리 파일 이름에 붙인다.
@@ -1508,7 +1665,7 @@ void ModelViewer::RenderScene( void )
         }
 
         // 일반 연속 캡처는 순번을 붙이고 지정 장수를 채운 뒤에만 완료로 둔다.
-        const bool sequence = m_CaptureCount && !m_SkeletalBreakDemo && !m_SkeletalPatchChecks && !breakCapture;
+        const bool sequence = m_CaptureCount && !m_RecutRepro && !m_SkeletalBreakDemo && !m_SkeletalPatchChecks && !breakCapture;
         if (sequence)
         {
             const auto number = std::to_wstring(m_SequenceCaptured++);

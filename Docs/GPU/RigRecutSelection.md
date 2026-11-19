@@ -1,4 +1,4 @@
-상태: 설계안 — 자식 관절이 이미 끊긴 뼈를 Rig 모드에서 다시 자를 수 있게 하는 선택 조건 수정(base `b649eaf7`, 2026-11-19)
+상태: 진행 중 — RR-1 커밋(재현 옵션 완료, 해시는 `git log`), RR-2 대기. 자식 관절이 이미 끊긴 뼈를 Rig 모드에서 다시 자를 수 있게 하는 선택 조건 수정(base `b649eaf7`, 2026-11-19)
 
 # Rig 모드 재절단 선택 결정
 
@@ -100,3 +100,23 @@
 6. Rig 모드 다중 컷 회귀: 기존 MI-4h2 허벅지 다중 컷 명령을 Rig 모드로 실행해 결과(constraint 18→16, 300/187/175)가 기존과 같다.
 7. 기존 회귀 5종 PASS.
 8. 2항 Xbot 실행의 2차 게시 뒤 캡처를 직접 확인한다: 허벅지 위쪽 살이 엉덩이에 남고 아래쪽이 떨어지는지 본다. 보지 못하면 미확인으로 기록한다.
+
+## 8. RR-1 결과와 RR-2 기준 자료 (2026-11-19, Release, MX450, `-debug 1`, 수정 전 선택 로직)
+
+옵션: `-skeletal-recut-repro 1|2`, `-first`, `-second`, `-mode rig|parent`. 로그는 `RecutRepro request/published/PASS/FAIL`. 요청 로그는 256자 `Utility::Printf` 제한 때문에 두 줄이다.
+
+| 실행 | 판정 | 핵심 로그 |
+|---|---|---|
+| Xbot Rig | FAIL(예상대로) | `SP7b rejected: incoming=3`, 2절과 동일 |
+| Xbot Parent | PASS | 관절 43, 2118, nodes 3/60 |
+| CesiumMan Rig | FAIL | 상자 중심 평면이 body에 닿음(`no_hits` 아님), 2차 `incoming=3` 거절 — 3절 원인이 CesiumMan에서도 확인됨 |
+| CesiumMan Parent | PASS | 관절 10, 154, nodes 2/13 (Debug는 자세 차이로 D5 leaf를 골라 거절, Release를 기준으로 삼는다) |
+| Startup 충돌 | 거절 | 데모·검사 병용, 잘못된 모드·모델 값, 종속 옵션 단독 5종 모두 예외 종료 |
+| 회귀 5종 | PASS | mask·patch(offset-copy)·union+demo 2(게시 없는 진단 종료)·demo 1·2 |
+
+D3D12 ERROR 0, Release·Debug 빌드 오류 0.
+
+**RR-2 기준(수정 전, Xbot Rig, 1차 종아리 뒤 2차 = 아래)**
+- root 선분 `-second mixamorig:Hips`: 선택은 되고 `SP7b rejected: incoming=2`(RigRoot). FAIL(거절)이 기대 결과다.
+- 말단 선분 `-second mixamorig:LeftToeBase`(부모→말단): `RigSelect result=no_candidates reason=legacy_leaf`, FAIL(거절).
+- 말단 body 평면 `-second mixamorig:LeftToe_End`(DFS 다음 본이 반대쪽 다리라 평면이 맞지 않음, 참고용): `AlreadyBroken`, `incoming=3` 거절.
