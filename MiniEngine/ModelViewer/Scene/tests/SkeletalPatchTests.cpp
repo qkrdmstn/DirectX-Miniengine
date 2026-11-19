@@ -172,10 +172,75 @@ static void CheckCutBodyGroups()
     Check(Viewer::BuildCutBodyGroups(parents, {6}, {1}).NodeGroups.empty(), "bad palette rejected");
 }
 
+// D1의 유한 선택과 문서 사례 5~9를 물리 및 GPU 없이 검증한다.
+static void CheckRigCutJoints()
+{
+    // 사례 5는 가까운 owner를 고르고 동거리에서는 작은 owner ID를 고른다.
+    using namespace Viewer;
+    MeshCutting::CutPlaneData plane;
+    Check(MeshCutting::TryBuildCutPlaneData({0.3f, 0.3f}, AffineTransform(kIdentity), plane), "rig plane");
+    const std::vector<std::vector<uint32_t>> parents = {{UINT32_MAX, 0, 1, 0, 3}, {UINT32_MAX, 0, 1}};
+    std::vector<RigCutSegment> segments = {
+        {10, 0, 1, 2, Vector3(0.08f, -0.1f, 0), Vector3(0.08f, 0.1f, 0), true},
+        {20, 1, 1, 2, Vector3(0.02f, -0.1f, 0), Vector3(0.02f, 0.1f, 0), true}};
+    auto selected = SelectRigCutJoints(segments, parents, plane);
+    Check(selected.Result == RigCutResult::Selected && selected.OwnerId == 20 && selected.OwnerIndex == 1
+        && selected.Joints.size() == 1 && selected.Joints[0].ParentNode == 1, "case 5 nearest owner");
+    segments[0].Parent = segments[1].Parent;
+    segments[0].Child = segments[1].Child;
+    std::swap(segments[0], segments[1]);
+    Check(SelectRigCutJoints(segments, parents, plane).OwnerId == 10, "case 5 tie smaller owner ID");
+
+    // 사례 6은 AnimationFrame 끝점을 쓰고 non-live 교차만 있으면 거절한다.
+    segments = {{10, 0, 1, 2, Vector3(0, -0.1f, 0), Vector3(0, 0.1f, 0), true}};
+    selected = SelectRigCutJoints(segments, parents, plane);
+    Check(selected.Result == RigCutResult::Selected && selected.Joints.size() == 1
+        && selected.Joints[0].ChildNode == 2 && selected.Joints[0].ChildSide == 0
+        && float(Length(selected.Joints[0].Intersection)) < 1e-6f, "case 6a live AnimationFrame child");
+    segments[0].Live = false;
+    selected = SelectRigCutJoints(segments, parents, plane);
+    Check(selected.Result == RigCutResult::AlreadyBroken && selected.Joints.empty(), "case 6b unavailable crossing");
+
+    // 사례 7의 root는 선택하며 사례 8의 같은 P 동점은 입력상 첫 자식을 보존한다.
+    segments = {{10, 0, 0, 1, Vector3(0, -0.1f, 0), Vector3(0, 0.1f, 0), true}};
+    selected = SelectRigCutJoints(segments, parents, plane);
+    Check(selected.Result == RigCutResult::Selected && selected.Joints.size() == 1
+        && selected.Joints[0].ParentNode == 0, "case 7 root before Request rejection");
+    segments = {{10, 0, 1, 3, Vector3(0, -0.1f, 0), Vector3(0.04f, 0.1f, 0), true},
+        {10, 0, 1, 2, Vector3(0, -0.1f, 0), Vector3(-0.04f, 0.1f, 0), true}};
+    selected = SelectRigCutJoints(segments, parents, plane);
+    Check(selected.Joints.size() == 1 && selected.Joints[0].ChildNode == 3, "case 8 first Asset.Joints child");
+
+    // 사례 9는 반대 ChildSide를 거절하되 정렬된 snapshot을 남긴다.
+    segments = {{10, 0, 3, 4, Vector3(0.06f, 0.1f, 0), Vector3(0.06f, -0.1f, 0), true},
+        {10, 0, 1, 2, Vector3(0, -0.1f, 0), Vector3(0, 0.1f, 0), true},
+        {10, 0, 0, 3, Vector3(1, -0.2f, 0), Vector3(0.06f, 0.1f, 0), true}};
+    selected = SelectRigCutJoints(segments, parents, plane);
+    Check(selected.Result == RigCutResult::ChildSideMismatch && selected.Joints.size() == 2
+        && selected.Joints[0].ParentNode == 1 && selected.Joints[1].ParentNode == 3
+        && selected.Joints[0].ChildSide == 0 && selected.Joints[1].ChildSide == 1, "case 9 mismatch snapshots sorted");
+
+    // 미교차와 사각형 밖 교차 및 정확히 평면 위인 끝점은 후보가 아니다.
+    Check(SelectRigCutJoints({}, parents, plane).Result == RigCutResult::NoCrossing, "rig no crossing");
+    Check(SelectRigCutJoints({segments[2]}, parents, plane).Result == RigCutResult::NoCrossing, "rig outside rectangle");
+    segments.resize(1);
+    segments[0].Parent = Vector3(kZero);
+    Check(SelectRigCutJoints(segments, parents, plane).Result == RigCutResult::NoCrossing, "rig strict zero endpoint");
+
+    // 조상과 자손이 모두 교차하면 조상만 남기며 작은 거리에도 epsilon을 적용하지 않는다.
+    segments = {{10, 0, 1, 2, Vector3(0, -1e-7f, 0), Vector3(0, 1e-7f, 0), true},
+        {10, 0, 0, 1, Vector3(0.1f, -0.1f, 0), Vector3(0.1f, 0.1f, 0), true}};
+    Check(SelectRigCutJoints({segments[0]}, parents, plane).Result == RigCutResult::Selected, "rig no crossing epsilon");
+    selected = SelectRigCutJoints(segments, parents, plane);
+    Check(selected.Result == RigCutResult::Selected && selected.Joints.size() == 1
+        && selected.Joints[0].ParentNode == 0, "rig ancestor removes descendant");
+}
+
 // 패치 추출과 선택 및 몸체 그룹의 CPU 계약을 함께 검사한다.
 int main()
 {
     // 다중 본 순수 함수의 교차 집합 계약을 먼저 검사한다.
+    CheckRigCutJoints();
     CheckCrossingJoints();
     CheckCutBodyGroups();
 

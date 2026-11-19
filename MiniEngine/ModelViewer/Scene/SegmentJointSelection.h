@@ -6,9 +6,104 @@
 #include <limits>
 #include <cmath>
 #include <utility>
+#include <map>
+#include <tuple>
 
 namespace Viewer
 {
+    struct RigCutSegment
+    {
+        uint32_t OwnerId, OwnerIndex, ParentNode, ChildNode;
+        Math::Vector3 Parent, Child; // 월드 끝점이며 입력은 owner 및 Asset.Joints 순서다.
+        bool Live;
+    };
+    struct RigCutJoint
+    {
+        uint32_t ParentNode, ChildNode;
+        Math::Vector3 Intersection;
+        uint32_t ChildSide; // IntersectLatticeSegment와 동일: 양의 반공간=0, 음의 반공간=1.
+    };
+    enum class RigCutResult { NoCrossing, AlreadyBroken, Selected, ChildSideMismatch };
+    struct RigCutSelection
+    {
+        RigCutResult Result = RigCutResult::NoCrossing;
+        uint32_t OwnerId = UINT32_MAX;
+        uint32_t OwnerIndex = UINT32_MAX;
+        std::vector<RigCutJoint> Joints;
+    };
+
+    // 유한 사각형의 live 교차에서 owner와 최상위 P 집합 및 교차 snapshot을 고른다.
+    inline RigCutSelection SelectRigCutJoints(const std::vector<RigCutSegment>& segments,
+        const std::vector<std::vector<uint32_t>>& ownerParents, const MeshCutting::CutPlaneData& plane)
+    {
+        // 엄격한 교차와 사각형 검사를 통과한 선분만 입력 순서대로 수집한다.
+        using namespace Math;
+        RigCutSelection result;
+        std::vector<std::pair<size_t, RigCutJoint>> crossings;
+        const Vector3 center = (plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f;
+        auto best = std::make_tuple(std::numeric_limits<float>::max(), UINT32_MAX, UINT32_MAX);
+        for (size_t i = 0; i < segments.size(); ++i)
+        {
+            const auto& segment = segments[i];
+            const float a = Dot(plane.WorldPlane, Vector4(segment.Parent, 1));
+            const float b = Dot(plane.WorldPlane, Vector4(segment.Child, 1));
+            if (!((a < 0 && b > 0) || (a > 0 && b < 0)))
+                continue;
+            const Vector3 hit = segment.Parent + (segment.Child - segment.Parent) * (a / (a - b));
+            const Vector3 local(plane.WorldToPlane * Vector4(hit, 1));
+            if (!(std::abs(float(local.GetX())) <= plane.HalfWidth
+                && std::abs(float(local.GetZ())) <= plane.HalfHeight))
+                continue;
+            result.Result = RigCutResult::AlreadyBroken;
+            if (!segment.Live)
+                continue;
+            crossings.push_back({i, {segment.ParentNode, segment.ChildNode, hit, b > a ? 0u : 1u}});
+            const auto key = std::make_tuple(float(LengthSquare(hit - center)), segment.OwnerId, segment.ParentNode);
+            if (key >= best)
+                continue;
+            best = key;
+            result.OwnerId = segment.OwnerId;
+            result.OwnerIndex = segment.OwnerIndex;
+        }
+        if (crossings.empty())
+            return result;
+
+        // 선택 owner의 같은 P는 최단 교차만 남기고 동점은 먼저 입력된 자식을 보존한다.
+        std::map<uint32_t, RigCutJoint> candidates;
+        for (const auto& crossing : crossings)
+        {
+            if (segments[crossing.first].OwnerIndex != result.OwnerIndex)
+                continue;
+            const auto& joint = crossing.second;
+            auto found = candidates.find(joint.ParentNode);
+            if (found == candidates.end())
+                candidates.emplace(joint.ParentNode, joint);
+            else if (float(LengthSquare(joint.Intersection - center))
+                < float(LengthSquare(found->second.Intersection - center)))
+                found->second = joint;
+        }
+
+        // 부모 사슬의 탐색 횟수를 제한하고 조상 P가 있는 자손을 제거해 P 오름차순으로 낸다.
+        const auto& parents = ownerParents.at(result.OwnerIndex);
+        result.Result = RigCutResult::Selected;
+        for (const auto& entry : candidates)
+        {
+            uint32_t ancestor = entry.first < parents.size() ? parents[entry.first] : UINT32_MAX;
+            bool covered = false;
+            for (size_t depth = 0; ancestor < parents.size() && depth < parents.size(); ++depth)
+            {
+                covered = covered || (ancestor != entry.first && candidates.count(ancestor) != 0);
+                ancestor = parents[ancestor];
+            }
+            if (covered)
+                continue;
+            result.Joints.push_back(entry.second);
+            if (entry.second.ChildSide != result.Joints.front().ChildSide)
+                result.Result = RigCutResult::ChildSideMismatch;
+        }
+        return result;
+    }
+
     enum class SegmentJointKind { Segment, Leaf };
     struct SegmentJointSelection
     {
