@@ -42,6 +42,7 @@
 | [PatchDiagnosticRemoval.md](GPU/PatchDiagnosticRemoval.md) | 패치 추출 진단 전용 계산 제거: Mode 5/8 인접 집계(RM-1), 기본 경로 평면 교차·미포함 교차 수(RM-2) | 완료 — RM-1 `49c8a002`, RM-2 `6d5e91b4` (2026-11-19) |
 | [PatchDiagnosticRemoval.md](GPU/PatchDiagnosticRemoval.md) | 패치 추출 진단 계산 제거: Mode 5/8 인접 집계(RM-1), 기본 경로 평면 교차 수(RM-2) | 진행 중 — RM-1 커밋, RM-2 대기 (2026-11-19) |
 | [RigRecutSelection.md](GPU/RigRecutSelection.md) | Rig 모드에서 자식 관절이 끊긴 뼈(종아리 뒤 허벅지) 재절단 선택 조건 수정 | 완료 — RR-1 `d82176fc`, RR-2 (2026-11-19) |
+| [JointCutRedesignMemo.md](GPU/JointCutRedesignMemo.md) | 관절 부근 절단 재설계 착수 전 조사 메모(현재 선택 경로, 재설계 부품 위치, 전제 확인, 결정 질문) | 조사 메모 (2026-11-19) |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
