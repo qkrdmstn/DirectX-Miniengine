@@ -94,6 +94,7 @@
 | JC-3 | D4: 쪽 후보 투표, `RelabelCapLoops` P당 여러 loop, 스냅샷 사용, 봉합 불일치 진단 | 100~200줄 | 같음 |
 | JC-4 | 측정·캡처·문서 동기화 | 문서 위주 | 캡처당 수 분 |
 
+- JC-1은 JC-1a(`SegmentJointSelection.h` 순수 CPU 함수·`SkeletalPatchTests` 합성 사례), JC-1b(`SelectRigSegment`·`Request` 연결·demo 모드 전달), JC-1c(`SkeletalPatchJob`의 P별 world 교차점·ChildSide 저장, JC-3에서만 사용)로 나눈다.
 - 단계마다 새 세션에서 진행한다. 순서는 Codex 구현 → D/R 빌드 → 검사 → 새 Codex 리뷰 → 로컬 커밋이다. 300줄이 넘으면 다시 쪼갠다.
 - 단계마다 바뀌는 기대값은 다음과 같다.
   - **JC-1:** 바뀌는 것은 P·child·거절·게시 여부뿐이다. 구현 전에 아래 사례마다 예상 P 집합을 문서에 먼저 적는다.
@@ -132,3 +133,42 @@
 - **위치 용접:** eps가 크면 다른 살이 붙고, 작으면 UV seam에서 성분이 끊긴다. JC-2c에서 MI-5 모델로 확인한다.
 - **ChildSide 불일치 거절:** 다중 절단에서 생각보다 자주 걸릴 수 있다. 자주 걸리면 P별 쪽 정의로 확장을 다시 결정한다.
 - **live/Frozen 봉합:** 넓어진 경계의 정점 봉합 오차는 4번 조건으로만 본다.
+
+## 7. JC-1 사례별 예상값
+
+- 아래는 새 Rig 선택의 기대값이다. Parent·Influence 규칙은 그대로다. 게시 «예»는 후속 추출·절단 검사가 성공한다는 전제이며 새 구현 실행 결과가 아니다.
+- 모든 등록 owner의 live·unavailable 선분을 본다. strict 반대 부호와 유한 범위 `|x|<=HalfWidth, |z|<=HalfHeight`를 쓴다. 물리 hit는 후보를 제한하지 않는다.
+- 교차 0개면 D5의 `PublishRigBonePatch` 경로다. Kinematic hit로 부착 body를 고른다. 교차가 있지만 live가 0개면 `AlreadyBroken`이다.
+- live 교차의 중심 거리→owner ID→P tuple로 owner를 고른다. 그 owner의 P를 중복 제거하고 rig 부모 사슬의 조상 P가 있으면 자손 P를 뺀다.
+- 대표 child는 P별 중심 최단이다. 동률은 `Asset.Joints` 순서다. P마다 `RigRoot`→incoming `AlreadyBroken`→양 끝 모두 1 mm 이내 모호성을 검사하고, P 간 ChildSide가 다르면 거절한다. P 하나는 단일, 둘 이상은 옵션 없이 기존 union·QueueBreaks·mask 1회·n+1 게시다.
+- 실모델 근거: `%TEMP%/JC1-expect/expect.cjs`로 GLB DFS 이름·양수 skin weight·가장 가까운 영향 조상·애니메이션 0 좌표를 계산했다. `.mini` 구의 배율과 mesh frame을 반영했다.
+- MI-5는 f60≈1초 pose다. 기존 `%TEMP%/MI5-{UpperArm,Torso,Thigh,Thigh-Single}-patch.log`의 선택·교차점과 대조했다. 작은 사각형은 0.3×0.3m다.
+- `-skeletal-recut-repro 1 -skeletal-recut-repro-mode rig`는 `%TEMP%/rr2/Release-x1-rig.log`의 f60/f109·실제 평면과 CPU 애니메이션 근사를 썼다. Dynamic 자식은 AnimationFrame이다. Dynamic 물리 pose 전체는 재현하지 않았다.
+
+| 사례 | owner | 예상 P 집합 → P별 대표 child (이름/DFS ID) | 거절 / 게시 | 현재 대비 Rig 변화 |
+|---|---|---|---|---|
+| 1. MI-5 위팔 | CesiumMan(5) | {Skeleton_arm_joint_L__4_/7} → Skeleton_arm_joint_L__3_/8 | 없음 / 예, 단일 | 기존 Parent {7}과 같음. JC-1b 뒤 `-skeletal-joint-mode rig`로 실제 Rig 요청. |
+| 2. MI-5 척추 | CesiumMan(5) | {Skeleton_torso_joint_2/3} → torso_joint_3/4 | 없음 / 예, 단일 | 기존 Parent {3}과 같음. 사각형 밖 양팔은 제외. |
+| 3a. 오른 허벅지, union 교체 없음 | CesiumMan(5) | {leg_joint_R_1/17} → leg_joint_R_2/18 | 없음 / 예, 단일 | 기존 Parent 단일 {17}과 같음. Rig는 multi 옵션 없이도 유한 선택. |
+| 3b. 오른 허벅지, union 교체 있음 | CesiumMan(5) | {leg_joint_L_1/13, leg_joint_R_1/17} → 각각 leg_joint_L_2/14, leg_joint_R_2/18 | 없음 / 예, 다중 n+1=3 | local Y=0.470281, 100×100 진단 평면. 기존 Parent+union+multi 경로를 Rig 자동 다중과 대조. |
+| 4a. Xbot recut 1차 | Xbot(4) | {mixamorig:LeftLeg/61} → mixamorig:LeftFoot/62 | 없음 / 예, 단일 | 기존 RR-2 Rig와 같음. incoming JointId=44. |
+| 4b. Xbot recut 2차 | Xbot(4) | {mixamorig:LeftUpLeg/60} → mixamorig:LeftLeg/61 | 없음 / 예, 단일 | 기존 RR-2 Rig와 같음. Dynamic child 61도 허용. incoming JointId=43. |
+
+- 3b의 기존 실행은 `-skeletal-union-checks 1 -skeletal-multi-cut 1`인 Parent 진단이다. 새 Rig에서는 교체된 평면에 D1을 적용한다. `-skeletal-multi-cut` 없이도 다중이어야 한다. 1~3의 현재 demo는 Parent 상수이며 JC-1b에서만 모드 전달로 바뀐다. 기본은 Parent다.
+- CPU 유한 범위 근거: 위팔의 다른 교차 3→4는 (x,z)=(-0.205,-0.432)m다. 척추의 7→8·10→11은 (0.351,0.285)·(-0.307,-0.287)m다. 오른 허벅지의 14→15는 (0.390,-0.776)m다. 모두 ±0.15m 밖이다.
+- 3b는 교차가 13→14·17→18뿐이며 ChildSide=1로 같다. 4a의 반대 종아리는 (-0.169,-0.424)m로 밖이다. 4b의 60→61은 (-0.028,-0.041)m로 안이다.
+- 4b의 다른 live 교차 중 가장 경계에 가까운 16→17(왼손 엄지)은 z≈0.15125m로 밖이다. 약 1.25mm 여유라 실제 요청 프레임·pose 차이에 민감하다. 게시 시점 변화 시 재계산한다. MI4d2의 2차 교점은 prepared pose 재계산값이므로 선택 snapshot 근거와 구분한다.
+
+- 5~9는 JC-1a용 합성 입력이다. 평면 y=0, 중심=(0,0,0), x/z 반폭=0.15m다. 기본 owner A/10, R/0=(1,-0.2,0)→P/1=(0,-0.1,0)→C/2=(0,0.1,0)다.
+- 기본은 모든 body Kinematic, incoming·pose 유효다. 명시한 선분 외 교차는 없다. hit는 비운다. 게시 기대는 Request 연결 후의 값이며 순수 CPU 테스트에서는 선택·거절만 단언한다.
+
+| 사례·최소 변형 | owner | 예상 P 집합 → 대표 child | 거절 / 게시 | 현재 대비 Rig 변화 |
+|---|---|---|---|---|
+| 5. A/10은 P·C의 x=0.08, B/20은 x=0.02인 같은 3-node rig | B/20 | {P/1} → C/2 | 없음 / 예, 단일 | hit 없이도 B 선택. 거리 동률 변형은 owner ID가 작은 A/10. owner 간 P는 합치지 않음. |
+| 6a. C/2만 Dynamic, AnimationFrame=(0,0.1,0), 물리 원점=(0,-0.3,0), hit=C만 | A/10 | {P/1} → C/2 | 없음 / 예, 단일 | 현재는 Dynamic hit만으로 live 후보를 못 고름. 새 규칙은 AnimationFrame 교차로 P 선택. |
+| 6b. P/1·C/2 Dynamic, incoming 끊김, 물리 원점은 기본 좌표, hit=P만 | 없음(출처 A/10) | ∅ → 없음; unavailable=P/1→C/2 | AlreadyBroken / 아니오 | Dynamic 부모는 후보로 승격하지 않음. unavailable 교차가 있어 D5로 가지 않음. 기존 거절 유지. |
+| 7. R/0=(0,-0.1,0)→C/1=(0,0.1,0)만 있는 root rig | A/10 | {R/0} → C/1 | RigRoot / 아니오 | hit 없이 root 교차도 수집한 뒤 Request에서 거절. 현재는 hit에 의존. |
+| 8. 기본 P 아래 C/2=(-0.04,0.1,0), D/3=(0.04,0.1,0), Asset.Joints는 P→D가 먼저 | A/10 | {P/1} → D/3 | 없음 / 예, 단일 B 하나 | 동거리 자식은 작은 ID 대신 Asset.Joints 첫 항목. 현재도 동률 순서는 같지만 hit 없이 선택하며 여러 child를 한 P로 묶음. |
+| 9. 기본 rig에 R→Q/3=(0.06,0.1,0)→D/4=(0.06,-0.1,0) 추가 | A/10 | {P/1,Q/3} → 각각 C/2,D/4 | ChildSide 불일치 / 아니오 | P·Q는 비중첩. R→Q 교차는 x≈0.373m로 밖. 현재는 단일 최단 P 또는 옵션 다중이며 전체 ChildSide 검사가 없음. |
+
+- 정정: 4절의 «CheckJointUnion 중복 root 거절 유지»와 달리 현재 함수는 {first,second,first} 제출의 성공·중복 삼각형 0을 검사한다. 중복 root 거절은 `BuildCutBodyGroups`에 있다. 진단 의미는 유지한다.
