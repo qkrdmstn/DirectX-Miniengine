@@ -39,6 +39,7 @@
 | [PatchSkinning.md](GPU/PatchSkinning.md) | 스켈레탈 패치 조각 스키닝: 끊은 쪽 joint를 부착 node 상대로 고정, 새 정점은 강체 | 완료 — PS-0~PS-6·비용 측정, SP7e2 PASS, Debug/Release 회귀 PASS(2026-11-13) |
 | [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 Mode 1 순차 prefix를 3단계 병렬 block scan으로 교체(측정: Xbot 추출 4.7 ms 중 4.4 ms) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19) |
 | [PatchAdjacentMarks.md](GPU/PatchAdjacentMarks.md) | 패치 추출 Mode 5 인접 집계를 정점 표시 비트로 O(N)화(부분 제거 Mode 5 34.35 ms → Mode 8+5 0.28 ms) | 완료 — AD-1 `c018aea0`, AD-2 재측정 통과 (2026-11-19) |
+| [PatchDiagnosticRemoval.md](GPU/PatchDiagnosticRemoval.md) | 패치 추출 진단 계산 제거: Mode 5/8 인접 집계(RM-1), 기본 경로 평면 교차 수(RM-2) | 설계안 — RM-1 착수 전 (2026-11-19) |
 | [참고자료.md](GPU/참고자료.md) | 단일 cap 내부 병렬화·GPU 이식 후보 및 문헌의 적용 한계 | 논문 2편 분석 기록 (2026-10-25); 실제 GPU 측정은 StaticCutImplementation 참조 |
 
 ## Unreal — 소스 비교·정렬 설계
