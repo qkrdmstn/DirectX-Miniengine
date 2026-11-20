@@ -1,4 +1,4 @@
-상태: 진행 중 — CP-1 측정, CP-2 (base `f2c0501f`, 커밋 대기)
+상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 (커밋 대기)
 
 # 절단 성능 개선 결정 (1차)
 
@@ -134,3 +134,13 @@
 
 - 리뷰 수정: 조상 방문 표시로 순환을 감지하고 반복 구간을 재사용해 기존 요청 NodeId의 이름을 보존한다. 공유 자식·중복 root는 기존대로 재순회한다. 모든 메타데이터가 같은 내용 변경은 진단 이름에 반영되지 않을 수 있다(전체 파일 해시 없음).
 - 리뷰 수정 검증: Release 증분 빌드 16.81초, 오류 0. 두 데모 exit=0, 기존 CP-2 island 로그 Xbot 4행·CesiumMan 3행 완전 일치. offset-copy 20요청 GPU==CPU PASS, exit=0, timeout=False, 명시적 FAIL 0. 임시 합성 GLB로 자기/조상 순환·공유 자식·중복 root·순환 중 이름 오류의 NodeId 0~999와 큰 NodeId, 동일 크기·수정 시각의 덮어쓰기/교체 감지 PASS. 자료는 `%TEMP%/CP2/review/`에 보관했다. 위 성능 수치는 리뷰 수정 전 CP-2 측정이며 메타데이터 조회 추가 비용은 재측정하지 않았다. Debug·D3D12 validation은 이번 요청 범위에서 제외했고 드라이버 조회는 접근 거부로 확인하지 못했다.
+
+### CP-3: D1 렌더 override 경로 (base `7367a00a`, 커밋 대기, 2026-11-20)
+
+- `MeshRenderOverride`는 section의 절대 IB view와 원본 draw 순서의 `StartIndex`·`IndexCount` 배열이다. `MeshSorter::AddMesh`의 선택 인자로 받아 정렬 목록이 `shared_ptr<const MeshRenderOverride>`로 수명을 보존한다. 호출자는 등록 뒤 내용을 바꾸지 않고 GPU 버퍼 자체는 명령 완료까지 보존한다.
+- `MeshSorter::RenderMeshes`의 공통 루프에서 override가 있으면 기존 ReplacedIB 주소 대체보다 우선한다. 원본 `Mesh`·`Mesh.draw`, `baseVertex`와 posed SRV 오프셋은 유지한다. `MeshComponent::Render`는 override를 생성하지 않으며 기존 ReplacedIB 전달식을 유지한다.
+- Release/Windows(x64), NVIDIA GeForce MX450(1906 MB). 첫 빌드는 125.79초, 오류 0(기존 경고 247개). Debug는 요청대로 빌드하지 않았다.
+- 기존 `-debug 0 -skeletal-mask-checks 1`: 두 모델의 IB·공유 원본·peer·reset·restore 및 shadow/depth/HDR 검사 PASS, exit=0(16.57초). `-debug 0 -skeletal-break-demo 1 -physics-query-exit 360`: exit=0, timeout=False(23.45초).
+- 변경 전후 `-debug 0 -capture <TEMP 경로> -capture-frame 60 -animation-step-ms 16 -physics-query-exit 100`의 HDR RAW(8,294,416바이트)가 동일하다. SHA-256: `CBD11B9AA57C4A656AC7442E2692B07B20A875A4DE352D9B0FF7B08EEA366ABA`.
+- 임시 코드로 한 컴포넌트에 동일 값의 override를 전달하고 Xbot·CesiumMan 각각 원본 IB 및 ReplacedIB 동시 전달 조건에서 shadow/depth/HDR readback을 바이트 비교했다. 네 비교 모두 PASS, exit=0(18.51초). 호출 지역 shared_ptr 소멸 이후 정렬·렌더하는 경로도 포함한다. 임시 코드는 제거했고 해당 두 소스를 재컴파일한 최종 Release 증분 빌드도 exit=0(12.23초)이다. 실행 파일에 임시 검사 문자열이 남지 않은 것도 확인했다.
+- 자료는 `%TEMP%/CP3/`에 보관했다. 투명 재질의 override 실행, Debug·D3D12 validation 및 드라이버 버전은 확인하지 않았다. 투명 패스의 적용은 동일 공통 루프의 코드 확인에 한정한다.

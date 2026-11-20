@@ -536,15 +536,19 @@ void Renderer::DrawSkybox( GraphicsContext& gfxContext, const Camera& Camera, co
     gfxContext.Draw(3);
 }
 
-// 객체별 posed SRV를 보관하고 기존 깊이·그림자·선·점 패스 분류를 유지한다.
+// 객체별 posed SRV와 불변 section override를 보관하고 기존 패스 분류를 유지한다.
 void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
     D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
     const Joint* skeleton, const GpuBuffer* posedBuffer, uint32_t posedOffset,
-    D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr)
+    D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr,
+    std::shared_ptr<const MeshRenderOverride> renderOverride)
 {
-    // 기존 분류 규칙으로 모든 패스에 같은 독립 IB를 전달한다.
+    // override는 원본 draw와 일대일 대응하며 공유 Mesh의 메타데이터는 수정하지 않는다.
+    ASSERT(!renderOverride || renderOverride->Draws.size() == mesh.numDraws);
+
+    // 기존 분류 규칙으로 모든 패스에 같은 독립 IB와 override를 전달한다.
     SortKey key;
     key.value = m_SortObjects.size();
 
@@ -556,6 +560,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     union float_or_int { float f; uint32_t u; } dist;
     dist.f = Max(distance, 0.0f);
 
+    // 그림자와 메인 패스의 기존 정렬 키 및 PSO 선택을 유지한다.
 	if (m_BatchType == kShadows)
 	{
 		if (alphaBlend)
@@ -598,8 +603,9 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
         m_PassCounts[kOpaque]++;
     }
 
+    // 정렬 목록이 override를 공유 소유하므로 호출자의 임시 shared_ptr가 사라져도 유효하다.
     SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr,
-        indexBufferPtr ? indexBufferPtr : bufferPtr, posedBuffer, posedOffset };
+        indexBufferPtr ? indexBufferPtr : bufferPtr, posedBuffer, posedOffset, renderOverride };
     m_SortObjects.push_back(object);
 }
 
@@ -609,12 +615,13 @@ void MeshSorter::Sort()
     std::sort(m_SortKeys.begin(), m_SortKeys.end(), Cmp);
 }
 
-// 모든 패스가 같은 독립 IB와 posed 정점을 읽으며 깊이·그림자와 선·점 차폐 정책을 유지한다.
+// 모든 패스가 같은 section override 또는 기존 IB와 draw를 읽고 원본 baseVertex를 유지한다.
 void MeshSorter::RenderMeshes(
     DrawPass pass,
     GraphicsContext& context,
     GlobalConstants& globals)
 {
+    // 공통 루트 시그니처와 디스크립터 힙을 준비한다.
 	ASSERT(m_DSV != nullptr);
 
     Renderer::UpdateGlobalDescriptors();
@@ -624,15 +631,16 @@ void MeshSorter::RenderMeshes(
     context.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, s_TextureHeap.GetHeapPointer());
     context.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, s_SamplerHeap.GetHeapPointer());
 
-    // Set common textures
+    // 모든 메시가 공유하는 텍스처 테이블을 연결한다.
     context.SetDescriptorTable(kCommonSRVs, m_CommonTextures);
 
-    // Set common shader constants
+    // 현재 카메라와 환경광 상수를 구성한다.
 	globals.ViewProjMatrix = m_Camera->GetViewProjMatrix();
 	globals.CameraPos = m_Camera->GetPosition();
     globals.IBLRange = s_SpecularIBLRange - s_SpecularIBLBias;
     globals.IBLBias = s_SpecularIBLBias;
 
+    // 배치 종류에 맞춰 깊이 타깃과 기본 뷰포트를 준비한다.
 	if (m_BatchType == kShadows)
 	{
 		context.TransitionResource(*m_DSV, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
@@ -679,16 +687,19 @@ void MeshSorter::RenderMeshes(
 		}
 	}
 
+    // 확정된 뷰포트 크기를 공통 상수 버퍼에 반영한다.
     globals.InvViewportSize[0] = 1.0f / m_Viewport.Width;
     globals.InvViewportSize[1] = 1.0f / m_Viewport.Height;
     context.SetDynamicConstantBufferView(kCommonCBV, sizeof(GlobalConstants), &globals);
 
+    // 그림자·깊이·불투명·투명 패스가 아래의 동일한 메시 루프를 사용한다.
     for ( ; m_CurrentPass <= pass; m_CurrentPass = (DrawPass)(m_CurrentPass + 1))
     {
         const uint32_t passCount = m_PassCounts[m_CurrentPass];
         if (passCount == 0)
             continue;
 
+        // 메인 패스별로 색상 및 깊이 자원의 상태와 쓰기 정책을 설정한다.
 		if (m_BatchType == kDefault)
 		{
 			switch (m_CurrentPass)
@@ -719,21 +730,26 @@ void MeshSorter::RenderMeshes(
 			}
 		}
 
+        // 표시 모드에 맞는 토폴로지를 적용하고 자원 전환을 제출한다.
         const bool colorPass = m_BatchType == kDefault && m_CurrentPass != kZPass;
         const bool points = colorPass && m_RenderMode == RenderMode::Vertices;
         context.SetPrimitiveTopology(points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context.SetViewportAndScissor(m_Viewport, m_Scissor);
         context.FlushResourceBarriers();
 
+        // 정렬된 목록의 현재 패스 구간만 소비한다.
         const uint32_t lastDraw = m_CurrentDraw + passCount;
 
         while (m_CurrentDraw < lastDraw)
         {
+            // 공유 원본 메시와 컴포넌트별 불변 override를 함께 조회한다.
             SortKey key;
             key.value = m_SortKeys[m_CurrentDraw];
             const SortObject& object = m_SortObjects[key.objectIdx];
             const Mesh& mesh = *object.mesh;
+            const MeshRenderOverride* renderOverride = object.renderOverride.get();
 
+            // 원본 재질과 스키닝 팔레트 및 posed 정점 경로를 유지한다.
             context.SetConstantBuffer(kMeshConstants, object.meshCBV);
             context.SetConstantBuffer(kMaterialConstants, object.materialCBV);
             context.SetDescriptorTable(kMaterialSRVs, s_TextureHeap[mesh.srvTable]);
@@ -745,10 +761,13 @@ void MeshSorter::RenderMeshes(
                 ASSERT(object.skeleton != nullptr, "Unspecified joint matrix array");
                 context.SetDynamicSRV(kSkinMatrices, sizeof(Joint) * mesh.numJoints, object.skeleton + mesh.startJoint);
             }
+
+            // 현재 표시 모드의 PSO를 선택한다.
             const auto& psos = points ? s_VertexPSOs :
                 (colorPass && m_RenderMode == RenderMode::Wireframe ? s_WireframePSOs : sm_PSOs);
             context.SetPipelineState(psos[key.psoIdx]);
 
+            // 깊이와 색상 패스의 기존 정점 버퍼 레이아웃을 사용한다.
             if (m_CurrentPass == kZPass)
             {
                 bool alphaTest = (mesh.psoFlags & PSOFlags::kAlphaTest) == PSOFlags::kAlphaTest;
@@ -762,22 +781,31 @@ void MeshSorter::RenderMeshes(
                 context.SetVertexBuffer(0, {object.bufferPtr + mesh.vbOffset, mesh.vbSize, mesh.vbStride});
             }
 
-            // 컴포넌트별 IB와 원본 VB 주소를 분리한다.
-            context.SetIndexBuffer({object.indexBufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat});
+            // override의 절대 IB view가 기존 ReplacedIB 주소 대체보다 우선한다.
+            const D3D12_INDEX_BUFFER_VIEW indexBuffer = renderOverride ? renderOverride->IndexBuffer
+                : D3D12_INDEX_BUFFER_VIEW{object.indexBufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat};
+            context.SetIndexBuffer(indexBuffer);
 
+            // draw 순서와 baseVertex는 유지하고 인덱스 범위만 선택적으로 대체한다.
             for (uint32_t i = 0; i < mesh.numDraws; ++i)
             {
                 // SV_VertexID에는 baseVertex가 없으므로 RAW SRV의 시작점에 반영한다.
                 if (object.posedBuffer)
                     context.SetBufferSRV(kPosedVertices, *object.posedBuffer,
                         object.posedOffset + uint64_t(mesh.draw[i].baseVertex) * PosedGeometry::VertexStride);
-                context.DrawIndexed(mesh.draw[i].primCount, mesh.draw[i].startIndex, mesh.draw[i].baseVertex);
+
+                // override가 없으면 기존 인덱스 수와 시작 위치를 그대로 사용한다.
+                const uint32_t indexCount = renderOverride ? renderOverride->Draws[i].IndexCount : mesh.draw[i].primCount;
+                const uint32_t startIndex = renderOverride ? renderOverride->Draws[i].StartIndex : mesh.draw[i].startIndex;
+                context.DrawIndexed(indexCount, startIndex, mesh.draw[i].baseVertex);
             }
 
+            // 다음 정렬 객체로 진행한다.
             ++m_CurrentDraw;
         }
     }
 
+    // 다음 렌더 작업을 위해 토폴로지와 그림자 읽기 상태를 복원한다.
     context.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	if (m_BatchType == kShadows)
 	{

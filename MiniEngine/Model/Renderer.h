@@ -20,6 +20,7 @@
 #include "../Core/UploadBuffer.h"
 #include "../Core/TextureManager.h"
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <d3d12.h>
@@ -47,6 +48,20 @@ namespace Renderer
     extern DescriptorHandle m_CommonTextures;
 
     enum class RenderMode { Solid, Wireframe, Vertices };
+
+    // 한 section의 draw 순서는 공유 Mesh.draw와 일치하며 baseVertex는 원본을 사용한다.
+    struct MeshDrawRange
+    {
+        uint32_t StartIndex = 0;
+        uint32_t IndexCount = 0;
+    };
+
+    // BufferLocation은 section의 절대 GPU 주소이며 mesh.ibOffset을 다시 더하지 않는다.
+    struct MeshRenderOverride
+    {
+        D3D12_INDEX_BUFFER_VIEW IndexBuffer = {};
+        std::vector<MeshDrawRange> Draws;
+    };
 
     enum RootBindings
     {
@@ -108,13 +123,18 @@ namespace Renderer
         const Frustum& GetViewFrustum() const { return m_Camera->GetViewSpaceFrustum(); }
         const Matrix4& GetViewMatrix() const { return m_Camera->GetViewMatrix(); }
 
-        // 원본 draw와 객체별 posed SRV를 보관하고 렌더 패스별로 분류한다.
+        // 원본 draw와 선택적 section override를 보관하고 렌더 패스별로 분류한다.
+        // override는 모든 패스 동안 불변이며 정렬 목록이 공유 소유하여 수명을 보장한다.
         void AddMesh( const Mesh& mesh, float distance,
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV,
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
             const Joint* skeleton = nullptr, const GpuBuffer* posedBuffer = nullptr,
-            uint32_t posedOffset = 0, D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr = 0);
+            uint32_t posedOffset = 0, D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr = 0,
+            std::shared_ptr<const MeshRenderOverride> renderOverride = nullptr);
+
+        // override와 indexBufferPtr를 함께 주면 override의 IB view와 draw 범위가 우선한다.
+        // GPU 버퍼 자체는 호출자가 제출된 명령의 완료까지 보존하고 INDEX_BUFFER 상태로 준비한다.
 
         void Sort();
 
@@ -147,6 +167,7 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr;
             const GpuBuffer* posedBuffer;
             uint32_t posedOffset;
+            std::shared_ptr<const MeshRenderOverride> renderOverride;
         };
 
         std::vector<SortObject> m_SortObjects;
