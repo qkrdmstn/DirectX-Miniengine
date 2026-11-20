@@ -4203,8 +4203,8 @@ namespace Viewer
             compute.InsertUAVBarrier(m_Selected);
         }
 
-        // 블록 scan·블록 offset scan·offset 적용을 거친 뒤 삼각형을 추출한다.
-        const uint32_t modes[] = { 0, 1, 6, 7, 2 };
+        // 블록 prefix와 블록 offset을 계산하고 추출할 때 두 값을 더한다.
+        const uint32_t modes[] = { 0, 1, 6, 2 };
         for (uint32_t mode : modes)
         {
             // 블록 합계 scan만 한 그룹을 쓰고 나머지는 기존 2D 분할을 유지한다.

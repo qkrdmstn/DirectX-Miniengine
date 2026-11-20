@@ -1,13 +1,15 @@
-상태: 완료 — PF-1 구현·검증(2aaef989), PF-2 재측정(2026-11-19)에서 7절 7항 기준 통과(Xbot Mode 1+6+7 평균 36.8 µs ≤ 200 µs); 7절 9항의 T=1·63·64·65·B<64·65535그룹 경계는 코드 리뷰로만 확인
+상태: 완료 — PF-1 구현·검증(2aaef989), PF-2 재측정(2026-11-19)에서 7절 7항 기준 통과(Xbot Mode 1+6+7 평균 36.8 µs ≤ 200 µs); 7절 9항의 T=1·63·64·65·B<64·65535그룹 경계는 코드 리뷰로만 확인; CP-5 Mode 7 제거(커밋 대기)
 
 # 패치 추출 prefix 병렬화 결정
+
+현재 CP-5(커밋 대기)는 [D3 결정](CutPerfImprovement.md)에 따라 Mode 7을 제거했다. 아래 측정 기록과 PF 완료 조건은 당시 기준이며, 현재 경로는 Mode 0→1→6→2이다.
 
 ## 1. 목표
 
 - `PatchExtractCS`의 Mode 1은 thread 0 하나가 모든 삼각형을 순서대로 돌며 선택 수 누적값을 `Scan`에 쓴다.
 - 이 순차 루프를 병렬 scan으로 바꿔 절단 요청당 추출 시간을 줄인다.
-- 결과 바이트는 바뀌지 않아야 한다. `Scan`의 삼각형별 inclusive prefix와 `Meta`의 선택·교차·미포함 교차 수가 지금과 같아야 한다.
-- Mode 0·2·3·4·5와 CPU 쪽 readback·검증 코드는 그대로 둔다.
+- 결과 바이트는 바뀌지 않아야 한다. CP-5에서는 `Scan`을 블록 안 inclusive prefix로 남기고, Mode 2가 scatter할 때 전역 prefix를 계산한다. `Meta` 선택 총계와 예약 영역은 그대로다.
+- CP-5는 Mode 2의 offset 적용과 제출 순서만 바꾸며 CPU readback·검증은 그대로 둔다.
 
 ## 2. 근거 (측정, MX450, Release, 임시 GPU timestamp)
 
@@ -36,11 +38,11 @@
 
 ## 3. 결정과 이유
 
-### D1. 3단계 block scan을 쓴다
+### D1. 블록 scan 뒤 scatter에서 전역 offset을 적용한다
 - Mode 1: 64개 삼각형 블록마다 그룹 안에서 scan하고, 블록 합계를 기록한다.
 - Mode 6(신규): 한 그룹이 블록 합계를 exclusive scan하고 `Meta`에 총계를 쓴다.
-- Mode 7(신규): 각 블록의 삼각형 prefix에 앞 블록들의 합을 더한다.
-- 이유: 단일 패스 decoupled look-back은 그룹 실행 순서 보장이 없는 GPU에서 멈출 수 있고 코드가 길다. 3단계는 dispatch 두 번이 늘지만 각 단계가 단순하고 결과가 결정적이다.
+- CP-5: Mode 7을 제거하고 Mode 2가 현재·이전 삼각형 prefix에 각자의 블록 offset을 더한다. t=64에서는 현재 블록 1과 이전 블록 0의 offset이 다르며, t=0의 이전 값은 따로 0을 쓴다.
+- 이유: 그룹 간 의존성은 Mode 1·6 dispatch로 분리하고, scatter에서 offset을 적용해 별도 덧셈 dispatch와 그 뒤 barrier를 줄인다.
 
 ### D2. 그룹 안 scan은 groupshared로 하고 Wave 함수는 쓰지 않는다
 - 셰이더는 SM 6.0이라 `WavePrefixSum`을 쓸 수 있다.
@@ -61,7 +63,7 @@
 - 새 버퍼와 새 UAV 슬롯을 만들지 않는다. 그러면 `InitializePatch`의 root signature(13개 파라미터)를 바꾸지 않아도 된다.
 - `m_Scan`을 8바이트 원소 `T + 2*B`개로 만든다(B=ceil(T/64)).
 - 블록 b의 영역은 바이트 `T*8 + b*16`부터 16바이트다. 선택 합계, 교차 합계, 미포함 교차 합계를 쓰고 4바이트는 비운다.
-- 삼각형 영역 `[0, T*8)`의 배치는 지금과 같다. Mode 2·5는 계속 `Scan.Load(t*8)`로 최종 inclusive prefix를 읽는다.
+- 삼각형 영역 `[0, T*8)`의 배치는 같지만 값은 블록 안 prefix이다. Mode 2만 블록 offset을 더해 사용한다. Mode 3·4, CPU Submit/Poll/Validate는 최종 prefix를 읽지 않는다. Mode 5는 RM-1에서 이미 제거되었다.
 
 ### D5. 교차·미포함 교차 총계도 블록 합계로 구한다
 - (RM-2 2026-11-19: 교차·미포함 합산을 제거했다. Mode 1·6은 선택 합계 하나만 scan하고 Mode 6은 `Meta.Store3(0, uint3(sum, 0, 0))`을 쓴다. 블록 간격 16바이트와 Scan 원소 8바이트는 그대로다. [결정](PatchDiagnosticRemoval.md))
@@ -75,21 +77,21 @@ groupshared uint Prefix[64];
 
 // Mode 1: 블록 안 inclusive prefix와 블록 합계(선택·교차·미포함)를 기록한다.
 // Mode 6: 블록 선택 합계를 exclusive offset으로 바꾸고 Meta 총계를 쓴다(Dispatch(1)).
-// Mode 7: 블록 offset을 삼각형 prefix에 더한다(블록 0은 건너뛴다).
+// Mode 2: 현재·이전 prefix에 각자 블록 offset을 더해 scatter한다(t=0 이전 값은 0).
 ```
 
 ```cpp
-// SkeletalPatchJob::Submit: Mode 0 → 1 → 6 → 7 → 2, 각 단계 사이 m_Scan UAV barrier.
-// Mode 1·7은 기존 2D 분할 Dispatch(min(B,65535), ceil(B/65535)), Mode 6은 Dispatch(1).
+// SkeletalPatchJob::Submit: Mode 0 → 1 → 6 → 2, 각 단계 사이 m_Scan UAV barrier.
+// Mode 1·2는 기존 2D 분할 Dispatch(min(B,65535), ceil(B/65535)), Mode 6은 Dispatch(1).
 m_Scan.Create(L"Patch inclusive prefix", uint32_t(triangles + 2 * blocks), 8);
 ```
 
 - 그룹 번호는 기존 `t=id.x+id.y*(65535*64)`에서 `b=t/64`로 얻는다.
-- 2D 분할에서는 B보다 많은 그룹이 실행될 수 있다(B=65536이면 65535×2개). 그래서 쓰기를 따로 막는다. Mode 1의 블록 영역 쓰기는 `b<B`일 때만, Mode 1·7의 삼각형 쓰기는 `t<T`일 때만 한다. 범위 밖 입력을 0으로 두는 것만으로는 부족하다.
-- Mode 1·6·7은 범위 밖 thread도 groupshared 동기화에 참여해야 하므로 `t>=Triangles` 조기 return보다 앞에서 처리하고, 범위 밖은 0을 넣는다.
+- 2D 분할에서는 B보다 많은 그룹이 실행될 수 있다(B=65536이면 65535×2개). 그래서 쓰기를 따로 막는다. Mode 1의 블록 영역 쓰기는 `b<B`일 때만, Mode 1·2의 삼각형 쓰기는 `t<T`일 때만 한다. 범위 밖 입력을 0으로 두는 것만으로는 부족하다.
+- Mode 1·6은 범위 밖 thread도 groupshared 동기화에 참여해야 하므로 `t>=Triangles` 조기 return보다 앞에서 처리하고, 범위 밖은 0을 넣는다.
 - `Mode`는 상수 버퍼 값이라 모드 분기는 그룹 전체가 같은 쪽으로 간다. 다른 모드의 조기 return은 문제가 아니다.
 - scan 단계마다 "이전 값 읽기 → barrier → 덮어쓰기 → barrier" 순서로 동기화한다. `GroupMemoryBarrierWithGroupSync`는 `lane>=offset` 같은 lane별 조건 **밖**에서 모든 thread가 호출한다(분기 안 호출은 미정의 동작).
-- `Meta` 의존성: Mode 5의 `Meta.Load(0)`은 Mode 6이 쓴 총계를 읽는다. 지금 Mode 2 뒤에 있는 `m_Output->LocalBounds` UAV barrier가 이 순서를 보장하므로 그대로 둔다(`InsertUAVBarrier`는 지정한 리소스에만 걸린다). `Meta` 12바이트 이후의 bounds 초기화도 유지한다.
+- `Meta` 의존성: Mode 6 뒤의 `m_Output->LocalBounds` UAV barrier는 유지한다. Mode 7 제거로 사라지는 것은 그 dispatch와 그 뒤 barrier이며, Mode 6 총계와 Mode 2 bounds 쓰기 사이의 의존성은 보존한다. `Meta` 12바이트 이후의 bounds 초기화도 유지한다.
 - Mode 1의 기존 위치(`if(t!=0) return;` 블록)를 교체한다. `Mode==1`을 다른 곳에서 특별 취급하는 C++ 코드(`c.Mode == 1 ? 1 : ...`)는 새 dispatch 크기로 바꾼다.
 
 ## 5. 범위 밖

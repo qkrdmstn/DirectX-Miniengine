@@ -23,7 +23,7 @@ StructuredBuffer<uint> State : register(t4);
 RWByteAddressBuffer Data : register(u0);
 RWByteAddressBuffer Sources : register(u1);
 RWByteAddressBuffer Meta : register(u2); // 선택 수 0, 예약 영역 4..11(항상 0), local AABB 12..32, source world X 36..40
-RWByteAddressBuffer Scan : register(u3); // inclusive prefix, 예약 값 0
+RWByteAddressBuffer Scan : register(u3); // 블록 안 inclusive prefix·예약 값 0, 뒤쪽 16바이트 간격 블록 offset
 RWByteAddressBuffer Votes : register(u4); // NodeId별 uint64 (lo, hi)
 RWByteAddressBuffer Chosen : register(u5);
 groupshared uint Prefix[64];
@@ -132,7 +132,7 @@ uint Ordered(float x)
     // 음수 구간은 비트를 반전하고 양수는 부호 비트를 뒤집는다.
     uint b=asuint(x); return b&0x80000000?~b:b^0x80000000;
 }
-// 투표·선택·병렬 prefix·추출을 실행한다.
+// 투표·선택·블록 prefix를 계산하고 Mode 2가 블록 offset을 더해 추출한다.
 [numthreads(64,1,1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -199,15 +199,6 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    // 앞 블록의 합계를 더해 원본 삼각형 순서의 전역 inclusive prefix를 완성한다.
-    if(Mode==7)
-    {
-        // 첫 블록은 이미 완성되어 있으며 초과 lane은 읽기와 쓰기를 모두 건너뛴다.
-        uint b=t/64;
-        if(t<Triangles && b!=0)
-            Scan.Store(t*8,Scan.Load(t*8)+Scan.Load(Triangles*8+b*16));
-        return;
-    }
     if(t>=Triangles) return;
 
     // section/draw와 현재 pose의 같은 원본 꼭짓점 번호를 읽는다.
@@ -261,8 +252,12 @@ void main(uint3 id : SV_DispatchThreadID)
         Scan.Store2(t*8,uint2(selected,0)); return;
     }
 
+    // 현재·이전 삼각형의 블록 안 prefix에 각자 소속 블록의 offset을 더한다.
+    uint prefix=Scan.Load(t*8)+Scan.Load(Triangles*8+(t/64)*16);
+    uint previous=0;
+    if(t>0) previous=Scan.Load((t-1)*8)+Scan.Load(Triangles*8+((t-1)/64)*16);
+
     // 누적값이 증가한 삼각형만 고유 출력 슬롯에 기록한다.
-    uint prefix=Scan.Load(t*8),previous=t?Scan.Load((t-1)*8):0;
     if(prefix==previous) return;
     uint outputTriangle=prefix-1;
     Sources.Store3(outputTriangle*12,uint3(s.SectionId,s.DrawId,triangleId));
