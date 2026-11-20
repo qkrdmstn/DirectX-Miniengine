@@ -1,10 +1,11 @@
-// VS Developer PowerShell, 저장소 루트: 산출물은 TEMP/SkeletalPatchTests에 둔다.
+﻿// VS Developer PowerShell, 저장소 루트: 산출물은 TEMP/SkeletalPatchTests에 둔다.
 // $sp = Join-Path $env:TEMP 'SkeletalPatchTests'; New-Item -ItemType Directory -Force $sp | Out-Null
 // cl /nologo /std:c++17 /EHsc /W4 /utf-8 /I MiniEngine/Core "/Fo:$sp/" "/Fe:$sp/SkeletalPatchTests.exe" MiniEngine/ModelViewer/Scene/tests/SkeletalPatchTests.cpp MiniEngine/MeshCutting/Geometry/CutPlane.cpp MiniEngine/Model/LatticeTopology.cpp
 // & "$sp/SkeletalPatchTests.exe"
 // Release는 /O2 /DNDEBUG를 추가한다. GPU와 Jolt는 필요 없다.
 #include "SkeletalPatchReference.h"
 #include "../SegmentJointSelection.h"
+#include "../TriangleMaskCompaction.h"
 #include <cstdio>
 #include <stdexcept>
 using namespace Viewer::PatchReference;
@@ -237,8 +238,73 @@ static void CheckRigCutJoints()
 }
 
 // 패치 추출과 선택 및 몸체 그룹의 CPU 계약을 함께 검사한다.
+// 원본 R16/R32의 비영 draw 시작점·baseVertex와 압축·거절의 원자성을 검사한다.
+static void CheckTriangleMaskCompaction()
+{
+    // loader처럼 원본 draw 구간을 펼치되 기대 압축 바이트는 아래 상수로 독립 지정한다.
+    const uint16_t r16[] = {99, 99, 1, 2, 3, 4, 5, 6, 99, 7, 8, 9};
+    const uint32_t r32[] = {99, 70000, 70001, 70002, 80000, 80001, 80002};
+    std::vector<uint32_t> a, b;
+    for (uint32_t i = 2; i < 8; ++i) a.push_back(r16[i] + 10);
+    for (uint32_t i = 9; i < 12; ++i) a.push_back(r16[i] + 20);
+    for (uint32_t i = 1; i < 7; ++i) b.push_back(r32[i] + 30);
+    std::vector<Viewer::MaskSection> sections = {
+        {true, false, &a, {{6, 10}, {3, 20}}}, {true, true, &b, {{6, 30}}}};
+    Viewer::CompactMask result;
+    const std::vector<uint32_t> state = {0x80000001u, 0, 0, 0, 0x80000002u};
+    Check(Viewer::CompactTriangleMask(sections, state, result), "mixed mask accepted");
+    const uint16_t expected16[] = {4, 5, 6, 7, 8, 9};
+    const uint32_t expected32[] = {70000, 70001, 70002};
+    Check(result.Bytes.size() == 24 && std::memcmp(result.Bytes.data(), expected16, 12) == 0
+        && std::memcmp(result.Bytes.data() + 12, expected32, 12) == 0, "independent R16/R32 bytes");
+    Check(result.Sections.size() == 2 && result.Sections[0].ByteOffset == 0
+        && result.Sections[0].ByteCount == 12 && result.Sections[1].ByteOffset == 12
+        && result.Sections[1].ByteCount == 12, "section order and original strides");
+    Check(result.Sections[0].Draws == std::vector<std::pair<uint32_t, uint32_t>>{{0, 3}, {3, 3}}
+        && result.Sections[1].Draws == std::vector<std::pair<uint32_t, uint32_t>>{{0, 3}}, "draw order and ranges");
+
+    // 뒤 section에서 거절되어도 직전의 정상 결과 전체를 보존한다.
+    const auto saved = result;
+    for (uint32_t invalid = 0; invalid < 3; ++invalid)
+    {
+        sections[1].Indices = invalid == 0 ? nullptr : &b;
+        sections[1].Skinned = invalid != 1;
+        if (invalid == 2) b.pop_back();
+        Check(!Viewer::CompactTriangleMask(sections, state, result), "unavailable CPU section rejected");
+        Check(result.Bytes == saved.Bytes && result.Sections.size() == saved.Sections.size()
+            && result.Sections[0].Draws == saved.Sections[0].Draws
+            && result.Sections[1].Draws == saved.Sections[1].Draws
+            && result.Sections[1].ByteOffset == saved.Sections[1].ByteOffset
+            && result.Sections[1].ByteCount == saved.Sections[1].ByteCount
+            && result.Sections[1].Override, "rejection preserves previous output");
+    }
+
+    // 제거가 없으면 CPU 인덱스 없는 비skin section도 원본 view를 그대로 쓴다.
+    sections[1] = {false, true, nullptr, {{6, 30}}};
+    Check(Viewer::CompactTriangleMask(sections, std::vector<uint32_t>(5), result)
+        && result.Bytes.empty() && !result.Sections[0].Override && !result.Sections[1].Override,
+        "no removal needs no override");
+
+    // 전체 제거 시에도 draw 수를 유지하고 모든 draw의 인덱스 수는 0이다.
+    b.push_back(80032);
+    sections[1] = {true, true, &b, {{6, 30}}};
+    Check(Viewer::CompactTriangleMask(sections, std::vector<uint32_t>(5, 0x80000000u), result)
+        && result.Bytes.empty() && result.Sections[0].Override && result.Sections[1].Override
+        && result.Sections[0].Draws == std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {0, 0}}
+        && result.Sections[1].Draws == std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}}, "all removed keeps draws");
+
+    // R16의 홀수 삼각형 뒤 R32 시작은 DWORD 정렬을 유지한다.
+    Check(Viewer::CompactTriangleMask(sections, {0, 0x80000000u, 0x80000000u, 0, 0x80000000u}, result)
+        && result.Sections[0].ByteCount == 6 && result.Sections[1].ByteOffset == 8
+        && result.Bytes.size() == 20, "mixed section alignment");
+}
+
+// GPU 없이 패치 참조 계산과 압축 IB의 합성 사례를 실행한다.
 int main()
 {
+    // 압축 IB의 원본 형식·순서·실패 보존 계약을 검사한다.
+    CheckTriangleMaskCompaction();
+
     // 다중 본 순수 함수의 교차 집합 계약을 먼저 검사한다.
     CheckRigCutJoints();
     CheckCrossingJoints();

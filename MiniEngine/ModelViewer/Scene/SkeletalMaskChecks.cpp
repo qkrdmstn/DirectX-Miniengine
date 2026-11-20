@@ -1,4 +1,4 @@
-#include "SkeletalMaskChecks.h"
+﻿#include "SkeletalMaskChecks.h"
 #include "Scene.h"
 #include "Renderer.h"
 #include "BufferManager.h"
@@ -256,10 +256,14 @@ namespace Viewer
                 if (view)
                 {
                     const size_t offset = size_t(view->IndexBuffer.BufferLocation - mask.CompactIB->GetGpuVirtualAddress());
-                    ibPass &= view->IndexBuffer.Format == DXGI_FORMAT_R32_UINT
-                        && view->IndexBuffer.SizeInBytes == expected[s].size() * 4
+                    const uint32_t stride = mesh.ibFormat == DXGI_FORMAT_R32_UINT ? 4 : 2;
+                    std::vector<uint8_t> expectedBytes(expected[s].size() * stride);
+                    for (size_t k = 0; k < expected[s].size(); ++k)
+                        std::memcpy(expectedBytes.data() + k * stride, &expected[s][k], stride);
+                    ibPass &= view->IndexBuffer.Format == mesh.ibFormat
+                        && view->IndexBuffer.SizeInBytes == expectedBytes.size()
                         && view->Draws.size() == mesh.numDraws
-                        && std::memcmp(compact + offset, expected[s].data(), expected[s].size() * 4) == 0;
+                        && std::memcmp(compact + offset, expectedBytes.data(), expectedBytes.size()) == 0;
                 }
                 uint32_t startIndex = 0;
                 for (uint32_t d = 0; d < mesh.numDraws; ++d)

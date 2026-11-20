@@ -130,10 +130,10 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
             const Joint* skeleton = nullptr, const GpuBuffer* posedBuffer = nullptr,
-            uint32_t posedOffset = 0, D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr = 0,
+            uint32_t posedOffset = 0,
             std::shared_ptr<const MeshRenderOverride> renderOverride = nullptr);
 
-        // override와 indexBufferPtr를 함께 주면 override의 IB view와 draw 범위가 우선한다.
+        // override가 있으면 원본 IB view와 draw 범위를 대체한다.
         // GPU 버퍼 자체는 호출자가 제출된 명령의 완료까지 보존하고 INDEX_BUFFER 상태로 준비한다.
 
         void Sort();
@@ -164,7 +164,6 @@ namespace Renderer
             D3D12_GPU_VIRTUAL_ADDRESS meshCBV;
             D3D12_GPU_VIRTUAL_ADDRESS materialCBV;
             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr;
-            D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr;
             const GpuBuffer* posedBuffer;
             uint32_t posedOffset;
             std::shared_ptr<const MeshRenderOverride> renderOverride;

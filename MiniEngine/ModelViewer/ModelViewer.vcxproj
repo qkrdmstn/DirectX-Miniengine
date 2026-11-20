@@ -116,9 +116,6 @@
     <ClInclude Include="Scene\CutPlaneRenderer.h" />
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="Scene\Shaders\TriangleMaskCS.hlsl">
-      <ShaderType>Compute</ShaderType>
-    </FxCompile>
     <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>
@@ -458,7 +455,6 @@
     <None Include="Scene\tests\SkeletalBreakTests.cpp" />
     <None Include="Scene\tests\SkeletalFrameTests.cpp" />
     <None Include="Scene\tests\SkeletalPatchTests.cpp" />
-    <None Include="Scene\tests\TriangleMaskShaderTests.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)', 'vcpkg.json'))\vcpkg\DirectX.vcpkg.targets" />
@@ -490,6 +486,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
+    <ClInclude Include="Scene\TriangleMaskCompaction.h" />
     <ClInclude Include="Scene\SegmentJointSelection.h" />
     <ClInclude Include="Scene\SkeletalPatchCopy.h" />
     <ClInclude Include="Scene\PatchSkinning.h" />

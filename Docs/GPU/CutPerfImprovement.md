@@ -1,4 +1,4 @@
-상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a (커밋 대기)
+상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b (커밋 대기)
 
 # 절단 성능 개선 결정 (1차)
 
@@ -165,3 +165,14 @@
 - MX450 Release 단발 비교(임시 Update 계측, 제거 완료): 두 번째 publish CPU Update 15.797→19.140 ms로 전체 단축은 확인하지 못했다. IB 교체 구간 4,601.2→0.9 µs, 압축+업로드 1,628.1→1,376.2 µs. 게시 frame은 113→112로 비동기 시점 차이가 있다. HDR은 기존 CP-4a 결과와 SHA-256 EB597C73DE8646772702B772D30B5B658C90C4B7631DD9E165EC93DE66133C72로 일치한다. 근거: `%TEMP%/CP4a/review-before-recut.log`, `review-after-recut.log`.
 - 최종 Release 증분 빌드 exit=0, 임시 계측 문자열 제거 확인. `-skeletal-mask-checks 1` PASS/exit=0(33.84초), `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1` PASS/exit=0(26.00초). 로그는 `%TEMP%/CP4a/review-final-{mask,patch}.log`; Debug는 실행하지 않았다.
 - HDR 일치는 임시 Update 계측이 있는 동일 게시 frame=112 실행에서 확인했다. 계측 제거 후 최종 바이너리 재현도 모두 PASS/exit=0이나 게시 frame=113~115로 달라 기존 frame=112 HDR과 해시는 다르다. 이 실행들은 동일 시점 HDR 비교 근거에서 제외한다(`review-final*-recut.log`).
+
+### CP-4b: 옛 마스크 경로 제거·CPU 압축 단위 검사 (base `ad5c74cd`, 커밋 대기, 2026-11-20)
+
+- `TriangleMaskCS.hlsl`, `TriangleMaskShaderTests.cpp`와 프로젝트 등록, `ReplacedIB`·`FirstByte`·`ByteCount`·미사용 `TriangleCount`, 상수 false 분기와 dispatch/root signature를 제거했다. 렌더러의 옛 IB 주소 대체 인자·정렬 필드도 유일한 호출자가 0만 넘기므로 제거했다. `UpdateTriangleMask`의 GPU State 업로드는 추출 입력으로 유지한다.
+- `TriangleMaskCompaction.h`의 `CompactTriangleMask`는 GPU 비의존 입력·출력으로 압축하며, 전체 성공 후에만 출력을 교체한다. `SetTriangleMask`도 성공 결과를 받은 뒤 GPU 자원을 만들고 게시하므로 거절 시 이전 Pending·IB·override·revision을 건드리지 않는다.
+- `SkeletalPatchTests`의 합성 원본 R16/R32에는 다중 draw·section, 비영 startIndex/baseVertex가 있다. 기대 IB는 압축 함수를 호출하지 않고 리터럴로 지정했다. 전체 제거의 draw 수·0 count, 제거 없음의 override 생략, CPU 인덱스 없음·길이 불일치·비skin 거절과 기존 결과 보존, 혼합 형식 정렬을 검사한다. CPU 입력은 loader가 draw 순서로 펼쳐 baseVertex를 더한 배열이므로 startIndex는 fixture 준비에서 소비된다.
+- R16 유지 결정: 형식별 stride·범위 검사·바이트 저장·section DWORD 정렬·view 형식·GPU 검사 변경은 약 20줄이다. 원본 형식을 따르며 R16 section 사이 패딩은 최대 2바이트, R32는 그대로다. CPU 테스트 Release 144 checks PASS. Release·실행·동일 게시 프레임 HDR 검증 결과는 아래에 기록한다.
+- 최종 검증: Release/Windows(x64), NVIDIA GeForce MX450(1906 MB), `-debug 0`. 저장소 밖 `%TEMP%/CP4b/Build/`에 기존 Release 중간 파일을 복사하고 `SolutionDir`만 외부 경로로 지정해 빌드했다. 최종 exit=0·error 0, CPU Release 144 checks PASS. 초기 인코딩 오류는 UTF-8 BOM으로 수정했으며 이후 최종 바이너리로 재검증했다. Debug는 요청에 따라 빌드·실행하지 않았고 드라이버 버전은 재조회하지 않았다.
+- 최종 실행: `-skeletal-mask-checks 1` PASS(18.20초), `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1` 20요청 GPU==CPU PASS(20.08초), `-skeletal-patch-break-checks 1` Parent/Rig 각각 6요청 GPU==CPU·boundary pass=4/fail=0/n/a=2 PASS(23.37/23.32초). `-skeletal-recut-repro 1` 요청 1 frame=64·요청 2 frame=112 정상 게시/PASS(25.40초). 모두 exit=0, timeout=False.
+- R16 효과: Xbot 동일 절단 IB는 563,928→281,964바이트. `-animation-step-ms 16` HDR RAW 각 8,294,416바이트가 같은 게시 프레임에서 완전히 일치한다: Xbot frame=64, CesiumMan frame=64, 재절단 request1=64/request2=112·두 번째 게시 age=0. Xbot 기준은 이번 HEAD 바이너리 캡처, 나머지는 CP-4a 보관 캡처와 비교했다. 최초 Xbot 기준 frame=65는 제외하고 frame=64로 재실행했다. SHA-256: Xbot `F7991A50EE392D09C2D0D2143CBE604AF8B9F9918C5C4378A133F68D511808E2`, CesiumMan `9E7146F87DB61AEBB313FBD2BC0058AF7D738243B61D959775450130E3C88259`, 재절단 `EB597C73DE8646772702B772D30B5B658C90C4B7631DD9E165EC93DE66133C72`.
+- 근거: `%TEMP%/CP4b/`의 빌드·CPU·`final-*`·`after-*` 로그, `hdr-comparison.json`과 RAW. 옵션 전달이 잘못된 초기 실행은 timeout으로 제외하고 스크립트에 옵션을 직접 지정해 재실행했다. 외부 임시 빌드 산출물 삭제는 경로 검증·절대 경로 명시 후에도 자동 승인 정책에 차단되어 `%TEMP%/CP4b/Build/` 및 같은 폴더의 CPU exe/obj가 남아 있다. 상세 거절 사유는 제공되지 않았다. 커밋하지 않았다.

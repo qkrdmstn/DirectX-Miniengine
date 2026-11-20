@@ -43,11 +43,9 @@ namespace Viewer
     struct TriangleMask
     {
         StructuredBuffer State;
-        ByteAddressBuffer ReplacedIB; // CP-4b에서 제거할 비활성 경로
         std::unique_ptr<UploadBuffer> CompactIB;
         std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> RenderOverrides;
-        uint32_t TriangleCount = 0, Revision = 0, AppliedRevision = 0;
-        uint32_t FirstByte = 0, ByteCount = 0;
+        uint32_t Revision = 0, AppliedRevision = 0;
         std::vector<uint32_t> Pending;
     };
 

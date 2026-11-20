@@ -542,7 +542,6 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
     D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
     const Joint* skeleton, const GpuBuffer* posedBuffer, uint32_t posedOffset,
-    D3D12_GPU_VIRTUAL_ADDRESS indexBufferPtr,
     std::shared_ptr<const MeshRenderOverride> renderOverride)
 {
     // override는 원본 draw와 일대일 대응하며 공유 Mesh의 메타데이터는 수정하지 않는다.
@@ -605,7 +604,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
 
     // 정렬 목록이 override를 공유 소유하므로 호출자의 임시 shared_ptr가 사라져도 유효하다.
     SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr,
-        indexBufferPtr ? indexBufferPtr : bufferPtr, posedBuffer, posedOffset, renderOverride };
+        posedBuffer, posedOffset, renderOverride };
     m_SortObjects.push_back(object);
 }
 
@@ -781,9 +780,9 @@ void MeshSorter::RenderMeshes(
                 context.SetVertexBuffer(0, {object.bufferPtr + mesh.vbOffset, mesh.vbSize, mesh.vbStride});
             }
 
-            // override의 절대 IB view가 기존 ReplacedIB 주소 대체보다 우선한다.
+            // section override가 없으면 원본 geometry의 IB view를 사용한다.
             const D3D12_INDEX_BUFFER_VIEW indexBuffer = renderOverride ? renderOverride->IndexBuffer
-                : D3D12_INDEX_BUFFER_VIEW{object.indexBufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat};
+                : D3D12_INDEX_BUFFER_VIEW{object.bufferPtr + mesh.ibOffset, mesh.ibSize, (DXGI_FORMAT)mesh.ibFormat};
             context.SetIndexBuffer(indexBuffer);
 
             // draw 순서와 baseVertex는 유지하고 인덱스 범위만 선택적으로 대체한다.
