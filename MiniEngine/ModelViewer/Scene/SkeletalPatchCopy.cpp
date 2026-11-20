@@ -21,6 +21,8 @@
 #include <stdexcept>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
+#include <exception>
 #include <set>
 #include <map>
 #include <tuple>
@@ -323,27 +325,130 @@ namespace Viewer
             }
         }
 
-        // mini에 없는 이름은 진단에서만 원본 GLB의 DFS 순서로 복원한다.
+        struct DiagnosticNames
+        {
+            std::filesystem::file_time_type Modified;
+            uintmax_t Size = 0;
+            std::tuple<DWORD, DWORD, DWORD, LONGLONG> Revision;
+            std::vector<std::string> Names;
+            std::vector<std::exception_ptr> NameErrors;
+            std::exception_ptr TraversalError;
+            uint32_t CycleBegin = UINT32_MAX;
+        };
+
+        // GLB 이름을 캐시하며 조상 재방문은 기존 DFS의 반복 구간으로 조회하고, 다른 재방문은 그대로 순회한다.
+        // 파일 ID·변경 시각도 비교하되 모든 메타데이터가 같은 내용 변경은 진단 이름에 반영되지 않을 수 있다.
         std::string DiagnosticNodeName(const std::string& model, uint32_t node)
         {
-            // JSON chunk를 읽고 변환기와 같은 scene root 전위 순서를 따른다.
-            std::ifstream file("Models/" + model + ".glb", std::ios::binary);
-            uint32_t header[5]{};
-            file.read(reinterpret_cast<char*>(header), sizeof(header));
-            if (!file || header[0] != 0x46546c67 || header[4] != 0x4e4f534a) return "unavailable";
-            std::string bytes(header[3], ' ');
-            file.read(&bytes[0], bytes.size());
-            const auto json = nlohmann::json::parse(bytes);
-            const auto roots = json["scenes"][json.value("scene", 0)]["nodes"].get<std::vector<uint32_t>>();
-            std::vector<uint32_t> stack(roots.rbegin(), roots.rend());
-            for (uint32_t id = 0; !stack.empty(); ++id)
+            // Model 주소를 쓰지 않아 해제 후 주소 재사용의 영향을 받지 않는다.
+            // 같은 GLB 경로는 모델 수명과 무관하게 공유하며 파일 변경·삭제 시 폐기한다.
+            static std::map<std::string, DiagnosticNames> cache;
+            const std::string path = "Models/" + model + ".glb";
+            std::error_code error;
+            const auto modified = std::filesystem::last_write_time(path, error);
+            const auto size = error ? uintmax_t(0) : std::filesystem::file_size(path, error);
+
+            // 크기·수정 시각을 보존한 교체와 덮어쓰기도 파일 ID·변경 시각으로 구분한다.
+            const HANDLE fileInfo = CreateFileA(path.c_str(), FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            BY_HANDLE_FILE_INFORMATION identity{};
+            FILE_BASIC_INFO basic{};
+            const bool revisionKnown = fileInfo != INVALID_HANDLE_VALUE
+                && GetFileInformationByHandle(fileInfo, &identity)
+                && GetFileInformationByHandleEx(fileInfo, FileBasicInfo, &basic, sizeof(basic));
+            if (fileInfo != INVALID_HANDLE_VALUE) CloseHandle(fileInfo);
+            const auto revision = std::make_tuple(identity.dwVolumeSerialNumber,
+                identity.nFileIndexHigh, identity.nFileIndexLow, basic.ChangeTime.QuadPart);
+
+            // 메타데이터 조회 실패 시에도 이전 캐시를 재사용하지 않는다.
+            auto found = cache.find(path);
+            if (error || !revisionKnown || (found != cache.end()
+                && (found->second.Modified != modified || found->second.Size != size
+                    || found->second.Revision != revision)))
             {
-                const auto current = stack.back();
-                stack.pop_back();
-                if (id == node) return json["nodes"][current].value("name", std::string("unnamed"));
-                const auto children = json["nodes"][current].value("children", std::vector<uint32_t>{});
-                stack.insert(stack.end(), children.rbegin(), children.rend());
+                cache.erase(path);
+                found = cache.end();
             }
+
+            // 실패한 읽기는 저장하지 않아 파일 복구 후 기존처럼 다시 시도한다.
+            if (found == cache.end())
+            {
+                std::ifstream file(path, std::ios::binary);
+                uint32_t header[5]{};
+                file.read(reinterpret_cast<char*>(header), sizeof(header));
+                if (!file || header[0] != 0x46546c67 || header[4] != 0x4e4f534a) return "unavailable";
+                std::string bytes(header[3], ' ');
+                file.read(&bytes[0], bytes.size());
+                const auto json = nlohmann::json::parse(bytes);
+                const auto roots = json["scenes"][json.value("scene", 0)]["nodes"].get<std::vector<uint32_t>>();
+                std::vector<std::pair<uint32_t, bool>> stack;
+                for (auto root = roots.rbegin(); root != roots.rend(); ++root)
+                    stack.emplace_back(*root, false);
+                std::map<uint32_t, uint32_t> visiting;
+                DiagnosticNames names;
+                names.Modified = modified;
+                names.Size = size;
+                names.Revision = revision;
+
+                // 기존 전위 순서와 unnamed 기본값을 유지하고 노드별 이름 오류를 보존한다.
+                while (!stack.empty())
+                {
+                    const auto entry = stack.back();
+                    stack.pop_back();
+                    const auto current = entry.first;
+                    if (entry.second)
+                    {
+                        visiting.erase(current);
+                        continue;
+                    }
+
+                    // 조상 재진입 뒤에는 같은 전위 구간이 무한 반복되므로 한 번만 저장한다.
+                    const auto visit = visiting.emplace(current, uint32_t(names.Names.size()));
+                    if (!visit.second)
+                    {
+                        names.CycleBegin = visit.first->second;
+                        break;
+                    }
+                    stack.emplace_back(current, true);
+
+                    // 이름 오류는 해당 NodeId 조회에만 적용한다.
+                    names.Names.emplace_back();
+                    names.NameErrors.emplace_back();
+                    try
+                    {
+                        names.Names.back() = json["nodes"][current].value("name", std::string("unnamed"));
+                    }
+                    catch (...)
+                    {
+                        names.NameErrors.back() = std::current_exception();
+                    }
+
+                    // 원래 조회는 현재 이름을 먼저 반환하므로 자식 오류는 다음 NodeId부터 적용한다.
+                    try
+                    {
+                        const auto children = json["nodes"][current].value("children", std::vector<uint32_t>{});
+                        for (auto child = children.rbegin(); child != children.rend(); ++child)
+                            stack.emplace_back(*child, false);
+                    }
+                    catch (...)
+                    {
+                        names.TraversalError = std::current_exception();
+                        break;
+                    }
+                }
+                found = cache.emplace(path, std::move(names)).first;
+            }
+
+            // Safe 호출자의 번호 대체와 직접 호출자의 예외 전파를 그대로 유지한다.
+            const auto& names = found->second;
+            if (names.CycleBegin != UINT32_MAX && node >= names.CycleBegin)
+                node = names.CycleBegin + (node - names.CycleBegin) % (names.Names.size() - names.CycleBegin);
+            if (node < names.Names.size())
+            {
+                if (names.NameErrors[node]) std::rethrow_exception(names.NameErrors[node]);
+                return names.Names[node];
+            }
+            if (names.TraversalError) std::rethrow_exception(names.TraversalError);
             return "unavailable";
         }
 

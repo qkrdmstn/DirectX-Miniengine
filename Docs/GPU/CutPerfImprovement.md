@@ -1,4 +1,4 @@
-상태: 설계안 — 절단 성능 개선 1차: 압축 IB·CPU 준비 구간·추출 단계 합치기(base `5f360fa7`, 2026-11-20, Codex 리뷰 1회 반영). 기준값은 [PerfBaseline.md](PerfBaseline.md).
+상태: 진행 중 — CP-1 측정, CP-2 (base `f2c0501f`, 커밋 대기)
 
 # 절단 성능 개선 결정 (1차)
 
@@ -110,3 +110,27 @@
 - 압축 IB 업로드가 게시 프레임에 들어간다. Xbot 0.28 MB다. 업로드 시간을 잰다.
 - R16 원본을 R32 압축 IB로 바꾸면 크기가 2배가 된다. R16을 유지하는 안은 CP-4에서 줄 수를 보고 결정한다.
 - `m_SkinCpuSections`가 없는 경로(비skin, 로딩 방식 차이)가 마스크 대상이 되면 거절된다. 실제로 요청되는지 회귀에서 확인한다.
+
+## 7. 결과
+
+### CP-1·CP-2: D2 노드 이름 캐시 (base `f2c0501f`, 2026-11-20)
+
+- Release/Windows(x64), NVIDIA GeForce MX450(1906 MB). CP-1과 같은 QPC 계측으로 Poll 성공 직후부터 `SkeletalPatchCopy::Update` 반환까지 U를 측정했다. 일반 실행은 debugger 없이, 수집기는 CP-1의 Win32 debugger 연결 방식이다. 두 조건을 별도로 비교한다.
+- cwd `MiniEngine/ModelViewer`, `-debug 0 -skeletal-break-demo 1`(Xbot) 또는 `2`(CesiumMan), `-physics-query-exit 360`. 매번 새 프로세스의 첫 요청이며 최초 이름 표 생성도 U에 포함된다.
+
+| 모델 | 조건 | CP-1 U ms (n=2 평균) | CP-2 U ms (실측) | CP-2 평균 ms |
+|---|---|---:|---:|---:|
+| Xbot | 일반 | 32.6031 | 15.9008 / 14.6531 | 15.2770 |
+| Xbot | 수집기 | 5038.6802 | 1594.9574 (n=1) | 1594.9574 |
+| CesiumMan | 일반 | 5.2438 | 3.8415 / 3.7654 | 3.8035 |
+| CesiumMan | 수집기 | 75.0722 | 66.1721 (n=1) | 66.1721 |
+
+- CP-1 상위 원인은 `DiagnosticNodeName`의 호출별 GLB 재읽기·JSON 파싱이었다. Xbot: 일반 29.0612 ms(U의 89.14%), 수집기 5004.9137 ms(99.33%); CesiumMan: 일반 2.0756 ms(39.58%), 수집기 68.8850 ms(91.76%). 수집기의 차이는 debugger 상호작용을 포함하며 출력 비용만으로 해석하지 않는다.
+- CP-2 `DiagnosticNodeName`: GLB 경로별 최초 조회에서 기존 scene root·자식 전위 DFS 순서로 이름 표를 만든다. 같은 경로는 Model 해제·재생성과 무관하게 재사용하고 파일 크기·수정 시각·파일 ID·변경 시각 변경 또는 삭제 시 폐기한다. 메타데이터 조회 실패 시 이전 캐시를 재사용하지 않는다. Model 포인터 주소 재사용에 의존하지 않는다. 잘못된 헤더·읽기/파싱 실패는 재시도하며 노드별 이름 오류와 자식 순회 오류는 기존 조회 시점에 맞춰 반환·전파한다. `SafeDiagnosticNodeName`의 번호 대체, 로그 문자열과 다른 동작은 유지했다.
+- 수정 후 이름 조회 합계: Xbot 일반 12.1835 / 11.3967 ms, 수집기 1555.6760 ms; CesiumMan 일반 1.6454 / 1.3971 ms, 수집기 61.6783 ms. 최초 파싱은 남으므로 U가 0에 가까워지는 변경은 아니다. 표본이 작아 일반화하지 않는다.
+- 검증 자료는 `%TEMP%/CP2/`의 실행별 CSV·TEMP 패치 로그·수집 로그, `runs.json`, 빌드 로그와 이름 동등성 검사에 보관했다. CP-1 계측을 재적용해 측정한 뒤 제거했으며 계측 없는 Release도 다시 빌드했다(15.35초, 오류 0). Debug 빌드는 디스크 제약으로 생략했다.
+- Xbot `-skeletal-break-demo 1` 수정 전후 TEMP 로그의 `MI2 island` 세 행 전체가 동일하다. 별도 임시 검사도 Xbot/CesiumMan NodeId 0~99 반복 조회와 DFS root/자식 순서·unnamed·이름/자식/JSON 오류·파일 교체/삭제/재시도의 기존 함수 결과 동등성 PASS. `SkeletalPatchTests` Release 131 checks PASS.
+- 계측 제거 후 회귀: -skeletal-patch-checks 1 -skeletal-patch-offset-copy 1 20요청 GPU==CPU PASS; -skeletal-patch-break-checks 1 Parent/Rig 각각 6요청 GPU==CPU와 subtree/root/AlreadyBroken PASS, 경계 검사 pass=4/fail=0/n/a=2. 세 프로세스 모두 exit=0, timeout=False, 명시적 FAIL 0. Debug·D3D12 validation과 드라이버 버전은 확인하지 않았다.
+
+- 리뷰 수정: 조상 방문 표시로 순환을 감지하고 반복 구간을 재사용해 기존 요청 NodeId의 이름을 보존한다. 공유 자식·중복 root는 기존대로 재순회한다. 모든 메타데이터가 같은 내용 변경은 진단 이름에 반영되지 않을 수 있다(전체 파일 해시 없음).
+- 리뷰 수정 검증: Release 증분 빌드 16.81초, 오류 0. 두 데모 exit=0, 기존 CP-2 island 로그 Xbot 4행·CesiumMan 3행 완전 일치. offset-copy 20요청 GPU==CPU PASS, exit=0, timeout=False, 명시적 FAIL 0. 임시 합성 GLB로 자기/조상 순환·공유 자식·중복 root·순환 중 이름 오류의 NodeId 0~999와 큰 NodeId, 동일 크기·수정 시각의 덮어쓰기/교체 감지 PASS. 자료는 `%TEMP%/CP2/review/`에 보관했다. 위 성능 수치는 리뷰 수정 전 CP-2 측정이며 메타데이터 조회 추가 비용은 재측정하지 않았다. Debug·D3D12 validation은 이번 요청 범위에서 제외했고 드라이버 조회는 접근 거부로 확인하지 못했다.
