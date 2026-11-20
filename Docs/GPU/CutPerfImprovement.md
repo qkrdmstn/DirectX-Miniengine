@@ -1,4 +1,4 @@
-상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 (커밋 대기)
+상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a (커밋 대기)
 
 # 절단 성능 개선 결정 (1차)
 
@@ -77,7 +77,8 @@
 | CP-1 | D2 하위 계측(임시, 커밋 안 함). 수집기 유무 각 1회, 원인 보고 | 100~180 | 구현 15~25분 + Release 증분 약 1분 + 실행 수 분 |
 | CP-2 | D2 수정. 확인된 원인만 | 측정 후 결정, 300 이내 | 구현 + 빌드 + 리뷰 2~5분 |
 | CP-3 | D1 렌더 override 경로(section IB view + draw 범위)만 추가. 동작 불변 | 150~240 | 같음 |
-| CP-4 | D1 CPU 압축 IB 생성·해제, 적용, `TriangleMaskCS`/`ReplacedIB`/셰이더 테스트 정리, `SkeletalMaskChecks` 갱신 | 200~300(넘으면 나눈다) | 같음 + 마스크 검사 |
+| CP-4a | D1 CPU 압축 IB 생성·해제·렌더 적용, 압축 IB 기준 마스크 검사. 옛 경로는 비활성 보존 | 약 200 | Release 빌드 + HDR·마스크·회귀 검사 |
+| CP-4b | `TriangleMaskCS`, `ReplacedIB`, `TriangleMaskShaderTests` 제거와 `SkeletalMaskChecks` 정리 | 300 이내 | Release 빌드 + 회귀 검사 |
 | CP-5 | D3 Mode 7 합치기 | 100~150 | 같음 |
 | CP-6a/b | D3 블록 크기 일반화와 K 비교 / 고른 K 반영 | 각 100~250 | 같음 + 측정 약 20분 |
 | CP-7 | BL·RP와 같은 조건으로 재측정, PerfBaseline에 개선 후 절 추가, 상태 줄·README 동기화 | 문서 | 약 40분 |
@@ -135,7 +136,7 @@
 - 리뷰 수정: 조상 방문 표시로 순환을 감지하고 반복 구간을 재사용해 기존 요청 NodeId의 이름을 보존한다. 공유 자식·중복 root는 기존대로 재순회한다. 모든 메타데이터가 같은 내용 변경은 진단 이름에 반영되지 않을 수 있다(전체 파일 해시 없음).
 - 리뷰 수정 검증: Release 증분 빌드 16.81초, 오류 0. 두 데모 exit=0, 기존 CP-2 island 로그 Xbot 4행·CesiumMan 3행 완전 일치. offset-copy 20요청 GPU==CPU PASS, exit=0, timeout=False, 명시적 FAIL 0. 임시 합성 GLB로 자기/조상 순환·공유 자식·중복 root·순환 중 이름 오류의 NodeId 0~999와 큰 NodeId, 동일 크기·수정 시각의 덮어쓰기/교체 감지 PASS. 자료는 `%TEMP%/CP2/review/`에 보관했다. 위 성능 수치는 리뷰 수정 전 CP-2 측정이며 메타데이터 조회 추가 비용은 재측정하지 않았다. Debug·D3D12 validation은 이번 요청 범위에서 제외했고 드라이버 조회는 접근 거부로 확인하지 못했다.
 
-### CP-3: D1 렌더 override 경로 (base `7367a00a`, 커밋 대기, 2026-11-20)
+### CP-3: D1 렌더 override 경로 (base `7367a00a`, commit `415fa819`, 2026-11-20)
 
 - `MeshRenderOverride`는 section의 절대 IB view와 원본 draw 순서의 `StartIndex`·`IndexCount` 배열이다. `MeshSorter::AddMesh`의 선택 인자로 받아 정렬 목록이 `shared_ptr<const MeshRenderOverride>`로 수명을 보존한다. 호출자는 등록 뒤 내용을 바꾸지 않고 GPU 버퍼 자체는 명령 완료까지 보존한다.
 - `MeshSorter::RenderMeshes`의 공통 루프에서 override가 있으면 기존 ReplacedIB 주소 대체보다 우선한다. 원본 `Mesh`·`Mesh.draw`, `baseVertex`와 posed SRV 오프셋은 유지한다. `MeshComponent::Render`는 override를 생성하지 않으며 기존 ReplacedIB 전달식을 유지한다.
@@ -144,3 +145,23 @@
 - 변경 전후 `-debug 0 -capture <TEMP 경로> -capture-frame 60 -animation-step-ms 16 -physics-query-exit 100`의 HDR RAW(8,294,416바이트)가 동일하다. SHA-256: `CBD11B9AA57C4A656AC7442E2692B07B20A875A4DE352D9B0FF7B08EEA366ABA`.
 - 임시 코드로 한 컴포넌트에 동일 값의 override를 전달하고 Xbot·CesiumMan 각각 원본 IB 및 ReplacedIB 동시 전달 조건에서 shadow/depth/HDR readback을 바이트 비교했다. 네 비교 모두 PASS, exit=0(18.51초). 호출 지역 shared_ptr 소멸 이후 정렬·렌더하는 경로도 포함한다. 임시 코드는 제거했고 해당 두 소스를 재컴파일한 최종 Release 증분 빌드도 exit=0(12.23초)이다. 실행 파일에 임시 검사 문자열이 남지 않은 것도 확인했다.
 - 자료는 `%TEMP%/CP3/`에 보관했다. 투명 재질의 override 실행, Debug·D3D12 validation 및 드라이버 버전은 확인하지 않았다. 투명 패스의 적용은 동일 공통 루프의 코드 확인에 한정한다.
+
+
+### CP-4a: D1 CPU 압축 IB 적용 (base `415fa819`, 커밋 대기, 2026-11-20)
+
+- `SetTriangleMask`는 원본 mesh 번호를 skin CPU section 번호에 연결하고, draw 순서로 보존된 `Indices`에서 bit31 제거 삼각형을 생략한다. 압축 값은 원본 baseVertex를 뺀 draw 상대값이며 공유 Model·Mesh.draw는 수정하지 않는다. 제거 요청 section의 CPU 인덱스가 없으면 로그와 false를 반환하고 이전 상태를 보존한다.
+- 컴포넌트 소유 R32 업로드 IB 하나와 section별 `MeshRenderOverride`를 게시한다. 전체 제거 draw도 배열 길이를 유지하며 IndexCount=0이다. 제거 없는 section은 원본 view를 쓰고, 제거가 전혀 없으면 압축 IB를 만들지 않는다.
+- 재설정 시 이전 압축 IB는 `CommandListManager::RetireResource`로 마지막 제출 queue fence와 함께 보존하고 완료 후 수집한다. publish 교체의 IdleGPU는 제거했다. `ClearTriangleMask`의 기존 IdleGPU·소유 객체 해제가 새 IB와 override도 정리한다. `SetGeometry`·`CommitGeometryReplacement`의 해제 호출은 유지된다.
+- `Render`는 override만 넘기며 ReplacedIB 주소를 넘기지 않는다. `UpdateTriangleMask`는 추출 State 업로드만 수행한다. 옛 셰이더·ReplacedIB 멤버·dispatch 구현·TriangleMaskShaderTests는 CP-4b까지 남기되, 상수 false 분기로 할당·dispatch를 비활성화했다.
+- `SkeletalMaskChecks`의 ReplacedIB readback을 압축 IB readback으로 바꿨다. 원본 GPU R16/R32 인덱스로 독립 계산한 남은 삼각형 순서·section view 크기·draw 범위를 비교한다. Xbot/CesiumMan shadow·depth·HDR 및 source/peer/reset/restore PASS, 전체 제거 draw 배열·0개 count와 제거 없는 원본 복귀 PASS.
+- Release/Windows(x64), NVIDIA GeForce MX450(1906 MB). 첫 증분 빌드 144.39초, 마지막 구현 빌드 81.94초, 오류 0. HEAD 기준 재빌드도 Release만 사용했다. Debug 빌드·D3D12 validation은 디스크 제약과 이번 요청에 따라 실행하지 않았다.
+- HEAD와 구현본의 동일 게시 프레임 HDR RAW는 각각 8,294,416바이트 전체 일치: Xbot frame=65, CesiumMan frame=64, D6 request1=64/request2=112 및 두 번째 게시 age=0. 비동기 게시 프레임이 다른 실행은 비교에서 제외하고 재실행했다. SHA-256·변경 바이트 수·로그는 `%TEMP%/CP4a/hdr-comparison.json`에 보관한다. `-capture-count`가 HDR을 생략하므로 기본 8장 캡처 뒤 첫 게시 프레임만 보존했다.
+- 회귀: offset-copy 20요청 GPU==CPU PASS; Parent/Rig break 각각 6요청 및 boundary pass=4/fail=0/n/a=2; SkeletalPatchTests 131 checks PASS. D5 RigBoneCutChecks PASS. Parent 다중 절단은 조각 3개, maskCalls=1, patchIds=1, topologyDelta=2, constraints 18→16으로 게시했다. 일반 Update·ConsumeMultiBreak·PublishRigBonePatch와 Pending 누적 D6 경로를 확인했다.
+- 게시 시 단일 실행 계측(수집기 연결): Xbot CPU 압축 1,239.1 µs, 업로드 힙 생성·복사 419.0 µs, IB 563,928 B; CesiumMan 110.5 µs / 205.6 µs / 52,812 B. D6 IB는 570,672→545,256 B, CPU 976.2→655.7 µs였다. 업로드 계측에는 이전 GPU 사용 대기를 포함하지 않는다.
+- 미검증: R32 원본·비영 startIndex/baseVertex·CPU 인덱스 누락 거절의 합성 fixture, 별도 새 실행의 코드 리뷰. 근거와 실행 스크립트는 `%TEMP%/CP4a/`에 보관하며 커밋하지 않았다.
+
+- CPU compaction unit-check fixture: CP-4b로 이월.
+- CP-4a 리뷰 수정: publish 교체만 기존 fence 지연 해제를 재사용한다. 소멸·ClearTriangleMask·geometry 교체 대기는 유지한다. `compactUploadUs`는 CPU 압축+업로드 합계이며 `retireWaitUs`는 관리 비용·할당 실패 안전 대기를 포함한 대기 상한이다.
+- MX450 Release 단발 비교(임시 Update 계측, 제거 완료): 두 번째 publish CPU Update 15.797→19.140 ms로 전체 단축은 확인하지 못했다. IB 교체 구간 4,601.2→0.9 µs, 압축+업로드 1,628.1→1,376.2 µs. 게시 frame은 113→112로 비동기 시점 차이가 있다. HDR은 기존 CP-4a 결과와 SHA-256 EB597C73DE8646772702B772D30B5B658C90C4B7631DD9E165EC93DE66133C72로 일치한다. 근거: `%TEMP%/CP4a/review-before-recut.log`, `review-after-recut.log`.
+- 최종 Release 증분 빌드 exit=0, 임시 계측 문자열 제거 확인. `-skeletal-mask-checks 1` PASS/exit=0(33.84초), `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1` PASS/exit=0(26.00초). 로그는 `%TEMP%/CP4a/review-final-{mask,patch}.log`; Debug는 실행하지 않았다.
+- HDR 일치는 임시 Update 계측이 있는 동일 게시 frame=112 실행에서 확인했다. 계측 제거 후 최종 바이너리 재현도 모두 PASS/exit=0이나 게시 frame=113~115로 달라 기존 frame=112 HDR과 해시는 다르다. 이 실행들은 동일 시점 HDR 비교 근거에서 제외한다(`review-final*-recut.log`).

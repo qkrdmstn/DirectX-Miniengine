@@ -1,4 +1,4 @@
-﻿#include "MeshComponent.h"
+#include "MeshComponent.h"
 #include "ConstantBuffers.h"
 #include "Renderer.h"
 #include "CommandListManager.h"
@@ -11,6 +11,7 @@
 #include "CompiledShaders/PatchSkinBakeCS.h"
 #include "ReadbackBuffer.h"
 #include <cstdio>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -21,6 +22,8 @@ using namespace Math;
 
 namespace Viewer
 {
+    constexpr bool BuildLegacyTriangleMaskIB = false; // CP-4b까지 옛 구현만 보존한다.
+
     // 불변 원본 참조와 컴포넌트 전용 GPU 저장 공간을 준비한다.
     MeshComponent::MeshComponent(ComponentId id, std::shared_ptr<const GeometryRevision> geometry)
         : m_Id(id), m_Geometry(std::move(geometry))
@@ -42,7 +45,7 @@ namespace Viewer
         RebuildCollision();
     }
 
-    // 삼각형 수와 상태 비트를 검사하고 컴포넌트 전용 변경을 예약한다.
+    // CPU 제거 상태로 압축 IB를 게시하고 이전 IB는 제출 fence 완료까지 보존한다.
     bool MeshComponent::SetTriangleMask(const std::vector<uint32_t>& state)
     {
         // 생성 geometry에는 원본 삼각형 번호를 적용하지 않는다.
@@ -59,7 +62,88 @@ namespace Viewer
         if (!triangles || triangles != state.size()) return false;
         for (uint32_t value : state) if (value & 0x7fff0000u) return false;
 
-        // 최초 변경에만 IB 구간과 삼각형 상태 버퍼를 할당한다.
+        // 같은 상태는 재할당하지 않고, 원본 mesh 번호를 skin CPU 배열 번호로 연결한다.
+        if (m_TriangleMask && m_TriangleMask->Pending == state) return true;
+        const auto started = std::chrono::steady_clock::now();
+        const auto& model = *m_Geometry->GetSource();
+        std::vector<uint32_t> skinSections(model.m_NumMeshes, UINT32_MAX);
+        const uint8_t* meshData = model.m_MeshData.get();
+        uint32_t skin = 0;
+        for (uint32_t s = 0; s < model.m_NumMeshes; ++s)
+        {
+            const auto& mesh = *reinterpret_cast<const Mesh*>(meshData);
+            if (mesh.numJoints) skinSections[s] = skin++;
+            meshData += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
+        }
+
+        // section과 draw의 전역 삼각형 순서를 유지하고 제거된 삼각형만 생략한다.
+        std::vector<uint32_t> indices;
+        std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> overrides;
+        std::vector<std::shared_ptr<Renderer::MeshRenderOverride>> views;
+        uint32_t triangle = 0;
+        for (size_t s = 0; s < m_Geometry->GetSections().size(); ++s)
+        {
+            const auto& mesh = m_Geometry->GetMesh(s);
+            uint32_t count = 0;
+            for (uint32_t d = 0; d < mesh.numDraws; ++d) count += mesh.draw[d].primCount / 3;
+            const bool removed = std::any_of(state.begin() + triangle, state.begin() + triangle + count,
+                [](uint32_t value) { return (value & 0x80000000u) != 0; });
+            overrides.push_back(nullptr);
+            if (!removed)
+            {
+                triangle += count;
+                continue;
+            }
+            const uint32_t cpuSection = skinSections.at(m_Geometry->GetSections()[s].SourceMesh);
+            if (!mesh.numJoints || cpuSection >= model.m_SkinCpuSections.size()
+                || model.m_SkinCpuSections[cpuSection].Indices.size() != size_t(count) * 3)
+            {
+                Utility::Printf("TriangleMask rejected section=%zu: skin CPU indices unavailable\n", s);
+                return false;
+            }
+            const auto& source = model.m_SkinCpuSections[cpuSection].Indices;
+            auto view = std::make_shared<Renderer::MeshRenderOverride>();
+            const size_t firstIndex = indices.size();
+            size_t sourceIndex = 0;
+            for (uint32_t d = 0; d < mesh.numDraws; ++d)
+            {
+                const uint32_t start = uint32_t(indices.size() - firstIndex);
+                for (uint32_t t = 0; t < mesh.draw[d].primCount / 3; ++t, ++triangle, sourceIndex += 3)
+                {
+                    if (state[triangle] & 0x80000000u) continue;
+                    for (uint32_t k = 0; k < 3; ++k)
+                        indices.push_back(uint32_t(int64_t(source[sourceIndex + k]) - int32_t(mesh.draw[d].baseVertex)));
+                }
+                view->Draws.push_back({ start, uint32_t(indices.size() - firstIndex) - start });
+            }
+            view->IndexBuffer = { firstIndex * 4, uint32_t(indices.size() - firstIndex) * 4, DXGI_FORMAT_R32_UINT };
+            overrides.back() = view;
+            views.push_back(std::move(view));
+        }
+        const double cpuUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+
+        // 업로드 힙을 직접 IB로 사용할 새 버퍼를 만들고 절대 view 주소를 확정한다.
+        const auto uploadStarted = std::chrono::steady_clock::now();
+        std::unique_ptr<UploadBuffer> compact;
+        if (!views.empty())
+        {
+            compact = std::make_unique<UploadBuffer>();
+            compact->Create(L"Component compact IB", std::max(size_t(4), indices.size() * 4));
+            if (!indices.empty()) std::memcpy(compact->Map(), indices.data(), indices.size() * 4);
+            else std::memset(compact->Map(), 0, 4);
+            compact->Unmap();
+            for (auto& view : views) view->IndexBuffer.BufferLocation += compact->GetGpuVirtualAddress();
+        }
+        const double uploadUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - uploadStarted).count();
+
+        // 이전 IB의 제출 명령은 기존 fence로 추적하며 wrapper 해제 뒤에도 자원 참조를 보존한다.
+        // retireWaitUs는 관리 비용과 할당 실패 시의 안전 대기를 함께 포함하는 대기 상한이다.
+        const auto retireStarted = std::chrono::steady_clock::now();
+        if (m_TriangleMask && m_TriangleMask->CompactIB)
+            Graphics::g_CommandManager.RetireResource(m_TriangleMask->CompactIB->GetResource());
+        const double retireUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - retireStarted).count();
+
+        // 추출 입력 State와 옛 경로의 메타데이터를 유지한다.
         if (!m_TriangleMask)
         {
             m_TriangleMask = std::make_unique<TriangleMask>();
@@ -67,10 +151,14 @@ namespace Viewer
             m_TriangleMask->FirstByte = first;
             m_TriangleMask->ByteCount = last - first;
             m_TriangleMask->State.Create(L"Component triangle state", uint32_t(triangles), 4);
-            m_TriangleMask->ReplacedIB.Create(L"Component replacement IB", (last - first) / 4, 4);
+            if (BuildLegacyTriangleMaskIB) m_TriangleMask->ReplacedIB.Create(L"Component replacement IB", (last - first) / 4, 4);
         }
-        if (m_TriangleMask->Pending == state) return true;
+        m_TriangleMask->CompactIB = std::move(compact);
+        m_TriangleMask->RenderOverrides = std::move(overrides);
         m_TriangleMask->Pending = state;
+        Utility::Printf("TriangleMask compact triangles=%u cpuUs=%.3f uploadUs=%.3f compactUploadUs=%.3f retireWaitUs=%.3f bytes=%zu allocated=%zu\n",
+            uint32_t(triangles), cpuUs, uploadUs, cpuUs + uploadUs, retireUs, indices.size() * 4,
+            m_TriangleMask->CompactIB ? m_TriangleMask->CompactIB->GetBufferSize() : 0);
         ++m_TriangleMask->Revision;
         return true;
     }
@@ -84,12 +172,27 @@ namespace Viewer
         m_TriangleMask.reset();
     }
 
-    // 상태 변경만 같은 명령 목록에서 계산하고 모든 렌더 패스가 읽을 IB로 전환한다.
+    // 추출 입력 State만 업로드하고 CP-4b까지 비활성인 옛 IB 생성 코드를 보존한다.
     void MeshComponent::UpdateTriangleMask(GraphicsContext& context)
     {
         // 변경되지 않은 마스크에는 업로드나 dispatch가 없다.
         if (!m_TriangleMask || m_TriangleMask->Revision == m_TriangleMask->AppliedRevision) return;
         auto& mask = *m_TriangleMask;
+
+        // 렌더는 CPU 압축 IB를 사용하므로 GPU 마스크 생성은 실행하지 않는다.
+        if (!BuildLegacyTriangleMaskIB)
+        {
+            const size_t bytes = mask.Pending.size() * 4;
+            DynAlloc upload = context.ReserveUploadMemory(bytes);
+            std::memcpy(upload.DataPtr, mask.Pending.data(), bytes);
+            context.TransitionResource(mask.State, D3D12_RESOURCE_STATE_COPY_DEST);
+            context.CopyBufferRegion(mask.State, 0, upload.Buffer, upload.Offset, bytes);
+            context.TransitionResource(mask.State, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            mask.AppliedRevision = mask.Revision;
+            return;
+        }
+
+        // 옛 ReplacedIB 경로는 CP-4b 정리 전까지 소스만 남긴다.
         static RootSignature root;
         static ComputePSO pso(L"Component triangle mask");
         static bool initialized = false;
@@ -1029,8 +1132,7 @@ namespace Viewer
                 m_Geometry->GetDataBuffer().GetGpuVirtualAddress(), joints,
                 posed ? &m_PosedGeometry->GetBuffer() : nullptr,
                 posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0,
-                m_TriangleMask && m_TriangleMask->AppliedRevision
-                    ? m_TriangleMask->ReplacedIB.GetGpuVirtualAddress() - m_TriangleMask->FirstByte : 0);
+                0, m_TriangleMask ? m_TriangleMask->RenderOverrides[i] : nullptr);
         }
     }
 }

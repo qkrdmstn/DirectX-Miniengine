@@ -84,8 +84,22 @@ namespace Viewer
         extract(range - overlap);
         if (!component.SetTriangleMask(std::vector<uint32_t>(state.size(), 0x80000001u)))
             throw std::runtime_error("SP7d all removed mask rejected");
+
+        // 전체 제거도 section과 draw 배열을 유지하며 실제 인덱스 수는 0이어야 한다.
+        const auto& geometrySections = component.GetGeometry()->GetSections();
+        for (size_t s = 0; s < geometrySections.size(); ++s)
+        {
+            const auto& view = component.GetTriangleMask()->RenderOverrides[s];
+            if (!view || view->Draws.size() != component.GetGeometry()->GetMesh(s).numDraws)
+                throw std::runtime_error("SP7d all removed draw layout");
+            for (const auto& draw : view->Draws)
+                if (draw.IndexCount) throw std::runtime_error("SP7d all removed draw count");
+        }
+
+        // 전체 제거 추출과 제거 없는 원본 경로 복귀를 확인한다.
         extract(0);
         if (!component.SetTriangleMask(std::vector<uint32_t>(state.size()))) throw std::runtime_error("SP7d zero mask rejected");
+        if (component.GetTriangleMask()->CompactIB) throw std::runtime_error("SP7d zero mask override");
         const auto zero = extract(range);
         component.ClearTriangleMask();
         const bool same = before == zero && before == extract(range);
@@ -116,7 +130,7 @@ namespace Viewer
             read.Finish(true);
             const auto* bytes = static_cast<const uint8_t*>(sourceRead.Map());
             const std::vector<uint8_t> original(bytes, bytes + source.GetBufferSize());
-            auto expected = original;
+            std::vector<std::vector<uint32_t>> expected;
             std::vector<uint32_t> state;
             std::vector<uint32_t> parentState;
             uint32_t removed = 0, childRange = 0, childOverlap = 0;
@@ -124,6 +138,7 @@ namespace Viewer
             {
                 const auto& mesh = geometry.GetMesh(s);
                 const uint32_t width = mesh.ibFormat == DXGI_FORMAT_R32_UINT ? 4 : 2;
+                expected.emplace_back();
                 for (uint32_t d = 0; d < mesh.numDraws; ++d)
                     for (uint32_t t = 0; t < mesh.draw[d].primCount / 3; ++t)
                     {
@@ -150,9 +165,17 @@ namespace Viewer
                         childOverlap += child && parent;
                         parentState.push_back(parent ? 0x80000001u : 0u);
                         state.push_back(selected ? 0x80000001u : 0u);
-                        if (!selected) continue;
-                        ++removed;
-                        for (uint32_t k = 1; k < 3; ++k) std::memcpy(expected.data() + at + k * width, bytes + at, width);
+                        if (selected)
+                        {
+                            ++removed;
+                            continue;
+                        }
+                        for (uint32_t k = 0; k < 3; ++k)
+                        {
+                            uint32_t index = 0;
+                            std::memcpy(&index, bytes + at + k * width, width);
+                            expected.back().push_back(index);
+                        }
                     }
             }
             sourceRead.Unmap();
@@ -216,16 +239,39 @@ namespace Viewer
                 || component.GetTriangleMask()->AppliedRevision != revision)
                 throw std::runtime_error("Mask revision mismatch");
 
-            // 치환 IB는 전체 바이트를 CPU 퇴화 기대값과 비교한다.
+            // 압축 IB를 원본 GPU 인덱스에서 독립 계산한 남은 삼각형 순서와 비교한다.
             const auto& mask = *component.GetTriangleMask();
             ReadbackBuffer ib;
-            ib.Create(L"Mask IB readback", mask.ByteCount, 1);
-            auto& check = GraphicsContext::Begin(L"Mask IB verify");
-            check.TransitionResource(const_cast<ByteAddressBuffer&>(mask.ReplacedIB), D3D12_RESOURCE_STATE_COPY_SOURCE);
-            check.CopyBufferRegion(ib, 0, const_cast<ByteAddressBuffer&>(mask.ReplacedIB), 0, mask.ByteCount);
-            check.TransitionResource(const_cast<ByteAddressBuffer&>(mask.ReplacedIB), D3D12_RESOURCE_STATE_INDEX_BUFFER);
+            ib.Create(L"Mask compact IB readback", mask.CompactIB->GetBufferSize(), 1);
+            auto& check = GraphicsContext::Begin(L"Mask compact IB verify");
+            check.CopyBufferRegion(ib, 0, *mask.CompactIB, 0, mask.CompactIB->GetBufferSize());
             check.Finish(true);
-            const bool ibPass = std::memcmp(ib.Map(), expected.data() + mask.FirstByte, mask.ByteCount) == 0;
+            const auto* compact = static_cast<const uint8_t*>(ib.Map());
+            bool ibPass = true;
+            uint32_t triangle = 0;
+            for (size_t s = 0; s < geometry.GetSections().size(); ++s)
+            {
+                const auto& mesh = geometry.GetMesh(s);
+                const auto& view = mask.RenderOverrides[s];
+                if (view)
+                {
+                    const size_t offset = size_t(view->IndexBuffer.BufferLocation - mask.CompactIB->GetGpuVirtualAddress());
+                    ibPass &= view->IndexBuffer.Format == DXGI_FORMAT_R32_UINT
+                        && view->IndexBuffer.SizeInBytes == expected[s].size() * 4
+                        && view->Draws.size() == mesh.numDraws
+                        && std::memcmp(compact + offset, expected[s].data(), expected[s].size() * 4) == 0;
+                }
+                uint32_t startIndex = 0;
+                for (uint32_t d = 0; d < mesh.numDraws; ++d)
+                {
+                    uint32_t count = 0;
+                    for (uint32_t t = 0; t < mesh.draw[d].primCount / 3; ++t, ++triangle)
+                        if (!(state[triangle] & 0x80000000u)) count += 3;
+                    if (view) ibPass &= view->Draws[d].StartIndex == startIndex && view->Draws[d].IndexCount == count;
+                    else ibPass &= count == mesh.draw[d].primCount;
+                    startIndex += count;
+                }
+            }
             ib.Unmap();
             const auto peerAfter = render(peer);
             if (!component.SetTriangleMask(std::vector<uint32_t>(state.size())))
