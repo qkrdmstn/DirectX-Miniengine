@@ -1,0 +1,112 @@
+상태: 설계안 — 절단 성능 개선 1차: 압축 IB·CPU 준비 구간·추출 단계 합치기(base `5f360fa7`, 2026-11-20, Codex 리뷰 1회 반영). 기준값은 [PerfBaseline.md](PerfBaseline.md).
+
+# 절단 성능 개선 결정 (1차)
+
+## 1. 목표
+
+- 2026-11-18 발표 피드백 두 가지에 답한다.
+  - 피드백 1: IB를 직접 마스킹할 때의 오버헤드.
+  - 피드백 2: thread가 삼각형 하나만 맡는 구조.
+- PerfBaseline에서 확인된 큰 비용을 줄인다. 같은 조건으로 다시 재서 개선 전후를 기록한다.
+
+## 2. 근거 (PerfBaseline, MX450 Release)
+
+| 항목 | Xbot | 비고 |
+|---|---:|---|
+| `TriangleMaskCS` 마스크 생성 | 770 µs | 추출 전체(350 µs)의 2배 |
+| ReplacedIB 상주 메모리 | 1.38 MB | 실제 IB 합 0.29 MB. section 사이 VB 간격까지 덮는다 |
+| 렌더: 숨긴 삼각형 | IA·clipper 100%, VS 약 2/3 잔존 | GPU 시간 차이는 사이클 잡음 범위 |
+| 추출 단계 사이 gap | 199 µs (57%) | Mode 합은 151 µs |
+| CPU `SkeletalPatchCopy::Update` (Poll 뒤) | 약 4.9 s | debug-output 수집기 포함. 원인 미확정 |
+
+정정: 현행 Mode 0에는 정점 중복 판정이 없다.
+- 선택 삼각형마다 정점 3개를 복제한다. Mode 2는 identity IB(R32)를 쓴다.
+- 그래서 "정점 단위 추출"의 이득은 중복 판정 제거가 아니다. 이득은 추출 출력 메모리(Xbot Data 7.07 MB, 입력 전체 T에 대해 3·T·48 B 할당)와 복사량 감소다.
+
+## 3. 결정과 이유
+
+### D1. 원본 렌더는 압축 IB로 바꾸고, 압축은 CPU가 만든다
+- `TriangleMask::Pending`에 이미 CPU State가 있다. draw별 남은 인덱스 수도 CPU가 알아야 `DrawIndexed`에 넘길 수 있다. 그래서 GPU compaction과 readback 대신 CPU에서 만든다.
+- 원본 인덱스는 이미 CPU에 있는 것을 재사용한다.
+  - skin section: `BuildInfluencingJoints`가 보존한 `m_SkinCpuSections[].Indices`를 쓴다. 이 값에는 baseVertex가 이미 더해져 있다.
+  - 압축 IB는 baseVertex를 뺀 draw 상대값으로 쓰고, `DrawIndexed`의 baseVertex는 원본 그대로 둔다.
+  - 비skin section: 지금 마스크 대상이 skinned 원본뿐이라 범위 밖이다. 비skin section에 마스크가 요청되면 거절 로그를 남긴다.
+- 압축 IB는 R32, 컴포넌트 소유다. 같은 Model을 쓰는 다른 인스턴스와 공유 `Mesh.draw`는 바꾸지 않는다.
+- 렌더 override는 **section별 IB view(주소·크기·형식) + draw별 범위(StartIndex, IndexCount)**다.
+  - 이것을 `MeshSorter::AddMesh`에 넘긴다.
+  - `RenderMeshes`의 공통 루프(shadow·depth·opaque·transparent)가 원본 `ibOffset/ibSize/ibFormat`과 `mesh.draw` 대신 이 값을 쓴다.
+- 경로는 두 갈래로 나눠 처리한다.
+  - **설정:** `SetTriangleMask`. 일반 `Update`, `ConsumeMultiBreak`, `PublishRigBonePatch`가 여기를 지난다. 이때 압축 IB와 override를 만든다.
+  - **해제:** `ClearTriangleMask`. `SetGeometry`, `CommitGeometryReplacement`가 여기를 지난다. 이때 압축 IB와 override를 없애고 원본 view로 돌아간다. GPU 사용 중 자원의 수명은 지금 ReplacedIB와 같은 방식으로 지킨다.
+- `TriangleMaskCS`와 `ReplacedIB`는 제거한다.
+  - `tests/TriangleMaskShaderTests`는 같은 단계에서 삭제하거나 CPU 압축 함수 테스트로 바꾼다.
+  - GPU State 버퍼는 추출 입력(제거 비트)으로 계속 쓰므로 유지한다.
+- 이유: 매 프레임 낭비(IA, clipper, VS), 마스크 생성 770 µs, 1.38 MB를 한 번에 없앤다.
+- 택하지 않은 안:
+  - 추출 Pass에서 Keep IB를 GPU로 만드는 안: 게시 전 대기 결과 관리와 R16 scatter 경쟁이 생긴다.
+  - 정점 단위 `SV_CullDistance` 마스크: VS 낭비가 오히려 늘고 경계가 근사가 된다.
+
+### D2. CPU `Update` 구간은 하위 계측으로 원인을 먼저 확정한 뒤 고친다
+- 조사 후보:
+  - `SafeDiagnosticNodeName`/`DiagnosticNodeName`이 아일랜드마다 GLB를 다시 열어 JSON을 파싱한다(캐시 없음).
+  - `PatchLog`가 호출마다 `OutputDebugString`과 파일 열기/닫기를 한다.
+  - `Scene::CreateObject`, `SetGeometry`에서 PosedGeometry 할당이 중복된다.
+  - `DiagnoseIslands`의 CPU skinning.
+- 수집기를 붙인 실행과 붙이지 않은 실행 각각에서 함수별 시간과 로그 호출 수를 잰다.
+- 수정은 측정으로 확인된 항목만 한다(예: 이름 캐시, 로그를 기본 실행에서 줄이기). `LabelPatchIslands`의 기능 결과는 바꾸지 않는다.
+
+### D3. 추출 단계 합치기와 coarsening은 측정으로 고른다
+- **Mode 7 합치기:** Mode 7을 없애고 Mode 2가 블록 offset을 직접 더한다.
+  - Mode 2는 현재 삼각형과 이전 삼각형의 prefix를 비교한다. 두 prefix에 **각자 블록의 offset**을 더한다(t=64처럼 블록 경계에서는 서로 다르다). t=0은 이전 값을 0으로 따로 처리한다.
+  - Scan 자체는 블록 내부 prefix로 남는다. Submit/Poll/Validate는 Scan을 readback하지 않으므로 영향이 없다.
+- **coarsening:** 기반 단계와 반영 단계를 나눈다.
+  - 기반 단계(CP-6a)는 블록 크기를 `64·K`로 일반화한다. 대상은 Mode 0/1/2와 Mode 6의 블록·lane 매핑, Scan 할당, Submit의 `blocks/groups` 계산이다. Influence Mode 3은 지금 처리 범위를 그대로 지킨다(별도 dispatch 크기).
+  - K=1/2/4/8을 비교하고, Xbot과 CesiumMan 중 어느 쪽도 나빠지지 않는 K 중 가장 빠른 값을 고른다. 차이가 사이클 범위 안이면 K=1을 유지한다.
+  - 반영 단계(CP-6b)는 고른 K만 상수로 남기고 실험 분기는 지운다.
+- A→B처럼 전역 prefix가 필요한 경계는 dispatch를 나눠야 하므로 합치지 않는다.
+
+### D4. 추출 출력의 정점 공유(정점 단위 복사)는 1차 범위에서 뺀다
+- 바뀌는 소비자가 많다: `PatchSkinBuildCS::SourceAddress`(vertex/3, vertex%3), `Validate`, Poll 크기 계산, D5 출처, 그리고 JC-2b~d와 같은 지점.
+- 측정된 것은 Mode 2 시간뿐이다. 첫 절단 35 µs, 재절단 두 번째 62 µs다. 할당·후속 소비자까지 포함한 순이득은 측정하지 않았다.
+- 1차 결과를 재측정한 뒤, JC-2와 함께 다시 결정한다. 메모리 7 MB(임시)는 그 결정의 근거로 남긴다.
+
+## 4. 단계와 예상 시간
+
+| 단계 | 내용 | 줄 수(추정) | 시간 |
+|---|---|---|---|
+| CP-1 | D2 하위 계측(임시, 커밋 안 함). 수집기 유무 각 1회, 원인 보고 | 100~180 | 구현 15~25분 + Release 증분 약 1분 + 실행 수 분 |
+| CP-2 | D2 수정. 확인된 원인만 | 측정 후 결정, 300 이내 | 구현 + 빌드 + 리뷰 2~5분 |
+| CP-3 | D1 렌더 override 경로(section IB view + draw 범위)만 추가. 동작 불변 | 150~240 | 같음 |
+| CP-4 | D1 CPU 압축 IB 생성·해제, 적용, `TriangleMaskCS`/`ReplacedIB`/셰이더 테스트 정리, `SkeletalMaskChecks` 갱신 | 200~300(넘으면 나눈다) | 같음 + 마스크 검사 |
+| CP-5 | D3 Mode 7 합치기 | 100~150 | 같음 |
+| CP-6a/b | D3 블록 크기 일반화와 K 비교 / 고른 K 반영 | 각 100~250 | 같음 + 측정 약 20분 |
+| CP-7 | BL·RP와 같은 조건으로 재측정, PerfBaseline에 개선 후 절 추가, 상태 줄·README 동기화 | 문서 | 약 40분 |
+
+- 단계마다: 새 Codex 구현 → Release 빌드(디스크 여유가 부족하면 Debug는 마지막 단계에서 한 번) → 검사 → 새 Codex 리뷰 → 로컬 커밋.
+- `Geometry/`는 바꾸지 않으므로 PlaneSlicerTests는 필요 없다.
+
+## 5. 완료 조건
+
+1. D/R 빌드 오류 0, D3D12 ERROR 0(Debug 실행 1회 이상).
+2. 압축 IB 적용 뒤:
+   - `-skeletal-mask-checks 1` PASS. 기대 IB 비교는 "남은 삼각형 원본 인덱스 순서"로 갱신한다.
+   - CPU 압축 함수 단위 검사: R16/R32 원본, 다중 draw, 0이 아닌 startIndex/baseVertex, 전체 제거, 제거 없음.
+   - HDR 캡처가 현재(퇴화 IB)와 같다. 자동 노출을 고정하거나 HDR 버퍼로 비교한다.
+   - 공유 Model의 다른 인스턴스는 바뀌지 않는다.
+   - 연속 절단(D6), multi(`ConsumeMultiBreak`), D5, Clear·`SetGeometry` 뒤 원본 복원이 동작한다.
+3. 렌더 재측정:
+   - 전체 제거 fixture에서 해당 draw의 IA·VS가 0이다.
+   - 부분 제거에서는 draw별 인덱스 수와 IAPrimitives가 남은 삼각형 수와 일치하고, 전체 VS 호출 감소를 기록한다.
+   - 마스크 생성 GPU dispatch가 없다. CPU 압축 시간, 업로드 시간, 압축 IB 바이트를 기록한다.
+4. Mode 7 합치기와 K 반영 뒤 추출 결과가 같다.
+   - 같은 입력 snapshot으로 변경 전후의 유효 Data 영역(surface VB, depth VB, IB), TriangleSources, Meta를 바이트 비교한다. 기록되지 않는 용량 영역은 제외한다.
+   - 블록 경계 꼬리를 검사한다(T%(64·K)≠0, 블록 경계 t).
+   - K마다 `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1` 20요청 GPU==CPU, 데모 Meta 2118/47/0·271/16/0 유지.
+5. CPU `Update` 구간: 원인 항목별 전후 시간을 기록한다. 수집기 없는 실행 기준으로 판정한다.
+6. 기존 회귀 PASS: `-skeletal-patch-checks`, `-skeletal-patch-break-checks`(Parent·Rig), MI-4h2 다중, MI-5 CesiumMan, `SkeletalPatchTests`, `-skeletal-recut-repro 1`, Influence 요청의 선택 node.
+
+## 6. 위험
+
+- 압축 IB 업로드가 게시 프레임에 들어간다. Xbot 0.28 MB다. 업로드 시간을 잰다.
+- R16 원본을 R32 압축 IB로 바꾸면 크기가 2배가 된다. R16을 유지하는 안은 CP-4에서 줄 수를 보고 결정한다.
+- `m_SkinCpuSections`가 없는 경로(비skin, 로딩 방식 차이)가 마스크 대상이 되면 거절된다. 실제로 요청되는지 회귀에서 확인한다.
