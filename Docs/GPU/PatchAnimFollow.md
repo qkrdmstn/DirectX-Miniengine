@@ -1,4 +1,4 @@
-상태: 설계안 — 결정 확정·Sonnet 리뷰 반영(2026-11-23), 구현 전. 기준 master `06edbd76`, 브랜치 `patch-anim-follow`
+상태: 완료 — AF-1 `5808b22e`, AF-2a `f91bafa9`, AF-2b `349f7f31`, AF-3 `cbc24a2a`, AF-4 `7002a722`, AF-5 `fbe5fc00`, AF-6(기본값 1 전환·캡처·문서 동기화, 커밋은 AF-6 커밋). 기준 master `06edbd76`, 브랜치 `patch-anim-follow`
 
 # 몸통 쪽 패치가 끊은 본의 애니메이션을 따르기
 
@@ -48,7 +48,7 @@ D4. cap은 대응 rim과 같은 끝점
 - `PatchSkinBuildCS`는 cap에 internal = 3으로 끝점 레코드를 쓰고, 끝점 번호 범위를 검사한다(범위 밖이면 K).
 - 용접 차이: 링 용접 때문에 cap 위치가 rim과 수십 μm 다를 수 있다. 판정은 "t_cut 대비 rim–cap 간격 변화"로 한다.
 - cap 법선: internal = 3이면 `PreparePoseCS`가 위치만 끝점 보간하고, 법선·탄젠트는 주 레코드(K, bind = 평면 법선) 결과를 그대로 쓴다.
-  - 한계: 그루터기가 부모에 대해 돌면 cap 법선은 부모만큼만 돈다. AF-6 캡처에서 관찰한다.
+  - AF-6 수정: K 법선만 쓰면 cap이 회색으로 밝게 보였다. 그래서 `PatchSkinBuildCS`가 cap 끝점 레코드의 탄젠트 칸에 끝점의 절단 시점 법선(K 프레임)을 저장한다. `PreparePoseCS`는 끝점마다 "절단 시점 법선 → 현재 법선" 최단 회전을 K 법선·탄젠트에 적용한 뒤 t로 보간한다. 재절단 cap은 그 칸이 0이라 K 법선을 유지한다(한계).
 - rim(D3)과 cap(D4)은 함께 켠다.
 
 D5. 옵션과 기본값
@@ -70,7 +70,7 @@ D6. 재절단(`PatchRecutSkinning.md`)
 | AF-1 | D1 애니메이션 노드·Joint 보존과 getter(ModelInstance·MeshComponent), 단위 검사 | override 없으면 최종 = 애니메이션, 있으면 override 노드만 다름. 회귀 PASS(동작 불변) |
 | AF-2a | D2 snapshot `AnimFollow`·`O_k`, `BuildPatchPalette` 식 | 옵션 0 회귀 PASS. 옵션 1에서 t_cut 팔레트 = JointsAtCut ≤ 1e-6 |
 | AF-2b | D5 옵션, 호출처 5곳(MeshComponent Update, SkeletalPatchCopy 진단 4곳)에 애니메이션 Joint 연결, 진단 로그 | 옵션 1에서 A 고정 joint 팔레트 = C·A_k·O_k CPU 재계산 ≤ 1e-6. 물리 override가 있는 owner 케이스 로그 |
-| AF-3 | D4 데이터: 링 (e0, e1, t) 세 경로, FinalizeCutCS cap Provenance | cap (e0, e1, t)와 같은 위치 rim의 일치·불일치 수 보고. 회귀 PASS, PlaneSlicerTests·GpuCutValidation PASS |
+| AF-3 | D4 데이터: 링 (e0, e1, t) 세 경로, FinalizeCutCS cap Provenance | cap (e0, e1, t)와 같은 위치 rim의 일치·불일치 수 보고. 회귀 PASS, GpuCutValidation(`-cut-validate 1`) PASS(PlaneSlicerTests.cpp는 저장소에 없어 쓰지 않았다) |
 | AF-4 | D3·D4 스키닝: PatchSkinBuildCS 조각별 플래그로 internal 2·3, PreparePoseCS cap 법선 분기, CPU 판독 1/2/3 구분, PS4·PS2 진단 | 옵션 1에서 PS4 rim–cap 간격의 t_cut 대비 변화(게시·60프레임)가 용접 거리 이하, PS2 PASS, SP7e2 PASS |
 | AF-5 | D6 재절단 끝점·K 폴백, SkinnedFollowError·RS-2b 갱신 | 옵션 0/1 모두 `-attached-recut-checks 1·2` PASS, 폴백 비율 로그 |
 | AF-6 | CesiumMan 걷기 팔·다리 절단, 다중 본(`-skeletal-multi-cut 1`) 옵션 0/1 캡처, 기본값 1 전환, 문서 동기화(상태 줄·README·CodeMap·PatchSkinning·PatchRecutSkinning) | 그루터기가 걷기를 따르고 절단면이 붙어 있음, cap 법선 관찰, 회귀 PASS(기본 1) |
@@ -94,3 +94,14 @@ D6. 재절단(`PatchRecutSkinning.md`)
 - B 조각(래그돌 쪽)의 고정 방식.
 - cap 법선을 지배 본으로 회전하는 개선.
 - 재절단에서 끝점이 두 겹이 되는 경우의 4끝점 레이아웃(K 폴백으로 대체).
+
+## 결과 (2026-11-23, AF-6)
+
+- 측정: AF-2a t_cut 팔레트 재계산 상대오차 ≤3e-7. AF-4 rim–cap 간격의 t_cut 대비 변화 ≈0(≤0.01 mm). 그루터기 변위(stumpDisp)는 K 고정 대비 최대 약 51 mm. AF-5 `-attached-recut-checks 4`의 그루터기 근처 재절단은 끝점 폴백 비율 0.556(전부 internal ≠ 0), `-attached-recut-checks 2`는 폴백 0.
+- 기본값을 `-patch-anim-follow 1`로 바꿨다(`Viewer::PatchAnimFollowEnabled`). 옵션 0은 이전 동작이다.
+- 회귀(Release, 기본 1과 `-patch-anim-follow 0` 모두): 회귀 6종과 `-attached-recut-checks 2`·`4` PASS.
+- 캡처(CesiumMan, `-skeletal-break-demo 2 -capture-count 3 -capture-step 60`, 게시·+60·+120프레임, 옵션 0/1 비교)
+  - 위팔(`Skeleton_arm_joint_L__4_`): 옵션 0은 그루터기가 절단 순간 각도로 굳고, 옵션 1은 걷기 흔들림을 따라 늘어진다. rim·cap 사이 틈은 보이지 않았다.
+  - 허벅지(`leg_joint_R_1`)와 다중 본(`-skeletal-union-checks 1 -skeletal-multi-cut 1`): 옵션 1에서 각 그루터기가 다리 움직임을 따른다.
+  - cap 법선: 처음 캡처에서 옵션 1의 cap이 회색으로 밝았다. 원인은 cap 위치는 끝점을 따르는데 법선은 K로 강체였던 것이다. D4의 끝점 회전으로 고친 뒤 주황으로 보인다. 허벅지 그루터기 하단의 얇은 선도 같은 원인으로 사라졌다. 게시 프레임 법선 일치는 캡처로만 확인했다.
+  - 허벅지 옵션 1의 한 장면에서 그루터기 하단에 얇은 선·점 모양 간극 후보가 보였다. 수치 근거는 없다.

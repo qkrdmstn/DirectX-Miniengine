@@ -517,13 +517,13 @@ namespace Viewer
         return true;
     }
 
-    // 애니메이션 추종 옵션을 실행 중 한 번만 읽는다. 기본값은 0이다.
+    // 애니메이션 추종 옵션을 실행 중 한 번만 읽는다. 기본값은 1이다(0이면 절단 시점 값으로 고정).
     bool PatchAnimFollowEnabled()
     {
         // 옵션은 최초 호출에서 읽고 이후 변하지 않는다.
         static const bool enabled = []
         {
-            uint32_t value = 0;
+            uint32_t value = 1;
             CommandLineArgs::GetInteger(L"patch-anim-follow", value);
             return value != 0;
         }();

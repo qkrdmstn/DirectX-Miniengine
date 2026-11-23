@@ -94,7 +94,7 @@ namespace Viewer
     bool BuildRecutPatchSkinVertices(const PatchSkinPublication& parent, const GeometryBuffers& cutResult,
         const Math::Matrix4& kFrame, PatchSkinPublication& out, RecutSkinStats* stats = nullptr, const RecutCheckInput* check = nullptr);
 
-    // -patch-anim-follow 옵션(기본 0)을 최초 호출에서 한 번만 읽어 반환한다.
+    // -patch-anim-follow 옵션(기본 1)을 최초 호출에서 한 번만 읽어 반환한다.
     bool PatchAnimFollowEnabled();
 
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
