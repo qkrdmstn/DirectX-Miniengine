@@ -108,6 +108,18 @@ namespace Viewer
             // 이번 프레임의 준비가 완료된 팔레트만 외부에 제공한다.
             return m_Ready ? m_RenderJoints : nullptr;
         }
+        // 이번 프레임의 순수 애니메이션 node pose(물리 override 이전)를 읽는다. Frozen 선택과 무관한 현재 값이다.
+        const Math::Matrix4* GetPreparedAnimNodes() const
+        {
+            // 이번 프레임의 준비가 완료된 입력만 외부에 제공한다.
+            return m_Ready ? m_RenderAnimNodes : nullptr;
+        }
+        // 순수 애니메이션 node로 만든 Joint 배열을 읽는다.
+        const Joint* GetPreparedAnimJoints() const
+        {
+            // 이번 프레임의 준비가 완료된 팔레트만 외부에 제공한다.
+            return m_Ready ? m_RenderAnimJoints : nullptr;
+        }
         // staging의 보관용 skin 입력과 실제 게시된 skinned PG를 구별한다.
         bool HasSkinnedPatch() const
         {
@@ -243,6 +255,8 @@ namespace Viewer
         std::vector<Joint> m_FrozenJoints;
         const Joint* m_RenderJoints = nullptr;
         const Math::Matrix4* m_RenderNodes = nullptr;
+        const Joint* m_RenderAnimJoints = nullptr;
+        const Math::Matrix4* m_RenderAnimNodes = nullptr;
         bool m_Ready = false;
         bool m_Simulating = false;
         MiniCollision::AggregateGeom m_Collision;   // 컴포넌트 로컬(SourceFrame⁻¹ × model-local) 충돌
