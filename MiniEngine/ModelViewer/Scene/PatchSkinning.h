@@ -63,6 +63,17 @@ namespace Viewer
         const char* Side = "D5";
     };
 
+    // 재절단 skin 생성의 정점 구성과 readback 비용이다.
+    struct RecutSkinStats
+    {
+        uint32_t Vertices = 0, Copied = 0, K = 0, BadK = 0, BadParent = 0;
+        double ReadbackMs = 0;
+    };
+
+    // 부모 skin과 재절단 결과로 자식 skin publication을 만든다(PatchSkinRecutCS). 완료까지 기다려 부모·결과 buffer를 잡지 않는다.
+    bool BuildRecutPatchSkinVertices(const PatchSkinPublication& parent, const GeometryBuffers& cutResult,
+        const Math::Matrix4& kFrame, PatchSkinPublication& out, RecutSkinStats* stats = nullptr);
+
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
         const Math::Matrix4* currentNodes, std::vector<Joint>& out);

@@ -329,6 +329,7 @@
     <FxCompile Include="Scene\Shaders\PatchBodyCompactCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBakeCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\PatchSkinRecutCS.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Scene\SkeletalAutoRig.cpp" />
