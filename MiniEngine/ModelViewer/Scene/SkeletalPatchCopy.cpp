@@ -1117,6 +1117,171 @@ namespace Viewer
         return true;
     }
 
+    // 스켈레톤 루트를 포함한 몸통 그룹(boneCut·Frozen 포즈 제외)이고 애니메이션 입력이 있을 때만 AnimFollow와 O_k를 채운다.
+    static void FillAnimFollow(PatchSkinSnapshot& snapshot, const MeshComponent& mesh,
+        const std::vector<NodeId>& parents, const CutBodyGroups& groups, uint32_t body, bool boneCut)
+    {
+        // 애니메이션 입력이 없거나 boneCut·Frozen 포즈면 추종하지 않는다.
+        snapshot.AnimFollow = false;
+        snapshot.AnimOffset.clear();
+        const auto* animNodes = mesh.GetPreparedAnimNodes();
+        const auto* animJoints = mesh.GetPreparedAnimJoints();
+        const auto* nodes = mesh.GetPreparedNodes();
+        if (boneCut || snapshot.SourceFrozen || !animNodes || !animJoints || !nodes)
+        {
+            return;
+        }
+
+        // 부착 노드의 최상위 조상(스켈레톤 루트)이 몸통 그룹(0번)일 때만 몸통 쪽으로 본다.
+        uint32_t top = snapshot.AttachNode;
+        for (size_t depth = 0; top < parents.size() && parents[top] != UINT32_MAX && depth < parents.size(); ++depth)
+        {
+            top = parents[top];
+        }
+        if (body != 0 || top >= groups.NodeGroups.size() || groups.NodeGroups[top] != 0)
+        {
+            return;
+        }
+
+        // C(t_cut)를 구하고 고정 joint마다 O_k = inv(C·A_k)·JointsAtCut[k]를 저장한다.
+        const Math::Matrix4 correction = nodes[snapshot.AttachNode] * Math::Invert(animNodes[snapshot.AttachNode]);
+        snapshot.AnimOffset.assign(snapshot.JointsAtCut.size(), Math::Matrix4(Math::kIdentity));
+        for (size_t k = 0; k < snapshot.JointsAtCut.size(); ++k)
+        {
+            if (!snapshot.Frozen[k])
+            {
+                continue;
+            }
+            snapshot.AnimOffset[k] = Math::Invert(correction * animJoints[k].posXform) * snapshot.JointsAtCut[k].posXform;
+        }
+
+        // C나 O_k에 비유한 값이 있으면 추종을 끄고 개수를 기록한다.
+        auto finite = [](const Math::Matrix4& matrix)
+        {
+            DirectX::XMFLOAT4X4 value;
+            DirectX::XMStoreFloat4x4(&value, matrix);
+            for (uint32_t r = 0; r < 4; ++r)
+            {
+                for (uint32_t c = 0; c < 4; ++c)
+                {
+                    if (!std::isfinite(value.m[r][c]))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        uint32_t bad = finite(correction) ? 0u : 1u;
+        for (size_t k = 0; k < snapshot.AnimOffset.size(); ++k)
+        {
+            bad += (snapshot.Frozen[k] && !finite(snapshot.AnimOffset[k])) ? 1u : 0u;
+        }
+        if (bad)
+        {
+            snapshot.AnimOffset.clear();
+            PatchLog("AF2a nonfinite offsets=%u animFollow disabled\n", bad);
+            return;
+        }
+        snapshot.AnimFollow = true;
+    }
+
+    // 두 팔레트의 고정 joint 위치·법선 행렬 차이의 절대 최댓값과 상대 최댓값(|기준 이동|과 1 중 큰 값으로 나눔)을 구한다.
+    static void ComparePalettes(const PatchSkinSnapshot& snapshot, const std::vector<Joint>& actual,
+        const std::vector<Joint>& expected, float& absolute, float& relative)
+    {
+        // 고정 joint마다 pos·nrm 행렬 성분 차이를 모은다.
+        for (size_t k = 0; k < snapshot.JointsAtCut.size(); ++k)
+        {
+            if (!snapshot.Frozen[k])
+            {
+                continue;
+            }
+            const Math::Matrix4 a[] = { actual[k].posXform, Math::Matrix4(actual[k].nrmXform) };
+            const Math::Matrix4 b[] = { expected[k].posXform, Math::Matrix4(expected[k].nrmXform) };
+            const float scale = std::max(1.0f, float(Math::Length(Math::Vector3(expected[k].posXform.GetW()))));
+            for (uint32_t m = 0; m < 2; ++m)
+            {
+                DirectX::XMFLOAT4X4 x, y;
+                DirectX::XMStoreFloat4x4(&x, a[m]);
+                DirectX::XMStoreFloat4x4(&y, b[m]);
+                for (uint32_t r = 0; r < 4; ++r)
+                {
+                    for (uint32_t c = 0; c < 4; ++c)
+                    {
+                        const float error = std::abs(x.m[r][c] - y.m[r][c]);
+                        absolute = !std::isfinite(error) ? INFINITY : std::max(absolute, error);
+                        relative = !std::isfinite(error) ? INFINITY : std::max(relative, error / scale);
+                    }
+                }
+            }
+        }
+    }
+
+    // t_cut 입력으로 AnimFollow 식을 세 가지로 평가해 한 줄로 기록한다. 입력이 없으면 SKIP이다.
+    static void CheckAnimFollowAtCut(const PatchSkinSnapshot& snapshot, const MeshComponent& mesh)
+    {
+        // 고정 joint 수를 센다.
+        uint32_t frozen = 0;
+        for (const uint8_t flag : snapshot.Frozen)
+        {
+            frozen += flag ? 1u : 0u;
+        }
+
+        // 추종이 꺼졌거나 애니메이션 입력이 없으면 평가하지 않고 SKIP으로 기록한다.
+        const auto* animJoints = mesh.GetPreparedAnimJoints();
+        const auto* animNodes = mesh.GetPreparedAnimNodes();
+        const auto* nodes = mesh.GetPreparedNodes();
+        if (!snapshot.AnimFollow || !animJoints || !animNodes || !nodes
+            || snapshot.AnimOffset.size() != snapshot.JointsAtCut.size())
+        {
+            PatchLog("AF2a tcut palette frozen=%u animFollow=%d result=SKIP\n", frozen, int(snapshot.AnimFollow));
+            return;
+        }
+
+        // 고정 강체 R(30도 회전+이동)과 S(-20도 회전+이동)를 만들고 입력 복사본을 준비한다.
+        using namespace Math;
+        const Matrix4 rigidR(Matrix3(Quaternion(Normalize(Vector3(1, 2, 3)), Scalar(0.5235988f))), Vector3(0.3f, -0.2f, 0.5f));
+        const Matrix4 rigidS(Matrix3(Quaternion(Normalize(Vector3(-2, 1, 1)), Scalar(-0.3490659f))), Vector3(-0.1f, 0.4f, 0.2f));
+        const size_t count = snapshot.JointsAtCut.size();
+        const Joint* joints = snapshot.JointsAtCut.data();
+        std::vector<Matrix4> movedNodes(nodes, nodes + snapshot.AttachNode + 1);
+        std::vector<Joint> animCopy(animJoints, animJoints + count);
+        std::vector<Joint> palette, expected(joints, joints + count);
+        float absA0 = 0, relA0 = 0, absA = 0, relA = 0, absB = 0, relB = 0;
+
+        // 검사 0: t_cut 입력 그대로면 팔레트가 JointsAtCut과 같아야 한다.
+        BuildPatchPalette(snapshot, joints, movedNodes.data(), palette, animJoints, animNodes, true);
+        ComparePalettes(snapshot, palette, expected, absA0, relA0);
+
+        // 검사 a: 부착 노드를 R로 옮기면 팔레트가 R·JointsAtCut과 같아야 한다.
+        movedNodes[snapshot.AttachNode] = rigidR * movedNodes[snapshot.AttachNode];
+        BuildPatchPalette(snapshot, joints, movedNodes.data(), palette, animJoints, animNodes, true);
+        for (size_t k = 0; k < count; ++k)
+        {
+            expected[k].posXform = rigidR * joints[k].posXform;
+            expected[k].nrmXform = InverseTranspose(expected[k].posXform.Get3x3());
+        }
+        ComparePalettes(snapshot, palette, expected, absA, relA);
+
+        // 검사 b: 애니메이션 joint를 S로 바꾸면 팔레트가 C0·S·inv(C0)·JointsAtCut과 같아야 한다.
+        const Matrix4 c0 = nodes[snapshot.AttachNode] * Invert(animNodes[snapshot.AttachNode]);
+        const Matrix4 conjugate = c0 * rigidS * Invert(c0);
+        for (size_t k = 0; k < count; ++k)
+        {
+            animCopy[k].posXform = rigidS * animJoints[k].posXform;
+            expected[k].posXform = conjugate * joints[k].posXform;
+            expected[k].nrmXform = InverseTranspose(expected[k].posXform.Get3x3());
+        }
+        BuildPatchPalette(snapshot, joints, nodes, palette, animCopy.data(), animNodes, true);
+        ComparePalettes(snapshot, palette, expected, absB, relB);
+
+        // 세 결과를 한 줄로 기록한다(상대 오차 1e-5 이하면 PASS).
+        const float worst = std::max({ relA0, relA, relB });
+        PatchLog("AF2a tcut palette frozen=%u animFollow=1 identity abs=%g rel=%g | rigidR abs=%g rel=%g | animS abs=%g rel=%g result=%s\n",
+            frozen, absA0, relA0, absA, relA, absB, relB, worst <= 1e-5f ? "PASS" : "FAIL");
+    }
+
     // 형제 몸체의 Frozen 본이 각 부착 노드를 따르고 나머지는 현재 팔레트를 쓰는지 검사한다.
     static void CheckBodyPalettes(const MeshComponent& source, const std::vector<NodeId>& parents,
         const std::vector<uint32_t>& roots)
@@ -1807,10 +1972,14 @@ namespace Viewer
                 snapshot.Frozen = boneCut ? std::vector<uint8_t>(model.m_NumJoints, 0)
                     : groups.FrozenPalettes[side];
 
+                // 몸통 쪽이면 애니메이션 추종 플래그와 O_k를 채운다.
+                FillAnimFollow(snapshot, *mesh, parents, groups, side, boneCut);
+
                 // 체크 실행에서만 실제 t_cut 입력으로 팔레트 오차를 계산한다.
                 m_SkinPaletteErrors[side] = 0;
                 if (m_SkinCheckCase)
                 {
+                    CheckAnimFollowAtCut(snapshot, *mesh);
                     std::vector<Joint> palette;
                     BuildPatchPalette(snapshot, joints, nodes, palette);
                     for (uint32_t k = 0; k < model.m_NumJoints; ++k)

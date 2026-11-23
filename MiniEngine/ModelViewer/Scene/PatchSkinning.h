@@ -41,6 +41,8 @@ namespace Viewer
         std::vector<Joint> JointsAtCut;
         std::vector<uint8_t> Frozen;
         bool SkinningAllowed = true;
+        bool AnimFollow = false;                // 몸통 쪽 조각이 고정 joint의 애니메이션을 따를 수 있는지(AF-2a).
+        std::vector<Math::Matrix4> AnimOffset;  // 고정 joint k의 O_k(AF-2a). 고정이 아닌 joint는 항등이다.
     };
 
     // 렌더 연결 전까지 조각의 skin 입력과 section별 유효 정점 범위를 함께 보관한다.
@@ -87,8 +89,10 @@ namespace Viewer
         const Math::Matrix4& kFrame, PatchSkinPublication& out, RecutSkinStats* stats = nullptr, const RecutCheckInput* check = nullptr);
 
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
+    // animFollow가 켜지고 snapshot.AnimFollow와 애니메이션 입력이 있으면 고정 본은 C(t)·A_k(t)·O_k를 쓴다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
-        const Math::Matrix4* currentNodes, std::vector<Joint>& out);
+        const Math::Matrix4* currentNodes, std::vector<Joint>& out,
+        const Joint* animJoints = nullptr, const Math::Matrix4* animNodes = nullptr, bool animFollow = false);
 
     // 원본 revision과 추출 출처를 이용해 조각의 skin VB를 만들고 GPU 완료 후 반환한다.
     bool BuildPatchSkinVertices(const GeometryRevision& source, ByteAddressBuffer& triangleSources,

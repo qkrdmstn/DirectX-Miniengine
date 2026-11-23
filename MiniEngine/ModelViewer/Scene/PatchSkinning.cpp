@@ -446,20 +446,29 @@ namespace Viewer
         return true;
     }
 
-    // 절단 시점의 고정 본을 현재 부착 프레임으로 옮기며 normal 행렬도 다시 계산한다.
+    // 절단 시점의 고정 본을 현재 부착 프레임으로 옮기거나(기본) 애니메이션 joint를 따르게 하며 normal 행렬도 다시 계산한다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
-        const Math::Matrix4* currentNodes, std::vector<Joint>& out)
+        const Math::Matrix4* currentNodes, std::vector<Joint>& out,
+        const Joint* animJoints, const Math::Matrix4* animNodes, bool animFollow)
     {
         // 전체 owner 팔레트를 유지하고 부착 노드의 모델 공간 변화량을 구한다.
         const size_t count = snapshot.JointsAtCut.size();
         out.assign(currentJoints, currentJoints + count);
         const Math::Matrix4 delta = currentNodes[snapshot.AttachNode] * Math::Invert(snapshot.AttachAtCut);
 
-        // 고정 본만 절단 pose로 치환하고 최종 위치 행렬의 역전치로 법선을 만든다.
+        // 애니메이션 추종 조건이 모두 충족될 때만 C(t) = G_att(t)·inv(G_att_anim(t))를 만든다.
+        const bool follow = animFollow && snapshot.AnimFollow && animJoints && animNodes
+            && snapshot.AnimOffset.size() == count;
+        Math::Matrix4 correction(Math::kIdentity);
+        if (follow)
+            correction = currentNodes[snapshot.AttachNode] * Math::Invert(animNodes[snapshot.AttachNode]);
+
+        // 고정 본만 치환하고 최종 위치 행렬의 역전치로 법선을 만든다.
         for (size_t k = 0; k < count; ++k)
         {
             if (!snapshot.Frozen[k]) continue;
-            out[k].posXform = delta * snapshot.JointsAtCut[k].posXform;
+            out[k].posXform = follow ? correction * animJoints[k].posXform * snapshot.AnimOffset[k]
+                : delta * snapshot.JointsAtCut[k].posXform;
             out[k].nrmXform = Math::InverseTranspose(out[k].posXform.Get3x3());
         }
 
