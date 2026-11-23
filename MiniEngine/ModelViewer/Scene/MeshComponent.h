@@ -38,6 +38,9 @@ namespace Viewer
         MiniCollision::AggregateGeom Collision;
         ComponentCollisionStatus CollisionStatus = ComponentCollisionStatus::Unavailable;
         std::string CollisionReason;
+        std::shared_ptr<PatchSkinPublication> PatchSkin; // RS-3: 재절단 skin이며 null이면 정적 교체다.
+        std::vector<Joint> Palette;                      // RS-3: skin 크기에 맞춘 팔레트다.
+        Math::AffineTransform PieceWorld{ Math::kIdentity }; // RS-3: skin 활성 직후의 게시 월드다.
     };
 
     struct TriangleMask
@@ -86,6 +89,9 @@ namespace Viewer
         const PosedGeometry& GetPosedGeometry() const { return *m_PosedGeometry; }
         // 게시할 조각의 skin 입력으로 컴포넌트 소유 PG를 준비한다.
         void ActivatePatchSkin();
+        // (geometry, skin)만으로 스키닝 PG와 팔레트를 만든다. 멤버를 바꾸지 않아 준비 단계에서 쓸 수 있다.
+        static void BuildSkinnedPose(const GeometryRevision& geometry, const PatchSkinPublication& skin,
+            std::unique_ptr<PosedGeometry>& posed, std::vector<Joint>& palette);
         // 후보 snapshot 전에 현재 PG를 새 Data로 굽고 영구 강체 부착으로 전환한다.
         bool BakePatchSkin(const Math::Matrix4& nodeWorld);
         // 원본 revision·binding 변경 시 현재 월드에서 강체 부착으로 한 번 전환한다.
@@ -152,7 +158,8 @@ namespace Viewer
         // 컴포넌트를 바꾸지 않고 새 geometry·배치·계승 충돌과 pose 버퍼를 미리 만든다. 할당과 실패는 여기서만 일어나며 거절되면 null이다.
         std::unique_ptr<PreparedGeometryReplacement> PrepareGeometryReplacement(std::shared_ptr<const GeometryRevision> geometry,
             const SceneTransform& transform, MeshTransformMode mode, const DeformBinding& binding,
-            MiniCollision::AggregateGeom collision, const char* emptyReason) const;
+            MiniCollision::AggregateGeom collision, const char* emptyReason,
+            std::shared_ptr<PatchSkinPublication> skin = nullptr) const;
         // 준비된 자원으로 geometry·배치·충돌을 교체한다. SetGeometry+SetPlacement와 같은 세대 증가(+3)이며 할당하거나 실패하지 않는다.
         void CommitGeometryReplacement(PreparedGeometryReplacement& prepared) noexcept;
         // 현재 revision에 대응하는 컴포넌트 로컬 충돌을 읽는다. revision이 다르면 빈 형상이다.

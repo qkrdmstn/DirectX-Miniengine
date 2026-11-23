@@ -1,4 +1,4 @@
-상태: 진행 중 — RS-1(부모 skin·N·D 보관, `-patch-recut-skin`)·RS-2a(PatchSkinRecutCS 생성, readback 약 1.1~1.6 ms)·RS-2b(독립 스키닝·kFrame 진단 PASS) 완료, Release 회귀 6종 PASS(2026-11-23). 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
+상태: 진행 중 — RS-1(부모 skin·N·D 보관, `-patch-recut-skin`)·RS-2a(PatchSkinRecutCS 생성, readback 약 1.1~1.6 ms)·RS-2b(독립 스키닝·kFrame 진단 PASS)·RS-3(node 쪽 skin 승계, 경계 게시·60프레임 0 local) 완료. RS-3 시점 옵션 1에서 AR4 #2·RigBoneCut FollowError FAIL은 판정 방식 때문(조각 W 이동 0, node 이동 0.0174 m)이며 RS-4에서 교체, Release 회귀 6종 PASS(2026-11-23). 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
 
 # 스키닝 패치 재절단 시 스키닝 유지
 

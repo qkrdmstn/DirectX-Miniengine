@@ -16,8 +16,9 @@ namespace Viewer
 {
     namespace
     {
-        // 재절단 skin을 생성해 정점 구성·readback 비용을 로그로 남기고 결과는 버린다(RS-2a).
-        void LogRecutSkinBuild(const PatchSkinPublication& parent, const GeometryBuffers& result, const Math::Matrix4& kFrame, const Math::Matrix4& world, const RecutCheckInput* checkInput, int32_t side)
+        // 재절단 skin을 생성해 정점 구성·readback 비용을 로그로 남긴다.
+        // 성공하면 게시용 skin을 돌려준다(RS-2a, RS-3).
+        std::shared_ptr<PatchSkinPublication> LogRecutSkinBuild(const PatchSkinPublication& parent, const GeometryBuffers& result, const Math::Matrix4& kFrame, const Math::Matrix4& world, const RecutCheckInput* checkInput, int32_t side)
         {
             // 진단 옵션이 켜진 실행에서만 RS-2b 검증 입력을 넘긴다.
             uint32_t recutChecks = 0, breakChecks = 0;
@@ -26,12 +27,13 @@ namespace Viewer
             const bool diagnostics = recutChecks || breakChecks;
 
             // 자식 publication을 만들고 실패해도 게시 경로는 막지 않는다.
-            PatchSkinPublication child;
+            auto child = std::make_shared<PatchSkinPublication>();
+            bool built = false;
             RecutSkinStats stats;
             char line[512], checks[1024] = "";
             try
             {
-                if (!BuildRecutPatchSkinVertices(parent, result, kFrame, child, &stats, diagnostics ? checkInput : nullptr))
+                if (!BuildRecutPatchSkinVertices(parent, result, kFrame, *child, &stats, diagnostics ? checkInput : nullptr))
                 {
                     sprintf_s(line, "RS2a build side=%d failed\n", side);
                 }
@@ -57,7 +59,8 @@ namespace Viewer
                             stats.KPositionMax, kPositionMm, scale, stats.KNormalMaxDeg, kPass ? "PASS" : "FAIL",
                             stats.CopiedSkinMax, copiedSkinMm, scale, stats.Skipped, skinPass ? "PASS" : "FAIL",
                             stats.KFrameDiff, framePass ? "PASS" : "FAIL");
-                    const auto& bounds = child.Vertices.BindBounds;
+                    const auto& bounds = child->Vertices.BindBounds;
+                    built = true;
                     sprintf_s(line, "RS2a build side=%d vertices=%u copied=%u k=%u badK=%u badParent=%u readbackMs=%.3f bindBounds=%u/%.4f\n",
                         side, stats.Vertices, stats.Copied, stats.K, stats.BadK, stats.BadParent, stats.ReadbackMs,
                         uint32_t(bounds.size()), bounds.empty() ? 0.0f : float(bounds[0].GetRadius()));
@@ -71,7 +74,7 @@ namespace Viewer
             Utility::Print(checks);
 
             // 파일 append는 진단 옵션이 켜진 실행에서만 한다.
-            if (!diagnostics) return;
+            if (!diagnostics) return built ? child : nullptr;
 
             // 임시 폴더의 진단 로그 파일에 한 줄을 덧붙인다.
             char path[MAX_PATH];
@@ -86,6 +89,7 @@ namespace Viewer
                     fclose(file);
                 }
             }
+            return built ? child : nullptr;
         }
 
         // 볼록 요소 목록의 총 부피를 합산한다.
@@ -814,9 +818,11 @@ namespace Viewer
                 }
                 if (results[0] && results[1])
                 {
-                    // RS-2a: node 쪽 결과의 재절단 skin을 생성만 하고 로그를 남긴 뒤 버린다(게시는 RS-3).
+                    // RS-3: node 쪽 결과의 재절단 skin을 생성한다.
+                    // 만들지 못하면 null로 두어 정적 게시로 폴백한다.
+                    std::shared_ptr<PatchSkinPublication> childSkin;
                     if (active.ParentSkin && active.NodeSide >= 0 && active.NodeSide <= 1 && results[active.NodeSide]->GetGenerated())
-                        LogRecutSkinBuild(*active.ParentSkin, *results[active.NodeSide]->GetGenerated(), active.RecutKFrame, active.World, active.RecutCheck.get(), active.NodeSide);
+                        childSkin = LogRecutSkinBuild(*active.ParentSkin, *results[active.NodeSide]->GetGenerated(), active.RecutKFrame, active.World, active.RecutCheck.get(), active.NodeSide);
 
                     SceneTransform transform = mesh->GetTransform();
                     const MeshTransformMode mode = active.AttachmentSnapshot
@@ -854,8 +860,28 @@ namespace Viewer
                         preparedB->SetInheritedCollision(std::move(inherited[1]), results[1]->GetId(), reasonB);
                         if (active.AttachmentSnapshot && active.NodeSide == 1)
                             preparedB->Attachment = std::make_unique<NodeAttachment>(*active.AttachmentSnapshot);
+
+                        // node 쪽이 B이면 준비 단계에서 skin을 붙인다.
+                        // 실패하면 정적 B로 폴백한다.
+                        if (active.AttachmentSnapshot && active.NodeSide == 1 && childSkin)
+                        {
+                            try
+                            {
+                                preparedB->PatchSkin = childSkin;
+                                preparedB->ActivatePatchSkin();
+                            }
+                            catch (const std::exception& error)
+                            {
+                                Utility::Printf("RS3 skin fallback to static side=B: %s\n", error.what());
+                            }
+                            if (!preparedB->HasSkinnedPatch())
+                                preparedB->PatchSkin.reset();
+                        }
                         const ComponentId id = preparedB->GetId();
-                        auto preparedA = mesh->PrepareGeometryReplacement(results[0], transform, mode, DeformBinding{}, std::move(inherited[0]), reasonA);
+
+                        // node 쪽이 A이면 교체 준비에 skin을 함께 넘긴다.
+                        auto preparedA = mesh->PrepareGeometryReplacement(results[0], transform, mode, DeformBinding{}, std::move(inherited[0]), reasonA,
+                            (active.AttachmentSnapshot && active.NodeSide == 0) ? childSkin : nullptr);
 
                         // simulate 대상이면 body 준비와 검증까지 끝내고, 실패하면 아무것도 바꾸지 않는다.
                         if (preparedA && physical && !transaction.Prepare(m_Physics, m_Budget, *object, *mesh,
