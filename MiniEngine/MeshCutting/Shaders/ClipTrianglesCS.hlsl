@@ -6,6 +6,20 @@ cbuffer SegmentCapture : register(b1)
 };
 RWByteAddressBuffer LoopSources : register(u6);
 
+// 교점 정점의 원본 변 기록 (e0, e1, asuint(t))을 만든다. 끝점 위(t = 0 또는 1)는 끝점 번호 둘을 같게 접는다.
+// split 정점의 Provenance (Origin.z, Origin.w, Parameter)와 같은 규약이다.
+uint3 EdgeRecord(Vertex v)
+{
+    // 끝점 위의 교점은 그 끝점 하나로 접는다.
+    if (v.Parameter <= 0)
+        return uint3(v.Origin.z, v.Origin.z, 0);
+    if (v.Parameter >= 1)
+        return uint3(v.Origin.w, v.Origin.w, 0);
+
+    // 변 안쪽의 교점은 Blend 결과를 그대로 쓴다.
+    return uint3(v.Origin.z, v.Origin.w, asuint(v.Parameter));
+}
+
 // 유효한 입력 표면의 양쪽 존재를 기록하고 각 삼각형과 단면 선분을 출력한다.
 // 선택한 스켈레탈 요청은 단면 선분의 원본 패치 삼각형도 보존한다.
 [numthreads(64, 1, 1)]
@@ -122,6 +136,7 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     
     float3 enter = 0, exit = 0; // 교차점 두 개
+    uint3 enterEdge = 0; // enter가 놓인 원본 변 (e0, e1, t)
     bool gotEnter = false, gotExit = false;
     uint kind = 1;
     
@@ -134,10 +149,11 @@ void main(uint3 id : SV_DispatchThreadID)
         // 현재 edge가 평면을 지나가는지 확인하여 교차점 2개를 고른다. (엄격한 교차는 공유 교차점, 평면 위 끝점은 직접 계산)
         if (d[e] <= 0 && d[n] > 0)
         {
-            if (crosses[e])
-                enter = hit[e].P;
-            else
-                enter = IntersectEdge(v[e], v[n], d[e], d[n]).P;
+            Vertex enterVertex = hit[e];
+            if (!crosses[e])
+                enterVertex = IntersectEdge(v[e], v[n], d[e], d[n]);
+            enter = enterVertex.P;
+            enterEdge = EdgeRecord(enterVertex);
             gotEnter = true;
         }
         if (d[e] > 0 && d[n] <= 0)
@@ -160,6 +176,7 @@ void main(uint3 id : SV_DispatchThreadID)
             if (d[edge] == 0 && d[(edge + 1) % 3] == 0)
             {
                 enter = v[(edge + 1) % 3].P;
+                enterEdge = uint3(v[(edge + 1) % 3].Origin.z, v[(edge + 1) % 3].Origin.z, 0); // 평면 위 원본 정점
                 exit = v[edge].P;
                 gotEnter = gotExit = true;
             }
@@ -189,5 +206,6 @@ void main(uint3 id : SV_DispatchThreadID)
     Ring.Store3(at * 128 + 12, asuint(exit));
     Ring.Store2(at * 128 + 24, asuint(Project(enter))); // 평면 투영 2D 좌표 저장 (8바이트)
     Ring.Store2(at * 128 + 32, asuint(Project(exit)));
+    Ring.Store3(at * 128 + 116, enterEdge); // enter의 원본 변 (e0, e1, t): 단면 정점 Provenance의 재료
     Ring.Store(at * 128 + 92, kind); // 선분 종류를 저장, 1: 삼각형을 가로지르는 선분, 2, 4: 각각 양, 음 쪽에 속한 삼각형의 edge 하나가 평면 위에 존재
 }
