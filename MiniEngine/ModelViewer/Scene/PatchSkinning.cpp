@@ -194,7 +194,7 @@ namespace Viewer
         {
             Math::Matrix4 InverseK;
             uint32_t FirstVertex, VertexCount, Flags, Stride;
-            uint32_t RigidJoint, ParentSectionCount, Padding0, Padding1;
+            uint32_t RigidJoint, ParentSectionCount, Follow, ParentVertexCount;
         };
         static_assert(sizeof(Parameters) == 96, "Patch skin recut shader layout");
 
@@ -257,7 +257,8 @@ namespace Viewer
         compute.SetBufferUAV(5, out.Vertices.Data);
 
         // 파라미터를 만들고 결과 mesh마다 정점 범위를 dispatch한다.
-        Parameters c{ Math::Invert(kFrame), 0, 0, flags, stride, k, uint32_t(parent.Sections.size()), 0, 0 };
+        Parameters c{ Math::Invert(kFrame), 0, 0, flags, stride, k, uint32_t(parent.Sections.size()),
+            PatchAnimFollowEnabled() && parent.Snapshot.AnimFollow ? 1u : 0u, parentCount };
         for (const auto& mesh : cutResult.Meshes)
         {
             c.FirstVertex = mesh.vbOffset / 28;
@@ -416,8 +417,69 @@ namespace Viewer
                 {
                     ++local.K;
                     if (joints != k) ++local.BadK;
+                    if (kind) ++local.Endpoint;
                     if (!verify)
                         continue;
+
+                    // AF-5: 추종 중 끝점을 쓰지 못한 새 정점은 출처와 부모 레코드로 폴백 사유를 분류한다.
+                    if (!kind && PatchAnimFollowEnabled() && parent.Snapshot.AnimFollow)
+                    {
+                        const bool isCap = origin[0] == 0xffffffff;
+                        if (isCap && parent.Sections.size() != 1)
+                            ++local.FallbackSection;
+                        else if (!isCap && origin[0] >= parent.Sections.size())
+                            ++local.FallbackRange;
+                        else
+                        {
+                            const uint64_t base = parent.Sections[isCap ? 0 : origin[0]].FirstVertex;
+                            const uint64_t ends[2] = { base + origin[2], base + origin[3] };
+                            if (ends[0] >= parentCount || ends[1] >= parentCount)
+                                ++local.FallbackRange;
+                            else
+                            {
+                                uint32_t a = 0, b = 0;
+                                std::memcpy(&a, parentSkin + size_t(ends[0]) * stride + stride - kSkinExtInternal, sizeof(a));
+                                std::memcpy(&b, parentSkin + size_t(ends[1]) * stride + stride - kSkinExtInternal, sizeof(b));
+                                if (a || b) ++local.FallbackInternal;
+                            }
+                        }
+                    }
+
+                    // AF-5: 끝점 정점은 두 끝점을 요청 시점 팔레트로 스키닝해 t로 보간한 위치를 구운 위치와 비교한다.
+                    if (kind)
+                    {
+                        const uint8_t* record = skin + size_t(first + v) * stride;
+                        float t = 0;
+                        std::memcpy(&t, record + stride - kSkinExtT, sizeof(t));
+                        DirectX::XMVECTOR ends[2];
+                        bool valid = true;
+                        for (uint32_t e = 0; e < 2; ++e)
+                        {
+                            const uint8_t* end = record + stride - kSkinExtEndpoint0 + e * kSkinEndpointSize;
+                            DirectX::XMFLOAT3 bind;
+                            uint16_t ids[4], ws[4];
+                            std::memcpy(&bind, end, sizeof(bind));
+                            std::memcpy(ids, end + kSkinEndpointJoints, sizeof(ids));
+                            std::memcpy(ws, end + kSkinEndpointWeights, sizeof(ws));
+                            const float total = std::max(1.0f, float(ws[0]) + ws[1] + ws[2] + ws[3]);
+                            ends[e] = DirectX::XMVectorZero();
+                            for (int i = 0; i < 4 && valid; ++i)
+                            {
+                                if (!ws[i]) continue;
+                                valid = ids[i] < check->Palette.size();
+                                if (valid)
+                                    ends[e] = DirectX::XMVectorAdd(ends[e], DirectX::XMVectorScale(DirectX::XMVector3Transform(
+                                        DirectX::XMLoadFloat3(&bind), check->Palette[ids[i]]), float(ws[i]) / total));
+                            }
+                        }
+                        DirectX::XMFLOAT3 bakedEnd;
+                        std::memcpy(&bakedEnd, data + size_t(first + v) * 28, sizeof(bakedEnd));
+                        const DirectX::XMMATRIX node = check->Node;
+                        const float endpointError = valid ? DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(
+                            DirectX::XMVector3Transform(DirectX::XMVectorLerp(ends[0], ends[1], t), node), DirectX::XMLoadFloat3(&bakedEnd)))) : 1.0e9f;
+                        float& worst = kind == 3 ? local.EndpointCapMax : local.EndpointSplitMax;
+                        worst = std::max(worst, endpointError);
+                    }
 
                     // K 정점은 bind 위치에 N·D를 곱한 값을 결과 Data의 구운 위치와 비교한다.
                     const uint8_t* baked = data + size_t(first + v) * 28;

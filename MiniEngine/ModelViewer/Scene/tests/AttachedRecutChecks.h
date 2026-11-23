@@ -75,9 +75,48 @@ namespace Viewer
             Done = true;
         }
 
+        // AF-5: 스키닝 조각의 절단면(rim·cap·K 슬롯 정점, 옵션과 무관한 집합)의 월드 PG 위치 평균을 그루터기 기준점으로 구한다.
+        static bool StumpCentre(const GameObject& owner, const MeshComponent& piece, Math::Vector3& out)
+        {
+            // 조각 skin VB와 게시된 PG를 읽는다.
+            using namespace Math;
+            std::vector<uint8_t> skin, pg;
+            if (!piece.PatchSkin || !piece.GetPosedGeometry().IsReady() || !ReadBytes(piece.PatchSkin->Vertices.Data, skin)
+                || !ReadBytes(piece.GetPosedGeometry().GetBuffer(), pg))
+                return false;
+
+            // 끝점 종류 2·3이거나 K 슬롯에 붙은 정점의 월드 위치를 모아 평균한다.
+            const auto& skinData = *piece.PatchSkin;
+            const auto& geometry = *piece.GetGeometry();
+            const uint32_t stride = skinData.Vertices.Stride, rigidSlot = uint32_t(skinData.Snapshot.JointsAtCut.size());
+            const Matrix4 world(piece.GetWorldTransform(owner.GetTransform()));
+            Vector3 sum(kZero);
+            uint32_t count = 0;
+            for (size_t s = 0; s < skinData.Sections.size(); ++s)
+            {
+                const size_t pgOffset = piece.GetPosedGeometry().GetOffset(geometry.GetSections().at(s).SourceMesh);
+                for (uint32_t v = 0; v < skinData.Sections[s].VertexCount; ++v)
+                {
+                    const uint8_t* record = skin.data() + size_t(skinData.Sections[s].FirstVertex + v) * stride;
+                    uint32_t kind = 0;
+                    uint16_t joints[4];
+                    std::memcpy(&kind, record + stride - kSkinExtInternal, sizeof(kind));
+                    std::memcpy(joints, record + stride - 16, sizeof(joints));
+                    if (kind == 1 || (kind == 0 && joints[0] != rigidSlot)) continue;
+                    DirectX::XMFLOAT3 p;
+                    std::memcpy(&p, pg.data() + pgOffset + size_t(v) * 40, sizeof(p));
+                    sum += Vector3(world * Vector4(Vector3(p.x, p.y, p.z), 1));
+                    ++count;
+                }
+            }
+            if (!count) return false;
+            out = sum / Scalar(float(count));
+            return true;
+        }
+
         // 실제 생성 정점을 읽어 월드 bounds 중심과 교차하는 평면을 만든다.
         static bool Plane(const GameObject& owner, const MeshComponent& mesh, const Math::Vector3* node,
-            MeshCutting::CutPlaneData& plane)
+            MeshCutting::CutPlaneData& plane, const Math::Vector3* stump = nullptr)
         {
             // 생성 버퍼를 한 번 동기화하고 section VB에서 월드 정점과 AABB를 계산한다.
             using namespace Math;
@@ -118,8 +157,16 @@ namespace Viewer
             if (points.empty()) return false;
 
             // 중심에서 node 방향을 우선하고 세 축도 검사해 양쪽 정점과 1mm 초과 거리를 보장한다.
-            const Vector3 center = (lo + hi) * 0.5f;
-            Vector3 normals[] = { node ? *node - center : hi - lo, Vector3(kXUnitVector), Vector3(kYUnitVector), Vector3(kZUnitVector) };
+            Vector3 center = (lo + hi) * 0.5f;
+            Vector3 firstAxis = node ? *node - center : hi - lo;
+
+            // AF-5: 그루터기 기준점이 있으면 그 점에서 bounds 중심 쪽으로 5% 들어간 위치에 중심 방향 평면을 둔다.
+            if (stump)
+            {
+                firstAxis = center - *stump;
+                center = *stump + firstAxis * 0.05f;
+            }
+            Vector3 normals[] = { firstAxis, Vector3(kXUnitVector), Vector3(kYUnitVector), Vector3(kZUnitVector) };
             for (const auto& axis : normals)
             {
                 if (float(Length(axis)) < 1.0e-6f) continue;
@@ -266,7 +313,20 @@ namespace Viewer
             const auto& geometry = *piece.GetGeometry();
             const uint32_t stride = skinData.Vertices.Stride, rigidSlot = uint32_t(skinData.Snapshot.JointsAtCut.size());
             float maximum = 0;
-            uint32_t measured = 0;
+            uint32_t measured = 0, endpoints = 0;
+
+            // AF-5: 애니메이션 추종 중이면 끝점 보간 정점용으로 현재 팔레트와 node 프레임을 CPU에서 다시 만든다.
+            const auto* source = owner.FindMeshComponent(piece.Attachment->SourceMesh);
+            const bool follow = PatchAnimFollowEnabled() && skinData.Snapshot.AnimFollow && source
+                && source->GetPreparedJoints() && source->GetPreparedNodes();
+            std::vector<Joint> palette;
+            Matrix4 nodeFrame(kIdentity);
+            if (follow)
+            {
+                BuildPatchPalette(skinData.Snapshot, source->GetPreparedJoints(), source->GetPreparedNodes(), palette,
+                    source->GetPreparedAnimJoints(), source->GetPreparedAnimNodes(), true);
+                nodeFrame = Matrix4(Invert(source->GetDeformBinding().SourceFrame.ToAffine())) * source->GetPreparedNodes()[skinData.Snapshot.MeshNode];
+            }
             for (size_t s = 0; s < skinData.Sections.size(); ++s)
             {
                 const auto& vb = geometry.GetMesh(s);
@@ -278,6 +338,42 @@ namespace Viewer
                     uint16_t joints[4];
                     std::memcpy(&internal, record + stride - kSkinExtInternal, sizeof(internal));
                     std::memcpy(joints, record + stride - 16, sizeof(joints));
+
+                    // 끝점 보간 정점은 두 끝점을 현재 팔레트로 스키닝해 t로 보간한 위치를 PG 위치와 비교한다.
+                    if (internal && follow)
+                    {
+                        float t = 0;
+                        std::memcpy(&t, record + stride - kSkinExtT, sizeof(t));
+                        DirectX::XMVECTOR ends[2];
+                        bool valid = true;
+                        for (uint32_t e = 0; e < 2; ++e)
+                        {
+                            const uint8_t* end = record + stride - kSkinExtEndpoint0 + e * kSkinEndpointSize;
+                            DirectX::XMFLOAT3 bind;
+                            uint16_t ids[4], ws[4];
+                            std::memcpy(&bind, end, sizeof(bind));
+                            std::memcpy(ids, end + kSkinEndpointJoints, sizeof(ids));
+                            std::memcpy(ws, end + kSkinEndpointWeights, sizeof(ws));
+                            const float total = (std::max)(1.0f, float(ws[0]) + ws[1] + ws[2] + ws[3]);
+                            ends[e] = DirectX::XMVectorZero();
+                            for (int i = 0; i < 4 && valid; ++i)
+                            {
+                                if (!ws[i]) continue;
+                                valid = ids[i] < palette.size();
+                                if (valid)
+                                    ends[e] = DirectX::XMVectorAdd(ends[e], DirectX::XMVectorScale(DirectX::XMVector3Transform(
+                                        DirectX::XMLoadFloat3(&bind), palette[ids[i]].posXform), float(ws[i]) / total));
+                            }
+                        }
+                        DirectX::XMFLOAT3 posed, expectedLocal;
+                        std::memcpy(&posed, pg.data() + pgOffset + size_t(v) * 40, sizeof(posed));
+                        DirectX::XMStoreFloat3(&expectedLocal, DirectX::XMVector3Transform(DirectX::XMVectorLerp(ends[0], ends[1], t), nodeFrame));
+                        const Vector3 want(actual * Vector4(Vector3(expectedLocal.x, expectedLocal.y, expectedLocal.z), 1));
+                        const Vector3 have(actual * Vector4(Vector3(posed.x, posed.y, posed.z), 1));
+                        maximum = valid ? (std::max)(maximum, float(Length(want - have))) : FLT_MAX;
+                        ++endpoints;
+                        continue;
+                    }
                     if (internal || joints[0] != rigidSlot) continue;
 
                     // 구운 위치는 기대 월드로, PG 위치는 현재 조각 월드로 옮겨 비교한다.
@@ -292,7 +388,7 @@ namespace Viewer
             }
 
             // 측정한 정점이 없으면 판정할 수 없으므로 실패 값을 낸다.
-            if (!measured) return FLT_MAX;
+            if (!measured && !endpoints) return FLT_MAX;
             const float scale = (std::max)({ float(Length(Vector3(actual.GetX()))), float(Length(Vector3(actual.GetY()))),
                 float(Length(Vector3(actual.GetZ()))) });
             if (localError) *localError = scale > 0 ? maximum / scale : FLT_MAX;
@@ -394,8 +490,13 @@ namespace Viewer
                             Matrix4 node;
                             MeshCutting::CutPlaneData plane;
                             if (!scene.TryGetAttachmentNodeWorld(*mesh, node)) continue;
+
+                            // AF-5: 모드 3은 AnimFollow를 가진 몸통 쪽 스키닝 조각만 재절단 대상으로 고른다.
+                            if (Mode >= 3 && !(mesh->HasSkinnedPatch() && mesh->PatchSkin->Snapshot.AnimFollow)) continue;
                             const Vector3 position(node.GetW());
-                            if (!Plane(*object, *mesh, &position, plane)) continue;
+                            Vector3 stump(kZero);
+                            const bool nearStump = Mode >= 4 && StumpCentre(*object, *mesh, stump);
+                            if (!Plane(*object, *mesh, &position, plane, nearStump ? &stump : nullptr)) continue;
                             Owner = object->GetId();
                             Input = mesh->GetId();
                             Count = object->GetMeshComponents().size();

@@ -84,6 +84,9 @@ namespace Viewer
         uint32_t Skipped = 0;                      // RS-2b: 결과의 끝점 보간 종류 1(내부 교점) 정점 수.
         float CopiedSkinMax = 0, KFrameDiff = 0;   // RS-2b: 복사 정점 독립 스키닝 최대 오차(local)와 kFrame 대 N·palette[K] 최대 성분 차이.
         uint32_t SkippedRim = 0, SkippedCap = 0;   // AF-4: 결과의 끝점 보간 종류 2(rim)·3(cap) 정점 수.
+        uint32_t Endpoint = 0;                     // AF-5: 새 split·cap 정점 중 끝점 레코드를 쓴 수(K - Endpoint는 K 폴백).
+        float EndpointSplitMax = 0, EndpointCapMax = 0; // AF-5: 끝점 정점의 요청 시점 팔레트 스키닝·t 보간 위치와 구운 위치의 최대 오차(local).
+        uint32_t FallbackInternal = 0, FallbackRange = 0, FallbackSection = 0; // AF-5: K 폴백 사유(끝점 internal ≠ 0, 끝점 범위 밖·잘못된 출처, cap의 다중 section). RS-2b 진단에서만 센다.
         bool Checked = false;                      // RS-2b: 진단 검증을 실제로 수행했는지.
     };
 
