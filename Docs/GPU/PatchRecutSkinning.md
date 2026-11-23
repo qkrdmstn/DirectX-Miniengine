@@ -1,4 +1,4 @@
-상태: 설계안 — 결정 확정·Sonnet 리뷰 반영(2026-11-23), 구현 전. 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
+상태: 진행 중 — RS-1(부모 skin·N·D 보관, `-patch-recut-skin`) 완료, Release 회귀 6종 PASS(2026-11-23). 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
 
 # 스키닝 패치 재절단 시 스키닝 유지
 

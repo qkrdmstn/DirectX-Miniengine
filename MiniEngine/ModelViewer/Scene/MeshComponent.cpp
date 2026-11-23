@@ -624,6 +624,7 @@ namespace Viewer
 
         // 고정 joint 수와 강체 슬롯에 맞춰 팔레트를 준비하고 게시 월드를 기록한다.
         m_PatchPalette.resize(PatchSkin->Snapshot.JointsAtCut.size() + 1);
+        m_HasPatchNodeFrame = false;
         const Matrix4& world = Attachment->PieceWorldAtCut;
         m_PreparedWorld = AffineTransform((Vector3)world.GetX(), (Vector3)world.GetY(),
             (Vector3)world.GetZ(), (Vector3)world.GetW());
@@ -797,6 +798,7 @@ namespace Viewer
         Attachment->PieceWorldAtCut = Matrix4(m_PreparedWorld);
         SetAttachedWorld(world);
         m_PatchSkinActive = false;
+        m_HasPatchNodeFrame = false;
         m_RetiredPatchSkin = std::move(PatchSkin);
         m_RetiredPatchPose = std::move(m_PosedGeometry);
         m_PosedGeometry = std::move(posed);
@@ -863,6 +865,7 @@ namespace Viewer
             m_RetiredPatchSkin.reset();
             m_RetiredPatchPose.reset();
             m_PatchPalette.clear();
+            m_HasPatchNodeFrame = false;
         }
 
         // 같은 명령 목록에서 마스크를 먼저 갱신한다.
@@ -906,6 +909,8 @@ namespace Viewer
                 const Matrix4 sourceToComponent(Invert(patchSource->GetDeformBinding().SourceFrame.ToAffine()));
                 const Matrix4 node = sourceToComponent * patchSource->GetPreparedNodes()[PatchSkin->Snapshot.MeshNode];
                 m_PosedGeometry->UpdateSkinnedGenerated(context, PatchSkin->Vertices.Data, m_PatchPalette, node);
+                m_PatchNodeFrame = node;
+                m_HasPatchNodeFrame = true;
                 if (skinChecks && !PatchSkinTimingName.empty())
                     EngineProfiling::EndBlock(&context);
 

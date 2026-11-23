@@ -23,6 +23,8 @@ namespace Viewer
         std::shared_ptr<const NodeAttachment> AttachmentSnapshot; // C++14: optional 대신 불변 snapshot을 공유한다.
         MeshCutting::CutPlaneData LocalPlane{};
         int32_t NodeSide = -1; // 요청 시점 node 쪽 결과 side이며 비부착은 -1이다.
+        std::shared_ptr<const PatchSkinPublication> ParentSkin; // bake 직전 부모 skin이며 null이면 기존 정적 경로다.
+        Math::Matrix4 RecutKFrame{ Math::kIdentity };           // 요청 시점 N(t_req)·D(t_req)이다.
     };
 
     // Scene의 collider 참조를 Jolt 조회 body에 연결하고 절단 후보 API를 제공한다.

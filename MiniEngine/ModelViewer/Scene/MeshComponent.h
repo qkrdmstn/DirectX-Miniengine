@@ -108,6 +108,14 @@ namespace Viewer
             // 현재 revision에 활성화한 skin 입력만 사용한다.
             return m_PatchSkinActive && PatchSkin && PatchSkin->Snapshot.SkinningAllowed;
         }
+        // 마지막 Update의 N·D(재절단 K 슬롯 프레임)를 읽는다. 스키닝 PG를 만든 적이 없으면 false다.
+        bool TryGetRecutKFrame(Math::Matrix4& out) const
+        {
+            // PreparePoseCS 규약(PG = N·skin·pos)에 맞춰 N 뒤에 K 슬롯 posXform을 곱한다.
+            if (!m_HasPatchNodeFrame || m_PatchPalette.empty()) return false;
+            out = m_PatchNodeFrame * m_PatchPalette.back().posXform;
+            return true;
+        }
         // 편집할 target TRS를 읽는다.
         const SceneTransform& GetTransform() const { return m_Transform; }
         // owner 종속 여부를 읽는다.
@@ -202,6 +210,8 @@ namespace Viewer
         std::shared_ptr<const GeometryRevision> m_Geometry;
         std::unique_ptr<PosedGeometry> m_PosedGeometry;
         std::vector<Joint> m_PatchPalette;
+        Math::Matrix4 m_PatchNodeFrame{ Math::kIdentity }; // 마지막 스키닝 Update의 N(sourceToComponent 포함 mesh node)이다.
+        bool m_HasPatchNodeFrame = false;
         bool m_PatchSkinActive = false;
         std::shared_ptr<PatchSkinPublication> m_RetiredPatchSkin;
         std::unique_ptr<PosedGeometry> m_RetiredPatchPose;

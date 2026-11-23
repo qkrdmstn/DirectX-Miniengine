@@ -308,6 +308,11 @@ namespace Viewer
         active.World = Math::Matrix4(world);
         active.AttachmentSnapshot = std::move(attachmentSnapshot);
         active.NodeSide = candidate ? candidate->NodeSide : -1;
+        if (candidate)
+        {
+            active.ParentSkin = candidate->ParentSkin;
+            active.RecutKFrame = candidate->RecutKFrame;
+        }
         active.Publish = publish;
         active.ReservedBytes = estimate;
         m_ReservedBytes += estimate;
