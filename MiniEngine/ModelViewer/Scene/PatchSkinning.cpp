@@ -2,6 +2,7 @@
 #include "GeometryRevision.h"
 #include "CommandContext.h"
 #include "RootSignature.h"
+#include "Util/CommandLineArg.h"
 #include "PipelineState.h"
 #include "ReadbackBuffer.h"
 #include <cstring>
@@ -444,6 +445,19 @@ namespace Viewer
         if (stats)
             *stats = local;
         return true;
+    }
+
+    // 애니메이션 추종 옵션을 실행 중 한 번만 읽는다. 기본값은 0이다.
+    bool PatchAnimFollowEnabled()
+    {
+        // 옵션은 최초 호출에서 읽고 이후 변하지 않는다.
+        static const bool enabled = []
+        {
+            uint32_t value = 0;
+            CommandLineArgs::GetInteger(L"patch-anim-follow", value);
+            return value != 0;
+        }();
+        return enabled;
     }
 
     // 절단 시점의 고정 본을 현재 부착 프레임으로 옮기거나(기본) 애니메이션 joint를 따르게 하며 normal 행렬도 다시 계산한다.

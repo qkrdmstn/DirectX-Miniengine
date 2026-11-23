@@ -120,6 +120,9 @@ namespace Viewer
             // 이번 프레임의 준비가 완료된 팔레트만 외부에 제공한다.
             return m_Ready ? m_RenderAnimJoints : nullptr;
         }
+        // 이번 프레임 owner pose의 물리 override 노드 목록과 유효 부모를 읽는다(진단용).
+        const std::vector<NodeId>* GetPreparedOverrideNodes() const { return m_Ready ? m_RenderOverrideNodes : nullptr; }
+        const std::vector<NodeId>* GetPreparedPoseParents() const { return m_Ready ? m_RenderPoseParents : nullptr; }
         // staging의 보관용 skin 입력과 실제 게시된 skinned PG를 구별한다.
         bool HasSkinnedPatch() const
         {
@@ -228,6 +231,9 @@ namespace Viewer
         // 현재 revision과 SourceFrame으로 컴포넌트 로컬 충돌을 다시 만든다.
         void RebuildCollision();
 
+        // AF2b 진단: 고정 joint 팔레트를 C·A_k·O_k로 재계산해 렌더 팔레트와 비교한다.
+        void CheckAnimFollowFrame(const MeshComponent& source);
+
         // 같은 그래픽 명령 목록에서 치환 IB를 갱신한다.
         void UpdateTriangleMask(GraphicsContext& context);
         std::unique_ptr<TriangleMask> m_TriangleMask;
@@ -257,6 +263,9 @@ namespace Viewer
         const Math::Matrix4* m_RenderNodes = nullptr;
         const Joint* m_RenderAnimJoints = nullptr;
         const Math::Matrix4* m_RenderAnimNodes = nullptr;
+        const std::vector<NodeId>* m_RenderOverrideNodes = nullptr;
+        const std::vector<NodeId>* m_RenderPoseParents = nullptr;
+        uint32_t m_AnimFollowFrame = 0; // AF2b 진단: 게시 후 팔레트 생성 횟수.
         bool m_Ready = false;
         bool m_Simulating = false;
         MiniCollision::AggregateGeom m_Collision;   // 컴포넌트 로컬(SourceFrame⁻¹ × model-local) 충돌

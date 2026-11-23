@@ -1981,7 +1981,7 @@ namespace Viewer
                 {
                     CheckAnimFollowAtCut(snapshot, *mesh);
                     std::vector<Joint> palette;
-                    BuildPatchPalette(snapshot, joints, nodes, palette);
+                    BuildPatchPalette(snapshot, joints, nodes, palette, mesh->GetPreparedAnimJoints(), mesh->GetPreparedAnimNodes(), PatchAnimFollowEnabled());
                     for (uint32_t k = 0; k < model.m_NumJoints; ++k)
                     {
                         const Matrix4 actual[] = { palette[k].posXform, Matrix4(palette[k].nrmXform) };
