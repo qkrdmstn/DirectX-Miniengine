@@ -1,4 +1,4 @@
-상태: 진행 중 — RS-1(부모 skin·N·D 보관, `-patch-recut-skin`)·RS-2a(PatchSkinRecutCS 생성, readback 약 1.1~1.6 ms)·RS-2b(독립 스키닝·kFrame 진단 PASS)·RS-3(node 쪽 skin 승계, 경계 게시·60프레임 0 local)·RS-4(FollowError를 K 정점 추종으로 교체: AR4 #2 마지막 0.0011 mm·최대 local 1.37e-08, RigBoneCut 최대 0.000002 m·local 1.15e-08; `-attached-recut-checks 2` 연속 재절단 skinned=1·경계 게시·60프레임 PASS) 완료, RS-5 시각 확인 남음. Release 회귀 6종 옵션 1·0 모두 PASS(2026-11-23). 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
+상태: 완료 — RS-1(부모 skin·N·D 보관, `-patch-recut-skin`)·RS-2a(PatchSkinRecutCS 생성, readback 약 1.1~1.6 ms)·RS-2b(독립 스키닝·kFrame 진단 PASS)·RS-3(node 쪽 skin 승계, 경계 게시·60프레임 0 local)·RS-4(FollowError를 K 정점 추종으로 교체: AR4 #2 마지막 0.0011 mm·최대 local 1.37e-08, RigBoneCut 최대 0.000002 m·local 1.15e-08; `-attached-recut-checks 2` 연속 재절단 skinned=1·경계 게시·60프레임 PASS) 완료, RS-5(AR4 장면 옵션 0/1 캡처: 틈 없음, 육안 차이 작음, 로그로 옵션 0 11.2 mm 어긋남 확인) 완료. Release 회귀 6종 옵션 1·0 모두 PASS(2026-11-23). 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
 
 # 스키닝 패치 재절단 시 스키닝 유지
 
@@ -89,7 +89,7 @@ struct PreparedGeometryReplacement { ...; std::shared_ptr<PatchSkinPublication> 
 | RS-2b | RS-2a 결과 진단 | 복사 레코드 부모와 바이트 동일, K 정점 왕복 위치와 복사 정점 독립 스키닝 위치가 구운 값과 local ≤ 1e-6, 법선 ≤ 0.5도, kFrame = N·palette[K]. 완료: mismatch 0/2246, K 1.86e-9, 복사 스키닝 1.62e-7 local(월드 0.029 mm, float 잡음), kframe diff 0 |
 | RS-3 | D1·D2 node 쪽 결과에 skin 승계·활성화(helper 분리, A는 PreparedGeometryReplacement, B는 준비 단계), 이전 skin 지연 해제, D7 (a)(b) 측정과 `AttachedRecutChecks::Plane`의 PG 읽기 | node 쪽 결과 HasSkinnedPatch, 경계 오차 게시·60프레임 뒤 local ≤ 1e-6(월드 mm는 참고) |
 | RS-4 | D7 판정 교체(AR4 #2·RigBoneCut FollowError), D5 연속 재절단 확인, 문서 동기화(상태 줄·README·CodeMap·PatchSkinning PS-6 주석) | 완료: 스키닝 조각은 `SkinnedFollowError`(K 정점 PG 월드 vs node 기대 월드의 구운 위치, 1 mm)로 판정. 연속 재절단(`-attached-recut-checks 2`) 두 번째 node 쪽 skinned=1, RS2b 4줄·경계 게시·60프레임 0 local PASS |
-| RS-5 | CesiumMan 시각 확인: 부착 조각 재절단을 옵션 0/1로 캡처 비교 | 몸에 남는 조각이 원본과 함께 변형, 틈 없음 |
+| RS-5 | CesiumMan 시각 확인: 부착 조각 재절단을 옵션 0/1로 캡처 비교 | 몸에 남는 조각이 원본과 함께 변형, 틈 없음. 결과: AR4 장면에 `-capture`·`-capture-count`·`-capture-step` 허용(첫 재절단 게시부터 `-attached-recut-N`). 옵션 0/1 게시·+30·+60 캡처에서 틈·늘어남 없음, 픽셀 차이 0.05~0.07%로 육안 차이는 작다(node 이동 17.4 mm뿐). 로그: 옵션 0은 조각이 7.0 mm만 따라가 11.2 mm 어긋남, 옵션 1은 skin 승계·경계 0 local. 큰 동작 장면의 육안 확인은 남음 |
 
 각 단계는 약 300줄 이하로, 새 구현 실행 → 다른 실행 리뷰 → Release 빌드 → 회귀 → 로컬 커밋 순서로 진행한다.
 
