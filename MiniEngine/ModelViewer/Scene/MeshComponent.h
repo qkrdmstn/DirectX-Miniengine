@@ -43,7 +43,7 @@ namespace Viewer
     struct TriangleMask
     {
         StructuredBuffer State;
-        std::unique_ptr<UploadBuffer> CompactIB;
+        std::unique_ptr<ByteAddressBuffer> CompactIB;
         std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> RenderOverrides;
         uint32_t Revision = 0, AppliedRevision = 0;
         std::vector<uint32_t> Pending;

@@ -244,7 +244,9 @@ namespace Viewer
             ReadbackBuffer ib;
             ib.Create(L"Mask compact IB readback", mask.CompactIB->GetBufferSize(), 1);
             auto& check = GraphicsContext::Begin(L"Mask compact IB verify");
+            check.TransitionResource(*mask.CompactIB, D3D12_RESOURCE_STATE_COPY_SOURCE);
             check.CopyBufferRegion(ib, 0, *mask.CompactIB, 0, mask.CompactIB->GetBufferSize());
+            check.TransitionResource(*mask.CompactIB, D3D12_RESOURCE_STATE_INDEX_BUFFER);
             check.Finish(true);
             const auto* compact = static_cast<const uint8_t*>(ib.Map());
             bool ibPass = true;

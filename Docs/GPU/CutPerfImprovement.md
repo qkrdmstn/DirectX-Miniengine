@@ -1,4 +1,4 @@
-상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 (커밋 대기)
+상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 8a7812e6, CP-4c (커밋 대기)
 
 # 절단 성능 개선 결정 (1차)
 
@@ -201,3 +201,30 @@
 - `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1`: **각 K 20요청 GPU==CPU PASS**, 모든 채택 실행 exit=0/timeout=False. 데모 GPU Meta는 Xbot 2118/0/0, CesiumMan 271/0/0으로 유지했다(예약 필드 0; CPU finite crossing 47/16과 구분).
 - 선택 규칙에 따라 일반화 코드·새 헤더·프로젝트 등록·임시 계측을 모두 제거하고 대상 소스를 HEAD와 같게 복원했다. 최종 비계측 Release 증분 빌드 exit=0(42.53초), offset-copy 20요청 GPU==CPU PASS/exit=0(28.69초), 로그의 CP6 계측 문자열 0을 확인했다. 원자료·실험 소스·제외 실행·빌드 및 집계 스크립트는 `%TEMP%/CP6/`에 보관한다. 커밋하지 않았다.
 - 제한: Debug 빌드·D3D12 validation은 요청에 따라 실행하지 않았다. 드라이버 버전·GPU clock/온도/전원·백그라운드 부하는 통제/확인하지 않았고, 성능 원인과 다른 GPU는 측정하지 않았다. Geometry 변경이 없어 PlaneSlicerTests 대상이 아니다.
+
+### CP-4c: 압축 IB를 DEFAULT 힙으로 이동 (base `8a7812e6`, 커밋 대기, 2026-11-23)
+
+- VC 실험(`%TEMP%/VC/VC-results.md`)에서 Xbot 단일 절단의 Compact/None이 인스턴스 1개 0.575/0.374 ms, 10개 3.668/1.878 ms로 역전됐다. `MeshComponent::SetTriangleMask`의 압축 IB는 UploadBuffer를 매 프레임 직접 읽고, 원본 IB는 DEFAULT 힙을 사용했다.
+- `SetTriangleMask`는 초기 데이터 없는 `ByteAddressBuffer::Create`로 DEFAULT IB를 만들고 임시 UploadBuffer에 CPU 결과를 쓴다. 별도 graphics 목록에 CopyBufferRegion과 COPY_DEST→INDEX_BUFFER 전환을 기록하고 렌더보다 먼저 같은 queue에 `Finish(false)`로 제출한다. `Create(initialData)` 및 GPU 완료 대기는 사용하지 않는다. 기존 R16/R32 section view와 draw 범위는 유지한다.
+- upload와 새 DEFAULT IB는 복사 목록 제출 후 `RetireResource`로 fence 수명을 보장하여 게시 준비 실패 시에도 복사 중인 자원이 해제되지 않는다. 이전 DEFAULT IB 교체도 기존 지연 해제를 유지한다. `ClearTriangleMask`·`SetGeometry`·소멸자의 기존 GPU drain/소유권 해제는 새 IB에도 적용된다. 마스크 검사기의 IB readback은 COPY_SOURCE 전환 후 INDEX_BUFFER로 복원한다.
+- VC 패치에서 RP 쿼리·고정 pose/카메라·character-only·인스턴스 생성·Compact/None 전환만 임시 사용했다. VC 셰이더·정점 마스크는 가져오지 않았다. 모드 전환 뒤 30프레임 제외, 창당 200표본, 모드당 3창(600표본). GPU 시간은 shadow/depth/opaque/transparent timestamp 합이며 skinning·후처리·Present는 제외한다. 추가 9개 원본은 독립 마스크를 갖고 첫 owner의 게시 조각 2개만 유지한다.
+
+| Xbot 단일 절단, character-only | 수정 전 Compact / None ms | 수정 후 Compact / None ms |
+|---|---:|---:|
+| 인스턴스 1 | 0.599175 / 0.365601 | 0.383870 / 0.394346 |
+| 인스턴스 10 | 4.084599 / 1.982476 | 1.909379 / 1.973647 |
+
+- 1개 조건의 수정 후 최초 실행은 0.381991/0.378726 ms로 근접해 3회 추가했다. 최초를 포함한 4회 전체 2,400표본/모드 평균을 표에 썼다(추가 Compact/None: 0.388218/0.393295, 0.381327/0.406790, 0.383945/0.398574 ms). 나머지는 600표본/모드다. 두 조건 모두 수정 후 전체 평균 Compact≤None이며, 1개 조건의 개별 실행 우열은 달라질 수 있다. GPU clock·온도·전원·배경 부하는 통제하지 않았다.
+- 게시 CPU 시간은 `SetTriangleMask`의 기존 `cpuUs + uploadUs` 로그다. `-debug 0 -animation-step-ms 16`, 같은 게시 프레임 HDR 채택 실행의 단일 표본이며 할당·memcpy·복사 명령 기록/제출·새 자원 fence 등록을 포함한다. 전체 Update 시간이나 GPU 복사 완료 시간은 아니다. CPU 일회 비용은 증가했다.
+
+| 게시 CPU ms | 수정 전 압축 + 업로드 = 합계 | 수정 후 압축 + 업로드 기록 = 합계 |
+|---|---:|---:|
+| Xbot frame=64 | 2.023 + 0.708 = 2.731 | 2.366 + 1.308 = 3.675 |
+| CesiumMan frame=64 | 0.131 + 0.174 = 0.305 | 0.266 + 1.398 = 1.665 |
+| 재절단 첫 게시 frame=65 | 1.893 + 1.010 = 2.903 | 1.743 + 2.472 = 4.215 |
+| 재절단 두 번째 게시 frame=113 | 1.222 + 0.316 = 1.538 | 1.825 + 1.416 = 3.241 |
+
+- 최종 Release/Windows(x64) 증분 빌드 exit=0/error 0. NVIDIA GeForce MX450(1906 MB), 드라이버 `32.0.15.9186`(레지스트리 조회). Xbot `-debug 1 -skeletal-break-demo 1` 및 `-debug 1 -skeletal-mask-checks 1` 모두 exit=0, D3D12 ERROR/CORRUPTION 0(IB 상태 오류 포함). 기존 PSO 출력/중복 barrier 경고는 남는다. Debug 빌드는 요청대로 실행하지 않았다.
+- 최종 필수 검사: mask PASS, `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1` 20요청 GPU==CPU PASS, `-skeletal-patch-break-checks 1` Parent/Rig 각각 6요청 GPU==CPU PASS·boundary pass=4/fail=0/n/a=2, `-skeletal-recut-repro 1` 두 게시/PASS. 모두 exit=0/timeout=False. 저장소 밖 Release 최적화 CPU `SkeletalPatchTests` 144 checks PASS. Geometry 변경이 없어 PlaneSlicerTests 대상은 아니다.
+- 수정 전 편집 없이 확보한 게시 age=0 HDR과 최종 비계측 수정본을 전체 파일 SHA-256으로 비교했다(각 8,294,416 bytes): Xbot frame=64 `F7991A50EE392D09C2D0D2143CBE604AF8B9F9918C5C4378A133F68D511808E2`, CesiumMan frame=64 `9E7146F87DB61AEBB313FBD2BC0058AF7D738243B61D959775450130E3C88259`, 재절단 첫 게시=65/두 번째=113 `842D4DAE1501F7654E3671B360B27BDDDCE8D2EFD17E4BB8A58A9EE0840D1176`. 세 조건 모두 바이트 동일이다. 게시 프레임이 다른 최초/재시도 캡처는 비교에서 제외했다.
+- 근거는 `%TEMP%/CP4c/`의 `before-*.log`, `retry-{xbot-1,cesium-2,recut-1}.log`, `hdr-comparison.json`, `final-*.log`, `cpu-*.log`, 전후/반복 CSV와 `measure-results.txt`에 보관한다. 임시 RP 계측·모드 전환은 전부 제거했다. Release `Clean` exit=0으로 프로젝트 빌드 산출물을 정리했고 TEMP CPU 테스트 exe/obj도 제거했다(`clean-build.log`). 커밋하지 않았다. 다른 GPU의 성능은 측정하지 않았다.

@@ -105,16 +105,29 @@ namespace Viewer
         }
         const double cpuUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
 
-        // 업로드 힙을 직접 IB로 사용할 새 버퍼를 만들고 절대 view 주소를 확정한다.
+        // CPU 결과를 임시 업로드에 쓰고 DEFAULT 힙 IB의 절대 view 주소를 확정한다.
         const auto uploadStarted = std::chrono::steady_clock::now();
-        std::unique_ptr<UploadBuffer> compact;
+        std::unique_ptr<ByteAddressBuffer> compact;
         if (!views.empty())
         {
-            compact = std::make_unique<UploadBuffer>();
-            compact->Create(L"Component compact IB", std::max(size_t(4), compacted.Bytes.size()));
-            if (!compacted.Bytes.empty()) std::memcpy(compact->Map(), compacted.Bytes.data(), compacted.Bytes.size());
-            else std::memset(compact->Map(), 0, 4);
-            compact->Unmap();
+            compact = std::make_unique<ByteAddressBuffer>();
+            compact->Create(L"Component compact IB", uint32_t((std::max(size_t(4), compacted.Bytes.size()) + 3) / 4), 4);
+            UploadBuffer upload;
+            upload.Create(L"Component compact IB upload", compact->GetBufferSize());
+            if (!compacted.Bytes.empty()) std::memcpy(upload.Map(), compacted.Bytes.data(), compacted.Bytes.size());
+            else std::memset(upload.Map(), 0, 4);
+            upload.Unmap();
+
+            // 렌더보다 먼저 같은 graphics queue에 복사와 IB 전환을 제출하며 CPU는 기다리지 않는다.
+            auto& copy = GraphicsContext::Begin(L"Upload component compact IB");
+            copy.TransitionResource(*compact, D3D12_RESOURCE_STATE_COPY_DEST);
+            copy.CopyBufferRegion(*compact, 0, upload, 0, std::max(size_t(4), compacted.Bytes.size()));
+            copy.TransitionResource(*compact, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+            copy.Finish(false);
+
+            // 게시 준비가 실패해도 복사 완료까지 두 버퍼의 강한 참조를 유지한다.
+            Graphics::g_CommandManager.RetireResource(upload.GetResource());
+            Graphics::g_CommandManager.RetireResource(compact->GetResource());
             for (auto& view : views) view->IndexBuffer.BufferLocation += compact->GetGpuVirtualAddress();
         }
         const double uploadUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - uploadStarted).count();
