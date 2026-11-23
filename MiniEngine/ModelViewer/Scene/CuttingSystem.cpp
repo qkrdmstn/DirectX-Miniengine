@@ -17,20 +17,46 @@ namespace Viewer
     namespace
     {
         // 재절단 skin을 생성해 정점 구성·readback 비용을 로그로 남기고 결과는 버린다(RS-2a).
-        void LogRecutSkinBuild(const PatchSkinPublication& parent, const GeometryBuffers& result, const Math::Matrix4& kFrame, int32_t side)
+        void LogRecutSkinBuild(const PatchSkinPublication& parent, const GeometryBuffers& result, const Math::Matrix4& kFrame, const Math::Matrix4& world, const RecutCheckInput* checkInput, int32_t side)
         {
+            // 진단 옵션이 켜진 실행에서만 RS-2b 검증 입력을 넘긴다.
+            uint32_t recutChecks = 0, breakChecks = 0;
+            CommandLineArgs::GetInteger(L"attached-recut-checks", recutChecks);
+            CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", breakChecks);
+            const bool diagnostics = recutChecks || breakChecks;
+
             // 자식 publication을 만들고 실패해도 게시 경로는 막지 않는다.
             PatchSkinPublication child;
             RecutSkinStats stats;
-            char line[512];
+            char line[512], checks[1024] = "";
             try
             {
-                if (!BuildRecutPatchSkinVertices(parent, result, kFrame, child, &stats))
+                if (!BuildRecutPatchSkinVertices(parent, result, kFrame, child, &stats, diagnostics ? checkInput : nullptr))
                 {
                     sprintf_s(line, "RS2a build side=%d failed\n", side);
                 }
                 else
                 {
+                    // 요청 시점 부모 월드의 최대 축 길이를 mm 환산 배율로 구한다.
+                    const float scale = std::max({ float(Math::Length(Math::Vector3(world.GetX()))),
+                        float(Math::Length(Math::Vector3(world.GetY()))), float(Math::Length(Math::Vector3(world.GetZ()))) });
+
+                    // 각 검증의 오차와 합격 여부를 별도 변수로 나눠 계산한다.
+                    const float kPositionMm = stats.KPositionMax * scale * 1000.0f;
+                    const float copiedSkinMm = stats.CopiedSkinMax * scale * 1000.0f;
+                    const bool copyPass = stats.CopyMismatch == 0 && stats.BadParent == 0;
+                    const bool kPass = stats.KPositionMax <= 1.0e-6f && stats.KNormalMaxDeg <= 0.5f;
+                    const bool skinPass = stats.CopiedSkinMax <= 1.0e-6f;
+                    const bool framePass = stats.KFrameDiff <= 1.0e-5f;
+
+                    // 검증을 수행한 경우에만 RS-2b 판정 줄을 만든다.
+                    if (stats.Checked)
+                        sprintf_s(checks, "RS2b copy mismatch=%u/%u badParent=%u %s\nRS2b K position max=%.3g local (%.4f mm, scale %.1f) normal max=%.3f deg %s\n"
+                            "RS2b copied skin max=%.3g local (%.4f mm, scale %.1f) skipped=%u %s\nRS2b kframe diff=%g %s\n",
+                            stats.CopyMismatch, stats.Copied, stats.BadParent, copyPass ? "PASS" : "FAIL",
+                            stats.KPositionMax, kPositionMm, scale, stats.KNormalMaxDeg, kPass ? "PASS" : "FAIL",
+                            stats.CopiedSkinMax, copiedSkinMm, scale, stats.Skipped, skinPass ? "PASS" : "FAIL",
+                            stats.KFrameDiff, framePass ? "PASS" : "FAIL");
                     const auto& bounds = child.Vertices.BindBounds;
                     sprintf_s(line, "RS2a build side=%d vertices=%u copied=%u k=%u badK=%u badParent=%u readbackMs=%.3f bindBounds=%u/%.4f\n",
                         side, stats.Vertices, stats.Copied, stats.K, stats.BadK, stats.BadParent, stats.ReadbackMs,
@@ -42,12 +68,10 @@ namespace Viewer
                 sprintf_s(line, "RS2a build side=%d exception=%s\n", side, error.what());
             }
             Utility::Print(line);
+            Utility::Print(checks);
 
             // 파일 append는 진단 옵션이 켜진 실행에서만 한다.
-            uint32_t recutChecks = 0, breakChecks = 0;
-            CommandLineArgs::GetInteger(L"attached-recut-checks", recutChecks);
-            CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", breakChecks);
-            if (!recutChecks && !breakChecks) return;
+            if (!diagnostics) return;
 
             // 임시 폴더의 진단 로그 파일에 한 줄을 덧붙인다.
             char path[MAX_PATH];
@@ -58,6 +82,7 @@ namespace Viewer
                 if (!fopen_s(&file, path, "a"))
                 {
                     fputs(line, file);
+                    fputs(checks, file);
                     fclose(file);
                 }
             }
@@ -359,6 +384,7 @@ namespace Viewer
         {
             active.ParentSkin = candidate->ParentSkin;
             active.RecutKFrame = candidate->RecutKFrame;
+            active.RecutCheck = candidate->RecutCheck;
         }
         active.Publish = publish;
         active.ReservedBytes = estimate;
@@ -790,7 +816,7 @@ namespace Viewer
                 {
                     // RS-2a: node 쪽 결과의 재절단 skin을 생성만 하고 로그를 남긴 뒤 버린다(게시는 RS-3).
                     if (active.ParentSkin && active.NodeSide >= 0 && active.NodeSide <= 1 && results[active.NodeSide]->GetGenerated())
-                        LogRecutSkinBuild(*active.ParentSkin, *results[active.NodeSide]->GetGenerated(), active.RecutKFrame, active.NodeSide);
+                        LogRecutSkinBuild(*active.ParentSkin, *results[active.NodeSide]->GetGenerated(), active.RecutKFrame, active.World, active.RecutCheck.get(), active.NodeSide);
 
                     SceneTransform transform = mesh->GetTransform();
                     const MeshTransformMode mode = active.AttachmentSnapshot

@@ -88,6 +88,7 @@ namespace Viewer
             int32_t NodeSide = -1;
             std::shared_ptr<const PatchSkinPublication> ParentSkin; // RS-1: 재절단 skin 승계용 보관이며 아직 쓰지 않는다.
             Math::Matrix4 RecutKFrame{ Math::kIdentity };           // RS-1: 요청 시점 N·D이며 아직 쓰지 않는다.
+            std::shared_ptr<const RecutCheckInput> RecutCheck;      // RS-2b 진단 전용 N·팔레트 보관이다.
             uint64_t EditGeneration = 0;
             uint64_t ReservedBytes = 0;
             bool Publish = true;

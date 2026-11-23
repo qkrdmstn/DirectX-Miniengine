@@ -63,16 +63,28 @@ namespace Viewer
         const char* Side = "D5";
     };
 
+    // RS-2b 진단 전용: 요청 시점 N과 팔레트 전체의 posXform이다.
+    struct RecutCheckInput
+    {
+        Math::Matrix4 Node{ Math::kIdentity };
+        std::vector<Math::Matrix4> Palette;
+    };
+
     // 재절단 skin 생성의 정점 구성과 readback 비용이다.
     struct RecutSkinStats
     {
         uint32_t Vertices = 0, Copied = 0, K = 0, BadK = 0, BadParent = 0;
         double ReadbackMs = 0;
+        uint32_t CopyMismatch = 0;                 // RS-2b: 부모 레코드와 바이트가 다른 복사 정점 수.
+        float KPositionMax = 0, KNormalMaxDeg = 0; // RS-2b: K 정점 위치 최대 오차(component-local)와 법선 각도 최대(도).
+        uint32_t Skipped = 0;                      // RS-2b: 내부 교점(internal=1)이라 독립 스키닝에서 뺀 복사 정점 수.
+        float CopiedSkinMax = 0, KFrameDiff = 0;   // RS-2b: 복사 정점 독립 스키닝 최대 오차(local)와 kFrame 대 N·palette[K] 최대 성분 차이.
+        bool Checked = false;                      // RS-2b: 진단 검증을 실제로 수행했는지.
     };
 
     // 부모 skin과 재절단 결과로 자식 skin publication을 만든다(PatchSkinRecutCS). 완료까지 기다려 부모·결과 buffer를 잡지 않는다.
     bool BuildRecutPatchSkinVertices(const PatchSkinPublication& parent, const GeometryBuffers& cutResult,
-        const Math::Matrix4& kFrame, PatchSkinPublication& out, RecutSkinStats* stats = nullptr);
+        const Math::Matrix4& kFrame, PatchSkinPublication& out, RecutSkinStats* stats = nullptr, const RecutCheckInput* check = nullptr);
 
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,

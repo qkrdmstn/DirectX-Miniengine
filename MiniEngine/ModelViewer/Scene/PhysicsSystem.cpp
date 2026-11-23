@@ -170,6 +170,11 @@ namespace Viewer
         candidate.ParentSkin = mesh.PatchSkin;
         candidate.RecutKFrame = kFrame;
 
+        // 진단용 N과 팔레트 posXform도 함께 보관한다.
+        auto check = std::make_shared<RecutCheckInput>();
+        if (mesh.TryGetRecutCheckInput(*check))
+            candidate.RecutCheck = check;
+
         // 행렬 네 행을 각각 문자열로 만든다.
         char rows[4][64];
         const Math::Vector4 axes[4] = { kFrame.GetX(), kFrame.GetY(), kFrame.GetZ(), kFrame.GetW() };

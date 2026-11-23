@@ -1,4 +1,4 @@
-상태: 진행 중 — RS-1(부모 skin·N·D 보관, `-patch-recut-skin`)·RS-2a(PatchSkinRecutCS 생성, readback 약 1.1~1.6 ms) 완료, Release 회귀 6종 PASS(2026-11-23). 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
+상태: 진행 중 — RS-1(부모 skin·N·D 보관, `-patch-recut-skin`)·RS-2a(PatchSkinRecutCS 생성, readback 약 1.1~1.6 ms)·RS-2b(독립 스키닝·kFrame 진단 PASS) 완료, Release 회귀 6종 PASS(2026-11-23). 기준 master `a4b9ea23`, 브랜치 `patch-recut-keep-skin`
 
 # 스키닝 패치 재절단 시 스키닝 유지
 
@@ -86,16 +86,18 @@ struct PreparedGeometryReplacement { ...; std::shared_ptr<PatchSkinPublication> 
 | --- | --- | --- |
 | RS-1 | D4 보관: Update의 마지막 N 저장, bake 직전 부모 skin·`N·D`를 후보와 ActiveCut에 보관, D6 옵션. 동작 변화 없음 | 옵션 0/1 모두 AR4 다섯 PASS, 보관 값 로그, 메모리 예산 포함 여부 확인 |
 | RS-2a | D3 `PatchSkinRecutCS`·`BuildRecutPatchSkinVertices`(section 재계산, BindBounds readback), 호출은 UpdateOne 게시 전 생성만 | 빌드·회귀 PASS, 생성 로그(정점 수, 복사/K 수, readback 비용) |
-| RS-2b | RS-2a 결과 진단 | 복사 레코드 부모와 바이트 동일, K 정점을 요청 시점 팔레트로 스키닝한 위치·법선이 구운 값과 ≤ 0.01 mm |
-| RS-3 | D1·D2 node 쪽 결과에 skin 승계·활성화(helper 분리, A는 PreparedGeometryReplacement, B는 준비 단계), 이전 skin 지연 해제, D7 (a)(b) 측정과 `AttachedRecutChecks::Plane`의 PG 읽기 | node 쪽 결과 HasSkinnedPatch, 경계 오차 게시·60프레임 뒤 ≤ 0.01 mm |
-| RS-4 | D7 판정 교체(AR4 #2·RigBoneCut FollowError), D5 연속 재절단 확인, 문서 동기화(상태 줄·README·CodeMap·PatchSkinning PS-6 주석) | AR4·RigBoneCut·PS 진단 PASS, 연속 2회 재절단 경계 오차 ≤ 0.01 mm |
+| RS-2b | RS-2a 결과 진단 | 복사 레코드 부모와 바이트 동일, K 정점 왕복 위치와 복사 정점 독립 스키닝 위치가 구운 값과 local ≤ 1e-6, 법선 ≤ 0.5도, kFrame = N·palette[K]. 완료: mismatch 0/2246, K 1.86e-9, 복사 스키닝 1.62e-7 local(월드 0.029 mm, float 잡음), kframe diff 0 |
+| RS-3 | D1·D2 node 쪽 결과에 skin 승계·활성화(helper 분리, A는 PreparedGeometryReplacement, B는 준비 단계), 이전 skin 지연 해제, D7 (a)(b) 측정과 `AttachedRecutChecks::Plane`의 PG 읽기 | node 쪽 결과 HasSkinnedPatch, 경계 오차 게시·60프레임 뒤 local ≤ 1e-6(월드 mm는 참고) |
+| RS-4 | D7 판정 교체(AR4 #2·RigBoneCut FollowError), D5 연속 재절단 확인, 문서 동기화(상태 줄·README·CodeMap·PatchSkinning PS-6 주석) | AR4·RigBoneCut·PS 진단 PASS, 연속 2회 재절단 경계 오차 local ≤ 1e-6 |
 | RS-5 | CesiumMan 시각 확인: 부착 조각 재절단을 옵션 0/1로 캡처 비교 | 몸에 남는 조각이 원본과 함께 변형, 틈 없음 |
 
 각 단계는 약 300줄 이하로, 새 구현 실행 → 다른 실행 리뷰 → Release 빌드 → 회귀 → 로컬 커밋 순서로 진행한다.
 
 ## 완료 조건
 
-1. 기본값(옵션 1)에서 부착 스키닝 패치 재절단의 node 쪽 결과가 스키닝을 유지하고, 원본과의 경계 오차가 게시 프레임과 60프레임 뒤 모두 0.01 mm 이하다.
+기준 단위(RS-2b에서 변경): AR4 장면은 모델을 `2 / BoundingSphere.radius`(CesiumMan 약 177배)로 키운다. 그래서 float 반올림(local 1e-7대)이 월드 0.03 mm로 보인다. 위치 판정은 local 1e-6 이하로 하고 월드 mm는 참고로 남긴다.
+
+1. 기본값(옵션 1)에서 부착 스키닝 패치 재절단의 node 쪽 결과가 스키닝을 유지하고, 원본과의 경계 오차가 게시 프레임과 60프레임 뒤 모두 local 1e-6 이하다.
 2. 반대쪽 결과는 기존처럼 독립 정적 조각이고, AR4의 나머지 판정이 PASS다.
 3. 게시 프레임에 node 쪽 결과가 튀지 않는다(게시 경계 오차가 1과 같은 기준).
 4. 연속 2회 재절단 뒤에도 1이 성립한다.
