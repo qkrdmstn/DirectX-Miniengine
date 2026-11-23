@@ -54,10 +54,10 @@ namespace Viewer
                     // 검증을 수행한 경우에만 RS-2b 판정 줄을 만든다.
                     if (stats.Checked)
                         sprintf_s(checks, "RS2b copy mismatch=%u/%u badParent=%u %s\nRS2b K position max=%.3g local (%.4f mm, scale %.1f) normal max=%.3f deg %s\n"
-                            "RS2b copied skin max=%.3g local (%.4f mm, scale %.1f) skipped=%u %s\nRS2b kframe diff=%g %s\n",
+                            "RS2b copied skin max=%.3g local (%.4f mm, scale %.1f) skipped=%u(rim=%u cap=%u) %s\nRS2b kframe diff=%g %s\n",
                             stats.CopyMismatch, stats.Copied, stats.BadParent, copyPass ? "PASS" : "FAIL",
                             stats.KPositionMax, kPositionMm, scale, stats.KNormalMaxDeg, kPass ? "PASS" : "FAIL",
-                            stats.CopiedSkinMax, copiedSkinMm, scale, stats.Skipped, skinPass ? "PASS" : "FAIL",
+                            stats.CopiedSkinMax, copiedSkinMm, scale, stats.Skipped, stats.SkippedRim, stats.SkippedCap, skinPass ? "PASS" : "FAIL",
                             stats.KFrameDiff, framePass ? "PASS" : "FAIL");
                     const auto& bounds = child->Vertices.BindBounds;
                     built = true;

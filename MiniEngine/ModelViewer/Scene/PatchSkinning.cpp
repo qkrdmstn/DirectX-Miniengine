@@ -33,7 +33,7 @@ namespace Viewer
         {
             Math::Matrix4 InverseNode;
             uint32_t FirstVertex, VertexCount, Flags, Stride;
-            uint32_t DrawCount, RigidJoint, PatchTriangles, Padding;
+            uint32_t DrawCount, RigidJoint, PatchTriangles, Follow;
         };
         static_assert(sizeof(DrawInput) == 40 && sizeof(Parameters) == 96, "Patch skin shader layout");
         std::vector<DrawInput> draws;
@@ -116,7 +116,8 @@ namespace Viewer
         compute.TransitionResource(out.Data, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         compute.SetBufferUAV(6, out.Data);
         Parameters c{ Math::Invert(snapshot.MeshNodeAtCut), 0, 0, flags, stride,
-            drawCount, uint32_t(snapshot.JointsAtCut.size()), uint32_t(triangleBodies.size()), 0 };
+            drawCount, uint32_t(snapshot.JointsAtCut.size()), uint32_t(triangleBodies.size()),
+            PatchAnimFollowEnabled() && snapshot.AnimFollow ? 1u : 0u };
         for (const auto& mesh : piece.Meshes)
         {
             c.FirstVertex = mesh.vbOffset / 28;
@@ -355,6 +356,13 @@ namespace Viewer
                 uint32_t joints = 0;
                 std::memcpy(&joints, skin + (first + v) * stride + stride - 16, sizeof(joints));
                 ++local.Vertices;
+
+                // 끝점 보간 종류 1·2·3을 복사 여부와 상관없이 정점마다 센다.
+                uint32_t kind = 0;
+                std::memcpy(&kind, skin + size_t(first + v) * stride + stride - kSkinExtInternal, sizeof(kind));
+                if (kind == 1) ++local.Skipped;
+                else if (kind == 2) ++local.SkippedRim;
+                else if (kind == 3) ++local.SkippedCap;
                 if (copied)
                 {
                     ++local.Copied;
@@ -373,7 +381,7 @@ namespace Viewer
                         std::memcpy(&internal, skin + size_t(first + v) * stride + stride - kSkinExtInternal, sizeof(internal));
                         if (internal)
                         {
-                            ++local.Skipped;
+                            // 끝점 보간 정점은 독립 스키닝 비교에서 뺀다.
                         }
                         else
                         {

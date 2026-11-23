@@ -9,7 +9,7 @@ struct GeometryBuffers;
 namespace Viewer
 {
     // 확장 skin 정점(Flags 0x200)의 배치: 정점 끝(Stride)에서 거꾸로 센 바이트 거리다.
-    //   -96 내부 교점 표시(uint) | -92 보간 t(float)
+    //   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
     //   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
     //   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16) | joints 8(+20) | weights 8(+28)
     constexpr uint32_t kSkinExtFlag = 0x200;
@@ -56,8 +56,10 @@ namespace Viewer
         {
             uint32_t Rim, Cap; // Data 정점 번호이며 누락 cap은 UINT32_MAX다.
             float DistanceAtCut; // t_cut Data에서 rim과 가장 가까운 cap 사이 거리(m).
+            float BindPosition[3]; // rim의 K 슬롯 bind 위치(옵션 0의 K 위치 = K 프레임 · bind, AF-4 그루터기 추종 진단).
         };
         std::vector<RimCapPair> RimCapPairs;
+        uint32_t Rims2 = 0, Caps3 = 0, FallbackK = 0; // AF-4: 끝점 보간 rim·cap 수와 옵션 1에서 K로 남은 rim·cap 수.
         PatchSkinSnapshot Snapshot;
         PatchSkinVertices Vertices;
         std::vector<Section> Sections;
@@ -79,8 +81,9 @@ namespace Viewer
         double ReadbackMs = 0;
         uint32_t CopyMismatch = 0;                 // RS-2b: 부모 레코드와 바이트가 다른 복사 정점 수.
         float KPositionMax = 0, KNormalMaxDeg = 0; // RS-2b: K 정점 위치 최대 오차(component-local)와 법선 각도 최대(도).
-        uint32_t Skipped = 0;                      // RS-2b: 내부 교점(internal=1)이라 독립 스키닝에서 뺀 복사 정점 수.
+        uint32_t Skipped = 0;                      // RS-2b: 결과의 끝점 보간 종류 1(내부 교점) 정점 수.
         float CopiedSkinMax = 0, KFrameDiff = 0;   // RS-2b: 복사 정점 독립 스키닝 최대 오차(local)와 kFrame 대 N·palette[K] 최대 성분 차이.
+        uint32_t SkippedRim = 0, SkippedCap = 0;   // AF-4: 결과의 끝점 보간 종류 2(rim)·3(cap) 정점 수.
         bool Checked = false;                      // RS-2b: 진단 검증을 실제로 수행했는지.
     };
 

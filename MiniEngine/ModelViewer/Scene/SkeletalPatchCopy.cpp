@@ -904,6 +904,9 @@ namespace Viewer
         bool inBounds = false;
         double maximum = INFINITY;
         uint32_t pairCount = 0;
+        double stumpMax = 0.0;
+        Math::Matrix4 kFrame(Math::kIdentity);
+        const bool haveFrame = piece && piece->TryGetRecutKFrame(kFrame);
         if (skinned && piece->HasPoseBounds() && piece->GetPosedGeometry().IsReady())
         {
             // 실제 프레임의 RAW40을 동기 복사하고 VB 겸용 버퍼의 읽기 상태를 복원한다.
@@ -950,6 +953,13 @@ namespace Viewer
                     maximum = INFINITY;
                     continue;
                 }
+
+                // AF-4: 옵션 1 rim이 t_cut 위치(= 옵션 0의 K 위치)에서 얼마나 움직였는지 기억한다.
+                if (haveFrame)
+                {
+                    const Math::Vector3 optionZero(kFrame * Math::Vector4(pair.BindPosition[0], pair.BindPosition[1], pair.BindPosition[2], 1.0f));
+                    stumpMax = std::max(stumpMax, double(float(Math::Length(positions[pair.Rim] - optionZero))) * 1000.0);
+                }
                 const float distance = float(Math::Length(positions[pair.Rim] - positions[pair.Cap]));
                 const double change = std::abs(double(distance) - double(pair.DistanceAtCut)) * 1000.0;
                 maximum = std::isfinite(change) ? std::max(maximum, change) : INFINITY;
@@ -960,6 +970,15 @@ namespace Viewer
         const bool pass = skinned && inBounds && pairCount > 0 && maximum <= 0.01;
         PatchLog("PS4 case=%u side=%s frame=%s skinned=%d inBounds=%d rimCapPairs=%u rimCapChangeMax_mm=%.6f result=%s\n",
             diagnosticCase, side, frame, int(skinned), int(inBounds), pairCount, maximum, pass ? "PASS" : "FAIL");
+
+        // AF-4: 옵션 1에서 끝점 보간 rim·cap 간격 변화가 용접 허용치(0.01 mm) 이하인지와 그루터기 이동량을 기록한다.
+        if (skinned && PatchAnimFollowEnabled() && piece->PatchSkin->Snapshot.AnimFollow)
+        {
+            const auto& skin = *piece->PatchSkin;
+            PatchLog("AF4 rimcap case=%u side=%s frame=%s gapChangeMax=%.6f weldTol=%.6f rims2=%u caps3=%u fallbackK=%u stumpDispMax_mm=%.6f result=%s\n",
+                diagnosticCase, side, frame, maximum, 0.01, skin.Rims2, skin.Caps3, skin.FallbackK, stumpMax,
+                maximum <= 0.01 && pairCount > 0 && skin.Rims2 + skin.Caps3 > 0 ? "PASS" : "FAIL");
+        }
     }
 
     // 외곽 경계와 PS4를 측정하고 양쪽 고정 weight 및 두 시점의 결과를 기록한다.
@@ -2250,6 +2269,8 @@ namespace Viewer
         uint32_t copied = 0;
         uint32_t split = 0;
         uint32_t cap = 0;
+        skin->Rims2 = skin->Caps3 = skin->FallbackK = 0;
+        const bool follow = built && PatchAnimFollowEnabled() && snapshot.AnimFollow;
         double maxError = built ? 0.0 : INFINITY;
         if (built)
         {
@@ -2304,8 +2325,11 @@ namespace Viewer
                         posed = posed + (palette[joints[k]].posXform * source) * (float(weights[k]) / total);
                     }
 
-                    // 내부 교점은 GPU와 같이 두 원본 끝점을 각각 skin한 뒤 t로 보간한다.
-                    if ((skin->Vertices.Flags & kSkinExtFlag) && *reinterpret_cast<const uint32_t*>(input + skin->Vertices.Stride - kSkinExtInternal))
+                    // 끝점 보간 종류(1 내부 교점, 2 rim, 3 cap)가 있으면 GPU와 같이 두 원본 끝점을 각각 skin한 뒤 t로 보간한다.
+                    uint32_t interpolation = 0;
+                    if (skin->Vertices.Flags & kSkinExtFlag)
+                        std::memcpy(&interpolation, input + skin->Vertices.Stride - kSkinExtInternal, sizeof(interpolation));
+                    if (interpolation)
                     {
                         Math::Vector4 endpoints[2];
                         float t;
@@ -2342,15 +2366,24 @@ namespace Viewer
                     {
                         ++cap;
                         capVertices.push_back(v);
+                        if (interpolation == 3)
+                            ++skin->Caps3;
+                        else if (follow)
+                            ++skin->FallbackK;
                     }
                     else if (origin[2] == origin[3])
                         ++copied;
                     else
                     {
                         ++split;
-                        // 실제 경계만 cap과 짝지으며 내부 교점은 표면 수에만 포함한다.
-                        if (!*reinterpret_cast<const uint32_t*>(input + skin->Vertices.Stride - kSkinExtInternal))
+
+                        // 실제 경계(K 또는 끝점 보간 rim)만 cap과 짝지으며 내부 교점(1)은 표면 수에만 포함한다.
+                        if (interpolation == 0 || interpolation == 2)
                             rimVertices.push_back(v);
+                        if (interpolation == 2)
+                            ++skin->Rims2;
+                        else if (interpolation == 0 && follow)
+                            ++skin->FallbackK;
                     }
                     ++vertices;
                 }
@@ -2392,7 +2425,8 @@ namespace Viewer
                     {
                         nearestMax = std::max(nearestMax, nearest);
                     }
-                    skin->RimCapPairs.push_back({ rim, match, nearest });
+                    const float* bindPosition = reinterpret_cast<const float*>(bind + size_t(rim) * skin->Vertices.Stride);
+                    skin->RimCapPairs.push_back({ rim, match, nearest, { bindPosition[0], bindPosition[1], bindPosition[2] } });
                 }
 
                 // split·cap 수, 누락 수, t_cut 최근접 거리 최댓값을 원인 조사용으로 남긴다.

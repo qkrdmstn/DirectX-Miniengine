@@ -2,7 +2,7 @@ cbuffer Parameters : register(b0)
 {
     float4x4 InverseNode;
     uint FirstVertex, VertexCount, Flags, Stride;
-    uint DrawCount, RigidJoint, PatchTriangles;
+    uint DrawCount, RigidJoint, PatchTriangles, Follow;
 };
 struct DrawInput
 {
@@ -17,7 +17,7 @@ ByteAddressBuffer Provenance : register(t3);
 StructuredBuffer<DrawInput> Inputs : register(t4);
 RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
-//   -96 내부 교점 표시(uint) | -92 보간 t(float)
+//   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
 //   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
 //   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16) | joints 8(+20) | weights 8(+28)
 static const uint ExtInternal = 96;
@@ -85,7 +85,7 @@ void StoreEndpoint(uint output, uint vertex)
     Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
 }
 
-// 복사 정점은 원본 bind로 복원하고 내부 교점만 끝점 보간 입력을 덧붙인다.
+// 복사 정점은 원본 bind로 복원한다. 내부 교점(1)과, 조각 플래그가 켜진 실제 분리 rim(2)·cap(3)에는 두 끝점의 원본 skin 입력을 덧붙인다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -138,16 +138,22 @@ void main(uint3 id : SV_DispatchThreadID)
     if (Flags & 16)
         Result.Store(at, uv1);
 
-    // 양쪽 삼각형이 같은 몸체로 귀속된 새 교점만 보간 대상으로 표시한다.
+    // 끝점 보간 종류를 정한다: 같은 몸체 교점은 1, 조각 플래그가 켜진 실제 rim은 2, cap은 3이다.
     uint sourceTriangle = Provenance.Load(vertex * 32 + 20);
-    bool internal = false;
+    uint interpolation = 0;
     if (origin.x != 0xffffffff && !copied && sourceTriangle < PatchTriangles)
     {
         DrawInput bodies = Inputs[DrawCount + sourceTriangle];
-        internal = bodies.Section != 0xffffffff && bodies.Section == bodies.Draw;
+        if (bodies.Section != 0xffffffff)
+            interpolation = bodies.Section == bodies.Draw ? 1 : (Follow ? 2 : 0);
     }
-    Result.Store2(output + Stride - ExtInternal, uint2(internal ? 1 : 0, Provenance.Load(vertex * 32 + 16)));
-    if (internal)
+    else if (origin.x == 0xffffffff && Follow && origin.z < PatchTriangles * 3 && origin.w < PatchTriangles * 3)
+    {
+        // cap의 (e0, e1)은 split과 같은 추출 패치 VB 번호라서 SourceAddress가 section/draw를 그대로 찾는다.
+        interpolation = 3;
+    }
+    Result.Store2(output + Stride - ExtInternal, uint2(interpolation, Provenance.Load(vertex * 32 + 16)));
+    if (interpolation)
     {
         StoreEndpoint(output + Stride - ExtEndpoint0, origin.z);
         StoreEndpoint(output + Stride - ExtEndpoint1, origin.w);
