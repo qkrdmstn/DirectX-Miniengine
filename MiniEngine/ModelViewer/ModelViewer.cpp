@@ -109,6 +109,8 @@ public:
             if (!pass)
                 return 1;
         }
+        if (m_AttachedRecutChecks.Mode >= 2 && !m_AttachedRecutChecks.SecondPassed)
+            return 1;
 
         // 재절단 진단의 완료 여부를 종료 코드로 변환한다.
         return m_AttachedRecutChecks.Done ? 0 : 1;
@@ -160,7 +162,7 @@ private:
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
     uint32_t m_RecutRepro = 0, m_RecutRequested[2]{}, m_RecutApplied[2]{};
-    uint32_t m_RecutResultFrame = 0, m_RecutCaptured = 0;
+    uint32_t m_RecutResultFrame = 0, m_RecutCaptured = 0, m_AttachedRecutFrame = 0;
     Viewer::ObjectId m_RecutOwner = Viewer::InvalidObjectId;
     size_t m_RecutBeforePieces = 0;
     bool m_RecutFailed[2]{};
@@ -419,6 +421,7 @@ void ModelViewer::Startup( void )
     uint32_t attachedRecut = 0;
     CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut);
     m_AttachedRecutChecks.Enabled = attachedRecut != 0;
+    m_AttachedRecutChecks.Mode = attachedRecut;
 
     // 본 내부 절단 진단은 별도 실행으로 제한한다.
     uint32_t rigBoneCut = 0;
@@ -455,7 +458,7 @@ void ModelViewer::Startup( void )
     {
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
-            L"capture", L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
+            L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
             L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
             L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
             L"cut-empty-side", L"collision-log", L"demo-cut-sec" })
@@ -1617,7 +1620,12 @@ void ModelViewer::RenderScene( void )
     // 두 번째 게시 캡처는 별도 순번으로 세고 120프레임 관찰 범위 안에서 저장한다.
     const bool recutCapture = m_RecutRepro && !m_CapturePath.empty() && m_RecutApplied[1]
         && m_RecutCaptured < demoCount && m_QueryFrame - m_RecutApplied[1] == m_RecutCaptured * demoStep;
-    const bool capture = recutCapture || demoCapture || (!m_RecutRepro && !m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
+    // 부착 재절단 검사는 첫 재절단 게시 프레임부터 같은 간격으로 저장한다.
+    if (m_AttachedRecutChecks.Enabled && !m_AttachedRecutFrame && m_AttachedRecutChecks.Stage >= 2)
+        m_AttachedRecutFrame = m_QueryFrame;
+    const bool attachedCapture = m_AttachedRecutFrame && !m_CapturePath.empty()
+        && m_RecutCaptured < demoCount && m_QueryFrame - m_AttachedRecutFrame == m_RecutCaptured * demoStep;
+    const bool capture = attachedCapture || recutCapture || demoCapture || (!m_RecutRepro && !m_SkeletalBreakDemo && (breakCapture || (!m_CapturePath.empty() && !m_CaptureComplete && ++m_CaptureFrame >= (m_SkeletalPatchChecks ? std::max(3u, m_CaptureTargetFrame) : m_CaptureTargetFrame)
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
         && (!m_CaptureCount || (m_CaptureFrame - m_CaptureTargetFrame) % m_CaptureStep == 0)
         && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())))));
@@ -1640,6 +1648,10 @@ void ModelViewer::RenderScene( void )
             Utility::Printf("RecutRepro capture request=2 frame=%u index=%u age=%u\n",
                 m_QueryFrame, m_RecutCaptured - 1, m_QueryFrame - m_RecutApplied[1]);
         }
+
+        // 부착 재절단 캡처는 별도 파일 이름과 순번을 쓴다.
+        if (attachedCapture)
+            m_ActiveCapturePath += L"-attached-recut-" + std::to_wstring(m_RecutCaptured++);
 
         // 게시 프레임부터 20프레임 간격의 순번을 세 자리 파일 이름에 붙인다.
         if (demoCapture)

@@ -134,6 +134,9 @@
     <FxCompile Include="Scene\Shaders\TriangleCompactCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>
+    <FxCompile Include="Scene\Shaders\PatchSkinRecutCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
     <FxCompile Include="Scene\Shaders\GizmoVS.hlsl">
       <ShaderType>Vertex</ShaderType>
     </FxCompile>

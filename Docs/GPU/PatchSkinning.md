@@ -105,6 +105,8 @@ void BuildPatchPalette(const PatchSkinSnapshot& snap, const Joint* current,
 | PS-5 | SP7e2 정점 식별자 짝·같은 프레임 PG 비교 | 완료: Xbot 허벅지·CesiumMan 팔 publish·after60 모두 0.000 mm PASS(강체 기준선 1.04/2.56, 36.4/249 mm), Xbot 전완 N/A. 조각별 경계 고정 weight 0. SP7e2 FAIL 시 종료 코드 1 |
 | PS-6 | AR 후보 static 노출, 후보 시점 bake·영구 강체 전환, 스키닝 해제 폴백 시 진행 중 AR 무효화 | 완료: PS6 bake D5 0.0011 mm·AR A 0.0014 mm PASS, AR4 다섯 PASS, Rig bone cut PASS. 전단·모호 node side 후보는 bake 전 거절 |
 
+PS-6 후속: 재절단 node 쪽은 [PatchRecutSkinning.md](PatchRecutSkinning.md)로 스키닝을 유지한다(옵션 `-patch-recut-skin 0`은 기존 bake·정적).
+
 시간 예상: 단계마다 구현 Codex 10~20분, 리뷰 Codex 2~5분, Debug+Release 빌드 2~4분, 회귀 6종 5~10분. 300줄을 넘기면 단계를 나눈다.
 
 ## 완료 조건

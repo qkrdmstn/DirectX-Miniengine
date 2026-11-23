@@ -548,7 +548,7 @@ namespace Viewer
     // 교체에 필요한 pose 버퍼와 충돌 상태를 컴포넌트 밖에서 미리 만든다. 같은 원본이 아니거나 TRS가 무효면 null을 돌려준다.
     std::unique_ptr<PreparedGeometryReplacement> MeshComponent::PrepareGeometryReplacement(std::shared_ptr<const GeometryRevision> geometry,
         const SceneTransform& transform, MeshTransformMode mode, const DeformBinding& binding,
-        MiniCollision::AggregateGeom collision, const char* emptyReason) const
+        MiniCollision::AggregateGeom collision, const char* emptyReason, std::shared_ptr<PatchSkinPublication> skin) const
     {
         // 같은 원본의 생성 geometry만 받는다.
         if (!geometry || !geometry->IsGenerated() || geometry->GetSource() != m_Geometry->GetSource())
@@ -562,8 +562,29 @@ namespace Viewer
             return nullptr;
         prepared->Mode = mode;
 
-        // 새 pose 버퍼를 만든다.
-        prepared->Posed = std::make_unique<PosedGeometry>(*geometry->GetGenerated());
+        // 재절단 skin이 있으면 skin PG와 팔레트를 준비한다.
+        // 만들 수 없으면 로그를 남기고 정적 교체로 폴백한다.
+        if (skin && Attachment && skin->Snapshot.SkinningAllowed && skin->Snapshot.MeshNode != UINT32_MAX)
+        {
+            try
+            {
+                BuildSkinnedPose(*geometry, *skin, prepared->Posed, prepared->Palette);
+                const Matrix4& world = Attachment->PieceWorldAtCut;
+                prepared->PieceWorld = AffineTransform((Vector3)world.GetX(), (Vector3)world.GetY(),
+                    (Vector3)world.GetZ(), (Vector3)world.GetW());
+                prepared->PatchSkin = std::move(skin);
+            }
+            catch (const std::exception& error)
+            {
+                prepared->Posed.reset();
+                prepared->Palette.clear();
+                Utility::Printf("RS3 skin fallback to static side=A: %s\n", error.what());
+            }
+        }
+
+        // 정적 교체이면 새 pose 버퍼를 만든다.
+        if (!prepared->PatchSkin)
+            prepared->Posed = std::make_unique<PosedGeometry>(*geometry->GetGenerated());
 
         // 계승 충돌과 상태를 확정한다. 빈 형상은 body 없는 조각이다.
         const bool empty = collision.ConvexElems.empty();
@@ -591,6 +612,22 @@ namespace Viewer
         std::unique_ptr<PosedGeometry> previous = std::move(m_PosedGeometry);
         m_PosedGeometry = std::move(prepared.Posed);
         m_PatchSkinActive = false;
+
+        // 준비된 skin이 있으면 move만으로 활성화하고, 아직 해제되지 않은 이전 skin은 지연 해제로 넘긴다.
+        if (prepared.PatchSkin)
+        {
+            if (PatchSkin && !m_RetiredPatchSkin)
+                m_RetiredPatchSkin = std::move(PatchSkin);
+
+            // 넘길 자리가 없으면 GPU fence까지 자원을 보존한 뒤 이전 skin을 놓는다.
+            else if (PatchSkin)
+                Graphics::g_CommandManager.RetireResource(PatchSkin->Vertices.Data.GetResource());
+            PatchSkin = std::move(prepared.PatchSkin);
+            m_PatchPalette = std::move(prepared.Palette);
+            m_PreparedWorld = prepared.PieceWorld;
+            m_HasPatchNodeFrame = false;
+            m_PatchSkinActive = true;
+        }
 
         // SetGeometry·SetTransform·SetDeformBinding과 같은 세대 증가와 캐시 무효화를 적용한다.
         ClearTriangleMask();
@@ -647,6 +684,27 @@ namespace Viewer
         return true;
     }
 
+    // 부분집합 조각도 전체 SourceMesh 번호로 조회되도록 매핑한 skin PG와 K+1 슬롯 팔레트를 만든다. 멤버는 바꾸지 않는다.
+    void MeshComponent::BuildSkinnedPose(const GeometryRevision& geometry, const PatchSkinPublication& skin,
+        std::unique_ptr<PosedGeometry>& posed, std::vector<Joint>& palette)
+    {
+        // 부분집합 조각도 렌더가 쓰는 전체 SourceMesh 번호로 PG offset을 조회한다.
+        std::vector<PosedGeometry::VertexRange> sections(geometry.GetGenerated()->Meshes.size(), { 0, 0 });
+        for (size_t i = 0; i < skin.Sections.size(); ++i)
+        {
+            const auto& section = skin.Sections[i];
+            sections[geometry.GetSections().at(i).SourceMesh] = { section.FirstVertex, section.VertexCount };
+        }
+
+        // skin VB를 입력으로 하는 PG와 고정 joint 수에 강체 슬롯을 더한 팔레트를 만든다.
+        auto result = std::make_unique<PosedGeometry>(skin.Vertices.Data, skin.Vertices.Stride, skin.Vertices.Flags, sections);
+        std::vector<Joint> slots(skin.Snapshot.JointsAtCut.size() + 1);
+
+        // 모두 성공한 뒤에만 호출자 값으로 옮긴다.
+        posed = std::move(result);
+        palette = std::move(slots);
+    }
+
     // 실제 게시 시 skin 입력으로 전용 PG를 교체하고 재사용할 팔레트를 한 번 할당한다.
     void MeshComponent::ActivatePatchSkin()
     {
@@ -662,19 +720,15 @@ namespace Viewer
         if (!m_Geometry->IsGenerated() || !Attachment || PatchSkin->Snapshot.MeshNode == UINT32_MAX)
             throw std::runtime_error("Invalid patch skin publication");
 
-        // 부분집합 조각도 렌더가 쓰는 전체 SourceMesh 번호로 PG offset을 조회한다.
-        std::vector<PosedGeometry::VertexRange> sections(m_Geometry->GetGenerated()->Meshes.size(), { 0, 0 });
-        for (size_t i = 0; i < PatchSkin->Sections.size(); ++i)
-        {
-            const auto& section = PatchSkin->Sections[i];
-            sections[m_Geometry->GetSections()[i].SourceMesh] = { section.FirstVertex, section.VertexCount };
-        }
-        auto posed = std::make_unique<PosedGeometry>(PatchSkin->Vertices.Data,
-            PatchSkin->Vertices.Stride, PatchSkin->Vertices.Flags, sections);
-        m_PosedGeometry = std::move(posed);
+        // 예외를 던질 수 있는 PG·팔레트 준비를 먼저 끝낸다.
+        std::unique_ptr<PosedGeometry> posed;
+        std::vector<Joint> palette;
+        BuildSkinnedPose(*m_Geometry, *PatchSkin, posed, palette);
 
-        // 고정 joint 수와 강체 슬롯에 맞춰 팔레트를 준비하고 게시 월드를 기록한다.
-        m_PatchPalette.resize(PatchSkin->Snapshot.JointsAtCut.size() + 1);
+        // 준비된 PG와 팔레트로 교체하고 게시 월드를 기록한다.
+        m_PosedGeometry = std::move(posed);
+        m_PatchPalette = std::move(palette);
+        m_HasPatchNodeFrame = false;
         const Matrix4& world = Attachment->PieceWorldAtCut;
         m_PreparedWorld = AffineTransform((Vector3)world.GetX(), (Vector3)world.GetY(),
             (Vector3)world.GetZ(), (Vector3)world.GetW());
@@ -848,6 +902,7 @@ namespace Viewer
         Attachment->PieceWorldAtCut = Matrix4(m_PreparedWorld);
         SetAttachedWorld(world);
         m_PatchSkinActive = false;
+        m_HasPatchNodeFrame = false;
         m_RetiredPatchSkin = std::move(PatchSkin);
         m_RetiredPatchPose = std::move(m_PosedGeometry);
         m_PosedGeometry = std::move(posed);
@@ -914,6 +969,7 @@ namespace Viewer
             m_RetiredPatchSkin.reset();
             m_RetiredPatchPose.reset();
             m_PatchPalette.clear();
+            m_HasPatchNodeFrame = false;
         }
 
         // 같은 명령 목록에서 마스크를 먼저 갱신한다.
@@ -957,6 +1013,8 @@ namespace Viewer
                 const Matrix4 sourceToComponent(Invert(patchSource->GetDeformBinding().SourceFrame.ToAffine()));
                 const Matrix4 node = sourceToComponent * patchSource->GetPreparedNodes()[PatchSkin->Snapshot.MeshNode];
                 m_PosedGeometry->UpdateSkinnedGenerated(context, PatchSkin->Vertices.Data, m_PatchPalette, node);
+                m_PatchNodeFrame = node;
+                m_HasPatchNodeFrame = true;
                 if (skinChecks && !PatchSkinTimingName.empty())
                     EngineProfiling::EndBlock(&context);
 

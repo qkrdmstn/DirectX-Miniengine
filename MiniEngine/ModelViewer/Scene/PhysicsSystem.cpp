@@ -1,7 +1,9 @@
 ﻿#include "PhysicsSystem.h"
 #include "Utility.h"
+#include "Util/CommandLineArg.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -150,6 +152,59 @@ namespace Viewer
         return true;
     }
 
+    // D6 옵션이 켜진 경우 bake 직전의 부모 skin과 N·D를 후보에 보관하고 한 줄 진단을 남긴다.
+    static void KeepParentSkin(const MeshComponent& mesh, CutCandidate& candidate)
+    {
+        // 옵션은 최초 호출에서 한 번만 읽고 기본값은 1이다.
+        static const bool enabled = []
+        {
+            uint32_t value = 1;
+            CommandLineArgs::GetInteger(L"patch-recut-skin", value);
+            return value != 0;
+        }();
+        if (!enabled) return;
+
+        // 현재 포즈의 N·D를 얻지 못하면 기존 정적 경로를 유지한다.
+        Math::Matrix4 kFrame;
+        if (!mesh.TryGetRecutKFrame(kFrame)) return;
+        candidate.ParentSkin = mesh.PatchSkin;
+        candidate.RecutKFrame = kFrame;
+
+        // 진단용 N과 팔레트 posXform도 함께 보관한다.
+        auto check = std::make_shared<RecutCheckInput>();
+        if (mesh.TryGetRecutCheckInput(*check))
+            candidate.RecutCheck = check;
+
+        // 행렬 네 행을 각각 문자열로 만든다.
+        char rows[4][64];
+        const Math::Vector4 axes[4] = { kFrame.GetX(), kFrame.GetY(), kFrame.GetZ(), kFrame.GetW() };
+        for (int i = 0; i < 4; ++i)
+            sprintf_s(rows[i], "%.4f %.4f %.4f", float(axes[i].GetX()), float(axes[i].GetY()), float(axes[i].GetZ()));
+
+        // 후보 보관 시점에만 한 줄을 로그에 남긴다.
+        char line[512], path[MAX_PATH];
+        sprintf_s(line, "RS1 keep parentSkin=%d vertices=%u kframe=[%s | %s | %s | %s]\n",
+            candidate.ParentSkin ? 1 : 0, candidate.ParentSkin ? candidate.ParentSkin->VertexCount : 0u,
+            rows[0], rows[1], rows[2], rows[3]);
+        Utility::Print(line);
+
+        // 파일 append는 진단 옵션이 켜진 실행에서만 한다.
+        uint32_t recutChecks = 0, breakChecks = 0;
+        CommandLineArgs::GetInteger(L"attached-recut-checks", recutChecks);
+        CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", breakChecks);
+        if (!recutChecks && !breakChecks) return;
+        FILE* file = nullptr;
+        if (GetTempPathA(MAX_PATH, path))
+        {
+            strcat_s(path, "SP6-SkeletalPatchChecks.log");
+            if (!fopen_s(&file, path, "a"))
+            {
+                fputs(line, file);
+                fclose(file);
+            }
+        }
+    }
+
     // 평면 후보의 활성 skin을 굽고 같은 프레임의 부착 snapshot을 고정한다.
     std::vector<CutCandidate> PhysicsSystem::QueryCutCandidates(const MeshCutting::CutPlaneData& plane,
         float worldEpsilon, ObjectId targetOwner, ComponentId targetMesh) const
@@ -223,6 +278,8 @@ namespace Viewer
                 // 모호 후보를 제외한 뒤 snapshot보다 먼저 현재 PG를 영구 강체로 굽는다.
                 if (mesh->HasSkinnedPatch())
                 {
+                    // bake가 skin을 해제하기 전에 부모 skin과 N·D를 보관한다.
+                    KeepParentSkin(*mesh, candidate);
                     if (!mesh->BakePatchSkin(nodeWorld))
                     {
                         ++attachmentRejected;
