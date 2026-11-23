@@ -7,8 +7,9 @@
 #include "Util/CommandLineArg.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
-#include "TriangleMaskCompaction.h"
+#include <algorithm>
 #include "CompiledShaders/PatchSkinBakeCS.h"
+#include "CompiledShaders/TriangleCompactCS.h"
 #include "ReadbackBuffer.h"
 #include <cstdio>
 #include <chrono>
@@ -22,6 +23,31 @@ using namespace Math;
 
 namespace Viewer
 {
+    // 압축 compute 파이프라인을 처음 한 번만 만든다. 첫 게시의 PSO 생성 지연을 피하려고 컴포넌트 생성 때도 호출한다.
+    static std::pair<RootSignature&, ComputePSO&> CompactPipeline()
+    {
+        // 최초 호출에서 루트 시그니처와 PSO를 만든다.
+        static RootSignature root;
+        static ComputePSO pso(L"Compact triangle mask");
+        static bool initialized = false;
+        if (!initialized)
+        {
+            root.Reset(6);
+            root[0].InitAsConstants(0, 4);
+            root[1].InitAsBufferSRV(0);
+            root[2].InitAsBufferSRV(1);
+            root[3].InitAsBufferSRV(2);
+            root[4].InitAsBufferUAV(0);
+            root[5].InitAsBufferUAV(1);
+            root.Finalize(L"Compact triangle mask");
+            pso.SetRootSignature(root);
+            pso.SetComputeShader(g_pTriangleCompactCS, sizeof(g_pTriangleCompactCS));
+            pso.Finalize();
+            initialized = true;
+        }
+        return { root, pso };
+    }
+
     // 불변 원본 참조와 컴포넌트 전용 GPU 저장 공간을 준비한다.
     MeshComponent::MeshComponent(ComponentId id, std::shared_ptr<const GeometryRevision> geometry)
         : m_Id(id), m_Geometry(std::move(geometry))
@@ -41,9 +67,19 @@ namespace Viewer
 
         // 현재 revision의 충돌을 만든다.
         RebuildCollision();
+
+        // 첫 게시 지연을 피하려고 압축 파이프라인을 미리 만든다.
+        CompactPipeline();
     }
 
-    // CPU 제거 상태로 압축 IB를 게시하고 이전 IB는 제출 fence 완료까지 보존한다.
+    // GPU 압축 셰이더의 draw 입력과 같은 배치다. 값은 모두 원본 IB 기준이다.
+    struct CompactDrawInput
+    {
+        uint32_t IbOffset, Index32, StartIndex, Triangles;
+        uint32_t StateFirst, WorkFirst, Reserved0, Reserved1;
+    };
+
+    // CPU가 draw별 남은 개수를 세고 GPU가 압축 IB를 만들며 이전 IB는 제출 fence 완료까지 보존한다.
     bool MeshComponent::SetTriangleMask(const std::vector<uint32_t>& state)
     {
         // 생성 geometry에는 원본 삼각형 번호를 적용하지 않는다.
@@ -57,101 +93,116 @@ namespace Viewer
         if (!triangles || triangles != state.size()) return false;
         for (uint32_t value : state) if (value & 0x7fff0000u) return false;
 
-        // 같은 상태는 재할당하지 않고, 원본 mesh 번호를 skin CPU 배열 번호로 연결한다.
+        // 같은 상태는 재할당하지 않는다.
         if (m_TriangleMask && m_TriangleMask->Pending == state) return true;
         const auto started = std::chrono::steady_clock::now();
-        const auto& model = *m_Geometry->GetSource();
-        std::vector<uint32_t> skinSections(model.m_NumMeshes, UINT32_MAX);
-        const uint8_t* meshData = model.m_MeshData.get();
-        uint32_t skin = 0;
-        for (uint32_t s = 0; s < model.m_NumMeshes; ++s)
-        {
-            const auto& mesh = *reinterpret_cast<const Mesh*>(meshData);
-            if (mesh.numJoints) skinSections[s] = skin++;
-            meshData += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
-        }
 
-        // GPU와 무관한 입력을 구성하고 전체 압축이 성공한 경우만 게시를 준비한다.
-        std::vector<MaskSection> sections;
-        for (size_t s = 0; s < m_Geometry->GetSections().size(); ++s)
-        {
-            const auto& mesh = m_Geometry->GetMesh(s);
-            const uint32_t cpu = skinSections.at(m_Geometry->GetSections()[s].SourceMesh);
-            sections.push_back({ mesh.numJoints != 0, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
-                cpu < model.m_SkinCpuSections.size() ? &model.m_SkinCpuSections[cpu].Indices : nullptr, {} });
-            for (uint32_t d = 0; d < mesh.numDraws; ++d)
-                sections.back().Draws.push_back({ mesh.draw[d].primCount, mesh.draw[d].baseVertex });
-        }
-        CompactMask compacted;
-        if (!CompactTriangleMask(sections, state, compacted))
-        {
-            Utility::Printf("TriangleMask rejected: skin CPU indices unavailable or invalid\n");
-            return false;
-        }
-
-        // 성공한 CPU 결과를 section별 렌더 override로 변환한다.
-        std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> overrides(sections.size());
+        // 제거가 있는 skin section의 draw별 남는 삼각형 수와 GPU 입력을 CPU 상태로 계산한다. 출력은 항상 R32다.
+        const size_t sectionCount = m_Geometry->GetSections().size();
+        std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> overrides(sectionCount);
         std::vector<std::shared_ptr<Renderer::MeshRenderOverride>> views;
-        for (size_t s = 0; s < sections.size(); ++s)
+        std::vector<CompactDrawInput> inputs;
+        uint32_t first = 0, work = 0, kept = 0;
+        const auto isRemoved = [](uint32_t value) { return (value & 0x80000000u) != 0; };
+        for (size_t s = 0; s < sectionCount; ++s)
         {
-            const auto& result = compacted.Sections[s];
-            if (!result.Override) continue;
+            const Mesh& mesh = m_Geometry->GetMesh(s);
+            uint32_t count = 0;
+            for (uint32_t d = 0; d < mesh.numDraws; ++d) count += mesh.draw[d].primCount / 3;
+            if (!std::any_of(state.begin() + first, state.begin() + first + count, isRemoved)) { first += count; continue; }
+            if (!mesh.numJoints)
+            {
+                Utility::Printf("TriangleMask rejected: removal on non-skinned section\n");
+                return false;
+            }
+
+            // 원본 draw 순서대로 남는 인덱스 범위를 정한다. section 출력 시작은 앞 section까지 남은 수다.
             auto view = std::make_shared<Renderer::MeshRenderOverride>();
-            for (const auto& draw : result.Draws) view->Draws.push_back({ draw.first, draw.second });
-            view->IndexBuffer = { result.ByteOffset, result.ByteCount,
-                sections[s].R32 ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT };
+            uint32_t sectionKept = 0;
+            for (uint32_t d = 0; d < mesh.numDraws; ++d)
+            {
+                const uint32_t drawTriangles = mesh.draw[d].primCount / 3;
+                const uint32_t survivors = drawTriangles - uint32_t(std::count_if(state.begin() + first,
+                    state.begin() + first + drawTriangles, isRemoved));
+                view->Draws.push_back({ sectionKept * 3, survivors * 3 });
+                if (drawTriangles)
+                    inputs.push_back({ mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT, mesh.draw[d].startIndex,
+                        drawTriangles, first, work, 0, 0 });
+                first += drawTriangles;
+                work += drawTriangles;
+                sectionKept += survivors;
+            }
+            view->IndexBuffer = { kept * 12ull, sectionKept * 12, DXGI_FORMAT_R32_UINT };
+            kept += sectionKept;
             overrides[s] = view;
             views.push_back(std::move(view));
         }
         const double cpuUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
 
-        // CPU 결과를 임시 업로드에 쓰고 DEFAULT 힙 IB의 절대 view 주소를 확정한다.
-        const auto uploadStarted = std::chrono::steady_clock::now();
-        std::unique_ptr<ByteAddressBuffer> compact;
-        if (!views.empty())
-        {
-            compact = std::make_unique<ByteAddressBuffer>();
-            compact->Create(L"Component compact IB", uint32_t((std::max(size_t(4), compacted.Bytes.size()) + 3) / 4), 4);
-            UploadBuffer upload;
-            upload.Create(L"Component compact IB upload", compact->GetBufferSize());
-            if (!compacted.Bytes.empty()) std::memcpy(upload.Map(), compacted.Bytes.data(), compacted.Bytes.size());
-            else std::memset(upload.Map(), 0, 4);
-            upload.Unmap();
-
-            // 렌더보다 먼저 같은 graphics queue에 복사와 IB 전환을 제출하며 CPU는 기다리지 않는다.
-            auto& copy = GraphicsContext::Begin(L"Upload component compact IB");
-            copy.TransitionResource(*compact, D3D12_RESOURCE_STATE_COPY_DEST);
-            copy.CopyBufferRegion(*compact, 0, upload, 0, std::max(size_t(4), compacted.Bytes.size()));
-            copy.TransitionResource(*compact, D3D12_RESOURCE_STATE_INDEX_BUFFER);
-            copy.Finish(false);
-
-            // 게시 준비가 실패해도 복사 완료까지 두 버퍼의 강한 참조를 유지한다.
-            Graphics::g_CommandManager.RetireResource(upload.GetResource());
-            Graphics::g_CommandManager.RetireResource(compact->GetResource());
-            for (auto& view : views) view->IndexBuffer.BufferLocation += compact->GetGpuVirtualAddress();
-        }
-        const double uploadUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - uploadStarted).count();
-
-        // 이전 IB의 제출 명령은 기존 fence로 추적하며 wrapper 해제 뒤에도 자원 참조를 보존한다.
-        // retireWaitUs는 관리 비용과 할당 실패 시의 안전 대기를 함께 포함하는 대기 상한이다.
-        const auto retireStarted = std::chrono::steady_clock::now();
-        if (m_TriangleMask && m_TriangleMask->CompactIB)
-            Graphics::g_CommandManager.RetireResource(m_TriangleMask->CompactIB->GetResource());
-        const double retireUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - retireStarted).count();
-
-        // 추출 입력 State는 압축 IB와 독립적으로 유지한다.
+        // 추출 입력 State와 Pending을 먼저 갱신해 같은 목록에서 GPU 압축이 State를 읽게 한다.
         if (!m_TriangleMask)
         {
             m_TriangleMask = std::make_unique<TriangleMask>();
             m_TriangleMask->State.Create(L"Component triangle state", uint32_t(triangles), 4);
         }
+        m_TriangleMask->Pending = state;
+        ++m_TriangleMask->Revision;
+
+        // 원본 IB와 State에서 압축 IB를 만드는 dispatch를 렌더보다 먼저 같은 graphics queue에 제출한다.
+        const auto dispatchStarted = std::chrono::steady_clock::now();
+        std::unique_ptr<ByteAddressBuffer> compact;
+        if (!views.empty())
+        {
+            // 미리 만들어 둔 압축 파이프라인을 가져온다.
+            const auto pipeline = CompactPipeline();
+
+            // 출력 IB와 임시 prefix 버퍼를 만든다. prefix에는 삼각형별 값과 블록별 합계가 들어간다.
+            const uint32_t blocks = (work + 63) / 64;
+            compact = std::make_unique<ByteAddressBuffer>();
+            compact->Create(L"Component compact IB", std::max(1u, kept * 3), 4);
+            ByteAddressBuffer scan;
+            scan.Create(L"Component compact scan", work + blocks, 4);
+            auto& context = GraphicsContext::Begin(L"Compact component triangle mask");
+            UpdateTriangleMask(context);
+            auto& compute = context.GetComputeContext();
+            auto& data = const_cast<ByteAddressBuffer&>(m_Geometry->GetDataBuffer());
+            compute.SetRootSignature(pipeline.first);
+            compute.SetPipelineState(pipeline.second);
+            compute.TransitionResource(data, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(scan, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.TransitionResource(*compact, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.SetBufferSRV(1, data);
+            compute.SetDynamicSRV(2, inputs.size() * sizeof(CompactDrawInput), inputs.data());
+            compute.SetBufferSRV(3, m_TriangleMask->State);
+            compute.SetBufferUAV(4, scan);
+            compute.SetBufferUAV(5, *compact);
+
+            // 블록 prefix, 블록 offset, 쓰기 순서로 실행하고 앞 두 단계 뒤 scan 의존성을 보장한다.
+            for (uint32_t mode = 0; mode < 3; ++mode)
+            {
+                const uint32_t constants[] = { work, uint32_t(inputs.size()), mode, 0 };
+                compute.SetConstantArray(0, 4, constants);
+                if (mode == 1) compute.Dispatch(1);
+                else compute.Dispatch(std::min(blocks, 65535u), (blocks + 65534) / 65535);
+                if (mode < 2) compute.InsertUAVBarrier(scan);
+            }
+
+            // 압축 IB를 INDEX_BUFFER로 전환해 제출하고 임시 버퍼는 fence 완료까지 보존한다.
+            context.TransitionResource(data, D3D12_RESOURCE_STATE_GENERIC_READ);
+            context.TransitionResource(*compact, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+            context.Finish(false);
+            Graphics::g_CommandManager.RetireResource(scan.GetResource());
+            for (auto& view : views) view->IndexBuffer.BufferLocation += compact->GetGpuVirtualAddress();
+        }
+        const double dispatchUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - dispatchStarted).count();
+
+        // 이전 IB의 제출 명령은 기존 fence로 추적하며 wrapper 해제 뒤에도 자원 참조를 보존한다.
+        if (m_TriangleMask->CompactIB)
+            Graphics::g_CommandManager.RetireResource(m_TriangleMask->CompactIB->GetResource());
         m_TriangleMask->CompactIB = std::move(compact);
         m_TriangleMask->RenderOverrides = std::move(overrides);
-        m_TriangleMask->Pending = state;
-        Utility::Printf("TriangleMask compact triangles=%u cpuUs=%.3f uploadUs=%.3f compactUploadUs=%.3f retireWaitUs=%.3f bytes=%zu allocated=%zu\n",
-            uint32_t(triangles), cpuUs, uploadUs, cpuUs + uploadUs, retireUs, compacted.Bytes.size(),
-            m_TriangleMask->CompactIB ? m_TriangleMask->CompactIB->GetBufferSize() : 0);
-        ++m_TriangleMask->Revision;
+        Utility::Printf("TriangleMask compact triangles=%u cpuUs=%.3f dispatchUs=%.3f kept=%u\n",
+            uint32_t(triangles), cpuUs, dispatchUs, kept);
         return true;
     }
 

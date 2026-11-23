@@ -1,4 +1,4 @@
-상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 8a7812e6, CP-4c (커밋 대기)
+상태: 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 8a7812e6, CP-4c a4b9ea23, CP-8 (커밋 대기)
 
 # 절단 성능 개선 결정 (1차)
 
@@ -70,6 +70,22 @@
 - 측정된 것은 Mode 2 시간뿐이다. 첫 절단 35 µs, 재절단 두 번째 62 µs다. 할당·후속 소비자까지 포함한 순이득은 측정하지 않았다.
 - 1차 결과를 재측정한 뒤, JC-2와 함께 다시 결정한다. 메모리 7 MB(임시)는 그 결정의 근거로 남긴다.
 
+### D5. 압축 IB는 GPU에서 만들고, draw별 개수는 CPU가 계산한다 (2026-11-23 추가)
+- 근거:
+  - CPU 압축은 Xbot 게시 1회에 약 2 ms(압축 + 업로드 기록 3.7 ms)다.
+  - 인스턴스마다 IB 전체를 순차로 훑으므로, 같은 프레임에 여러 원본이 게시되면 n배가 된다(VC2 측정장치 K10에서 25.6 ms).
+  - 렌더 결과(압축 IB 내용)는 그대로 두고 생성 위치만 옮긴다.
+- 방식:
+  - 원본 인덱스(기본 힙 원본 IB)와 GPU State를 입력으로 하는 compute 셰이더가 만든다.
+  - 남는 삼각형(bit31=0) 표시 → 블록 prefix(PF-1/CP-5와 같은 64 블록 + 블록 offset) → 원본 인덱스 3개를 새 자리에 쓴다.
+  - 출력은 컴포넌트 소유 기본 힙 IB다.
+  - 형식은 지금처럼 원본을 따른다. R16은 두 삼각형이 한 DWORD를 나눠 쓸 수 있으므로 쓰기 경쟁이 없는 방식(예: 출력은 R32로 쓰고 R16 변환을 하지 않음, 또는 DWORD 단위 소유)을 구현 단계에서 정하고 이유를 적는다.
+- draw별 (StartIndex, IndexCount)는 **CPU가 State의 제거 비트 수로 계산**한다.
+  - 계산은 draw마다 삼각형 수 − 제거 수다. 인덱스를 쓰지 않는 단순 집계라 압축보다 훨씬 싸다.
+  - 그래서 `ExecuteIndirect`와 개수 readback이 필요 없고, CP-3의 override 경로를 그대로 쓴다.
+- CPU 압축 함수(`TriangleMaskCompaction.h`)는 CPU 검사의 독립 기대값으로 남겨, GPU 결과와 바이트 비교에 쓴다.
+- 업로드 버퍼, CPU 압축 결과 복사, 그 버퍼의 지연 해제는 없어진다. 이전 IB 교체의 fence 지연 해제는 유지한다.
+
 ## 4. 단계와 예상 시간
 
 | 단계 | 내용 | 줄 수(추정) | 시간 |
@@ -81,6 +97,7 @@
 | CP-4b | `TriangleMaskCS`, `ReplacedIB`, `TriangleMaskShaderTests` 제거와 `SkeletalMaskChecks` 정리 | 300 이내 | Release 빌드 + 회귀 검사 |
 | CP-5 | D3 Mode 7 합치기 | 100~150 | 같음 |
 | CP-6a/b | D3 블록 크기 일반화와 K 비교 / 고른 K 반영 | 각 100~250 | 같음 + 측정 약 20분 |
+| CP-8 | D5 GPU 압축 IB 생성, CPU draw 개수 계산, GPU/CPU 압축 결과 바이트 비교, 게시 비용 K1/K10 측정 | 200~300 | 구현 + Release 빌드 + 회귀·측정 |
 | CP-7 | BL·RP와 같은 조건으로 재측정, PerfBaseline에 개선 후 절 추가, 상태 줄·README 동기화 | 문서 | 약 40분 |
 
 - 단계마다: 새 Codex 구현 → Release 빌드(디스크 여유가 부족하면 Debug는 마지막 단계에서 한 번) → 검사 → 새 Codex 리뷰 → 로컬 커밋.
@@ -228,3 +245,34 @@
 - 최종 필수 검사: mask PASS, `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1` 20요청 GPU==CPU PASS, `-skeletal-patch-break-checks 1` Parent/Rig 각각 6요청 GPU==CPU PASS·boundary pass=4/fail=0/n/a=2, `-skeletal-recut-repro 1` 두 게시/PASS. 모두 exit=0/timeout=False. 저장소 밖 Release 최적화 CPU `SkeletalPatchTests` 144 checks PASS. Geometry 변경이 없어 PlaneSlicerTests 대상은 아니다.
 - 수정 전 편집 없이 확보한 게시 age=0 HDR과 최종 비계측 수정본을 전체 파일 SHA-256으로 비교했다(각 8,294,416 bytes): Xbot frame=64 `F7991A50EE392D09C2D0D2143CBE604AF8B9F9918C5C4378A133F68D511808E2`, CesiumMan frame=64 `9E7146F87DB61AEBB313FBD2BC0058AF7D738243B61D959775450130E3C88259`, 재절단 첫 게시=65/두 번째=113 `842D4DAE1501F7654E3671B360B27BDDDCE8D2EFD17E4BB8A58A9EE0840D1176`. 세 조건 모두 바이트 동일이다. 게시 프레임이 다른 최초/재시도 캡처는 비교에서 제외했다.
 - 근거는 `%TEMP%/CP4c/`의 `before-*.log`, `retry-{xbot-1,cesium-2,recut-1}.log`, `hdr-comparison.json`, `final-*.log`, `cpu-*.log`, 전후/반복 CSV와 `measure-results.txt`에 보관한다. 임시 RP 계측·모드 전환은 전부 제거했다. Release `Clean` exit=0으로 프로젝트 빌드 산출물을 정리했고 TEMP CPU 테스트 exe/obj도 제거했다(`clean-build.log`). 커밋하지 않았다. 다른 GPU의 성능은 측정하지 않았다.
+
+### CP-8: 압축 IB를 GPU에서 생성 (D5) (base `a4b9ea23`, 커밋 대기, 2026-11-23)
+
+- 변경: 새 `TriangleCompactCS.hlsl`(블록 64 prefix: Mode 0 블록 내부 prefix·합계, Mode 1 한 그룹의 블록 offset, Mode 2 쓰기). `MeshComponent::SetTriangleMask`가 CPU State의 제거 비트로 draw별 (StartIndex, IndexCount)와 draw 입력을 계산하고, 같은 목록에서 `UpdateTriangleMask`(State 업로드)와 압축 dispatch를 기록해 `Finish(false)`로 제출한다. 입력은 원본 DEFAULT 힙 `m_DataBuffer`(ByteAddressBuffer SRV)와 GPU State(bit31)이고, 출력은 컴포넌트 소유 DEFAULT IB를 UAV→INDEX_BUFFER로 전환한다. 렌더보다 먼저 같은 queue에 제출하므로 새 `Finish(true)`/`IdleGPU`는 없다.
+- 제거: CPU 압축 호출, UploadBuffer, CPU 결과 복사와 그 `RetireResource`. 임시 prefix 버퍼와 이전 압축 IB는 `RetireResource`로 fence 완료까지 보존한다. `TriangleMaskCompaction.h`는 CPU 테스트·기대값용으로 그대로 둔다(런타임에서는 include하지 않는다). 압축 파이프라인은 첫 게시의 PSO 생성 지연(아래)을 피하려고 `MeshComponent` 생성 때 `CompactPipeline()`으로 미리 만든다.
+- 형식 결정: **출력은 항상 R32, override 형식도 R32.** R16은 두 인덱스가 한 DWORD를 나눠 써서 쓰기 경쟁이 생기고, 경쟁 없는 방식(출력 0 초기화 후 `InterlockedOr`, 또는 삼각형 쌍 단위 소유)은 clear pass나 인접 생존 삼각형 의존이 추가된다. R32는 인덱스당 DWORD를 한 스레드가 소유한다. 비용은 메모리 2배다: Xbot 281,964→563,928 B, CesiumMan 26,408→52,812 B. 값은 원본 draw 상대값 그대로다.
+- 검증 규칙 변경: 비skin section 제거 거절은 유지한다. CPU 인덱스 배열(`m_SkinCpuSections`) 의존이 없어져 그 부재 거절은 사라졌다. `SkeletalMaskChecks`의 기대 IB 비교는 R32 stride·형식으로 갱신했다.
+- 바이트 비교(임시 검사, 제거함): GPU가 만든 IB를 읽어 `CompactTriangleMask`(R32 입력으로 호출) 결과와 비교했다. `-skeletal-break-demo 1` 563,928 B, `-skeletal-break-demo 2` 52,812 B, `-skeletal-recut-repro 1` 두 게시 570,672 B / 545,256 B가 모두 **바이트 불일치 0**, section override 주소·크기와 draw (StartIndex, IndexCount) 불일치 0이다.
+- 회귀(Release, `-debug 0`): `-skeletal-mask-checks 1` Xbot/CesiumMan 6 pass 모두 IB=1 PASS, `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1` 20요청 GPU==CPU PASS, `-skeletal-patch-break-checks 1` Parent/Rig 각각 6요청 GPU==CPU와 boundary pass=4/fail=0/n/a=2, `-skeletal-recut-repro 1` 두 게시 PASS(request2 frame=113). 모두 exit=0, timeout=False. CPU `SkeletalPatchTests` 144 checks PASS(TEMP 빌드). `-debug 1 -skeletal-break-demo 1`·`-skeletal-mask-checks 1`: D3D12 ERROR/CORRUPTION 0, WARNING 191개로 CP-4c와 같다.
+- 같은 게시 프레임 HDR(8,294,416 B)은 HEAD `a4b9ea23`과 바이트 동일하다: Xbot frame=64 `F7991A50…08E2`, CesiumMan frame=64 `9E7146F8…8259`, 재절단 첫 게시=65/두 번째=113 `842D4DAE…1176`(CP-4c 기록과 같은 SHA-256). 게시 프레임이 다른 실행(Xbot 65, 재절단 64/112)은 제외했다. 재절단 64/112 캡처는 CP-4b 기록 `EB597C73…3C72`와 같다.
+- 게시 CPU 비용(임시 계측 없이 `SetTriangleMask` 로그 `cpuUs + dispatchUs`: CPU 개수 계산 + State 업로드·버퍼 생성·dispatch 기록·제출). 같은 세션에서 HEAD도 같은 측정 장치(`-rp-measure 1 -rp-cuts 1 -rp-instances N -rp-character-only 1`, 추가 인스턴스 독립 마스크)로 다시 쟀다.
+
+| 게시 CPU ms | HEAD(CPU 압축 + 업로드 기록) | CP-8 |
+|---|---:|---:|
+| K1 (이벤트 1) | 1.860, 2.515 | 0.942, 0.983 (세 번째 11.8 ms 1회 스파이크) |
+| K10 합계(이벤트 10) | 25.45, 29.27 | 9.13, 11.30, 11.84 |
+| K10 이벤트당(첫 이벤트 제외) | 2.62, 3.01 | 0.88, 1.15, 1.20 |
+
+- 하네스가 아닌 데모 캡처(`-animation-step-ms 16`, 단일 표본) CP-8 게시 CPU: Xbot frame=64 0.062+0.699=0.761 ms, CesiumMan frame=64 0.009+0.594=0.603 ms, 재절단 첫 게시 0.056+1.023=1.079 ms, 두 번째 0.043+0.635=0.679 ms(CP-4c 표: 3.675/1.665/4.215/3.241). CPU 압축 구간은 2.4 ms→약 0.06 ms로 줄었고 남은 비용은 버퍼 생성·기록·제출이다.
+- 첫 게시 지연: PSO를 첫 `SetTriangleMask`에서 만들 때 Xbot 첫 게시가 17.5~19.3 ms(CesiumMan 37 ms)로 늘었고, 같은 프로세스의 두 번째 게시는 0.6 ms였다. 생성자에서 미리 만들도록 바꾸자 사라졌다(위 표는 이후 값). 컴포넌트 생성 시점으로 옮겨진 비용은 측정하지 않았다.
+- 압축 dispatch GPU 시간(임시 timestamp, 제거함, 정확한 측정을 위해 `Finish(true)`): Xbot 1회 45.2 µs, K10 첫 인스턴스 165.9 µs·나머지 9개 45.6~50.4 µs, 합계 약 0.59 ms. CP-4c VC2 장치의 복사 GPU 1.151 ms(K10)와 같은 기준은 아니다.
+- 렌더 GPU 합(shadow+depth+opaque+transparent, 모드 전환 뒤 30프레임 제외 600표본, Xbot 1절단 character-only, ms). 같은 세션 측정이며 앞선 CP-4c 표와는 GPU 상태가 달라 절대값이 다르다.
+
+| 조건 | Compact / None, HEAD 2회 | Compact / None, CP-8 최종 3회 |
+|---|---|---|
+| K1 | 0.551/0.575, 0.516/0.486 | 0.578/0.581, 0.518/0.496, 0.515/0.469 |
+| K10 | 2.535/2.594, 2.438/2.480 | 2.657/2.449, 2.593/2.478, 2.585/2.488 |
+
+  K1은 차이가 잡음 범위다. K10은 HEAD가 Compact≤None이었는데 CP-8은 Compact가 None보다 0.10~0.21 ms(4~8%) 크다. 한 세션의 5회 표본이므로 확정하지 않으며, 원인 후보는 R32 IB의 2배 읽기 대역폭이다. 확인하려면 R16 경쟁 없는 출력 방식(위 형식 결정)을 구현해 같은 조건으로 비교해야 한다.
+- 제한: Debug 빌드는 요청대로 하지 않았다. GPU clock·온도·전원·배경 부하는 통제하지 않았고 다른 GPU는 측정하지 않았다. Geometry 변경이 없어 PlaneSlicerTests 대상이 아니다. 렌더 회귀는 5회 표본이라 R32의 영향은 미확정이다. 커밋하지 않았다.
+- 근거: `%TEMP%/CP8/`의 `build*.log`, `bc-*.log`(바이트 비교), `final-*.log`·`fin*-hdr.raw`·`after-*`(HDR), `m-*.log`/`m-*.csv`/`measure-results.txt`(게시·렌더 측정), `cpu-*.log`.
