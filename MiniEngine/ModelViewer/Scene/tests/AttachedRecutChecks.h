@@ -24,6 +24,11 @@ namespace Viewer
         bool MeasuredPublish = false, HaveOrigin = false;
         Math::Vector3 FirstPiece{ Math::kZero }, FirstNode{ Math::kZero };
         bool Follows = true, Body = false, Collision = false, NodePositive = false;
+        // RS-4: 진단 옵션 값(2 이상이면 스키닝 승계 조각을 한 번 더 재절단한다)과 연속 재절단 상태.
+        unsigned Mode = 1, SecondObserve = 0;
+        bool SecondPassed = false, SecondSkinned = false, SecondPublishOk = false, SecondMeasured = false, SecondAfterOk = false;
+        ComponentId Second = 0;
+        float MaxKLocal = 0;
 
         // 각 판정과 요약을 debugger와 기존 패치 검사 파일에 함께 남긴다.
         static void Log(const char* label, bool pass, bool verdict = true)
@@ -55,6 +60,16 @@ namespace Viewer
             {
                 Log(labels[i], Passed[i]);
                 pass &= Passed[i];
+            }
+
+            // RS-4: 연속 재절단 진단은 별도 판정 줄로 남기고 전체 결과에 포함한다.
+            if (Mode >= 2)
+            {
+                char second[200];
+                sprintf_s(second, "RS4 second recut skinned=%d boundary publish=%d after60=%d", int(SecondSkinned), int(SecondPublishOk), int(SecondAfterOk));
+                SecondPassed = SecondSkinned && SecondPublishOk && SecondAfterOk;
+                Log(second, SecondPassed);
+                pass &= SecondPassed;
             }
             Log("Attached recut checks", pass);
             Done = true;
@@ -148,7 +163,7 @@ namespace Viewer
 
         // RS-3: 스키닝 조각의 복사 정점(고정 joint weight 0)을 같은 프레임 원본 PG의 가장 가까운 정점과 비교한다.
         // 최대 차이를 로그로 남긴다.
-        static void MeasureRecutBoundary(const GameObject& owner, const MeshComponent& piece, const char* frame)
+        static bool MeasureRecutBoundary(const GameObject& owner, const MeshComponent& piece, const char* frame)
         {
             // 조각 skin VB, 조각 PG, 원본 PG를 모두 읽을 수 있어야 측정한다.
             using namespace Math;
@@ -161,7 +176,7 @@ namespace Viewer
             {
                 sprintf_s(line, "RS3 boundary frame=%s unreadable", frame);
                 Log(line, false);
-                return;
+                return false;
             }
 
             // 원본 PG의 모든 정점을 월드로 옮겨 둔다.
@@ -223,13 +238,75 @@ namespace Viewer
             const float local = scale > 0 ? maximum / scale : FLT_MAX;
             sprintf_s(line, "RS3 boundary frame=%s measured=%u frozenSkipped=%u max=%.3g local (%.4f mm, scale %.1f)",
                 frame, measured, frozen, local, maximum * 1000.0f, scale);
-            Log(line, measured > 0 && local <= 1.0e-6f);
+            const bool pass = measured > 0 && local <= 1.0e-6f;
+            Log(line, pass);
+            return pass;
+        }
+
+        // RS-4: 스키닝 조각의 K(새 절단면) 정점 PG 월드 위치와 node 기대 월드로 옮긴 구운 위치를 비교한다.
+        // 최대 월드 오차를 돌려주고 컴포넌트 local 환산값은 localError로 낸다.
+        static float SkinnedFollowError(Scene& scene, const GameObject& owner, const MeshComponent& piece, float* localError)
+        {
+            // 부착 snapshot, 게시된 PG, K 정점 skin, 구운 Data를 모두 읽을 수 있어야 한다.
+            using namespace Math;
+            Matrix4 node;
+            std::vector<uint8_t> skin, pg, data;
+            if (!piece.Attachment || !piece.PatchSkin || !piece.GetPosedGeometry().IsReady() || !piece.GetGeometry()->IsGenerated()
+                || !scene.TryGetAttachmentNodeWorld(piece, node) || !ReadBytes(piece.PatchSkin->Vertices.Data, skin)
+                || !ReadBytes(piece.GetPosedGeometry().GetBuffer(), pg) || !ReadBytes(piece.GetGeometry()->GetGenerated()->Data, data))
+                return FLT_MAX;
+
+            // node 기대 월드 변환과 실제 조각 월드 변환을 구한다.
+            const auto& snapshot = *piece.Attachment;
+            const Matrix4 expected = node * Invert(snapshot.NodeWorldAtCut) * snapshot.PieceWorldAtCut;
+            const Matrix4 actual(piece.GetWorldTransform(owner.GetTransform()));
+
+            // 강체 슬롯(K)에 붙은 정점마다 두 월드 위치의 거리를 잰다.
+            const auto& skinData = *piece.PatchSkin;
+            const auto& geometry = *piece.GetGeometry();
+            const uint32_t stride = skinData.Vertices.Stride, rigidSlot = uint32_t(skinData.Snapshot.JointsAtCut.size());
+            float maximum = 0;
+            uint32_t measured = 0;
+            for (size_t s = 0; s < skinData.Sections.size(); ++s)
+            {
+                const auto& vb = geometry.GetMesh(s);
+                const size_t pgOffset = piece.GetPosedGeometry().GetOffset(geometry.GetSections().at(s).SourceMesh);
+                for (uint32_t v = 0; v < skinData.Sections[s].VertexCount; ++v)
+                {
+                    const uint8_t* record = skin.data() + size_t(skinData.Sections[s].FirstVertex + v) * stride;
+                    uint32_t internal = 0;
+                    uint16_t joints[4];
+                    std::memcpy(&internal, record + stride - kSkinExtInternal, sizeof(internal));
+                    std::memcpy(joints, record + stride - 16, sizeof(joints));
+                    if (internal || joints[0] != rigidSlot) continue;
+
+                    // 구운 위치는 기대 월드로, PG 위치는 현재 조각 월드로 옮겨 비교한다.
+                    DirectX::XMFLOAT3 baked, posed;
+                    std::memcpy(&baked, data.data() + vb.vbOffset + size_t(v) * vb.vbStride, sizeof(baked));
+                    std::memcpy(&posed, pg.data() + pgOffset + size_t(v) * 40, sizeof(posed));
+                    const Vector3 want(expected * Vector4(Vector3(baked.x, baked.y, baked.z), 1));
+                    const Vector3 have(actual * Vector4(Vector3(posed.x, posed.y, posed.z), 1));
+                    maximum = (std::max)(maximum, float(Length(want - have)));
+                    ++measured;
+                }
+            }
+
+            // 측정한 정점이 없으면 판정할 수 없으므로 실패 값을 낸다.
+            if (!measured) return FLT_MAX;
+            const float scale = (std::max)({ float(Length(Vector3(actual.GetX()))), float(Length(Vector3(actual.GetY()))),
+                float(Length(Vector3(actual.GetZ()))) });
+            if (localError) *localError = scale > 0 ? maximum / scale : FLT_MAX;
+            return maximum;
         }
 
         // AR과 RBC가 같은 node 상대 원점 오차를 측정한다.
-        static float FollowError(Scene& scene, const GameObject& owner, const MeshComponent& mesh)
+        static float FollowError(Scene& scene, const GameObject& owner, const MeshComponent& mesh, float* localError = nullptr)
         {
-            // 현재 node와 게시 snapshot으로 기대 월드 원점을 복원한다.
+            // 스키닝 조각은 source W가 월드이므로 K 정점 추종으로 판정한다(RS-4, D7).
+            if (mesh.HasSkinnedPatch())
+                return SkinnedFollowError(scene, owner, mesh, localError);
+
+            // 정적 조각은 현재 node와 게시 snapshot으로 기대 월드 원점을 복원한다.
             Math::Matrix4 node;
             if (!mesh.Attachment || !scene.TryGetAttachmentNodeWorld(mesh, node)) return FLT_MAX;
             const auto& snapshot = *mesh.Attachment;
@@ -248,7 +325,7 @@ namespace Viewer
         void OnResult(Scene& scene, const CutResultEntry& result)
         {
             // 초기 패치 절단과 다른 대상의 결과는 소비하지 않는다.
-            if (!Enabled || Done || result.Owner != Owner || result.Mesh != (Stage == 4 ? Detached : Input)) return;
+            if (!Enabled || Done || result.Owner != Owner || result.Mesh != (Stage == 4 ? Detached : Stage == 7 ? Attached : Input)) return;
             auto* owner = scene.FindObject(Owner);
             auto* a = owner ? owner->FindMeshComponent(result.Mesh) : nullptr;
             auto* b = owner ? owner->FindMeshComponent(result.Other) : nullptr;
@@ -271,7 +348,24 @@ namespace Viewer
             else if (Stage == 4)
             {
                 Passed[4] = published && !a->Attachment && !b->Attachment && owner->GetMeshComponents().size() == Count + 1;
-                Finish();
+
+                // RS-4: 연속 재절단 모드면 스키닝 승계 조각을 한 번 더 자른다.
+                if (Mode >= 2 && Passed[4] && owner->FindMeshComponent(Attached) && owner->FindMeshComponent(Attached)->HasSkinnedPatch())
+                    Stage = 5;
+                else Finish();
+            }
+            else if (Stage == 7)
+            {
+                // RS-4: 두 번째 결과의 node 쪽(Attachment 보유)이 스키닝을 유지하는지 확인한다.
+                auto* node = published ? (a->Attachment ? a : b->Attachment ? b : nullptr) : nullptr;
+                if (!node)
+                {
+                    Finish();
+                    return;
+                }
+                Second = node->GetId();
+                SecondSkinned = node->HasSkinnedPatch();
+                Stage = 6;
             }
             else Finish();
         }
@@ -310,6 +404,48 @@ namespace Viewer
                             if (!cutting.Request(Owner, Input, plane)) Finish();
                             return;
                         }
+            }
+
+            // RS-4: node 쪽 조각을 한 번 더 재절단하는 요청을 낸다.
+            if (Stage == 5 && owner && !cutting.IsBusy())
+            {
+                auto* piece = owner->FindMeshComponent(Attached);
+                Matrix4 node;
+                MeshCutting::CutPlaneData plane;
+                if (!piece || !piece->HasPoseBounds() || !scene.TryGetAttachmentNodeWorld(*piece, node))
+                {
+                    Finish();
+                    return;
+                }
+                const Vector3 position(node.GetW());
+                Stage = 7;
+                if (!Plane(*owner, *piece, &position, plane) || !cutting.Request(Owner, Attached, plane)) Finish();
+                return;
+            }
+
+            // RS-4: 두 번째 node 쪽 조각의 경계 오차를 게시 직후와 60프레임 뒤에 잰다.
+            if (Stage == 6 && owner)
+            {
+                auto* second = owner->FindMeshComponent(Second);
+                if (!second || !SecondSkinned)
+                {
+                    Finish();
+                    return;
+                }
+                if (second->HasSkinnedPatch() && second->HasPoseBounds() && second->GetPosedGeometry().IsReady())
+                {
+                    if (!SecondMeasured)
+                    {
+                        SecondMeasured = true;
+                        SecondPublishOk = MeasureRecutBoundary(*owner, *second, "second-publish");
+                    }
+                    if (++SecondObserve >= 60)
+                    {
+                        SecondAfterOk = MeasureRecutBoundary(*owner, *second, "second-after60");
+                        Finish();
+                    }
+                }
+                return;
             }
             if (Stage != 2 || !owner) return;
 
@@ -351,7 +487,16 @@ namespace Viewer
                     float(Length(pieceMove)), float(Length(nodeMove)), float(Length(pieceMove - nodeMove)), int(attached->HasSkinnedPatch()));
                 Log(moveLine, true, false);
             }
-            const float error = FollowError(scene, *owner, *attached);
+            float local = 0;
+            const float error = FollowError(scene, *owner, *attached, &local);
+            if (attached->HasSkinnedPatch() && std::isfinite(error))
+                MaxKLocal = (std::max)(MaxKLocal, local);
+            if (Observe == 59 && attached->HasSkinnedPatch())
+            {
+                char followLine[160];
+                sprintf_s(followLine, "RS4 K follow last=%.4f mm maxLocal=%.3g", error * 1000.0f, MaxKLocal);
+                Log(followLine, true, false);
+            }
             Follows &= std::isfinite(error) && error <= 0.001f;
             Body |= physics.GetBodyState(Owner, Detached) != PhysicsSystem::BodyState::None;
             if (++Observe < 60) return;

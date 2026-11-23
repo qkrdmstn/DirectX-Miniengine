@@ -109,6 +109,8 @@ public:
             if (!pass)
                 return 1;
         }
+        if (m_AttachedRecutChecks.Mode >= 2 && !m_AttachedRecutChecks.SecondPassed)
+            return 1;
 
         // 재절단 진단의 완료 여부를 종료 코드로 변환한다.
         return m_AttachedRecutChecks.Done ? 0 : 1;
@@ -419,6 +421,7 @@ void ModelViewer::Startup( void )
     uint32_t attachedRecut = 0;
     CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut);
     m_AttachedRecutChecks.Enabled = attachedRecut != 0;
+    m_AttachedRecutChecks.Mode = attachedRecut;
 
     // 본 내부 절단 진단은 별도 실행으로 제한한다.
     uint32_t rigBoneCut = 0;

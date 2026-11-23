@@ -13,7 +13,7 @@ namespace Viewer
         ComponentId Attached = 0, Detached = 0;
         uint64_t Topology = 0;
         size_t Broken = 0, Dynamic = 0;
-        float StartY = 0, MaxError = 0, NodeMove = 0, NodeRot = 0;
+        float StartY = 0, MaxError = 0, MaxLocal = 0, NodeMove = 0, NodeRot = 0;
         Math::Matrix4 NodeStart{ Math::kIdentity };
         PhysicsSystem::QueuedBreakDiagnostics BreakBefore{};
         bool StateRead = false, FailureResult = false, FailureRejected = false;
@@ -256,7 +256,9 @@ namespace Viewer
                     Finish();
                     return;
                 }
-                const float error = AttachedRecutChecks::FollowError(scene, *owner, *a);
+                float local = 0;
+                const float error = AttachedRecutChecks::FollowError(scene, *owner, *a, &local);
+                if (a->HasSkinnedPatch() && std::isfinite(error)) MaxLocal = (std::max)(MaxLocal, local);
                 MaxError = std::isfinite(error) ? (std::max)(MaxError, error) : FLT_MAX;
                 Body |= physics.GetBodyState(owner->GetId(), Detached) != PhysicsSystem::BodyState::None;
 
@@ -291,6 +293,11 @@ namespace Viewer
                 sprintf_s(detail, "RBC actual drop=%.6fm read=%d/%d broken=%zu/%zu dynamic=%zu/%zu breakProcessed=%llu/%llu",
                     drop, int(StateRead), int(stateRead), Broken, broken, Dynamic, dynamic, BreakBefore.Processed, breaks.Processed);
                 AttachedRecutChecks::Log(detail, Passed[0] && Passed[2]);
+
+                // RS-4: 스키닝 조각이면 K 정점 추종 오차(월드 m, local)를 함께 남긴다.
+                char follow[160];
+                sprintf_s(follow, "RBC K follow maxError=%.6f m maxLocal=%.3g skinned=%d", MaxError, MaxLocal, int(a->HasSkinnedPatch()));
+                AttachedRecutChecks::Log(follow, true, false);
                 Finish();
                 return;
             }
