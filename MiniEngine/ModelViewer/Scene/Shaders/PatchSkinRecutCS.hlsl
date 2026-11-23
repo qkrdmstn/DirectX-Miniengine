@@ -113,6 +113,13 @@ void main(uint3 id : SV_DispatchThreadID)
             StoreEndpoint(output + Stride - ExtEndpoint0, first + origin.z);
             StoreEndpoint(output + Stride - ExtEndpoint1, first + origin.w);
             Result.Store2(output + Stride - ExtInternal, uint2(split ? 2 : 3, Provenance.Load(vertex * 32 + 16)));
+
+            // cap 끝점은 절단 시점 법선 칸을 0(없음)으로 비워 PreparePoseCS가 K 법선을 유지하게 한다.
+            if (!split)
+            {
+                Result.Store(output + Stride - ExtEndpoint0 + EndpointTangent, 0);
+                Result.Store(output + Stride - ExtEndpoint1 + EndpointTangent, 0);
+            }
         }
     }
 

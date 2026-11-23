@@ -72,14 +72,18 @@ uint SourceAddress(uint vertex, out DrawInput draw)
     return draw.VbOffset + Index(draw, sourceTriangle.z * 3 + vertex % 3) * draw.SourceStride;
 }
 
-// 내부 교점의 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다.
-void StoreEndpoint(uint output, uint vertex)
+// 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다. cap 끝점은 탄젠트 칸에 절단 시점 법선(K 프레임)을 넣는다.
+void StoreEndpoint(uint output, uint vertex, bool cap)
 {
     // 두 끝점의 weight를 합치지 않고 각각의 skin 입력을 복사한다.
     DrawInput draw;
     uint address = SourceAddress(vertex, draw);
     Result.Store4(output, Source.Load4(address));
     Result.Store(output + EndpointTangent, (draw.SourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff);
+
+    // cap은 PreparePoseCS가 끝점의 절단 시점 → 현재 법선 회전을 구할 수 있게 K 프레임 법선을 기록한다.
+    if (cap)
+        Result.Store(output + EndpointTangent, RotateFrame(Data.Load(vertex * 28 + 12)));
     uint4 skin = Source.Load4(address + draw.SourceStride - 16);
     uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
     Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
@@ -155,8 +159,8 @@ void main(uint3 id : SV_DispatchThreadID)
     Result.Store2(output + Stride - ExtInternal, uint2(interpolation, Provenance.Load(vertex * 32 + 16)));
     if (interpolation)
     {
-        StoreEndpoint(output + Stride - ExtEndpoint0, origin.z);
-        StoreEndpoint(output + Stride - ExtEndpoint1, origin.w);
+        StoreEndpoint(output + Stride - ExtEndpoint0, origin.z, interpolation == 3);
+        StoreEndpoint(output + Stride - ExtEndpoint1, origin.w, interpolation == 3);
     }
 
     // 전체 팔레트를 직접 참조하도록 네 joint 모두에 section startJoint를 더한다.
