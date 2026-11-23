@@ -37,9 +37,9 @@
 | [AttachedPatchRecut.md](GPU/AttachedPatchRecut.md) | 부착 패치 조각 Static 재절단: node 쪽 부착 유지, 반대쪽 독립 낙하 | 완료 — AR-4 bb766e1b, Debug/Release 실행 PASS(2026-11-12) |
 | [MeshIslandMultiBoneCut.md](GPU/MeshIslandMultiBoneCut.md) | 격자 아일랜드를 실제 절단 loop·반공간 및 weight로 몸체에 배정하고 여러 본을 합쳐 자르기 | 완료 — MI-4 `e123cad1`, MI-5 `bffcf22f`(2026-11-17): 위팔491/167·허리90→A·cap54 drop, 양 허벅지300/187/175·constraint18→16·mask1회, 실제 척추182/337 및 P=1 옵션 비교18 PNG·Release 회귀6건 PASS·D3D12 ERROR0. 몸통 접힘·척추 절단 양팔 틈(uncapped17/loop fallback34)·작은 파편 미해결. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속 |
 | [PatchSkinning.md](GPU/PatchSkinning.md) | 스켈레탈 패치 조각 스키닝: 끊은 쪽 joint를 부착 node 상대로 고정, 새 정점은 강체 | 완료 — PS-0~PS-6·비용 측정, SP7e2 PASS, Debug/Release 회귀 PASS(2026-11-13) |
-| [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 병렬 block scan과 Mode 2 scatter의 블록 offset 적용(CP-5 Mode 7 제거) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19); CP-5 Mode 7 제거(커밋 대기) |
+| [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 병렬 block scan과 Mode 2 scatter의 블록 offset 적용(CP-5 Mode 7 제거) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19); CP-5 Mode 7 제거 a23fe252 |
 | [PerfBaseline.md](GPU/PerfBaseline.md) | per-vertex 추출·compacted IB 변경 전 절단 GPU/CPU·메모리 및 렌더 측정 | 측정 기록 — 기준 `5f360fa7`, 임시 계측 패치 보관·코드 원복 (2026-11-20) |
-| [CutPerfImprovement.md](GPU/CutPerfImprovement.md) | 절단 성능 1차: CPU 압축 IB로 퇴화 IB·TriangleMaskCS 대체, CPU Update 4.9 s 원인 확정, 추출 Mode 7 합치기·coarsening | 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 (커밋 대기) |
+| [CutPerfImprovement.md](GPU/CutPerfImprovement.md) | 절단 성능 1차: CPU 압축 IB로 퇴화 IB·TriangleMaskCS 대체, CPU Update 4.9 s 원인 확정, 추출 Mode 7 합치기·coarsening | 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 K=1 유지(커밋 대기) |
 | [PatchAdjacentMarks.md](GPU/PatchAdjacentMarks.md) | 패치 추출 Mode 5 인접 집계를 정점 표시 비트로 O(N)화(부분 제거 Mode 5 34.35 ms → Mode 8+5 0.28 ms) | 폐기 — RM-1에서 제거 (2026-11-19) |
 | [PatchDiagnosticRemoval.md](GPU/PatchDiagnosticRemoval.md) | 패치 추출 진단 전용 계산 제거: Mode 5/8 인접 집계(RM-1), 기본 경로 평면 교차·미포함 교차 수(RM-2) | 완료 — RM-1 `49c8a002`, RM-2 `6d5e91b4` (2026-11-19) |
 | [PatchDiagnosticRemoval.md](GPU/PatchDiagnosticRemoval.md) | 패치 추출 진단 계산 제거: Mode 5/8 인접 집계(RM-1), 기본 경로 평면 교차 수(RM-2) | 진행 중 — RM-1 커밋, RM-2 대기 (2026-11-19) |
