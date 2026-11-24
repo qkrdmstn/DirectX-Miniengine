@@ -1545,7 +1545,12 @@ void ModelViewer::RenderScene( void )
 		sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
 		sorter.AddRenderTarget(g_SceneColorBuffer);
 
-        m_Scene.Render(sorter);
+        // 위상 아일랜드 시각화 중에는 캐릭터 solid 메시를 그리지 않고 와이어프레임 선만 남긴다.
+        const bool hideSceneMeshes = !m_SkeletalPatchCopy.GetTopologyViz().empty();
+        if (!hideSceneMeshes)
+        {
+            m_Scene.Render(sorter);
+        }
 
         sorter.Sort();
 
@@ -1567,7 +1572,10 @@ void ModelViewer::RenderScene( void )
 				shadowSorter.SetCamera(m_SunShadowCamera);
 				shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
 
-                m_Scene.Render(shadowSorter);
+                if (!hideSceneMeshes)
+                {
+                    m_Scene.Render(shadowSorter);
+                }
 
                 shadowSorter.Sort();
                 shadowSorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
@@ -1577,7 +1585,11 @@ void ModelViewer::RenderScene( void )
             gfxContext.ClearColor(g_SceneColorBuffer);
 
             // 깊이를 쓰지 않는 선·점의 실루엣 가장자리를 배경이 덮지 않도록 먼저 그린다.
-            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+            // 위상 아일랜드 시각화 중에는 배경을 검정으로 두기 위해 skybox를 건너뛴다.
+            if (!hideSceneMeshes)
+            {
+                Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+            }
 
             {
                 ScopedTimer _prof(L"Render Color", gfxContext);
@@ -1736,6 +1748,12 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     if (g_ShowCollision)
         m_CollisionDraw.Draw(context, m_Scene, m_Physics, m_Camera,
             float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
+
+    // 위상 아일랜드 시각화 중에는 기즈모와 도움말 글자를 그리지 않고 선만 남긴다.
+    if (!m_SkeletalPatchCopy.GetTopologyViz().empty())
+    {
+        return;
+    }
     m_Gizmo.Render(context, m_Scene, m_Target, m_Camera,
         float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
     TextContext text(context);

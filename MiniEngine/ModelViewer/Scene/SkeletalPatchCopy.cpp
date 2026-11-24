@@ -487,6 +487,41 @@ namespace Viewer
             return enabled;
         }
 
+        // 디버깅 씬용 수평 평면 높이 비율을 읽는다. -topology-island-viz-height 값이 있으면 그 값을,
+        // -topology-island-viz 2이면 기본 비율을 쓰고, 둘 다 없으면 false를 돌려준다.
+        bool TopologyIslandVizHeightRatio(float& ratio)
+        {
+            // 튜닝으로 정한 몸통 가운데 기본 비율이다.
+            ratio = 0.5f;
+
+            // 높이 옵션이 있으면 값을 읽고 읽지 못하면 기본 비율을 유지한다.
+            std::wstring text;
+            if (CommandLineArgs::GetString(L"topology-island-viz-height", text))
+            {
+                try
+                {
+                    ratio = std::stof(text);
+                }
+                catch (...)
+                {
+                    // 숫자가 아니면 기본 비율을 그대로 쓴다.
+                }
+
+                // 유한하지 않은 값은 기본 비율로 되돌리고 0~1로 제한한다.
+                if (!std::isfinite(ratio))
+                {
+                    ratio = 0.5f;
+                }
+                ratio = std::min(std::max(ratio, 0.0f), 1.0f);
+                return true;
+            }
+
+            // 시각화 값이 2이면 기본 비율의 수평 평면을 쓴다.
+            uint32_t value = 0;
+            CommandLineArgs::GetInteger(L"topology-island-viz", value);
+            return value == 2;
+        }
+
         // 아일랜드 크기 순위에 대응하는 12색 팔레트 색을 돌려준다.
         Color TopologyIslandColor(uint32_t rank)
         {
@@ -2250,11 +2285,14 @@ namespace Viewer
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
     }
 
-    // 절단 없이 격자 위상 맵만 평면으로 갈라 아일랜드별 색 월드 선분 snapshot과 요약 로그를 만든다.
-    // 현재 포즈로 모든 skin 정점을 CPU 스키닝하는 부분은 DiagnoseIslands와 같은 식이다.
+    // 절단 없이 격자 위상 맵을 평면으로 갈라 아일랜드별 색 월드 선분 snapshot과 요약 로그를 만든다.
+    // 정점 스키닝은 DiagnoseIslands와 같고, 평면은 스키닝 경계에 맞추며 높이 옵션이면 수평으로 바꾼다.
     void SkeletalPatchCopy::BuildTopologyIslandViz(const GameObject& target, const MeshComponent& mesh,
-        const Math::Matrix4& world, const MeshCutting::CutPlaneData& plane)
+        const Math::Matrix4& world, const MeshCutting::CutPlaneData& requestedPlane)
     {
+        // 요청 평면을 복사해 두고 아래에서 필요하면 교체한다.
+        MeshCutting::CutPlaneData plane = requestedPlane;
+
         // 이전 snapshot을 비우고 준비된 포즈가 없으면 로그만 남기고 건너뛴다.
         m_TopologyViz.clear();
         const auto& geometry = *mesh.GetGeometry();
@@ -2299,11 +2337,13 @@ namespace Viewer
             hasFrame[skin] = 1;
         }
 
-        // 모든 skin 정점을 스키닝해 월드 위치, 평면 거리, 1e-5 규칙의 부호를 구한다.
+        // 모든 skin 정점을 스키닝해 월드 위치와 전체 경계를 구한다.
         std::vector<std::vector<Math::Vector3>> positions(skinTotal);
         std::vector<std::vector<float>> distances(skinTotal);
         std::vector<std::vector<int8_t>> signs(skinTotal);
         std::vector<std::array<uint32_t, 2>> triangles;
+        Math::Vector3 boundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
+        Math::Vector3 boundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
         for (uint32_t skin = 0; skin < skinTotal; ++skin)
         {
             if (!hasFrame[skin])
@@ -2340,13 +2380,12 @@ namespace Viewer
                     }
                 }
 
-                // 제출 프레임과 컴포넌트 월드를 적용한 뒤 평면까지의 부호 거리를 저장한다.
+                // 제출 프레임과 컴포넌트 월드를 적용한 위치를 저장하고 경계를 넓힌다.
                 const Math::Vector3 local(frames[skin] * skinned);
                 const Math::Vector3 position(world * Math::Vector4(local, 1));
-                const float distance = Math::Dot(plane.WorldPlane, Math::Vector4(position, 1));
                 positions[skin][v] = position;
-                distances[skin][v] = distance;
-                signs[skin][v] = std::abs(distance) <= 1e-5f ? 0 : distance > 0 ? 1 : -1;
+                boundsMin = Math::Min(boundsMin, position);
+                boundsMax = Math::Max(boundsMax, position);
             }
 
             // 이 section의 모든 삼각형을 아일랜드 판정 대상으로 넣는다.
@@ -2354,6 +2393,58 @@ namespace Viewer
             for (uint32_t tri = 0; tri < triangleCount; ++tri)
             {
                 triangles.push_back({ skin, tri });
+            }
+        }
+
+        // 누적된 정점이 없으면 경계가 비어 있으므로 로그만 남기고 건너뛴다.
+        if (float(boundsMin.GetX()) > float(boundsMax.GetX()))
+        {
+            PatchLog("TIV skipped: empty bounds\n");
+            return;
+        }
+
+        // 높이 옵션이 있으면 경계 높이 비율의 수평 월드 평면(법선 +Y)으로 요청 평면을 바꾼다.
+        float heightRatio = 0.0f;
+        if (TopologyIslandVizHeightRatio(heightRatio))
+        {
+            const float minY = boundsMin.GetY();
+            const float maxY = boundsMax.GetY();
+            const float height = minY + heightRatio * (maxY - minY);
+            plane.WorldPlane = Math::Vector4(0.0f, 1.0f, 0.0f, -height);
+            PatchLog("TIV horizontal plane ratio=%.3f height=%.4f minY=%.4f maxY=%.4f\n",
+                heightRatio, height, minY, maxY);
+        }
+
+        // 경계 중심을 평면에 투영한 점을 사각형 중심으로 삼는다.
+        // 사각형 크기는 경계가 평면 두 축에 드리우는 크기에 15% 여유를 둔 값이다.
+        const Math::Vector3 normal(plane.WorldPlane);
+        const Math::Vector3 boundsCenter = (boundsMin + boundsMax) * 0.5f;
+        const Math::Vector3 boundsHalf = (boundsMax - boundsMin) * 0.5f;
+        const float centerDistance = Math::Dot(plane.WorldPlane, Math::Vector4(boundsCenter, 1));
+        const Math::Vector3 planeCenter = boundsCenter - normal * centerDistance;
+        const Math::Vector3 reference = std::abs(float(normal.GetY())) > 0.9f
+            ? Math::Vector3(1.0f, 0.0f, 0.0f) : Math::Vector3(0.0f, 1.0f, 0.0f);
+        const Math::Vector3 axisU = Math::Normalize(Math::Cross(normal, reference));
+        const Math::Vector3 axisV = Math::Cross(normal, axisU);
+        const float halfU = 1.15f * (std::abs(float(axisU.GetX())) * float(boundsHalf.GetX())
+            + std::abs(float(axisU.GetY())) * float(boundsHalf.GetY())
+            + std::abs(float(axisU.GetZ())) * float(boundsHalf.GetZ()));
+        const float halfV = 1.15f * (std::abs(float(axisV.GetX())) * float(boundsHalf.GetX())
+            + std::abs(float(axisV.GetY())) * float(boundsHalf.GetY())
+            + std::abs(float(axisV.GetZ())) * float(boundsHalf.GetZ()));
+        plane.WorldCorners[0] = planeCenter - axisU * halfU - axisV * halfV;
+        plane.WorldCorners[1] = planeCenter + axisU * halfU - axisV * halfV;
+        plane.WorldCorners[2] = planeCenter + axisU * halfU + axisV * halfV;
+        plane.WorldCorners[3] = planeCenter - axisU * halfU + axisV * halfV;
+
+        // 최종 평면 기준으로 정점의 부호 거리와 1e-5 규칙의 부호를 구한다.
+        for (uint32_t skin = 0; skin < skinTotal; ++skin)
+        {
+            for (size_t v = 0; v < positions[skin].size(); ++v)
+            {
+                const float distance = Math::Dot(plane.WorldPlane, Math::Vector4(positions[skin][v], 1));
+                distances[skin][v] = distance;
+                signs[skin][v] = std::abs(distance) <= 1e-5f ? 0 : distance > 0 ? 1 : -1;
             }
         }
 
@@ -2429,17 +2520,17 @@ namespace Viewer
             }
         }
 
-        // 나눈 기준 평면을 흰색 테두리와 4x4 격자로 같은 snapshot에 덧붙인다.
+        // 나눈 기준 평면을 흰색 테두리와 8x8 격자로 같은 snapshot에 덧붙인다.
         const Color planeColor(1.0f, 1.0f, 1.0f);
         const auto& corners = plane.WorldCorners;
         for (uint32_t e = 0; e < 4; ++e)
         {
             m_TopologyViz.push_back({ corners[e], corners[(e + 1) % 4], planeColor });
         }
-        for (uint32_t g = 1; g < 4; ++g)
+        for (uint32_t g = 1; g < 8; ++g)
         {
             // 코너 (-,-)~(+,-)와 (-,+)~(+,+) 사이, (-,-)~(-,+)와 (+,-)~(+,+) 사이를 보간한다.
-            const float t = float(g) / 4.0f;
+            const float t = float(g) / 8.0f;
             m_TopologyViz.push_back({ corners[0] + (corners[1] - corners[0]) * t,
                 corners[3] + (corners[2] - corners[3]) * t, planeColor });
             m_TopologyViz.push_back({ corners[0] + (corners[3] - corners[0]) * t,
@@ -2448,7 +2539,6 @@ namespace Viewer
 
         // 평면 중심에서 법선 방향으로 짧은 화살표를 그린다.
         const Math::Vector3 center = (corners[0] + corners[2]) * 0.5f;
-        const Math::Vector3 normal(plane.WorldPlane);
         const Math::Vector3 tip = center + normal * 0.15f;
         m_TopologyViz.push_back({ center, tip, planeColor });
         const Math::Vector3 side = Math::Normalize(corners[1] - corners[0]);
