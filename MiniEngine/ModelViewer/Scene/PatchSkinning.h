@@ -29,9 +29,9 @@ namespace Viewer
         uint32_t Flags = 0, Stride = 0;
         std::vector<Math::BoundingSphere> BindBounds;
 
-        // 남은 길이 재분배(LW-2b) 계수: 0 재분배, 1 경계 유지, 2 합 0 폴백, 3 폴백 본 없음 유지, 4 비가역 유지, 5 변화 없음(재분배 대상 weight 없음).
+        // 남은 길이 재분배(LW-2b) 계수: 0 재분배, 1 경계 유지, 2 합 0 폴백, 3 폴백 본 없음 유지, 4 비가역 유지, 5 변화 없음(재분배 대상 weight 없음), 6 법선 행렬 비가역이라 법선·탄젠트만 유지(LW-2c).
         // LengthEnabled는 재분배 경로가 실제로 켜졌는지(표·플래그 크기가 맞는지)를 나타낸다.
-        uint32_t LengthCounters[6] = {};
+        uint32_t LengthCounters[7] = {};
         bool LengthEnabled = false;
     };
 

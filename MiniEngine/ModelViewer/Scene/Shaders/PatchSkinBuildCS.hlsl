@@ -127,9 +127,25 @@ void StoreEndpoint(uint output, uint vertex, bool cap)
     Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
 }
 
-// 복사 정점의 u16 skin 입력(joints 전체 팔레트 인덱스, weights u16)을 남은 길이 비율로 재분배하고 bind 위치를 다시 계산한다.
-// 재분배 대상 weight가 없거나 폴백 본 없음, 비가역이면 입력을 그대로 두고 false를 돌려주며, 계수는 LengthCounters에 누적한다.
-bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16)
+// 법선 행렬 합의 새 역행렬과 옛 행렬을 이어 bind 방향 하나를 다시 계산해 압축한다(w 두 비트는 유지하고, 퇴화하면 원래 값을 돌려준다).
+uint RemapFrame(uint packed, float3x3 inverseNew, float3x3 oldNormal)
+{
+    // 옛 법선 행렬로 절단 시점 방향을 만든 뒤 새 법선 행렬의 역으로 bind 방향을 구한다.
+    float4 frame = Frame(packed);
+    float3 direction = mul(inverseNew, mul(oldNormal, frame.xyz));
+    if (!(dot(direction, direction) > 1e-20))
+    {
+        return packed;
+    }
+
+    // 정규화해 기존 UNORM 10-10-10-2 형식으로 다시 압축하고 w 비트는 원래 값을 쓴다.
+    uint3 value = uint3(round(saturate(normalize(direction) * .5 + .5) * 1023));
+    return value.x | (value.y << 10) | (value.z << 20) | (packed & 0xc0000000);
+}
+
+// 복사 정점의 u16 skin 입력(joints 전체 팔레트 인덱스, weights u16)을 남은 길이 비율로 재분배하고 bind 위치·법선·탄젠트를 다시 계산한다.
+// 재분배 대상 weight가 없거나 폴백 본 없음, 비가역이면 입력을 그대로 두고 false를 돌려주며, 법선 행렬만 비가역이면 법선·탄젠트만 유지하고 계수한다.
+bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inout uint normal, inout uint tangent, bool hasTangent)
 {
     // weight가 있는 슬롯 중 비율 1 미만이 없으면 연산 없이 원래 레코드를 유지한다(weight 0 슬롯의 비율은 무시한다).
     bool affected = false;
@@ -194,6 +210,7 @@ bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16)
     }
 
     // 원래와 새 weight로 절단 시점 skin 행렬 M, M'를 만든다.
+    uint4 oldJoints = joints;
     float4 before = weights;
     float4 after = float4(quantized) / 65535.0;
     float4x4 oldSkin = JointsAtCut[joints.x].PosMatrix * before.x + JointsAtCut[joints.y].PosMatrix * before.y
@@ -219,11 +236,38 @@ bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16)
     bind = mul(transpose(cofactor), skinned - translation) / determinant;
     joints = newJoints;
     weights16 = quantized;
+
+    // 법선 행렬의 합 A, A'를 만든다(PreparePoseCS와 같은 Σw·NrmMatrix이며 M'의 역전치가 아니다).
+    float4x3 oldSum = JointsAtCut[oldJoints.x].NrmMatrix * before.x + JointsAtCut[oldJoints.y].NrmMatrix * before.y
+        + JointsAtCut[oldJoints.z].NrmMatrix * before.z + JointsAtCut[oldJoints.w].NrmMatrix * before.w;
+    float4x3 newSum = JointsAtCut[newJoints.x].NrmMatrix * after.x + JointsAtCut[newJoints.y].NrmMatrix * after.y
+        + JointsAtCut[newJoints.z].NrmMatrix * after.z + JointsAtCut[newJoints.w].NrmMatrix * after.w;
+    float3x3 oldNormal = (float3x3)oldSum;
+    float3x3 newNormal = (float3x3)newSum;
+
+    // A'의 역(cofactor/det)이 퇴화하면 법선·탄젠트는 원래 값을 유지하고 계수한다.
+    float3x3 normalCofactor = float3x3(cross(newNormal[1], newNormal[2]), cross(newNormal[2], newNormal[0]), cross(newNormal[0], newNormal[1]));
+    float normalDeterminant = dot(newNormal[0], normalCofactor[0]);
+    float oldNormalDeterminant = dot(oldNormal[0], cross(oldNormal[1], oldNormal[2]));
+    if (!(abs(normalDeterminant) > 1e-4 * abs(oldNormalDeterminant)) || abs(normalDeterminant) < 1e-20)
+    {
+        LengthCounters.InterlockedAdd(24, 1);
+    }
+    else
+    {
+        // 법선과 탄젠트 xyz를 같은 식으로 다시 계산한다.
+        float3x3 inverseNormal = transpose(normalCofactor) / normalDeterminant;
+        normal = RemapFrame(normal, inverseNormal, oldNormal);
+        if (hasTangent)
+        {
+            tangent = RemapFrame(tangent, inverseNormal, oldNormal);
+        }
+    }
     LengthCounters.InterlockedAdd(0, 1);
     return true;
 }
 
-// 복사 정점은 원본 bind로 복원하며(재분배가 켜진 A mesh의 비경계 복사 정점은 weight와 bind 위치를 다시 계산한다) 내부 교점(1)과, 조각 플래그가 켜진 실제 분리 rim(2)·cap(3)에는 두 끝점의 원본 skin 입력을 덧붙인다.
+// 복사 정점은 원본 bind로 복원하며(재분배가 켜진 A mesh의 비경계 복사 정점은 weight와 bind 위치·법선·탄젠트를 다시 계산한다) 내부 교점(1)과, 조각 플래그가 켜진 실제 분리 rim(2)·cap(3)에는 두 끝점의 원본 skin 입력을 덧붙인다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -241,6 +285,8 @@ void main(uint3 id : SV_DispatchThreadID)
     uint4 skin = uint4(RigidJoint, 0, 65535, 0);
     bool reweighted = false;
     uint4 newJoints = uint4(0, 0, 0, 0);
+    uint copiedNormal = 0;
+    uint copiedTangent = 0;
 
     // 복사된 패치 정점을 section/draw/sourceTriangle과 corner로 원본 VB에 대응시킨다.
     if (copied)
@@ -251,6 +297,8 @@ void main(uint3 id : SV_DispatchThreadID)
         startJoint = draw.StartJoint;
         skin = Source.Load4(address + draw.SourceStride - 16);
         float3 bind = asfloat(Source.Load3(address));
+        copiedNormal = Source.Load(address + 12);
+        copiedTangent = (sourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff;
 
         // 남은 길이 재분배가 켜져 있으면 경계가 아닌 정점만 weight와 bind 위치를 바꾼다(경계 번호를 못 읽으면 경계로 본다).
         if (LengthEntries)
@@ -263,7 +311,7 @@ void main(uint3 id : SV_DispatchThreadID)
             {
                 uint4 full = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + startJoint;
                 uint4 packed = uint4(skin.z & 65535, skin.z >> 16, skin.w & 65535, skin.w >> 16);
-                reweighted = Reweight(bind, full, packed);
+                reweighted = Reweight(bind, full, packed, copiedNormal, copiedTangent, (sourceFlags & 4) != 0);
                 if (reweighted)
                 {
                     newJoints = full;
@@ -272,7 +320,7 @@ void main(uint3 id : SV_DispatchThreadID)
             }
         }
         Result.Store3(output, asuint(bind));
-        Result.Store(output + 12, Source.Load(address + 12));
+        Result.Store(output + 12, copiedNormal);
     }
     else
     {
@@ -281,7 +329,7 @@ void main(uint3 id : SV_DispatchThreadID)
     }
 
     // section별 flags의 합집합을 사용하고 없는 속성에는 기본값을 넣는다.
-    uint tangent = (sourceFlags & 4) ? (copied ? Source.Load(address + 16) : RotateFrame(Data.Load(address + 16))) : 0xe00803ff;
+    uint tangent = (sourceFlags & 4) ? (copied ? copiedTangent : RotateFrame(Data.Load(address + 16))) : 0xe00803ff;
     uint uvAt = address + 16 + ((sourceFlags & 4) ? 4 : 0);
     uint uv0 = (sourceFlags & 8) ? (copied ? Source.Load(uvAt) : Data.Load(uvAt)) : 0;
     uint uv1 = (sourceFlags & 16) ? (copied ? Source.Load(uvAt + ((sourceFlags & 8) ? 4 : 0)) : Data.Load(uvAt + 4)) : uv0;

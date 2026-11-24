@@ -2550,8 +2550,8 @@ namespace Viewer
             const auto& counters = skin->Vertices.LengthCounters;
             if (skin->Vertices.LengthEnabled)
             {
-                PatchLog("LW2b reweighted=%u unchanged=%u boundaryKept=%u sumZeroFallback=%u fallbackMissingKept=%u singularKept=%u\n",
-                    counters[0], counters[5], counters[1], counters[2], counters[3], counters[4]);
+                PatchLog("LW2b reweighted=%u unchanged=%u boundaryKept=%u sumZeroFallback=%u fallbackMissingKept=%u singularKept=%u normalSingularKept=%u\n",
+                    counters[0], counters[5], counters[1], counters[2], counters[3], counters[4], counters[6]);
             }
             else
             {
@@ -2588,6 +2588,10 @@ namespace Viewer
         uint32_t stumpVertices = 0;
         double stumpSum = 0.0, stumpMax = 0.0;
         uint32_t copiedNonBoundary = 0, nonBoundaryDescendant = 0, copiedBoundary = 0;
+
+        // 복사 정점의 게시 순간 법선(새 레코드 스키닝)과 절단 시점 Data 법선의 최대 각도(도)와 최대 성분 차를 모은다.
+        uint32_t normalChecked = 0;
+        double normalMaxAngle = 0.0, normalMaxComponent = 0.0;
         const bool follow = built && PatchAnimFollowEnabled() && snapshot.AnimFollow;
         double maxError = built ? 0.0 : INFINITY;
         if (built)
@@ -2667,6 +2671,31 @@ namespace Viewer
                             nonBoundaryDescendant += descendant > 0.0f;
                         }
                         copiedBoundary += copiedVertex && boundary;
+
+                        // 복사 정점은 새 레코드의 법선을 절단 시점 팔레트로 스키닝해 Data 법선과 비교한다(Data는 노드 변환을 포함하므로 역전치를 곱한다).
+                        if (copiedVertex && valid)
+                        {
+                            const auto decode = [](uint32_t packed)
+                            {
+                                return Math::Vector3(float(packed & 1023) / 1023.0f * 2 - 1,
+                                    float((packed >> 10) & 1023) / 1023.0f * 2 - 1, float((packed >> 20) & 1023) / 1023.0f * 2 - 1);
+                            };
+                            uint32_t recordNormal, dataNormal;
+                            std::memcpy(&recordNormal, input + 12, 4);
+                            std::memcpy(&dataNormal, data + size_t(v) * 28 + 12, 4);
+                            Math::Vector3 skinned(Math::kZero);
+                            for (uint32_t k = 0; k < 4; ++k)
+                                skinned = skinned + (palette[joints[k]].nrmXform * decode(recordNormal)) * (float(weights[k]) / total);
+                            const Math::Vector3 actualNormal = Math::Normalize(
+                                Math::InverseTranspose(snapshot.MeshNodeAtCut.Get3x3()) * skinned);
+                            const Math::Vector3 expectedNormal = Math::Normalize(decode(dataNormal));
+                            const double cosine = std::clamp(double(float(Math::Dot(actualNormal, expectedNormal))), -1.0, 1.0);
+                            normalMaxAngle = std::max(normalMaxAngle, std::acos(cosine) * 57.29577951308232);
+                            const Math::Vector3 difference = actualNormal - expectedNormal;
+                            normalMaxComponent = std::max(normalMaxComponent, double(std::max({ std::fabs(float(difference.GetX())),
+                                std::fabs(float(difference.GetY())), std::fabs(float(difference.GetZ())) })));
+                            ++normalChecked;
+                        }
                     }
 
                     // 끝점 보간 종류(1 내부 교점, 2 rim, 3 cap)가 있으면 GPU와 같이 두 원본 끝점을 각각 skin한 뒤 t로 보간한다.
@@ -2804,6 +2833,10 @@ namespace Viewer
                 enabled ? 1 : 0, copiedNonBoundary, nonBoundaryDescendant, enabled && nonBoundaryDescendant == 0 ? "PASS" : "FAIL");
             PatchLog("LW2b case=%u side=%s counterSum=%u copied=%u boundaryKept=%u lw2aBoundary=%u %s\n", m_SkinCheckCase, label,
                 accounted, copied, counters[1], copiedBoundary, countsMatch ? "PASS" : "FAIL");
+
+            // 게시 순간 법선 차는 UNORM 10비트 반올림 두 번(레코드 재압축, Data 압축; 각 약 1e-3)의 합인 2.5e-3 안이어야 한다.
+            PatchLog("LW2c case=%u side=%s normalChecked=%u maxAngle_deg=%.4f maxComponent=%.6f %s\n", m_SkinCheckCase, label,
+                normalChecked, normalMaxAngle, normalMaxComponent, normalChecked && normalMaxComponent <= 2.5e-3 ? "PASS" : "FAIL");
         }
 
         // PS3 동기 GPU 진단은 break 검사에서만 수행하며 게시 경로에는 연결하지 않는다.

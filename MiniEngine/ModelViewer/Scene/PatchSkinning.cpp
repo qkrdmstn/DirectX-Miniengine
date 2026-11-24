@@ -223,7 +223,7 @@ namespace Viewer
         }
         // 재분배 계수를 복사해 호출자가 로그로 남기게 한다.
         const auto* counts = static_cast<const uint32_t*>(counterReadback.Map());
-        std::copy(counts, counts + 6, out.LengthCounters);
+        std::copy(counts, counts + 7, out.LengthCounters);
         counterReadback.Unmap();
         readback.Unmap();
         return true;
