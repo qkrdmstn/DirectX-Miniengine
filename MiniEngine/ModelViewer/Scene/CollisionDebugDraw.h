@@ -3,7 +3,9 @@
 #include "Scene.h"
 #include "PhysicsSystem.h"
 #include "Camera.h"
+#include "Color.h"
 #include <cstdint>
+#include <vector>
 
 class GraphicsContext;
 
@@ -26,6 +28,17 @@ namespace Viewer
             double Milliseconds = 0.0;
         };
 
+        // 월드 공간 색 선분 하나이다. 위상 아일랜드 시각화처럼 스냅샷으로 고정한 선을 그릴 때 쓴다.
+        struct WorldLine
+        {
+            Math::Vector3 From;
+            Math::Vector3 To;
+            Color Tint;
+        };
+
+        // 월드 선분 목록을 근평면 자르기와 화면 투영을 거쳐 얇은 overlay 선으로 그린다.
+        static void DrawWorldLines(GraphicsContext& context, const Math::Camera& camera,
+            float width, float height, const std::vector<WorldLine>& lines);
         // 켜져 있을 때 호출한다. 충돌 hull과 바닥 상자의 모서리를 모아 선 overlay로 그린다.
         void Draw(GraphicsContext& context, const Scene& scene, const PhysicsSystem& physics,
             const Math::Camera& camera, float width, float height);

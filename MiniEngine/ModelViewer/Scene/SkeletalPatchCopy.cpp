@@ -25,6 +25,9 @@
 #include <exception>
 #include <set>
 #include <map>
+#include <array>
+#include <numeric>
+#include <algorithm>
 #include <tuple>
 #include <sstream>
 #include "SystemTime.h"
@@ -468,6 +471,32 @@ namespace Viewer
 
             // 이름이 없거나 조회에 실패한 노드를 번호로 식별한다.
             return std::to_string(node);
+        }
+
+        // -topology-island-viz 옵션을 한 번만 읽어 켜짐 여부를 돌려준다.
+        bool TopologyIslandVizEnabled()
+        {
+            // 프로세스 수명 동안 같은 값을 쓴다.
+            static const bool enabled = []
+            {
+                // 값이 0이거나 없으면 꺼진 상태이다.
+                uint32_t value = 0;
+                CommandLineArgs::GetInteger(L"topology-island-viz", value);
+                return value != 0;
+            }();
+            return enabled;
+        }
+
+        // 아일랜드 크기 순위에 대응하는 12색 팔레트 색을 돌려준다.
+        Color TopologyIslandColor(uint32_t rank)
+        {
+            // 서로 뚜렷이 구별되는 색을 고정 순서로 두고 넘치면 되풀이한다.
+            static const Color colors[12] = {
+                Color(0.90f, 0.10f, 0.10f), Color(0.15f, 0.45f, 1.00f), Color(0.10f, 0.80f, 0.20f),
+                Color(1.00f, 0.85f, 0.10f), Color(0.80f, 0.20f, 0.90f), Color(0.10f, 0.85f, 0.85f),
+                Color(1.00f, 0.55f, 0.10f), Color(0.55f, 0.35f, 0.15f), Color(1.00f, 0.50f, 0.75f),
+                Color(0.60f, 0.90f, 0.20f), Color(0.50f, 0.50f, 1.00f), Color(0.95f, 0.95f, 0.95f) };
+            return colors[rank % 12];
         }
 
         // 투표·선택·추출 패스가 공유하는 root signature와 compute PSO를 준비한다.
@@ -1883,6 +1912,22 @@ namespace Viewer
             return;
         }
 
+        // 선택된 component의 월드 변환을 한 번만 구해 시각화와 이후 절단이 함께 쓴다.
+        const Matrix4 world(mesh->GetWorldTransform(target->GetTransform()));
+
+        // 위상 아일랜드 시각화는 물리 등록과 GPU 절단 및 게시를 건너뛰고 snapshot만 만든다.
+        if (TopologyIslandVizEnabled())
+        {
+            BuildTopologyIslandViz(*target, *mesh, world, plane);
+
+            // 시연 캡처가 게시 신호를 기다리지 않도록 시각화 요청 프레임을 게시 프레임으로 알린다.
+            if (m_Demo != 0)
+            {
+                m_CaptureRequest = m_Demo;
+            }
+            return;
+        }
+
         // 명시 옵션에서만 최상위 교차 P 집합을 몸체별 준비 입력으로 고정한다.
         uint32_t multiCut = 0;
         CommandLineArgs::GetInteger(L"skeletal-multi-cut", multiCut);
@@ -2157,7 +2202,6 @@ namespace Viewer
             });
 
         // cutter와 같은 component-local 평면 변환을 사용한다.
-        const Matrix4 world(mesh->GetWorldTransform(target->GetTransform()));
         auto local = plane;
         local.WorldPlane = Transpose(world) * plane.WorldPlane;
         local.WorldToPlane = plane.WorldToPlane * world;
@@ -2204,6 +2248,237 @@ namespace Viewer
         m_BonePending = boneCut && submitted;
         if (!submitted && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
+    }
+
+    // 절단 없이 격자 위상 맵만 평면으로 갈라 아일랜드별 색 월드 선분 snapshot과 요약 로그를 만든다.
+    // 현재 포즈로 모든 skin 정점을 CPU 스키닝하는 부분은 DiagnoseIslands와 같은 식이다.
+    void SkeletalPatchCopy::BuildTopologyIslandViz(const GameObject& target, const MeshComponent& mesh,
+        const Math::Matrix4& world, const MeshCutting::CutPlaneData& plane)
+    {
+        // 이전 snapshot을 비우고 준비된 포즈가 없으면 로그만 남기고 건너뛴다.
+        m_TopologyViz.clear();
+        const auto& geometry = *mesh.GetGeometry();
+        const auto& model = *geometry.GetSource();
+        const auto* joints = mesh.GetPreparedJoints();
+        const auto* nodes = mesh.GetPreparedNodes();
+        if (!joints || !nodes)
+        {
+            PatchLog("TIV skipped: prepared pose is not ready\n");
+            return;
+        }
+
+        // SkeletalPatchJob::Submit과 같은 방식으로 원본 mesh의 skin 번호를 센다.
+        std::vector<uint32_t> skinSections(model.m_NumMeshes, UINT32_MAX);
+        uint32_t skinCount = 0;
+        const uint8_t* meshData = model.m_MeshData.get();
+        for (uint32_t s = 0; s < model.m_NumMeshes; ++s)
+        {
+            const auto& part = *reinterpret_cast<const Mesh*>(meshData);
+            if (part.numJoints)
+            {
+                skinSections[s] = skinCount;
+                ++skinCount;
+            }
+            meshData += sizeof(Mesh) + (part.numDraws - 1) * sizeof(Mesh::Draw);
+        }
+
+        // 컴포넌트의 각 skin section에 제출 프레임(SourceFrame 역행렬 * 노드)을 대응시킨다.
+        const Math::Matrix4 sourceInverse(Invert(Math::Matrix4(mesh.GetDeformBinding().SourceFrame.ToAffine())));
+        const size_t skinTotal = model.m_SkinCpuSections.size();
+        std::vector<Math::Matrix4> frames(skinTotal, Math::Matrix4(Math::kIdentity));
+        std::vector<uint8_t> hasFrame(skinTotal, 0);
+        for (uint32_t s = 0; s < geometry.GetSections().size(); ++s)
+        {
+            // section의 원본 skin 번호를 찾고 skin이 아니면 건너뛴다.
+            const uint32_t skin = skinSections.at(geometry.GetSections()[s].SourceMesh);
+            if (skin == UINT32_MAX || skin >= skinTotal)
+            {
+                continue;
+            }
+            frames[skin] = sourceInverse * nodes[geometry.GetMesh(s).meshCBV];
+            hasFrame[skin] = 1;
+        }
+
+        // 모든 skin 정점을 스키닝해 월드 위치, 평면 거리, 1e-5 규칙의 부호를 구한다.
+        std::vector<std::vector<Math::Vector3>> positions(skinTotal);
+        std::vector<std::vector<float>> distances(skinTotal);
+        std::vector<std::vector<int8_t>> signs(skinTotal);
+        std::vector<std::array<uint32_t, 2>> triangles;
+        for (uint32_t skin = 0; skin < skinTotal; ++skin)
+        {
+            if (!hasFrame[skin])
+            {
+                continue;
+            }
+
+            // section 정점 수만큼 결과 배열을 준비한다.
+            const auto& section = model.m_SkinCpuSections[skin];
+            positions[skin].resize(section.size());
+            distances[skin].resize(section.size());
+            signs[skin].resize(section.size());
+
+            // 정점마다 스키닝과 평면 부호를 계산한다.
+            for (size_t v = 0; v < section.size(); ++v)
+            {
+                // 정규화한 weight로 팔레트 변환을 섞는다.
+                const auto& vertex = section[v];
+                Math::Vector4 skinned(Math::kZero);
+                uint32_t sum = 0;
+
+                // weight 합을 구한 뒤 팔레트 변환을 가중 합산한다.
+                for (uint32_t weight : vertex.Weights)
+                {
+                    sum += weight;
+                }
+                for (uint32_t j = 0; j < 4; ++j)
+                {
+                    if (vertex.Weights[j])
+                    {
+                        skinned = skinned + (joints[section.StartJoint + vertex.Joints[j]].posXform
+                            * Math::Vector4(vertex.Position[0], vertex.Position[1], vertex.Position[2], 1))
+                            * (float(vertex.Weights[j]) / std::max(sum, 1u));
+                    }
+                }
+
+                // 제출 프레임과 컴포넌트 월드를 적용한 뒤 평면까지의 부호 거리를 저장한다.
+                const Math::Vector3 local(frames[skin] * skinned);
+                const Math::Vector3 position(world * Math::Vector4(local, 1));
+                const float distance = Math::Dot(plane.WorldPlane, Math::Vector4(position, 1));
+                positions[skin][v] = position;
+                distances[skin][v] = distance;
+                signs[skin][v] = std::abs(distance) <= 1e-5f ? 0 : distance > 0 ? 1 : -1;
+            }
+
+            // 이 section의 모든 삼각형을 아일랜드 판정 대상으로 넣는다.
+            const uint32_t triangleCount = uint32_t(model.m_LatticeTopology.Indices.at(skin).size() / 3);
+            for (uint32_t tri = 0; tri < triangleCount; ++tri)
+            {
+                triangles.push_back({ skin, tri });
+            }
+        }
+
+        // 몸체 투표는 쓰지 않고 아일랜드 연결만 구한 뒤 큰 순서로 색 순위를 정한다.
+        const auto labels = LabelPatchIslands(model.m_LatticeTopology, model.m_SkinCpuSections,
+            triangles, signs, [](uint32_t) { return 0u; });
+        std::vector<uint32_t> order(labels.Islands.size());
+        std::iota(order.begin(), order.end(), 0u);
+        std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b)
+        {
+            // 삼각형이 많은 아일랜드가 앞선다.
+            return labels.Islands[a].Triangles > labels.Islands[b].Triangles;
+        });
+        std::vector<uint32_t> rank(order.size());
+        for (uint32_t i = 0; i < order.size(); ++i)
+        {
+            rank[order[i]] = i;
+        }
+
+        // 삼각형마다 각 side 아일랜드에 속한 부분의 간선을 그 색의 선분으로 만든다.
+        std::set<std::array<uint32_t, 5>> emitted;
+        for (size_t t = 0; t < triangles.size(); ++t)
+        {
+            const uint32_t skin = triangles[t][0];
+            const uint32_t tri = triangles[t][1];
+            const auto& indices = model.m_LatticeTopology.Indices[skin];
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                const uint32_t island = labels.TriangleSideIsland[t][side];
+                if (island == UINT32_MAX)
+                {
+                    continue;
+                }
+                const Color color = TopologyIslandColor(rank[island]);
+                for (uint32_t e = 0; e < 3; ++e)
+                {
+                    // 부호 0은 양쪽 side에 속하므로 같은 side 판정에 포함한다.
+                    const uint32_t a = indices[tri * 3 + e];
+                    const uint32_t b = indices[tri * 3 + (e + 1) % 3];
+                    const bool inA = side == 0 ? signs[skin][a] >= 0 : signs[skin][a] <= 0;
+                    const bool inB = side == 0 ? signs[skin][b] >= 0 : signs[skin][b] <= 0;
+                    if (!inA && !inB)
+                    {
+                        continue;
+                    }
+                    Math::Vector3 from = positions[skin][a];
+                    Math::Vector3 to = positions[skin][b];
+                    std::array<uint32_t, 5> key = { skin, std::min(a, b), std::max(a, b), island, 0 };
+
+                    // 한 끝만 이 side이면 평면 교점까지의 부분 선분만 낸다. 끝점이 평면 위면 길이 0이라 건너뛴다.
+                    if (!inA || !inB)
+                    {
+                        const uint32_t inside = inA ? a : b;
+                        const uint32_t outside = inA ? b : a;
+                        if (signs[skin][inside] == 0)
+                        {
+                            continue;
+                        }
+                        const float inDistance = distances[skin][inside];
+                        const float fraction = inDistance / (inDistance - distances[skin][outside]);
+                        from = positions[skin][inside];
+                        to = from + (positions[skin][outside] - from) * fraction;
+                        key = { skin, inside, outside, island, 1 };
+                    }
+
+                    // 같은 아일랜드의 같은 선분은 한 번만 낸다.
+                    if (!emitted.insert(key).second)
+                    {
+                        continue;
+                    }
+                    m_TopologyViz.push_back({ from, to, color });
+                }
+            }
+        }
+
+        // 나눈 기준 평면을 흰색 테두리와 4x4 격자로 같은 snapshot에 덧붙인다.
+        const Color planeColor(1.0f, 1.0f, 1.0f);
+        const auto& corners = plane.WorldCorners;
+        for (uint32_t e = 0; e < 4; ++e)
+        {
+            m_TopologyViz.push_back({ corners[e], corners[(e + 1) % 4], planeColor });
+        }
+        for (uint32_t g = 1; g < 4; ++g)
+        {
+            // 코너 (-,-)~(+,-)와 (-,+)~(+,+) 사이, (-,-)~(-,+)와 (+,-)~(+,+) 사이를 보간한다.
+            const float t = float(g) / 4.0f;
+            m_TopologyViz.push_back({ corners[0] + (corners[1] - corners[0]) * t,
+                corners[3] + (corners[2] - corners[3]) * t, planeColor });
+            m_TopologyViz.push_back({ corners[0] + (corners[3] - corners[0]) * t,
+                corners[1] + (corners[2] - corners[1]) * t, planeColor });
+        }
+
+        // 평면 중심에서 법선 방향으로 짧은 화살표를 그린다.
+        const Math::Vector3 center = (corners[0] + corners[2]) * 0.5f;
+        const Math::Vector3 normal(plane.WorldPlane);
+        const Math::Vector3 tip = center + normal * 0.15f;
+        m_TopologyViz.push_back({ center, tip, planeColor });
+        const Math::Vector3 side = Math::Normalize(corners[1] - corners[0]);
+        m_TopologyViz.push_back({ tip, tip - normal * 0.04f + side * 0.025f, planeColor });
+        m_TopologyViz.push_back({ tip, tip - normal * 0.04f - side * 0.025f, planeColor });
+
+        // 아일랜드 수와 크기 순서별 side, 삼각형 수, 기여 상위 두 joint를 기록한다.
+        PatchLog("TIV islands=%u triangles=%zu lines=%zu\n", labels.IslandCount, triangles.size(), m_TopologyViz.size());
+        for (uint32_t i = 0; i < order.size(); ++i)
+        {
+            // 점수 상위 두 joint를 고른다.
+            const auto& island = labels.Islands[order[i]];
+            std::vector<std::pair<uint32_t, double>> scores(island.JointScores.begin(), island.JointScores.end());
+            const size_t top = std::min<size_t>(2, scores.size());
+            std::partial_sort(scores.begin(), scores.begin() + top, scores.end(),
+                [](const auto& a, const auto& b) { return a.second > b.second; });
+
+            // 가능하면 node 이름으로 적고 없으면 번호가 대신 나온다.
+            std::ostringstream line;
+            line << "TIV island=" << i << " color=" << i % 12 << " side=" << island.Side
+                << " tris=" << island.Triangles;
+            for (size_t k = 0; k < top; ++k)
+            {
+                const uint32_t node = model.m_JointIndices[scores[k].first];
+                line << " joint" << k << "=" << SafeDiagnosticNodeName(target.GetName(), node)
+                    << ":" << scores[k].second;
+            }
+            line << '\n';
+            PatchLog("%s", line.str().c_str());
+        }
     }
 
     // 실제 추출 section의 공통 N과 그 node 식별자를 저장하고 팔레트 및 경계 weight를 확인한다.

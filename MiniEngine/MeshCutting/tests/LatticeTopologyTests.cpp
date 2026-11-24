@@ -2,6 +2,7 @@
 // cl /nologo /utf-8 /std:c++17 /EHsc /W4 /Fo:$env:TEMP/ /Fe:$env:TEMP/LatticeTopologyTests.exe
 //    MiniEngine/MeshCutting/tests/LatticeTopologyTests.cpp MiniEngine/Model/LatticeTopology.cpp
 #include "../../Model/LatticeTopology.h"
+#include <array>
 #include <cstdio>
 #include <set>
 #include <stdexcept>
@@ -223,6 +224,66 @@ int main()
         Require(conflict[2] == 1 && conflicting.TriangleSideBody[0][0] == fullVote.TriangleSideBody[0][0]
             && conflicting.TriangleSideBody[0][1] == 0 && conflicting.SideDefault[1] == 0,
             "MI3e2 conflicting demands preserve majority and update defaults");
+
+        // 뒤집힌 U(П)자 메시를 quad로 만든다. 윗변 한 줄과 아래로 뻗은 두 다리이며 모든 정점이 joint 0이다.
+        SkinCpuSection arch;
+        for (uint32_t y = 0; y < 4; ++y)
+        {
+            for (uint32_t x = 0; x < 4; ++x)
+            {
+                // 4x4 격자 정점을 정수 좌표에 둔다.
+                SkinCpuVertex vertex = {};
+                vertex.Position[0] = float(x);
+                vertex.Position[1] = float(y);
+                vertex.Weights[0] = 65535;
+                arch.push_back(vertex);
+            }
+        }
+        const std::array<std::array<uint32_t, 2>, 7> archCells = { {
+            {0,0}, {0,1}, {2,0}, {2,1}, {0,2}, {1,2}, {2,2} } };
+        for (const auto& cell : archCells)
+        {
+            // 한 칸을 삼각형 두 개로 나눈다.
+            const uint32_t v00 = cell[1] * 4 + cell[0];
+            const uint32_t v10 = v00 + 1;
+            const uint32_t v01 = v00 + 4;
+            const uint32_t v11 = v01 + 1;
+            for (uint32_t v : { v00, v10, v01, v10, v11, v01 })
+            {
+                arch.Indices.push_back(v);
+            }
+        }
+
+        // quad 위상 맵과 모든 삼각형 목록을 만든다.
+        const auto archTopology = BuildLatticeTopology({ arch });
+        std::vector<std::array<uint32_t, 2>> archTriangles;
+        for (uint32_t t = 0; t < arch.Indices.size() / 3; ++t)
+        {
+            archTriangles.push_back({ 0, t });
+        }
+        const auto archIslands = [&](float planeY)
+        {
+            // 수평 평면 y=planeY에 대한 정점 부호로 아일랜드를 센다.
+            std::vector<int8_t> archSigns;
+            for (const auto& vertex : arch)
+            {
+                archSigns.push_back(vertex.Position[1] > planeY ? 1 : vertex.Position[1] < planeY ? -1 : 0);
+            }
+            return LabelPatchIslands(archTopology, { arch }, archTriangles, { archSigns }, groups);
+        };
+
+        // 다리를 가로지르면 윗변 쪽 하나와 다리 둘이 따로 떨어진 3개이고 윗변 쪽만 side0이다.
+        const auto legsCut = archIslands(1.5f);
+        Require(legsCut.IslandCount == 3, "arch legs cut gives three islands");
+        uint32_t legSides[2] = {};
+        for (const auto& island : legsCut.Islands)
+        {
+            ++legSides[island.Side];
+        }
+        Require(legSides[0] == 1 && legSides[1] == 2, "arch bar is one side and legs are the other");
+
+        // 윗변만 가로지르면 윗변 위쪽 하나와 나머지 한 덩어리인 2개다.
+        Require(archIslands(2.5f).IslandCount == 2, "arch bar cut gives two islands");
 
         // 빈 입력과 점 크기 bounds도 유효한 결과를 낸다.
         Require(CountLatticeComponents(BuildLatticeTopology({})) == 0, "empty");

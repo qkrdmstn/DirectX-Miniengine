@@ -5,6 +5,7 @@
 #include "ReadbackBuffer.h"
 #include "SkeletalBoundaryChecks.h"
 #include "PatchSkinning.h"
+#include "CollisionDebugDraw.h"
 #include "../../MeshCutting/Geometry/CutPlane.h"
 
 namespace Viewer
@@ -181,6 +182,12 @@ namespace Viewer
             // 결과를 소비하기 전까지 복사본의 단독 작업이다.
             return m_ReadyCut || m_CutInFlight || !m_RetiredOwners.empty();
         }
+        // -topology-island-viz가 만든 아일랜드별 색 월드 선분 snapshot을 읽는다.
+        const std::vector<CollisionDebugDraw::WorldLine>& GetTopologyViz() const
+        {
+            // 요청이 없거나 시각화가 꺼져 있으면 빈 목록이다.
+            return m_TopologyViz;
+        }
         // 후속 AR 단계가 준비된 부착 패치와 요청 평면을 한 번 가져간다.
         bool TakeRigBoneCutPublication(RigBoneCutPublication& publication)
         {
@@ -203,6 +210,9 @@ namespace Viewer
             return m_BodyState == PatchBodyState::Done ? &m_BodyResult : nullptr;
         }
     private:
+        // 절단 없이 위상 맵만 평면으로 갈라 아일랜드별 색 선분 snapshot과 요약 로그를 만든다.
+        void BuildTopologyIslandViz(const GameObject& target, const MeshComponent& mesh,
+            const Math::Matrix4& world, const MeshCutting::CutPlaneData& plane);
         // 출력 반공간의 provenance로 몸체를 판정하고 작은 진단 카운터만 읽는다.
         void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
             const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount);
@@ -247,6 +257,7 @@ namespace Viewer
         // 추출된 section의 공통 N을 확정하고 체크 실행에서만 PS-1 결과를 기록한다.
         void CheckPatchSkin(const SkeletalPatchBuffers& patch);
         std::vector<PatchSkinSnapshot> m_SkinSnapshots;
+        std::vector<CollisionDebugDraw::WorldLine> m_TopologyViz; // -topology-island-viz가 만든 색 선분 snapshot이다.
         std::vector<Math::Matrix4> m_SkinSectionNodes;
         std::vector<float> m_SkinPaletteErrors;
         uint32_t m_SkinCheckCase = 0;
