@@ -15,6 +15,12 @@ ByteAddressBuffer TriangleSources : register(t1);
 ByteAddressBuffer Data : register(t2);
 ByteAddressBuffer Provenance : register(t3);
 StructuredBuffer<DrawInput> Inputs : register(t4);
+struct Joint
+{
+    float4x4 PosMatrix;
+    float4x3 NrmMatrix;
+};
+StructuredBuffer<Joint> JointsAtCut : register(t5);
 RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
 //   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
@@ -72,6 +78,27 @@ uint SourceAddress(uint vertex, out DrawInput draw)
     return draw.VbOffset + Index(draw, sourceTriangle.z * 3 + vertex % 3) * draw.SourceStride;
 }
 
+// 끝점의 원본 법선을 절단 시점 팔레트(JointsAtCut)로 스키닝해 PreparePoseCS의 SkinEndpoint와 같은 공간의 UNORM 법선으로 압축한다.
+uint CutTimeNormal(uint address, DrawInput draw)
+{
+    // 원본 법선과 정규화 weight, 전체 팔레트 인덱스를 읽는다.
+    float3 normal = Frame(Source.Load(address + 12)).xyz;
+    uint4 skin = Source.Load4(address + draw.SourceStride - 16);
+    uint4 indices = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
+    float4 weights = float4(skin.z & 65535, skin.z >> 16, skin.w & 65535, skin.w >> 16);
+    weights /= max(dot(weights, 1), 1);
+
+    // 네 영향의 법선 행렬을 섞어 법선을 변환하고 정규화한다.
+    float4x3 skinNormal = JointsAtCut[indices.x].NrmMatrix * weights.x + JointsAtCut[indices.y].NrmMatrix * weights.y
+        + JointsAtCut[indices.z].NrmMatrix * weights.z + JointsAtCut[indices.w].NrmMatrix * weights.w;
+    float3 skinned = mul(skinNormal, normal).xyz;
+    skinned = dot(skinned, skinned) > 1e-20 ? normalize(skinned) : float3(0, 1, 0);
+
+    // UNORM 10-10-10-2로 압축한다.
+    uint3 value = uint3(round(saturate(skinned * .5 + .5) * 1023));
+    return value.x | (value.y << 10) | (value.z << 20) | (3u << 30);
+}
+
 // 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다. cap 끝점은 탄젠트 칸에 절단 시점 법선(K 프레임)을 넣는다.
 void StoreEndpoint(uint output, uint vertex, bool cap)
 {
@@ -81,9 +108,9 @@ void StoreEndpoint(uint output, uint vertex, bool cap)
     Result.Store4(output, Source.Load4(address));
     Result.Store(output + EndpointTangent, (draw.SourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff);
 
-    // cap은 PreparePoseCS가 끝점의 절단 시점 → 현재 법선 회전을 구할 수 있게 K 프레임 법선을 기록한다.
+    // cap은 PreparePoseCS가 끝점의 절단 시점 → 현재 법선 회전을 구할 수 있게 절단 시점 팔레트로 스키닝한 법선을 기록한다.
     if (cap)
-        Result.Store(output + EndpointTangent, RotateFrame(Data.Load(vertex * 28 + 12)));
+        Result.Store(output + EndpointTangent, CutTimeNormal(address, draw));
     uint4 skin = Source.Load4(address + draw.SourceStride - 16);
     uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
     Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));

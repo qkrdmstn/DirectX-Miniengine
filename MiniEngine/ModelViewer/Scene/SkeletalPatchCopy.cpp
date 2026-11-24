@@ -907,6 +907,7 @@ namespace Viewer
         double stumpMax = 0.0;
         Math::Matrix4 kFrame(Math::kIdentity);
         const bool haveFrame = piece && piece->TryGetRecutKFrame(kFrame);
+        std::vector<Math::Vector3> posedNormals;
         if (skinned && piece->HasPoseBounds() && piece->GetPosedGeometry().IsReady())
         {
             // 실제 프레임의 RAW40을 동기 복사하고 VB 겸용 버퍼의 읽기 상태를 복원한다.
@@ -936,6 +937,13 @@ namespace Viewer
                         + size_t(v) * PosedGeometry::VertexStride, sizeof(p));
                     const Math::Vector3 position(p[0], p[1], p[2]);
                     positions.at(size_t(section.FirstVertex) + v) = position;
+
+                    // AF-6 진단용으로 같은 정점의 준비된 법선(+12)도 모아 둔다.
+                    float n[3];
+                    std::memcpy(n, bytes + posed.GetOffset(piece->GetGeometry()->GetSections()[i].SourceMesh)
+                        + size_t(v) * PosedGeometry::VertexStride + 12, sizeof(n));
+                    if (posedNormals.size() != positions.size()) posedNormals.resize(positions.size());
+                    posedNormals.at(size_t(section.FirstVertex) + v) = Math::Vector3(n[0], n[1], n[2]);
                     const float distance = float(Math::Length(position - bound.GetCenter()));
                     if (!std::isfinite(distance) || !std::isfinite(radius) || distance > radius + 1e-4f)
                         inBounds = false;
@@ -964,6 +972,113 @@ namespace Viewer
                 const double change = std::abs(double(distance) - double(pair.DistanceAtCut)) * 1000.0;
                 maximum = std::isfinite(change) ? std::max(maximum, change) : INFINITY;
             }
+        }
+
+        // AF-6: 옵션 1 cap 법선을 (a) 절단 시점 팔레트 항등 검사와 (b) 현재 팔레트 CPU 재계산 일치 검사로 확인한다.
+        RecutCheckInput checkInput;
+        if (skinned && haveFrame && PatchAnimFollowEnabled() && piece->PatchSkin->Snapshot.AnimFollow && !posedNormals.empty()
+            && piece->TryGetRecutCheckInput(checkInput))
+        {
+            // 결과 skin Data를 동기 복사하고 읽기 상태를 복원한다.
+            const auto& skin = *piece->PatchSkin;
+            auto& data = const_cast<ByteAddressBuffer&>(skin.Vertices.Data);
+            ReadbackBuffer dataReadback;
+            dataReadback.Create(L"AF6 skin data readback", uint32_t(data.GetBufferSize()), 1);
+            auto& copyContext = GraphicsContext::Begin(L"AF6 cap normal");
+            copyContext.CopyBuffer(dataReadback, data);
+            copyContext.TransitionResource(data, D3D12_RESOURCE_STATE_GENERIC_READ);
+            copyContext.Finish(true);
+
+            // 압축 법선 복원, 행렬의 법선 변환, 최단 회전, 각도 계산 도구를 만든다.
+            using namespace DirectX;
+            const auto decode = [](uint32_t packed)
+            {
+                return XMVectorSet(float(packed & 1023) / 1023.0f * 2 - 1, float((packed >> 10) & 1023) / 1023.0f * 2 - 1,
+                    float((packed >> 20) & 1023) / 1023.0f * 2 - 1, 0);
+            };
+            const auto normalOf = [](const Math::Matrix4& m)
+            {
+                return XMMatrixTranspose(XMMatrixInverse(nullptr, XMMATRIX(m)));
+            };
+            const auto arc = [](XMVECTOR a, XMVECTOR b, XMVECTOR v)
+            {
+                const XMVECTOR axis = XMVector3Cross(a, b);
+                const float c = XMVectorGetX(XMVector3Dot(a, b));
+                if (c < -0.999f) return v;
+                return v + XMVector3Cross(axis, v) + XMVector3Cross(axis, XMVector3Cross(axis, v)) / (1 + c);
+            };
+            const auto degrees = [](XMVECTOR x, XMVECTOR y)
+            {
+                const float cosine = std::min(1.0f, std::max(-1.0f, XMVectorGetX(XMVector3Dot(XMVector3Normalize(x), XMVector3Normalize(y)))));
+                return std::acos(cosine) * 57.29578f;
+            };
+
+            // 팔레트 두 벌(절단 시점 값·현재 값)의 법선 행렬을 한 번만 만든다. 절단 시점 팔레트의 K 슬롯은 항등이다.
+            std::vector<XMMATRIX> cutNormals, nowNormals;
+            for (const auto& joint : skin.Snapshot.JointsAtCut)
+                cutNormals.push_back(normalOf(joint.posXform));
+            cutNormals.push_back(XMMatrixIdentity());
+            for (const auto& matrix : checkInput.Palette)
+                nowNormals.push_back(normalOf(matrix));
+            const XMMATRIX nodeNormal = normalOf(checkInput.Node);
+            const bool paletteOk = nowNormals.size() == cutNormals.size();
+
+            // 한 끝점의 원본 법선을 주어진 팔레트의 법선 행렬로 스키닝해 정규화한다.
+            const auto skinEndpoint = [&](const uint8_t* endpoint, const std::vector<XMMATRIX>& normals)
+            {
+                uint32_t words[4] = {};
+                std::memcpy(words, endpoint + 20, sizeof(words));
+                uint32_t packed = 0;
+                std::memcpy(&packed, endpoint + 12, sizeof(packed));
+                const XMVECTOR source = decode(packed);
+                const uint32_t indices[4] = { words[0] & 65535, words[0] >> 16, words[1] & 65535, words[1] >> 16 };
+                float weights[4] = { float(words[2] & 65535), float(words[2] >> 16), float(words[3] & 65535), float(words[3] >> 16) };
+                const float sum = std::max(weights[0] + weights[1] + weights[2] + weights[3], 1.0f);
+                XMVECTOR result = XMVectorZero();
+                for (int k = 0; k < 4; ++k)
+                    result += XMVector3TransformNormal(source, normals.at(indices[k])) * (weights[k] / sum);
+                return XMVector3Normalize(result);
+            };
+
+            // cap 정점마다 (a) 절단 시점 팔레트 결과 대 K 법선, (b) 현재 팔레트 CPU 결과 대 준비된 법선, INFO 현재 K 법선 대비를 모은다.
+            const auto* record = static_cast<const uint8_t*>(dataReadback.Map());
+            float identityMax = 0.0f, matchMax = 0.0f, followMax = 0.0f;
+            uint32_t count = 0;
+            for (const auto& pair : skin.RimCapPairs)
+            {
+                if (!paletteOk || pair.Cap >= posedNormals.size()) continue;
+                const uint8_t* vertex = record + size_t(pair.Cap) * skin.Vertices.Stride;
+                const uint8_t* end = vertex + skin.Vertices.Stride;
+                uint32_t packed = 0, cut0 = 0, cut1 = 0;
+                float t = 0;
+                std::memcpy(&packed, vertex + 12, sizeof(packed));
+                std::memcpy(&t, end - 92, sizeof(t));
+                std::memcpy(&cut0, end - 88 + 16, sizeof(cut0));
+                std::memcpy(&cut1, end - 52 + 16, sizeof(cut1));
+                if (!cut0 || !cut1) continue;
+                const XMVECTOR a0 = XMVector3Normalize(decode(cut0)), a1 = XMVector3Normalize(decode(cut1)), bind = decode(packed);
+
+                // (a) 팔레트 전체를 절단 시점 값으로 두면 회전이 항등이라 결과가 K 법선(bind)과 같아야 한다.
+                const XMVECTOR cutN = XMVector3Normalize(bind);
+                const XMVECTOR b0c = skinEndpoint(end - 88, cutNormals), b1c = skinEndpoint(end - 52, cutNormals);
+                const XMVECTOR identity = XMVectorLerp(arc(a0, b0c, cutN), arc(a1, b1c, cutN), t);
+                identityMax = std::max(identityMax, degrees(identity, cutN));
+
+                // (b) 현재 팔레트로 같은 식을 CPU에서 계산해 노드 변환 뒤 PreparePoseCS 출력과 비교한다.
+                const XMVECTOR nowK = XMVector3TransformNormal(bind, nowNormals.back());
+                const XMVECTOR b0 = skinEndpoint(end - 88, nowNormals), b1 = skinEndpoint(end - 52, nowNormals);
+                const XMVECTOR expected = XMVector3TransformNormal(XMVectorLerp(arc(a0, b0, nowK), arc(a1, b1, nowK), t), nodeNormal);
+                const XMVECTOR actual = XMVECTOR(posedNormals[pair.Cap]);
+                matchMax = std::max(matchMax, degrees(expected, actual));
+
+                // INFO: 절단 시점 이후 애니메이션 진행으로 현재 K 법선에서 벗어난 각도다.
+                followMax = std::max(followMax, degrees(XMVector3TransformNormal(nowK, nodeNormal), actual));
+                ++count;
+            }
+            dataReadback.Unmap();
+            PatchLog("AF6 capnormal frame=%s side=%s n=%u identity_deg=%.4f match_deg=%.4f info_vsK_deg=%.4f result=%s\n", frame, side, count,
+                identityMax, matchMax, followMax,
+                count && matchMax <= 0.5f && (std::strcmp(frame, "publish") != 0 || identityMax <= 0.5f) ? "PASS" : "FAIL");
         }
 
         // 스키닝·전체 정점 경계·대응 쌍·0.01 mm 간격을 모두 만족해야 통과한다.
