@@ -39,7 +39,9 @@ ModelInstance::ModelInstance(std::shared_ptr<const Model> sourceModel)
 
     // 직렬화 그래프를 바꾸지 않고 인스턴스별 출력과 유효 부모를 준비한다.
     m_ModelSpaceTransforms = std::make_unique<Matrix4[]>(m_Model->m_NumNodes);
+    m_AnimNodeTransforms = std::make_unique<Matrix4[]>(m_Model->m_NumNodes);
     m_Skeleton = std::make_unique<Joint[]>(m_Model->m_NumJoints);
+    m_AnimSkeleton = std::make_unique<Joint[]>(m_Model->m_NumJoints);
     BuildPoseParents(m_Model->m_SceneGraph.get(), m_Model->m_NumNodes, m_PoseParents);
 
     // 애니메이션이 있는 모델만 수정 가능한 local 그래프를 복사한다.
@@ -48,6 +50,19 @@ ModelInstance::ModelInstance(std::shared_ptr<const Model> sourceModel)
         m_AnimGraph = std::make_unique<GraphNode[]>(m_Model->m_NumNodes);
         std::memcpy(m_AnimGraph.get(), m_Model->m_SceneGraph.get(), m_Model->m_NumNodes * sizeof(GraphNode));
         m_AnimState.resize(m_Model->m_NumAnimations);
+    }
+}
+
+// node 전역 행렬과 IBM으로 중복 node를 포함한 전체 Joint 배열(posXform, nrmXform)을 채운다.
+static void BuildJointArray(const Model& model, const Matrix4* nodes, Joint* joints)
+{
+    // 팔레트 인덱스 순서를 유지하여 여러 skin의 동일 본도 모두 반영한다.
+    for (uint32_t i = 0; i < model.m_NumJoints; ++i)
+    {
+        // 각 팔레트의 IBM과 normal 행렬을 따로 계산한다.
+        Joint& joint = joints[i];
+        joint.posXform = nodes[model.m_JointIndices[i]] * model.m_JointIBMs[i];
+        joint.nrmXform = InverseTranspose(joint.posXform.Get3x3());
     }
 }
 
@@ -83,6 +98,19 @@ void ModelInstance::EvaluateAnimation(float deltaTime)
         ASSERT(false, "Invalid model scene graph");
         return;
     }
+
+    // 물리 override가 덮기 전의 순수 애니메이션 node를 보존한다. 정적 pose도 같은 평가기를 거치므로 최종 pose와 같다.
+    std::memcpy(m_AnimNodeTransforms.get(), m_ModelSpaceTransforms.get(), m_Model->m_NumNodes * sizeof(Matrix4));
+    m_OverrideNodes.clear();
+
+    // 순수 애니메이션 node에서 owner당 한 번 애니메이션 Joint 배열을 만든다. 잘못된 joint 참조는 건너뛴다.
+    bool jointsValid = true;
+    for (uint32_t i = 0; i < m_Model->m_NumJoints; ++i)
+    {
+        jointsValid = jointsValid && m_Model->m_JointIndices[i] < m_Model->m_NumNodes;
+    }
+    if (jointsValid)
+        BuildJointArray(*m_Model, m_AnimNodeTransforms.get(), m_AnimSkeleton.get());
     m_AnimationValid = true;
 }
 
@@ -107,13 +135,12 @@ bool ModelInstance::FinalizePose(const NodePhysicsPose* overrides, uint32_t over
         return false;
 
     // node 식별자가 중복되어도 각 팔레트의 IBM과 normal 행렬을 따로 갱신한다.
-    for (uint32_t i = 0; i < m_Model->m_NumJoints; ++i)
-    {
-        // 팔레트 인덱스 순서를 유지하여 여러 skin의 동일 본도 모두 반영한다.
-        Joint& joint = m_Skeleton[i];
-        joint.posXform = m_ModelSpaceTransforms[m_Model->m_JointIndices[i]] * m_Model->m_JointIBMs[i];
-        joint.nrmXform = InverseTranspose(joint.posXform.Get3x3());
-    }
+    BuildJointArray(*m_Model, m_ModelSpaceTransforms.get(), m_Skeleton.get());
+
+    // 진단이 override 노드와 자손만 달라야 하는 조건을 검사하도록 이번 override 목록을 기록한다.
+    m_OverrideNodes.clear();
+    for (uint32_t i = 0; i < overrideCount; ++i)
+        m_OverrideNodes.push_back(overrides[i].Node);
     m_PoseValid = true;
     return true;
 }

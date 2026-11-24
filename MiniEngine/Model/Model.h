@@ -162,6 +162,12 @@ public:
     const std::shared_ptr<const Model>& GetModel() const { return m_Model; }
     // 이 프레임에 평가된 node pose를 읽는다.
     const Math::Matrix4* GetNodeTransforms() const { return m_ModelSpaceTransforms.get(); }
+    // 물리 override 이전의 순수 애니메이션 node pose를 읽는다. 정적 모델에서는 최종 pose와 같다.
+    const Math::Matrix4* GetAnimNodeTransforms() const { return m_AnimNodeTransforms.get(); }
+    // 순수 애니메이션 node로 만든 Joint 배열(G_anim*IBM, 법선 행렬 포함)을 읽는다.
+    const Joint* GetAnimJoints() const { return m_AnimSkeleton.get(); }
+    // 마지막 FinalizePose에 전달된 override node 목록을 읽는다.
+    const std::vector<NodeId>& GetOverrideNodes() const { return m_OverrideNodes; }
     // 최종 pose와 같은 NodeId 기준의 유효 부모를 읽는다.
     const std::vector<NodeId>& GetPoseParents() const
     {
@@ -197,4 +203,7 @@ private:
     std::unique_ptr<GraphNode[]> m_AnimGraph;   // A copy of the scene graph when instancing animation
     std::vector<AnimationState> m_AnimState;    // Per-animation (not per-curve)
     std::unique_ptr<Joint[]> m_Skeleton;
+    std::unique_ptr<Math::Matrix4[]> m_AnimNodeTransforms; // override 이전 순수 애니메이션 node pose
+    std::unique_ptr<Joint[]> m_AnimSkeleton;               // 순수 애니메이션 node로 만든 Joint 배열
+    std::vector<NodeId> m_OverrideNodes;                   // 마지막 FinalizePose의 override node
 };

@@ -125,6 +125,10 @@ PS-6 후속: 재절단 node 쪽은 [PatchRecutSkinning.md](PatchRecutSkinning.md
 - Xbot(거의 정지 자세) 허벅지·정강이·위팔·전완·목·척추: 두 모드가 거의 같아 애니메이션 차이는 확인하지 못했다.
 - 스키닝과 무관한 기존 문제(추정): CesiumMan 위팔 절단에서 허리 쪽 삼각형이 패치에 들어가 B(팔)와 함께 움직인다(두 모드 동일). 패치 아일랜드 구분이 필요하다.
 
+## 애니메이션 추종
+
+`-patch-anim-follow 1`(기본)에서는 A 조각의 고정 팔레트가 절단 시점 값에 묶이지 않고 애니메이션 포즈를 따르며, rim·cap은 원본 변의 끝점 레코드(ExtInternal 2·3)로 스키닝한다. 옵션 0은 이 문서의 고정 방식이다. 자세한 내용은 [PatchAnimFollow.md](PatchAnimFollow.md).
+
 ## 범위 밖
 
 - 재절단 결과 조각의 스키닝 승계, 다중 절단 snapshot 수명 관리.

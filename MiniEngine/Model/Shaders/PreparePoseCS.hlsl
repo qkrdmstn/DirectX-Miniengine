@@ -22,14 +22,15 @@ ByteAddressBuffer Source : register(t0);
 StructuredBuffer<Joint> Joints : register(t1);
 RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
-//   -96 내부 교점 표시(uint) | -92 보간 t(float)
+//   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
 //   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
-//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16) | joints 8(+20) | weights 8(+28)
+//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16, cap은 절단 시점 법선) | joints 8(+20) | weights 8(+28)
 static const uint ExtFlag = 0x200;
 static const uint ExtInternal = 96;
 static const uint ExtT = 92;
 static const uint ExtEndpoint0 = 88;
 static const uint ExtEndpoint1 = 52;
+static const uint EndpointTangent = 16;
 static const uint EndpointSkin = 20;
 
 // 렌더 정점의 압축 UNORM을 기존 VS와 같은 [-1,1] 성분으로 복원한다.
@@ -61,6 +62,17 @@ void SkinEndpoint(uint address, uint skinAddress, out float4 position, out float
     tangent.xyz = mul(skinNormal, tangent.xyz).xyz;
 }
 
+// 단위 벡터 a를 b로 옮기는 최단 회전을 v에 적용한다(거의 반대 방향이면 v를 그대로 둔다).
+float3 RotateArc(float3 a, float3 b, float3 v)
+{
+    // 회전축과 코사인으로 Rodrigues 식을 계산한다.
+    float3 axis = cross(a, b);
+    float c = dot(a, b);
+    if (c < -0.999)
+        return v;
+    return v + cross(axis, v) + cross(axis, cross(axis, v)) / (1 + c);
+}
+
 // static·skeletal을 같은 posed local 형식으로 변환하며 원본 정점 번호를 유지한다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
@@ -76,20 +88,43 @@ void main(uint3 id : SV_DispatchThreadID)
     if (Flags & 0x100)
     {
         // 일반 복사 정점과 실제 rim/cap은 기존 단일 skin 경로를 유지한다.
+        const float3 bindNormal = normal;
+        const float3 bindTangent = tangent.xyz;
         SkinEndpoint(address, address + SourceStride - 16, position, normal, tangent);
         if (Flags & ExtFlag)
         {
-            if (Source.Load(address + SourceStride - ExtInternal) != 0)
+            uint interpolation = Source.Load(address + SourceStride - ExtInternal);
+            if (interpolation != 0)
             {
-                // 내부 교점은 두 끝점 skin 결과를 보간한 뒤 방향만 정규화한다.
+                // 내부 교점(1)·rim(2)·cap(3)은 두 끝점 skin 결과를 보간한다.
                 float4 p0, p1, t0, t1;
                 float3 n0, n1;
                 SkinEndpoint(address + SourceStride - ExtEndpoint0, address + SourceStride - ExtEndpoint0 + EndpointSkin, p0, n0, t0);
                 SkinEndpoint(address + SourceStride - ExtEndpoint1, address + SourceStride - ExtEndpoint1 + EndpointSkin, p1, n1, t1);
                 float t = asfloat(Source.Load(address + SourceStride - ExtT));
                 position = lerp(p0, p1, t);
-                normal = normalize(lerp(n0, n1, t));
-                tangent.xyz = normalize(lerp(t0.xyz, t1.xyz, t));
+
+                // rim·교점(1·2)은 끝점 방향을 보간하고, cap(3)은 끝점의 절단 시점→현재 법선 회전을 K 방향에 적용해 보간한다.
+                if (interpolation != 3)
+                {
+                    normal = normalize(lerp(n0, n1, t));
+                    tangent.xyz = normalize(lerp(t0.xyz, t1.xyz, t));
+                }
+                else
+                {
+                    // 끝점 탄젠트 칸에는 절단 시점 법선이 들어 있고, 0이면 없음이라 주 레코드(K) 방향을 유지한다.
+                    uint cut0 = Source.Load(address + SourceStride - ExtEndpoint0 + EndpointTangent);
+                    uint cut1 = Source.Load(address + SourceStride - ExtEndpoint1 + EndpointTangent);
+                    if (cut0 != 0 && cut1 != 0)
+                    {
+                        float3 a0 = DecodeFrame(cut0).xyz, a1 = DecodeFrame(cut1).xyz;
+                        float3 b0 = normalize(n0), b1 = normalize(n1);
+                        float3 cn = normalize(lerp(RotateArc(a0, b0, bindNormal), RotateArc(a1, b1, bindNormal), t));
+                        float3 ct = normalize(lerp(RotateArc(a0, b0, bindTangent), RotateArc(a1, b1, bindTangent), t));
+                        normal = cn;
+                        tangent.xyz = ct;
+                    }
+                }
             }
         }
     }

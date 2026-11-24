@@ -39,10 +39,20 @@ void main(uint3 id : SV_DispatchThreadID)
     
     // 각 선분의 세 시작점으로 정점 생성
     Vertex a = (Vertex) 0, b = (Vertex) 0, c = (Vertex) 0;
-    a.Origin = b.Origin = c.Origin = uint4(0xffffffff, leader, i, 0);
     a.P = Point(corners.x);
     b.P = Point(corners.y);
     c.P = Point(corners.z);
+
+    // 꼭짓점마다 슬롯에 저장된 원본 변 (e0, e1, t)를 출처로 기록한다. (b/c 교환 때 정점과 함께 이동)
+    uint3 edgeA = Ring.Load3(corners.x * 128 + 116);
+    uint3 edgeB = Ring.Load3(corners.y * 128 + 116);
+    uint3 edgeC = Ring.Load3(corners.z * 128 + 116);
+    a.Origin = uint4(0xffffffff, leader, edgeA.x, edgeA.y);
+    b.Origin = uint4(0xffffffff, leader, edgeB.x, edgeB.y);
+    c.Origin = uint4(0xffffffff, leader, edgeC.x, edgeC.y);
+    a.Parameter = asfloat(edgeA.z);
+    b.Parameter = asfloat(edgeB.z);
+    c.Parameter = asfloat(edgeC.z);
     
     // 면적 0인 삼각형 건너뛰기
     if (length(cross(b.P - a.P, c.P - a.P)) <= Epsilon * Epsilon)   // 면적 0인 삼각형

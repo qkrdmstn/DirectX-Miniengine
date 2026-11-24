@@ -105,6 +105,10 @@ struct PreparedGeometryReplacement { ...; std::shared_ptr<PatchSkinPublication> 
 6. Release 회귀 6종 PASS, D3D12 ERROR 0.
 7. CesiumMan 캡처로 옵션 0/1 차이를 확인한다.
 
+## 애니메이션 추종과 재절단
+
+`-patch-anim-follow 1`(기본)에서도 재절단은 몸에 남는 쪽의 끝점 레코드를 승계한다(AF-5). 두 끝점이 일반 복사 정점이면 끝점 레코드를, 아니면 K로 폴백한다. 자세한 내용은 [PatchAnimFollow.md](PatchAnimFollow.md).
+
 ## 범위 밖
 
 - 재절단이 본을 끊는 경우(현재 경로에 없음). 생기면 고정 집합 중첩 설계가 따로 필요하다.

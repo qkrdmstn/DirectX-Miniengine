@@ -30,7 +30,7 @@ namespace Viewer
             auto child = std::make_shared<PatchSkinPublication>();
             bool built = false;
             RecutSkinStats stats;
-            char line[512], checks[1024] = "";
+            char line[512], checks[1536] = "";
             try
             {
                 if (!BuildRecutPatchSkinVertices(parent, result, kFrame, *child, &stats, diagnostics ? checkInput : nullptr))
@@ -54,11 +54,23 @@ namespace Viewer
                     // 검증을 수행한 경우에만 RS-2b 판정 줄을 만든다.
                     if (stats.Checked)
                         sprintf_s(checks, "RS2b copy mismatch=%u/%u badParent=%u %s\nRS2b K position max=%.3g local (%.4f mm, scale %.1f) normal max=%.3f deg %s\n"
-                            "RS2b copied skin max=%.3g local (%.4f mm, scale %.1f) skipped=%u %s\nRS2b kframe diff=%g %s\n",
+                            "RS2b copied skin max=%.3g local (%.4f mm, scale %.1f) skipped=%u(rim=%u cap=%u) %s\nRS2b kframe diff=%g %s\n",
                             stats.CopyMismatch, stats.Copied, stats.BadParent, copyPass ? "PASS" : "FAIL",
                             stats.KPositionMax, kPositionMm, scale, stats.KNormalMaxDeg, kPass ? "PASS" : "FAIL",
-                            stats.CopiedSkinMax, copiedSkinMm, scale, stats.Skipped, skinPass ? "PASS" : "FAIL",
+                            stats.CopiedSkinMax, copiedSkinMm, scale, stats.Skipped, stats.SkippedRim, stats.SkippedCap, skinPass ? "PASS" : "FAIL",
                             stats.KFrameDiff, framePass ? "PASS" : "FAIL");
+
+                    // AF-5: 새 split·cap 정점의 끝점·K 폴백 수와 끝점 위치 오차를 별도 줄로 남긴다.
+                    if (stats.Checked)
+                    {
+                        const uint32_t fallback = stats.K - stats.Endpoint;
+                        const bool endpointPass = stats.EndpointSplitMax <= 1.0e-6f && stats.EndpointCapMax <= 1.0e-6f;
+                        const size_t used = strlen(checks);
+                        sprintf_s(checks + used, sizeof(checks) - used, "RS2b endpoint K=%u endpoint=%u fallback=%u fallbackRatio=%.3f (internal=%u range=%u section=%u) split max=%.3g cap max=%.3g local %s\n",
+                            stats.K, stats.Endpoint, fallback, stats.K ? float(fallback) / float(stats.K) : 0.0f,
+                            stats.FallbackInternal, stats.FallbackRange, stats.FallbackSection,
+                            stats.EndpointSplitMax, stats.EndpointCapMax, endpointPass ? "PASS" : "FAIL");
+                    }
                     const auto& bounds = child->Vertices.BindBounds;
                     built = true;
                     sprintf_s(line, "RS2a build side=%d vertices=%u copied=%u k=%u badK=%u badParent=%u readbackMs=%.3f bindBounds=%u/%.4f\n",

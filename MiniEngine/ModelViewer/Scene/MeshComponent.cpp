@@ -18,6 +18,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 using namespace Math;
 
@@ -913,6 +914,96 @@ namespace Viewer
         return true;
     }
 
+    // AF2b 진단: 게시 후 몇 프레임에서 고정 joint 팔레트를 C·A_k·O_k로 CPU 재계산해 렌더 팔레트와 비교한다.
+    // 이전 K 방식(D·JointsAtCut) 대비 이동량과 부착 node의 물리 override 여부도 함께 기록한다.
+    // 렌더 식과 같은 식을 재계산하므로 입력 연결만 검증한다.
+    void MeshComponent::CheckAnimFollowFrame(const MeshComponent& source)
+    {
+        // 게시(0), +30, +60 프레임에서만 검사한다.
+        const uint32_t frame = m_AnimFollowFrame++;
+        if (frame != 0 && frame != 30 && frame != 60)
+        {
+            return;
+        }
+
+        // owner의 현재 node·애니메이션 입력과 입력 유효성을 확인한다.
+        const auto& snapshot = PatchSkin->Snapshot;
+        const Matrix4* nodes = source.GetPreparedNodes();
+        const Matrix4* animNodes = source.GetPreparedAnimNodes();
+        const Joint* animJoints = source.GetPreparedAnimJoints();
+        if (!nodes || !animNodes || !animJoints || m_PatchPalette.size() != snapshot.JointsAtCut.size() + 1
+            || snapshot.AnimOffset.size() != snapshot.JointsAtCut.size())
+        {
+            return;
+        }
+
+        // 고정 joint마다 C·A_k·O_k를 다시 계산해 렌더 팔레트와 상대 오차를 비교하고 K 방식과의 이동량을 잰다.
+        const Matrix4 correction = nodes[snapshot.AttachNode] * Invert(animNodes[snapshot.AttachNode]);
+        const Matrix4 delta = nodes[snapshot.AttachNode] * Invert(snapshot.AttachAtCut);
+        uint32_t frozen = 0;
+        float maxRel = 0, followDelta = 0;
+        for (size_t k = 0; k < snapshot.JointsAtCut.size(); ++k)
+        {
+            if (!snapshot.Frozen[k])
+            {
+                continue;
+            }
+            ++frozen;
+            DirectX::XMFLOAT4X4 actual, expected, old;
+            DirectX::XMStoreFloat4x4(&actual, m_PatchPalette[k].posXform);
+            DirectX::XMStoreFloat4x4(&expected, correction * animJoints[k].posXform * snapshot.AnimOffset[k]);
+            DirectX::XMStoreFloat4x4(&old, delta * snapshot.JointsAtCut[k].posXform);
+            const float scale = std::max(1.0f, std::sqrt(expected.m[3][0] * expected.m[3][0]
+                + expected.m[3][1] * expected.m[3][1] + expected.m[3][2] * expected.m[3][2]));
+            for (uint32_t r = 0; r < 4; ++r)
+            {
+                for (uint32_t c = 0; c < 4; ++c)
+                {
+                    const float error = std::abs(actual.m[r][c] - expected.m[r][c]) / scale;
+                    maxRel = std::isfinite(error) ? std::max(maxRel, error) : INFINITY;
+                }
+            }
+            const float dx = actual.m[3][0] - old.m[3][0], dy = actual.m[3][1] - old.m[3][1], dz = actual.m[3][2] - old.m[3][2];
+            followDelta = std::max(followDelta, std::sqrt(dx * dx + dy * dy + dz * dz));
+        }
+
+        // 부착 node나 조상이 물리 override 대상인지 확인한다.
+        int overridden = 0;
+        const auto* overrides = source.GetPreparedOverrideNodes();
+        const auto* parents = source.GetPreparedPoseParents();
+        if (overrides && parents)
+        {
+            for (uint32_t node = snapshot.AttachNode, depth = 0; node < parents->size() && depth <= parents->size(); ++depth)
+            {
+                if (std::find(overrides->begin(), overrides->end(), node) != overrides->end())
+                {
+                    overridden = 1;
+                }
+                if ((*parents)[node] == UINT32_MAX)
+                {
+                    break;
+                }
+                node = (*parents)[node];
+            }
+        }
+
+        // 한 줄을 로그 파일에 남긴다.
+        char line[320], path[MAX_PATH];
+        sprintf_s(line, "AF2b palette side=%s frame=%u frozen=%u maxrel=%g followDelta=%g attachOverridden=%d result=%s\n",
+            PatchSkin->Side, frame, frozen, maxRel, followDelta, overridden, maxRel <= 1e-5f ? "PASS" : "FAIL");
+        Utility::Print(line);
+        FILE* file = nullptr;
+        if (GetTempPathA(MAX_PATH, path))
+        {
+            strcat_s(path, "SP6-SkeletalPatchChecks.log");
+            if (!fopen_s(&file, path, "a"))
+            {
+                fputs(line, file);
+                fclose(file);
+            }
+        }
+    }
+
     // 원본의 revision과 binding을 검사하고 불일치는 현재 월드를 기준으로 강체 부착으로 전환한다.
     void MeshComponent::ValidatePatchSkinSource(const MeshComponent* source, const Matrix4* nodeWorld)
     {
@@ -958,6 +1049,101 @@ namespace Viewer
             static_cast<unsigned long long>(m_Id));
     }
 
+    // AF-1 진단으로 최종 pose와 순수 애니메이션 pose가 override 노드와 그 자손에서만 다른지 확인한다.
+    // 옵션이 없으면 아무것도 하지 않으며, override 수가 바뀔 때와 FAIL일 때만 한 줄을 남긴다.
+    static void AnimPoseCheck(const ModelInstance& pose)
+    {
+        // 기존 break·rig 진단 옵션 중 하나가 켜진 실행에서만 검사한다.
+        static const bool enabled = []
+        {
+            uint32_t breakChecks = 0;
+            uint32_t rigChecks = 0;
+            CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", breakChecks);
+            CommandLineArgs::GetInteger(L"rig-bone-cut-checks", rigChecks);
+            return breakChecks || rigChecks;
+        }();
+        const Model* model = pose.GetModel().get();
+        if (!enabled || !model || !pose.GetAnimNodeTransforms())
+            return;
+
+        // override 노드와 그 자손을 부모 사슬로 표시한다.
+        const auto& parents = pose.GetPoseParents();
+        const auto& overrides = pose.GetOverrideNodes();
+        std::vector<bool> affected(model->m_NumNodes, false);
+        for (NodeId node : overrides)
+            if (node < model->m_NumNodes)
+                affected[node] = true;
+        for (uint32_t i = 0; i < model->m_NumNodes; ++i)
+        {
+            for (NodeId p = parents[i]; p != UINT32_MAX && !affected[i]; p = parents[p])
+            {
+                affected[i] = affected[p];
+            }
+        }
+
+        // node와 joint를 원소 단위로 비교해 허용되지 않은 차이와 전체 차이 수를 센다.
+        auto maxDiff = [](const Matrix4& a, const Matrix4& b)
+        {
+            // 4x4 원소의 최대 절대 차이를 구한다.
+            DirectX::XMFLOAT4X4 fa, fb;
+            DirectX::XMStoreFloat4x4(&fa, a);
+            DirectX::XMStoreFloat4x4(&fb, b);
+            float diff = 0.0f;
+            for (int k = 0; k < 16; ++k)
+                diff = std::max(diff, std::fabs(reinterpret_cast<const float*>(&fa)[k] - reinterpret_cast<const float*>(&fb)[k]));
+            return diff;
+        };
+        uint32_t differing = 0;
+        uint32_t unexpected = 0;
+        uint32_t jointUnexpected = 0;
+        for (uint32_t i = 0; i < model->m_NumNodes; ++i)
+        {
+            // 영향 밖 node가 다르면 허용되지 않은 차이다.
+            const bool differs = !(maxDiff(pose.GetNodeTransforms()[i], pose.GetAnimNodeTransforms()[i]) <= 1e-6f);
+            differing += differs;
+            unexpected += differs && !affected[i];
+        }
+        for (uint32_t i = 0; i < model->m_NumJoints; ++i)
+        {
+            // joint가 참조하는 node가 영향 밖인데 posXform이 다르면 허용되지 않은 차이다.
+            const NodeId node = model->m_JointIndices[i];
+            jointUnexpected += !affected[node]
+                && !(maxDiff(pose.GetJoints()[i].posXform, pose.GetAnimJoints()[i].posXform) <= 1e-6f);
+        }
+
+        // 마지막으로 기록한 override 수가 바뀌었거나 FAIL이면 한 줄을 stdout과 임시 로그에 남긴다.
+        static std::unordered_map<const ModelInstance*, size_t> lastCount;
+        static uint32_t failLines = 0;
+        const bool pass = !unexpected && !jointUnexpected;
+        auto found = lastCount.find(&pose);
+        const bool changed = found == lastCount.end() || found->second != overrides.size();
+        lastCount[&pose] = overrides.size();
+        if (!(changed || (!pass && failLines < 20)))
+            return;
+        failLines += !pass;
+
+        // 결과 한 줄을 만들어 stdout에 출력한다.
+        char line[256];
+        sprintf_s(line, "AF1 anim pose overrides=%zu nodes=%u differing=%u unexpectedNodes=%u unexpectedJoints=%u result=%s\n",
+            overrides.size(), model->m_NumNodes, differing, unexpected, jointUnexpected, pass ? "PASS" : "FAIL");
+        Utility::Print(line);
+
+        // 임시 폴더의 로그 파일 경로를 구한다.
+        char path[MAX_PATH];
+        FILE* file = nullptr;
+        if (GetTempPathA(MAX_PATH, path))
+        {
+            strcat_s(path, "AF1-AnimPose.log");
+
+            // 같은 줄을 로그 파일에 덧붙인다.
+            if (!fopen_s(&file, path, "a"))
+            {
+                fputs(line, file);
+                fclose(file);
+            }
+        }
+    }
+
     // 확정 CPU pose와 재사용 팔레트로 PG를 갱신하고 스키닝 조각에 원본의 W와 N을 적용한다.
     void MeshComponent::Update(GraphicsContext& context, const ModelInstance& pose, const SceneTransform& owner,
         const MeshComponent* patchSource)
@@ -979,6 +1165,10 @@ namespace Viewer
         m_Ready = false;
         m_RenderNodes = nullptr;
         m_RenderJoints = nullptr;
+        m_RenderAnimNodes = nullptr;
+        m_RenderAnimJoints = nullptr;
+        m_RenderOverrideNodes = nullptr;
+        m_RenderPoseParents = nullptr;
         m_CutSectionFrames.clear();
         if (!pose.HasValidPose() || pose.GetModel() != m_Geometry->GetSource())
             return;
@@ -1009,7 +1199,13 @@ namespace Viewer
                     EngineProfiling::BeginBlock(PatchSkinTimingName, &context);
 
                 // 조각 팔레트 생성과 GPU 스키닝 명령 기록을 함께 측정한다.
-                BuildPatchPalette(PatchSkin->Snapshot, patchSource->GetPreparedJoints(), patchSource->GetPreparedNodes(), m_PatchPalette);
+                const bool animFollow = PatchAnimFollowEnabled();
+                BuildPatchPalette(PatchSkin->Snapshot, patchSource->GetPreparedJoints(), patchSource->GetPreparedNodes(), m_PatchPalette,
+                    patchSource->GetPreparedAnimJoints(), patchSource->GetPreparedAnimNodes(), animFollow);
+                if (skinChecks && animFollow && PatchSkin->Snapshot.AnimFollow)
+                {
+                    CheckAnimFollowFrame(*patchSource);
+                }
                 const Matrix4 sourceToComponent(Invert(patchSource->GetDeformBinding().SourceFrame.ToAffine()));
                 const Matrix4 node = sourceToComponent * patchSource->GetPreparedNodes()[PatchSkin->Snapshot.MeshNode];
                 m_PosedGeometry->UpdateSkinnedGenerated(context, PatchSkin->Vertices.Data, m_PatchPalette, node);
@@ -1093,6 +1289,11 @@ namespace Viewer
         // Frozen 선택을 마친 node와 source 기준으로 PG 및 절단 행렬을 함께 만든다.
         m_RenderJoints = joints;
         m_RenderNodes = nodes;
+        m_RenderAnimNodes = pose.GetAnimNodeTransforms();
+        m_RenderAnimJoints = pose.GetAnimJoints();
+        m_RenderOverrideNodes = &pose.GetOverrideNodes();
+        m_RenderPoseParents = &pose.GetPoseParents();
+        AnimPoseCheck(pose);
         const Matrix4 sourceToComponent(Invert(m_DeformBinding.SourceFrame.ToAffine()));
         m_PreparedWorld = GetWorldTransform(owner);
         const Matrix4 world(m_PreparedWorld);

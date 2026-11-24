@@ -3,7 +3,13 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <array>
 #include <map>
+#include <vector>
 #include <stdexcept>
 
 namespace MeshCutting
@@ -72,6 +78,113 @@ namespace MeshCutting
                     "Nonfinite parent position");
             }
             return Math::XMFLOAT3(result[0], result[1], result[2]);
+        }
+
+        // 원본 변 기록 (e0, e1, t)를 비교용 표준형으로 접는다. 끝점 위면 한 점으로, 아니면 e0 < e1 순서로 맞춘다.
+        struct EdgeKey { uint32_t E0, E1; float T; };
+        EdgeKey CanonicalEdge(uint32_t e0, uint32_t e1, float t)
+        {
+            // 끝점 위(t = 0 또는 1)와 두 끝점이 같은 경우는 하나의 정점 기록으로 접는다.
+            if (t <= 0 || e0 == e1) return { e0, e0, 0.0f };
+            if (t >= 1) return { e1, e1, 0.0f };
+
+            // 순서를 e0 < e1로 맞추고 뒤집으면 t도 반전한다.
+            if (e0 > e1) return { e1, e0, 1.0f - t };
+            return { e0, e1, t };
+        }
+
+        // AF3 진단 줄을 디버그 출력과 %TEMP%\SP6-SkeletalPatchChecks.log 끝에 함께 남긴다.
+        void LogAf3(const char* format, ...)
+        {
+            // 한 줄을 만들어 디버그 출력으로 보낸다.
+            char line[256];
+            va_list args;
+            va_start(args, format);
+            vsprintf_s(line, sizeof(line), format, args);
+            va_end(args);
+            Utility::Print(line);
+
+            // TEMP 로그 파일에 이어 쓴다. 열 수 없으면 건너뛴다.
+            char* temp = nullptr;
+            size_t length = 0;
+            if (_dupenv_s(&temp, &length, "TEMP") == 0 && temp)
+            {
+                std::string path = std::string(temp) + "\\SP6-SkeletalPatchChecks.log";
+                free(temp);
+                FILE* file = nullptr;
+                if (fopen_s(&file, path.c_str(), "a") == 0 && file)
+                {
+                    fputs(line, file);
+                    fclose(file);
+                }
+            }
+        }
+
+        // 단면 정점의 (e0, e1, t)가 같은 위치 표면 정점(rim)의 기록과 같은지 센다. (AF-3)
+        void ReportCapProvenance(const uint8_t* packed, const uint8_t* provenance, const std::vector<CutSection>& sections,
+            const uint32_t* status, uint32_t sectionCount, uint32_t side)
+        {
+            // 표면과 단면 정점의 위치와 기록을 모은다.
+            std::vector<Math::XMFLOAT3> rimPositions, capPositions;
+            std::vector<EdgeKey> rimKeys, capKeys;
+            for (uint32_t section = 0; section < sectionCount; ++section)
+            {
+                const uint32_t count = status[20 + side * sectionCount + section];
+                const bool cap = section + 1 == sectionCount;
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    const uint32_t global = sections[section].VertexStart + i;
+                    const auto p = Read<Math::XMFLOAT3>(packed, size_t(global) * 28);
+                    const EdgeKey key = CanonicalEdge(Read<uint32_t>(provenance, global * 32 + 8),
+                        Read<uint32_t>(provenance, global * 32 + 12), Read<float>(provenance, global * 32 + 16));
+                    (cap ? capPositions : rimPositions).push_back(p);
+                    (cap ? capKeys : rimKeys).push_back(key);
+                }
+            }
+
+            // rim 위치를 균일 격자에 넣는다. 칸 크기는 표면 크기의 1e-3이다.
+            float extent = 1.0e-6f;
+            for (const auto& p : rimPositions) extent = std::max({ extent, std::abs(p.x), std::abs(p.y), std::abs(p.z) });
+            const float cell = extent * 1.0e-3f;
+            auto cellOf = [cell](float v) { return int(std::floor(v / cell)); };
+            std::map<std::array<int, 3>, std::vector<uint32_t>> grid;
+            for (uint32_t r = 0; r < rimPositions.size(); ++r)
+                grid[{ cellOf(rimPositions[r].x), cellOf(rimPositions[r].y), cellOf(rimPositions[r].z) }].push_back(r);
+
+            // 단면 정점마다 이웃 칸의 rim 중 같은 기록이 있는지, 가장 가까운 rim이 있는지 센다.
+            uint32_t match = 0, mismatch = 0, noRim = 0, samples = 0;
+            double maxGap = 0;
+            for (uint32_t c = 0; c < capPositions.size(); ++c)
+            {
+                const auto& p = capPositions[c];
+                float nearest = 1.0e30f, nearestMatch = 1.0e30f;
+                for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz)
+                {
+                    const auto found = grid.find({ cellOf(p.x) + dx, cellOf(p.y) + dy, cellOf(p.z) + dz });
+                    if (found == grid.end()) continue;
+                    for (const uint32_t r : found->second)
+                    {
+                        const float gap = std::sqrt((p.x - rimPositions[r].x) * (p.x - rimPositions[r].x)
+                            + (p.y - rimPositions[r].y) * (p.y - rimPositions[r].y) + (p.z - rimPositions[r].z) * (p.z - rimPositions[r].z));
+                        nearest = std::min(nearest, gap);
+                        if (rimKeys[r].E0 == capKeys[c].E0 && rimKeys[r].E1 == capKeys[c].E1 && std::abs(rimKeys[r].T - capKeys[c].T) <= 1.0e-4f)
+                            nearestMatch = std::min(nearestMatch, gap);
+                    }
+                }
+
+                // 같은 기록의 rim이 있으면 일치, 가까운 rim만 있으면 불일치, 없으면 norim이다.
+                if (nearestMatch < 1.0e30f) { ++match; maxGap = std::max(maxGap, double(nearestMatch)); }
+                else if (nearest < 1.0e30f)
+                {
+                    ++mismatch;
+                    if (samples++ < 3)
+                        LogAf3("AF3 mismatch sample: side=%u cap=%u key=(%u,%u,%.6f) gap=%.9g\n",
+                            side, c, capKeys[c].E0, capKeys[c].E1, capKeys[c].T, nearest);
+                }
+                else ++noRim;
+            }
+            LogAf3("AF3 cap provenance side=%u caps=%zu match=%u mismatch=%u norim=%u maxPosGap=%.9g\n",
+                side, capPositions.size(), match, mismatch, noRim, maxGap);
         }
 
         // 행렬의 유한성·역전치와 생성 revision의 단위 변환 계약을 검사한다.
@@ -519,6 +632,9 @@ namespace MeshCutting
 
             // 기존 검사를 마친 cap 위치로 순서 무관 checksum을 기록한다.
             PrintCapChecksum(packed, Sections.back(), Status[20 + side * Constants.Sections + Constants.Sections - 1], side);
+
+            // 단면 정점의 원본 변 기록이 같은 위치 rim과 같은지 보고한다.
+            ReportCapProvenance(packed, provenance, Sections, Status.data(), Constants.Sections, side);
 
             // 경계 기준 cap 면적과 양쪽 결과의 방향 부피를 기록한다.
             Require(std::abs(capArea-expectedArea) <= std::max(1.0e-8, expectedArea*0.001), "Cap area does not match closed boundary");

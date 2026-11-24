@@ -2,7 +2,7 @@ cbuffer Parameters : register(b0)
 {
     float4x4 InverseNode;
     uint FirstVertex, VertexCount, Flags, Stride;
-    uint DrawCount, RigidJoint, PatchTriangles;
+    uint DrawCount, RigidJoint, PatchTriangles, Follow;
 };
 struct DrawInput
 {
@@ -17,7 +17,7 @@ ByteAddressBuffer Provenance : register(t3);
 StructuredBuffer<DrawInput> Inputs : register(t4);
 RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
-//   -96 내부 교점 표시(uint) | -92 보간 t(float)
+//   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
 //   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
 //   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16) | joints 8(+20) | weights 8(+28)
 static const uint ExtInternal = 96;
@@ -72,20 +72,24 @@ uint SourceAddress(uint vertex, out DrawInput draw)
     return draw.VbOffset + Index(draw, sourceTriangle.z * 3 + vertex % 3) * draw.SourceStride;
 }
 
-// 내부 교점의 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다.
-void StoreEndpoint(uint output, uint vertex)
+// 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다. cap 끝점은 탄젠트 칸에 절단 시점 법선(K 프레임)을 넣는다.
+void StoreEndpoint(uint output, uint vertex, bool cap)
 {
     // 두 끝점의 weight를 합치지 않고 각각의 skin 입력을 복사한다.
     DrawInput draw;
     uint address = SourceAddress(vertex, draw);
     Result.Store4(output, Source.Load4(address));
     Result.Store(output + EndpointTangent, (draw.SourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff);
+
+    // cap은 PreparePoseCS가 끝점의 절단 시점 → 현재 법선 회전을 구할 수 있게 K 프레임 법선을 기록한다.
+    if (cap)
+        Result.Store(output + EndpointTangent, RotateFrame(Data.Load(vertex * 28 + 12)));
     uint4 skin = Source.Load4(address + draw.SourceStride - 16);
     uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
     Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
 }
 
-// 복사 정점은 원본 bind로 복원하고 내부 교점만 끝점 보간 입력을 덧붙인다.
+// 복사 정점은 원본 bind로 복원한다. 내부 교점(1)과, 조각 플래그가 켜진 실제 분리 rim(2)·cap(3)에는 두 끝점의 원본 skin 입력을 덧붙인다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -138,19 +142,25 @@ void main(uint3 id : SV_DispatchThreadID)
     if (Flags & 16)
         Result.Store(at, uv1);
 
-    // 양쪽 삼각형이 같은 몸체로 귀속된 새 교점만 보간 대상으로 표시한다.
+    // 끝점 보간 종류를 정한다: 같은 몸체 교점은 1, 조각 플래그가 켜진 실제 rim은 2, cap은 3이다.
     uint sourceTriangle = Provenance.Load(vertex * 32 + 20);
-    bool internal = false;
+    uint interpolation = 0;
     if (origin.x != 0xffffffff && !copied && sourceTriangle < PatchTriangles)
     {
         DrawInput bodies = Inputs[DrawCount + sourceTriangle];
-        internal = bodies.Section != 0xffffffff && bodies.Section == bodies.Draw;
+        if (bodies.Section != 0xffffffff)
+            interpolation = bodies.Section == bodies.Draw ? 1 : (Follow ? 2 : 0);
     }
-    Result.Store2(output + Stride - ExtInternal, uint2(internal ? 1 : 0, Provenance.Load(vertex * 32 + 16)));
-    if (internal)
+    else if (origin.x == 0xffffffff && Follow && origin.z < PatchTriangles * 3 && origin.w < PatchTriangles * 3)
     {
-        StoreEndpoint(output + Stride - ExtEndpoint0, origin.z);
-        StoreEndpoint(output + Stride - ExtEndpoint1, origin.w);
+        // cap의 (e0, e1)은 split과 같은 추출 패치 VB 번호라서 SourceAddress가 section/draw를 그대로 찾는다.
+        interpolation = 3;
+    }
+    Result.Store2(output + Stride - ExtInternal, uint2(interpolation, Provenance.Load(vertex * 32 + 16)));
+    if (interpolation)
+    {
+        StoreEndpoint(output + Stride - ExtEndpoint0, origin.z, interpolation == 3);
+        StoreEndpoint(output + Stride - ExtEndpoint1, origin.w, interpolation == 3);
     }
 
     // 전체 팔레트를 직접 참조하도록 네 joint 모두에 section startJoint를 더한다.
