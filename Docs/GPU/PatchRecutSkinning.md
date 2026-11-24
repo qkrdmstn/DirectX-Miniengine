@@ -114,4 +114,4 @@ struct PreparedGeometryReplacement { ...; std::shared_ptr<PatchSkinPublication> 
 - 재절단이 본을 끊는 경우(현재 경로에 없음). 생기면 고정 집합 중첩 설계가 따로 필요하다.
 - 반대쪽 독립 조각의 스키닝.
 - 절단 실패·무분할 때 스키닝 복원(D4의 버린 대안).
-- 첫 절단 쪽 변경(JointCutRedesign JC-1~4 범위).
+- 첫 절단 쪽 변경(JointCutRedesign JC-1~4 범위였으나 2026-11-24 폐기).

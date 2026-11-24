@@ -1,4 +1,4 @@
-상태: 설계안 — 관절 부근 절단 재설계: 뼈대 전용 P 선택, 쪽-그룹 불일치 패치 선택, 쪽 기준 배정(base `2fdfa0e8`, 2026-11-19). 근거 조사는 [JointCutRedesignMemo.md](JointCutRedesignMemo.md).
+상태: 폐기 (2026-11-24 사용자 결정, 구현하지 않음). 원래 설계안 — 관절 부근 절단 재설계: 뼈대 전용 P 선택, 쪽-그룹 불일치 패치 선택, 쪽 기준 배정(base `2fdfa0e8`, 2026-11-19). 근거 조사는 [JointCutRedesignMemo.md](JointCutRedesignMemo.md).
 
 # 관절 부근 절단 재설계 결정
 
