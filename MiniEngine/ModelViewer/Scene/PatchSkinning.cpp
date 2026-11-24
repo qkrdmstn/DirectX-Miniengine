@@ -16,10 +16,12 @@
 
 namespace Viewer
 {
-    // 패치 출처와 원본 draw를 묶어 GPU에서 bind 속성을 복원한다.
+    // 패치 출처와 원본 draw를 묶어 GPU에서 bind 속성을 복원하고, 재분배가 켜지면 A 조각 mesh의 비경계 복사 정점 weight를 다시 나눈다.
     bool BuildPatchSkinVertices(const GeometryRevision& source, ByteAddressBuffer& triangleSources,
         const GeometryBuffers& piece, const PatchSkinSnapshot& snapshot, PatchSkinVertices& out,
-        const std::vector<std::array<uint32_t, 2>>& triangleBodies)
+        const std::vector<std::array<uint32_t, 2>>& triangleBodies,
+        const RemainLengthTable* lengthTable, const std::vector<uint32_t>* lengthMeshes,
+        const std::function<const std::vector<uint32_t>*()>& boundaryProvider)
     {
         // u16 강체 슬롯과 최초 원본 revision을 요구한다.
         if (!snapshot.SkinningAllowed || source.IsGenerated() || snapshot.JointsAtCut.empty()
@@ -36,8 +38,9 @@ namespace Viewer
             Math::Matrix4 InverseNode;
             uint32_t FirstVertex, VertexCount, Flags, Stride;
             uint32_t DrawCount, RigidJoint, PatchTriangles, Follow;
+            uint32_t LengthEntries, BoundaryCount, Pad0, Pad1;
         };
-        static_assert(sizeof(DrawInput) == 40 && sizeof(Parameters) == 96, "Patch skin shader layout");
+        static_assert(sizeof(DrawInput) == 40 && sizeof(Parameters) == 112, "Patch skin shader layout");
         std::vector<DrawInput> draws;
         uint32_t flags = 259 | kSkinExtFlag;
         for (uint32_t s = 0; s < source.GetSections().size(); ++s)
@@ -86,12 +89,15 @@ namespace Viewer
         static bool initialized = false;
         if (!initialized)
         {
-            root.Reset(8);
+            root.Reset(11);
             root[0].InitAsConstantBuffer(0);
             for (uint32_t i = 0; i < 5; ++i)
                 root[i + 1].InitAsBufferSRV(i);
             root[6].InitAsBufferUAV(0);
             root[7].InitAsBufferSRV(5);
+            root[8].InitAsBufferSRV(6);
+            root[9].InitAsBufferSRV(7);
+            root[10].InitAsBufferUAV(1);
             root.Finalize(L"Patch skin build");
             pso.SetRootSignature(root);
             pso.SetComputeShader(g_pPatchSkinBuildCS, sizeof(g_pPatchSkinBuildCS));
@@ -104,6 +110,37 @@ namespace Viewer
         descriptors.Create(L"Patch skin draws", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
         StructuredBuffer cutJoints;
         cutJoints.Create(L"Patch skin joints at cut", uint32_t(snapshot.JointsAtCut.size()), sizeof(Joint), snapshot.JointsAtCut.data());
+        // 재분배 대상이면 검증이 끝난 지금 경계 플래그를 얻고, 표와 플래그 크기가 맞을 때만 경로를 켠다.
+        const std::vector<uint32_t>* boundaryFlags = lengthTable && boundaryProvider ? boundaryProvider() : nullptr;
+        struct LengthEntry
+        {
+            float Ratio;
+            uint32_t Descendant;
+            int32_t Fallback;
+            uint32_t Pad;
+        };
+        const bool lengthEnabled = lengthTable && boundaryFlags && !lengthTable->Ratio.empty() && !boundaryFlags->empty()
+            && lengthTable->Ratio.size() == snapshot.JointsAtCut.size() && lengthTable->Fallback.size() == lengthTable->Ratio.size();
+        std::vector<LengthEntry> entries(lengthEnabled ? lengthTable->Ratio.size() : 1, LengthEntry{ 1.0f, 0, -1, 0 });
+        for (size_t k = 0; lengthEnabled && k < entries.size(); ++k)
+            entries[k] = { lengthTable->Ratio[k], lengthTable->Descendant[k], lengthTable->Fallback[k], 0 };
+        out.LengthEnabled = lengthEnabled;
+
+        // 팔레트별 비율 표 버퍼를 만든다.
+        StructuredBuffer lengthBuffer;
+        lengthBuffer.Create(L"Patch skin length table", uint32_t(entries.size()), sizeof(LengthEntry), entries.data());
+
+        // 경계 플래그 버퍼를 만든다(꺼져 있으면 1칸 더미).
+        const uint32_t dummyFlag = 1;
+        StructuredBuffer boundaryBuffer;
+        boundaryBuffer.Create(L"Patch skin boundary flags", lengthEnabled ? uint32_t(boundaryFlags->size()) : 1, sizeof(uint32_t),
+            lengthEnabled ? boundaryFlags->data() : &dummyFlag);
+
+        // 계수 버퍼를 0으로 초기화해 만든다.
+        const uint32_t zeros[8] = {};
+        ByteAddressBuffer counters;
+        counters.Create(L"Patch skin length counters", 8, sizeof(uint32_t), zeros);
+
         out.Data.Create(L"Patch skin vertices", end, stride);
         out.Flags = flags;
         out.Stride = stride;
@@ -120,13 +157,25 @@ namespace Viewer
         }
         compute.TransitionResource(cutJoints, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.SetBufferSRV(7, cutJoints);
+        compute.TransitionResource(lengthBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.SetBufferSRV(8, lengthBuffer);
+        compute.TransitionResource(boundaryBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.SetBufferSRV(9, boundaryBuffer);
+        compute.TransitionResource(counters, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.SetBufferUAV(10, counters);
         compute.TransitionResource(out.Data, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         compute.SetBufferUAV(6, out.Data);
         Parameters c{ Math::Invert(snapshot.MeshNodeAtCut), 0, 0, flags, stride,
             drawCount, uint32_t(snapshot.JointsAtCut.size()), uint32_t(triangleBodies.size()),
-            PatchAnimFollowEnabled() && snapshot.AnimFollow ? 1u : 0u };
+            PatchAnimFollowEnabled() && snapshot.AnimFollow ? 1u : 0u,
+            0u, lengthEnabled ? uint32_t(boundaryFlags->size()) : 0u, 0, 0 };
+        uint32_t meshIndex = 0;
         for (const auto& mesh : piece.Meshes)
         {
+            // A 조각 section의 mesh만 재분배를 켠다(B mesh 정점은 원래 레코드를 유지한다).
+            const bool inLength = lengthEnabled && lengthMeshes && std::find(lengthMeshes->begin(), lengthMeshes->end(), meshIndex) != lengthMeshes->end();
+            ++meshIndex;
+            c.LengthEntries = inLength ? uint32_t(entries.size()) : 0u;
             c.FirstVertex = mesh.vbOffset / 28;
             c.VertexCount = mesh.vbSize / 28;
             if (!c.VertexCount)
@@ -140,6 +189,10 @@ namespace Viewer
         ReadbackBuffer readback;
         readback.Create(L"Patch skin bind bounds", end, stride);
         graphics.CopyBuffer(readback, out.Data);
+        ReadbackBuffer counterReadback;
+        counterReadback.Create(L"Patch skin length counters", 8, sizeof(uint32_t));
+        graphics.TransitionResource(counters, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        graphics.CopyBuffer(counterReadback, counters);
 
         // 원본·조각 Data는 이후 VB/IB로도 묶이므로 다른 절단 작업처럼 GENERIC_READ로 되돌린다.
         for (uint32_t i = 0; i < 5; ++i)
@@ -168,6 +221,10 @@ namespace Viewer
             const float radius = std::max(float(Math::Length(maximum - minimum)) * 0.5f, 1.0e-6f);
             out.BindBounds.emplace_back(center, Math::Scalar(radius));
         }
+        // 재분배 계수를 복사해 호출자가 로그로 남기게 한다.
+        const auto* counts = static_cast<const uint32_t*>(counterReadback.Map());
+        std::copy(counts, counts + 6, out.LengthCounters);
+        counterReadback.Unmap();
         readback.Unmap();
         return true;
     }
@@ -659,6 +716,7 @@ namespace Viewer
         table.Ratio.assign(jointNodes.size(), 1.0f);
         table.CutRoot.assign(jointNodes.size(), -1);
         table.Descendant.assign(jointNodes.size(), 0);
+        table.Fallback.assign(jointNodes.size(), -1);
 
         // P_i마다 |I - parent| / |child - parent|를 [0, 1]로 잘라 r_P를 구한다(선분이 없으면 1).
         std::vector<float> remain(cuts.size(), 1.0f);

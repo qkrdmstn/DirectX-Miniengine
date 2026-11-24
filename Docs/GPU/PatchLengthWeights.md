@@ -104,7 +104,7 @@ RemainLengthTable BuildRemainLengthTable(/* 선택된 P 목록, 교점, 월드 j
 | --- | --- | --- |
 | LW-1 | D2 옵션, D1 r_k·joint→P_i 표(CPU, 다중 절단·잎·중복 항목), 로그 출력만 | 옵션 0·1·2 모두 렌더 불변. CesiumMan 팔 절단과 다중 본 절단에서 P별 r_P·자손 수, 그루터기 정점의 자손 가중치 합 평균·최대 로그. 회귀 6종 PASS |
 | LW-2a | D4 경계 플래그 계산과 SP7e2 대조 진단 | 경계 플래그 수와 SP7e2 경계 짝 비교에서 누락 0. 렌더 불변 |
-| LW-2b | D3·D5 복사 정점 재분배와 위치 bind 재계산(`PatchSkinBuildCS`), 폴백 집계 | 옵션 1·2에서 게시 순간 위치 차가 CPU 재계산 대비 ≤ 1e-4 mm(기존 PS2 한도 수준). 경계 정점 레코드 = 원본(SP7e2 PASS). 비경계 정점 중 자손 가중치 > 0인 수 = 0. 폴백 수 보고 |
+| LW-2b | D3·D5 복사 정점 재분배와 위치 bind 재계산(`PatchSkinBuildCS`), 폴백 집계 | 옵션 1·2에서 게시 순간 위치 차(PS2)의 옵션 0 대비 증가 ≤ 1e-4 mm(case3는 옵션 0부터 0.0002 mm대라 절대값 대신 증가분으로 판정). 경계 정점 레코드 = 원본(SP7e2 PASS). 비경계 정점 중 자손 가중치 > 0인 수 = 0. 폴백 수 보고 |
 | LW-2c | D5 법선·탄젠트 bind 재계산 | 게시 순간 법선 차 ≤ 1e-3(압축 정밀도). 옵션 0 진단 값 불변 |
 | LW-3 | D6 끝점 레코드 재분배·끝점 bind, `CutTimeNormal` 불변 진단 | rim·cap 게시 순간 위치 차 ≤ 1e-4 mm, `CutTimeNormal` 차 ≤ 1e-3. 옵션 0 진단 값 불변 |
 | LW-4 | 재절단 승계 확인, 옵션 0/1/2 캡처 비교, 문서 동기화(상태 줄·README·CodeMap·PatchSkinning) | RS-2b 복사 정점 레코드 일치 검사와 `-attached-recut-checks 1`·`2`·`4`를 옵션 1·2로 PASS. CesiumMan 걷기 팔·다리 절단과 `-skeletal-multi-cut 1` 캡처 0/1/2. 기본값은 0 유지 |

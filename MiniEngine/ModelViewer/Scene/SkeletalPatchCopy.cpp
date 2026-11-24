@@ -2189,6 +2189,27 @@ namespace Viewer
                 }
                 m_RemainLengthTables[0] = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups, PatchLengthWeightsMode());
 
+                // 소속 P_i가 있는 joint마다 같은 section 팔레트 범위 안에서 P_i의 NodeId를 찾아 합 0 폴백 인덱스로 정한다(없으면 -1).
+                auto& lengthTable = m_RemainLengthTables[0];
+                for (size_t k = 0; k < jointNodes.size(); ++k)
+                {
+                    if (lengthTable.CutRoot[k] < 0)
+                        continue;
+                    for (size_t s = 0; s < mesh->GetGeometry()->GetSections().size(); ++s)
+                    {
+                        const auto& sectionMesh = mesh->GetGeometry()->GetMesh(s);
+                        if (k < sectionMesh.startJoint || k >= size_t(sectionMesh.startJoint) + sectionMesh.numJoints)
+                            continue;
+                        for (size_t j = sectionMesh.startJoint; j < size_t(sectionMesh.startJoint) + sectionMesh.numJoints && j < jointNodes.size(); ++j)
+                            if (jointNodes[j] == cuts[lengthTable.CutRoot[k]].NodeId)
+                            {
+                                lengthTable.Fallback[k] = int(j);
+                                break;
+                            }
+                        break;
+                    }
+                }
+
                 // P_i마다 r_P와 자손 joint 수를 기록하고, 단일 절단은 선택 시점 교점과의 pose 차이도 남긴다.
                 const auto& table = m_RemainLengthTables[0];
                 for (size_t i = 0; i < cuts.size(); ++i)
@@ -2483,7 +2504,7 @@ namespace Viewer
             flagged, paired.size(), missed, extra, missed == 0 ? "PASS" : "FAIL");
     }
 
-    // 생성 skin VB를 보관하고 진단 옵션에서 Data 비교와 rim/cap 대응 쌍 생성을 수행한다.
+    // 생성 skin VB를 보관하고(남은 길이 옵션이 켜진 A 조각은 비경계 복사 정점 weight를 재분배한다) 진단 옵션에서 Data 비교와 rim/cap 대응 쌍 생성을 수행한다.
     void SkeletalPatchCopy::BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
         SkeletalPatchBuffers& patch, uint32_t body)
     {
@@ -2494,8 +2515,49 @@ namespace Viewer
         auto skin = std::make_shared<PatchSkinPublication>();
         skin->Snapshot = snapshot;
         skin->Side = m_SkinSnapshots.size() == 1 ? "D5" : (body ? "B" : "A");
+
+        // 옵션이 켜진 A 조각이면 재분배 대상 mesh 번호(A의 section이 쓰는 SourceMesh)를 모은다.
+        const RemainLengthTable* lengthTable = body < m_RemainLengthTables.size() && !m_RemainLengthTables[body].Ratio.empty()
+            ? &m_RemainLengthTables[body] : nullptr;
+        std::vector<uint32_t> lengthMeshes;
+        if (lengthTable)
+        {
+            for (const auto& section : piece.GetGeometry()->GetSections())
+            {
+                lengthMeshes.push_back(section.SourceMesh);
+            }
+        }
+
+        // 빌드가 검증을 통과한 뒤에만 경계 플래그를 계산한다(같은 절단에서 이미 있으면 재사용하고, 끝나면 기존 제거 상태 복사본을 놓는다).
+        const std::function<const std::vector<uint32_t>*()> boundaryProvider = [&]() -> const std::vector<uint32_t>*
+        {
+            if (m_PatchBoundaryFlags.empty())
+            {
+                m_PatchBoundaryFlags = BuildPatchBoundaryFlags(*m_SourceRevision, patch.Triangles, patch.PreviousState, m_SkinSectionNodes);
+                patch.PreviousState = {};
+                const size_t flagged = size_t(std::count(m_PatchBoundaryFlags.begin(), m_PatchBoundaryFlags.end(), 1u));
+                PatchLog("LW2a boundaryFlags patchVertices=%zu flagged=%zu\n", m_PatchBoundaryFlags.size(), flagged);
+            }
+            return &m_PatchBoundaryFlags;
+        };
+
+        // skin VB를 만들고, 재분배가 켜져 있으면 계수를 로그로 남긴다.
         const bool built = BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources,
-            geometry, snapshot, skin->Vertices, patch.Islands.TriangleSideBody);
+            geometry, snapshot, skin->Vertices, patch.Islands.TriangleSideBody,
+            lengthTable, lengthTable ? &lengthMeshes : nullptr, lengthTable ? boundaryProvider : nullptr);
+        if (built && lengthTable)
+        {
+            const auto& counters = skin->Vertices.LengthCounters;
+            if (skin->Vertices.LengthEnabled)
+            {
+                PatchLog("LW2b reweighted=%u unchanged=%u boundaryKept=%u sumZeroFallback=%u fallbackMissingKept=%u singularKept=%u\n",
+                    counters[0], counters[5], counters[1], counters[2], counters[3], counters[4]);
+            }
+            else
+            {
+                PatchLog("LW2b disabled (flags empty or table size mismatch)\n");
+            }
+        }
         if (built)
         {
             for (const auto& section : piece.GetGeometry()->GetSections())
@@ -2506,16 +2568,6 @@ namespace Viewer
                 skin->VertexCount += count;
             }
             piece.PatchSkin = skin;
-        }
-
-        // 옵션이 켜진 A 조각이면 패치 꼭짓점의 경계 플래그를 한 번 계산해 둔다(LW-2b가 GPU 버퍼로 올린다).
-        // 같은 절단에서 두 호출 경로가 모두 오면 이미 계산한 플래그를 재사용하고, 끝나면 기존 제거 상태 복사본을 놓는다.
-        if (built && m_PatchBoundaryFlags.empty() && body < m_RemainLengthTables.size() && !m_RemainLengthTables[body].Ratio.empty())
-        {
-            m_PatchBoundaryFlags = BuildPatchBoundaryFlags(*m_SourceRevision, patch.Triangles, patch.PreviousState, m_SkinSectionNodes);
-            patch.PreviousState = {};
-            const size_t flagged = size_t(std::count(m_PatchBoundaryFlags.begin(), m_PatchBoundaryFlags.end(), 1u));
-            PatchLog("LW2a boundaryFlags patchVertices=%zu flagged=%zu\n", m_PatchBoundaryFlags.size(), flagged);
         }
 
         // 전체 VB readback과 CPU 비교는 요청된 자동 진단에서만 수행한다.
@@ -2532,11 +2584,10 @@ namespace Viewer
         uint32_t cap = 0;
         skin->Rims2 = skin->Caps3 = skin->FallbackK = 0;
 
-        // 옵션이 켜진 A 조각이면 정점의 자손 가중치 합(그루터기 끌림의 원인)을 모을 표를 고른다.
-        const RemainLengthTable* lengthTable = body < m_RemainLengthTables.size() && !m_RemainLengthTables[body].Ratio.empty()
-            ? &m_RemainLengthTables[body] : nullptr;
+        // 옵션이 켜진 A 조각이면 비경계 정점의 자손 가중치 합(그루터기 끌림의 원인)을 모은다.
         uint32_t stumpVertices = 0;
         double stumpSum = 0.0, stumpMax = 0.0;
+        uint32_t copiedNonBoundary = 0, nonBoundaryDescendant = 0, copiedBoundary = 0;
         const bool follow = built && PatchAnimFollowEnabled() && snapshot.AnimFollow;
         double maxError = built ? 0.0 : INFINITY;
         if (built)
@@ -2605,6 +2656,17 @@ namespace Viewer
                             stumpSum += descendant;
                             stumpMax = std::max(stumpMax, double(descendant));
                         }
+
+                        // 복사 정점 중 경계가 아닌 정점에 자손 가중치가 남았는지 센다(재분배 뒤 0이어야 한다).
+                        const auto* flagOrigin = provenance + size_t(v) * 8;
+                        const bool copiedVertex = flagOrigin[0] != UINT32_MAX && flagOrigin[2] == flagOrigin[3];
+                        const bool boundary = flagOrigin[2] >= m_PatchBoundaryFlags.size() || m_PatchBoundaryFlags[flagOrigin[2]];
+                        if (copiedVertex && !boundary)
+                        {
+                            ++copiedNonBoundary;
+                            nonBoundaryDescendant += descendant > 0.0f;
+                        }
+                        copiedBoundary += copiedVertex && boundary;
                     }
 
                     // 끝점 보간 종류(1 내부 교점, 2 rim, 3 cap)가 있으면 GPU와 같이 두 원본 끝점을 각각 skin한 뒤 t로 보간한다.
@@ -2731,6 +2793,18 @@ namespace Viewer
         if (lengthTable)
             PatchLog("LW1 case=%u side=%s mainRecordOnly descendantWeightVertices=%u of %u avg=%.4f max=%.4f\n", m_SkinCheckCase, label,
                 stumpVertices, vertices, stumpVertices ? stumpSum / stumpVertices : 0.0, stumpMax);
+        if (lengthTable)
+        {
+            // 재분배가 꺼졌으면 FAIL, 켜졌으면 비경계 자손 가중치 0과 계수 합 = A 복사 정점 수, 경계 수 = LW-2a 경계 수를 확인한다.
+            const auto& counters = skin->Vertices.LengthCounters;
+            const bool enabled = skin->Vertices.LengthEnabled;
+            const uint32_t accounted = counters[0] + counters[5] + counters[1] + counters[3] + counters[4];
+            const bool countsMatch = enabled && accounted == copied && counters[1] == copiedBoundary;
+            PatchLog("LW2b case=%u side=%s enabled=%d nonBoundaryCopied=%u nonBoundaryDescendantWeight=%u %s\n", m_SkinCheckCase, label,
+                enabled ? 1 : 0, copiedNonBoundary, nonBoundaryDescendant, enabled && nonBoundaryDescendant == 0 ? "PASS" : "FAIL");
+            PatchLog("LW2b case=%u side=%s counterSum=%u copied=%u boundaryKept=%u lw2aBoundary=%u %s\n", m_SkinCheckCase, label,
+                accounted, copied, counters[1], copiedBoundary, countsMatch ? "PASS" : "FAIL");
+        }
 
         // PS3 동기 GPU 진단은 break 검사에서만 수행하며 게시 경로에는 연결하지 않는다.
         uint32_t poseChecks = 0;

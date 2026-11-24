@@ -2,6 +2,7 @@
 #include "Model.h"
 #include <vector>
 #include <array>
+#include <functional>
 
 class GeometryRevision;
 struct GeometryBuffers;
@@ -27,6 +28,11 @@ namespace Viewer
         ByteAddressBuffer Data;
         uint32_t Flags = 0, Stride = 0;
         std::vector<Math::BoundingSphere> BindBounds;
+
+        // 남은 길이 재분배(LW-2b) 계수: 0 재분배, 1 경계 유지, 2 합 0 폴백, 3 폴백 본 없음 유지, 4 비가역 유지, 5 변화 없음(재분배 대상 weight 없음).
+        // LengthEnabled는 재분배 경로가 실제로 켜졌는지(표·플래그 크기가 맞는지)를 나타낸다.
+        uint32_t LengthCounters[6] = {};
+        bool LengthEnabled = false;
     };
 
     struct PatchSkinSnapshot
@@ -115,6 +121,7 @@ namespace Viewer
         std::vector<float> Ratio;
         std::vector<int> CutRoot;
         std::vector<uint8_t> Descendant;
+        std::vector<int> Fallback; // 합 0 폴백용 같은 section 범위의 P_i 팔레트 인덱스(없으면 -1)
     };
 
     // P_i의 자손은 0, P_i는 모드 1에서 1 / 모드 2에서 r_P, 나머지는 1로 팔레트별 비율 표를 만든다.
@@ -136,7 +143,11 @@ namespace Viewer
         const Joint* animJoints = nullptr, const Math::Matrix4* animNodes = nullptr, bool animFollow = false);
 
     // 원본 revision과 추출 출처를 이용해 조각의 skin VB를 만들고 GPU 완료 후 반환한다.
+    // lengthTable이 있으면 lengthMeshes(piece.Meshes 번호, A 조각 section의 SourceMesh)에 속한 mesh의 복사 정점만
+    // boundaryProvider가 주는 경계 플래그로 비경계 정점의 weight와 bind 위치를 남은 길이 비율로 재분배한다(검증이 통과한 뒤에만 호출).
     bool BuildPatchSkinVertices(const GeometryRevision& source, ByteAddressBuffer& triangleSources,
         const GeometryBuffers& piece, const PatchSkinSnapshot& snapshot, PatchSkinVertices& out,
-        const std::vector<std::array<uint32_t, 2>>& triangleBodies);
+        const std::vector<std::array<uint32_t, 2>>& triangleBodies,
+        const RemainLengthTable* lengthTable = nullptr, const std::vector<uint32_t>* lengthMeshes = nullptr,
+        const std::function<const std::vector<uint32_t>*()>& boundaryProvider = nullptr);
 }

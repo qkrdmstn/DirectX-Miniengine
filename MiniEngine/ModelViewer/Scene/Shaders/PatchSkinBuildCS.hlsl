@@ -3,6 +3,7 @@ cbuffer Parameters : register(b0)
     float4x4 InverseNode;
     uint FirstVertex, VertexCount, Flags, Stride;
     uint DrawCount, RigidJoint, PatchTriangles, Follow;
+    uint LengthEntries, BoundaryCount, Pad0, Pad1;
 };
 struct DrawInput
 {
@@ -21,6 +22,16 @@ struct Joint
     float4x3 NrmMatrix;
 };
 StructuredBuffer<Joint> JointsAtCut : register(t5);
+struct LengthEntry
+{
+    float Ratio;
+    uint Descendant;
+    int Fallback;
+    uint Pad;
+};
+StructuredBuffer<LengthEntry> LengthTable : register(t6);
+StructuredBuffer<uint> BoundaryFlags : register(t7);
+RWByteAddressBuffer LengthCounters : register(u1);
 RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
 //   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
@@ -116,7 +127,103 @@ void StoreEndpoint(uint output, uint vertex, bool cap)
     Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
 }
 
-// 복사 정점은 원본 bind로 복원한다. 내부 교점(1)과, 조각 플래그가 켜진 실제 분리 rim(2)·cap(3)에는 두 끝점의 원본 skin 입력을 덧붙인다.
+// 복사 정점의 u16 skin 입력(joints 전체 팔레트 인덱스, weights u16)을 남은 길이 비율로 재분배하고 bind 위치를 다시 계산한다.
+// 재분배 대상 weight가 없거나 폴백 본 없음, 비가역이면 입력을 그대로 두고 false를 돌려주며, 계수는 LengthCounters에 누적한다.
+bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16)
+{
+    // weight가 있는 슬롯 중 비율 1 미만이 없으면 연산 없이 원래 레코드를 유지한다(weight 0 슬롯의 비율은 무시한다).
+    bool affected = false;
+    for (uint slot = 0; slot < 4; ++slot)
+    {
+        if (weights16[slot] > 0 && LengthTable[joints[slot]].Ratio < 1.0)
+        {
+            affected = true;
+        }
+    }
+    if (!affected)
+    {
+        LengthCounters.InterlockedAdd(20, 1);
+        return false;
+    }
+
+    // 정규화 weight와 비율의 가중합을 구한다.
+    float4 weights = float4(weights16);
+    weights /= max(dot(weights, 1), 1);
+    float4 ratios = float4(LengthTable[joints.x].Ratio, LengthTable[joints.y].Ratio, LengthTable[joints.z].Ratio, LengthTable[joints.w].Ratio);
+    float4 scaled = weights * ratios;
+    float sum = dot(scaled, 1);
+    uint4 newJoints = joints;
+    uint4 quantized;
+
+    // 합이 너무 작으면 최대 weight joint의 P_i 하나에 1을 준다(없으면 원래 레코드를 유지한다).
+    if (sum < 1e-3)
+    {
+        uint best = 0;
+        for (uint k = 1; k < 4; ++k)
+        {
+            if (weights[k] > weights[best])
+            {
+                best = k;
+            }
+        }
+        int fallback = LengthTable[joints[best]].Fallback;
+        if (fallback < 0)
+        {
+            LengthCounters.InterlockedAdd(12, 1);
+            return false;
+        }
+        newJoints[best] = uint(fallback);
+        quantized = uint4(0, 0, 0, 0);
+        quantized[best] = 65535;
+        LengthCounters.InterlockedAdd(8, 1);
+    }
+    else
+    {
+        // 재정규화한 weight를 반올림하고 나머지는 가장 큰 항목에 더해 합을 65535로 맞춘다.
+        scaled /= sum;
+        quantized = uint4(round(scaled * 65535));
+        uint largest = 0;
+        for (uint k = 1; k < 4; ++k)
+        {
+            if (scaled[k] > scaled[largest])
+            {
+                largest = k;
+            }
+        }
+        quantized[largest] = uint(int(quantized[largest]) + 65535 - int(quantized.x + quantized.y + quantized.z + quantized.w));
+    }
+
+    // 원래와 새 weight로 절단 시점 skin 행렬 M, M'를 만든다.
+    float4 before = weights;
+    float4 after = float4(quantized) / 65535.0;
+    float4x4 oldSkin = JointsAtCut[joints.x].PosMatrix * before.x + JointsAtCut[joints.y].PosMatrix * before.y
+        + JointsAtCut[joints.z].PosMatrix * before.z + JointsAtCut[joints.w].PosMatrix * before.w;
+    float4x4 newSkin = JointsAtCut[newJoints.x].PosMatrix * after.x + JointsAtCut[newJoints.y].PosMatrix * after.y
+        + JointsAtCut[newJoints.z].PosMatrix * after.z + JointsAtCut[newJoints.w].PosMatrix * after.w;
+
+    // M' 3x3의 행렬식이 M에 비해 거의 0이면 원래 레코드를 유지한다.
+    float3x3 newLinear = (float3x3)newSkin;
+    float3x3 cofactor = float3x3(cross(newLinear[1], newLinear[2]), cross(newLinear[2], newLinear[0]), cross(newLinear[0], newLinear[1]));
+    float determinant = dot(newLinear[0], cofactor[0]);
+    float3x3 oldLinear = (float3x3)oldSkin;
+    float oldDeterminant = dot(oldLinear[0], cross(oldLinear[1], oldLinear[2]));
+    if (!(abs(determinant) > 1e-4 * abs(oldDeterminant)) || abs(determinant) < 1e-20)
+    {
+        LengthCounters.InterlockedAdd(16, 1);
+        return false;
+    }
+
+    // bind' = inv(M')·M·bind 를 3x3 역(cofactor/det)과 이동으로 계산한다.
+    float3 skinned = mul(oldSkin, float4(bind, 1)).xyz;
+    float3 translation = float3(newSkin[0][3], newSkin[1][3], newSkin[2][3]);
+    bind = mul(transpose(cofactor), skinned - translation) / determinant;
+    joints = newJoints;
+    weights16 = quantized;
+    LengthCounters.InterlockedAdd(0, 1);
+    return true;
+}
+
+// 복사 정점은 원본 bind로 복원하며(재분배가 켜진 A mesh의 비경계 복사 정점은 weight와 bind 위치를 다시 계산한다) 내부 교점(1)과, 조각 플래그가 켜진 실제 분리 rim(2)·cap(3)에는 두 끝점의 원본 skin 입력을 덧붙인다.
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -132,6 +239,8 @@ void main(uint3 id : SV_DispatchThreadID)
     uint sourceFlags = 31;
     uint startJoint = 0;
     uint4 skin = uint4(RigidJoint, 0, 65535, 0);
+    bool reweighted = false;
+    uint4 newJoints = uint4(0, 0, 0, 0);
 
     // 복사된 패치 정점을 section/draw/sourceTriangle과 corner로 원본 VB에 대응시킨다.
     if (copied)
@@ -141,7 +250,28 @@ void main(uint3 id : SV_DispatchThreadID)
         sourceFlags = draw.SourceFlags;
         startJoint = draw.StartJoint;
         skin = Source.Load4(address + draw.SourceStride - 16);
-        Result.Store3(output, Source.Load3(address));
+        float3 bind = asfloat(Source.Load3(address));
+
+        // 남은 길이 재분배가 켜져 있으면 경계가 아닌 정점만 weight와 bind 위치를 바꾼다(경계 번호를 못 읽으면 경계로 본다).
+        if (LengthEntries)
+        {
+            if (origin.z >= BoundaryCount || BoundaryFlags[origin.z])
+            {
+                LengthCounters.InterlockedAdd(4, 1);
+            }
+            else
+            {
+                uint4 full = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + startJoint;
+                uint4 packed = uint4(skin.z & 65535, skin.z >> 16, skin.w & 65535, skin.w >> 16);
+                reweighted = Reweight(bind, full, packed);
+                if (reweighted)
+                {
+                    newJoints = full;
+                    skin.zw = uint2(packed.x | (packed.y << 16), packed.z | (packed.w << 16));
+                }
+            }
+        }
+        Result.Store3(output, asuint(bind));
         Result.Store(output + 12, Source.Load(address + 12));
     }
     else
@@ -192,5 +322,9 @@ void main(uint3 id : SV_DispatchThreadID)
 
     // 전체 팔레트를 직접 참조하도록 네 joint 모두에 section startJoint를 더한다.
     uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + startJoint;
+    if (reweighted)
+    {
+        joints = newJoints;
+    }
     Result.Store4(output + Stride - 16, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
 }
