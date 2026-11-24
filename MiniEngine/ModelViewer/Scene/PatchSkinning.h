@@ -97,6 +97,32 @@ namespace Viewer
     // -patch-anim-follow 옵션(기본 1)을 최초 호출에서 한 번만 읽어 반환한다.
     bool PatchAnimFollowEnabled();
 
+    // -patch-length-weights 옵션을 최초 호출에서 한 번만 읽어 반환한다(0 끔, 1 자손만, 2 자손+P 비율).
+    int PatchLengthWeightsMode();
+
+    // 잘린 본 P_i의 선택 선분 snapshot이다(NodeId는 유효 부모, 교점과 joint 위치는 월드 공간).
+    struct RemainLengthCut
+    {
+        uint32_t NodeId = UINT32_MAX, ChildNodeId = UINT32_MAX;
+        Math::Vector3 Intersection{ Math::kZero };
+    };
+
+    // A 조각 팔레트 joint별 남은 길이 비율, 소속 P_i, 자손 여부다.
+    // 크기는 JointsAtCut.size()와 같고, 섹션 중복 항목도 같은 값을 갖는다.
+    // CutRoot는 cuts 배열의 0 기반 인덱스이며 소속이 없으면 -1이다. Descendant는 P_i의 자손(P_i 제외)이면 1이다.
+    struct RemainLengthTable
+    {
+        std::vector<float> Ratio;
+        std::vector<int> CutRoot;
+        std::vector<uint8_t> Descendant;
+    };
+
+    // P_i의 자손은 0, P_i는 모드 1에서 1 / 모드 2에서 r_P, 나머지는 1로 팔레트별 비율 표를 만든다.
+    // jointNodes는 팔레트 순서의 NodeId, nodeGroups는 BuildCutBodyGroups의 노드 소속(0=A, i=B_i)이다.
+    RemainLengthTable BuildRemainLengthTable(const std::vector<RemainLengthCut>& cuts,
+        const std::vector<Math::Vector3>& positions, const std::vector<uint32_t>& jointNodes,
+        const std::vector<uint32_t>& nodeGroups, int mode);
+
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
     // animFollow가 켜지고 snapshot.AnimFollow와 애니메이션 입력이 있으면 고정 본은 C(t)·A_k(t)·O_k를 쓴다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,

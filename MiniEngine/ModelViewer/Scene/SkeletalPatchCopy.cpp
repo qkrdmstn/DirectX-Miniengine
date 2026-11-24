@@ -1681,6 +1681,7 @@ namespace Viewer
         m_Physics = physics;
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
+        m_RemainLengthTables.clear();
         m_Attachments.clear();
         m_PieceIds.clear();
         m_BoundaryWait = 0;
@@ -2085,6 +2086,7 @@ namespace Viewer
                 return;
             m_SkinSnapshots.resize(boneCut ? 1 : groups.AttachNodes.size());
             m_SkinPaletteErrors.assign(m_SkinSnapshots.size(), 0);
+            m_RemainLengthTables.assign(m_SkinSnapshots.size(), {});
             uint32_t checks = 0;
             CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
             m_SkinCheckCase = checks ? m_BreakCheck + 1 : 0;
@@ -2135,6 +2137,89 @@ namespace Viewer
                         }
                     }
                 }
+            }
+
+            // 옵션이 켜지면 A 조각(body 0)의 남은 길이 비율 표를 만든다(아직 GPU에 넘기지 않는다).
+            if (!boneCut && PatchLengthWeightsMode() && m_RemainLengthTables.size() == m_SkinSnapshots.size())
+            {
+                // 절단 시점 pose의 월드 joint 위치를 구한다(snapshot의 JointsAtCut과 같은 pose).
+                size_t firstSkin = 0;
+                while (firstSkin < mesh->GetGeometry()->GetSections().size() && !mesh->GetGeometry()->GetMesh(firstSkin).numJoints)
+                    ++firstSkin;
+                const Matrix4 toWorld = Matrix4(mesh->GetWorldTransform(target->GetTransform())) * m_SkinSectionNodes[firstSkin];
+                std::vector<Math::Vector3> positions(parents.size());
+                for (uint32_t node = 0; node < parents.size(); ++node)
+                    positions[node] = Math::Vector3(toWorld * nodes[node] * Math::Vector4(0, 0, 0, 1));
+
+                // P_i별 부모·자식 노드를 모은다(단일은 selected, 다중은 unionCut).
+                std::vector<uint32_t> cutParents, cutChildren;
+                if (m_MultiPrepare)
+                {
+                    cutParents = unionCut.Roots;
+                    cutChildren = unionCut.Children;
+                }
+                else
+                {
+                    cutParents = { selected.NodeId };
+                    cutChildren = { selected.Kind == SegmentJointKind::Segment ? selected.ChildNodeId : UINT32_MAX };
+                }
+
+                // 단일·다중 모두 절단 시점 선분과 평면의 교점으로 r_P를 구한다(a/(a-b), [0,1]). 범위 밖 노드는 선분 없음이다.
+                std::vector<RemainLengthCut> cuts;
+                for (size_t i = 0; i < cutParents.size(); ++i)
+                {
+                    RemainLengthCut cut;
+                    cut.NodeId = cutParents[i];
+                    cut.ChildNodeId = i < cutChildren.size() ? cutChildren[i] : UINT32_MAX;
+                    if (cut.NodeId >= positions.size() || cut.ChildNodeId >= positions.size())
+                        cut.ChildNodeId = UINT32_MAX;
+                    cut.Intersection = cut.NodeId < positions.size() ? positions[cut.NodeId] : Math::Vector3(Math::kZero);
+                    if (cut.ChildNodeId != UINT32_MAX)
+                    {
+                        const auto& from = positions[cut.NodeId];
+                        const auto& to = positions[cut.ChildNodeId];
+                        const float a = Math::Dot(plane.WorldPlane, Math::Vector4(from, 1));
+                        const float b = Math::Dot(plane.WorldPlane, Math::Vector4(to, 1));
+                        const float fraction = a != b ? std::min(std::max(a / (a - b), 0.0f), 1.0f) : 1.0f;
+                        cut.Intersection = from + (to - from) * fraction;
+                    }
+                    cuts.push_back(cut);
+                }
+                m_RemainLengthTables[0] = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups, PatchLengthWeightsMode());
+
+                // P_i마다 r_P와 자손 joint 수를 기록하고, 단일 절단은 선택 시점 교점과의 pose 차이도 남긴다.
+                const auto& table = m_RemainLengthTables[0];
+                for (size_t i = 0; i < cuts.size(); ++i)
+                {
+                    std::set<uint32_t> descendants;
+                    for (size_t k = 0; k < jointNodes.size(); ++k)
+                        if (table.CutRoot[k] == int(i) && table.Descendant[k])
+                            descendants.insert(jointNodes[k]);
+                    float length = 0.0f, ratio = 1.0f;
+                    if (cuts[i].ChildNodeId != UINT32_MAX)
+                    {
+                        length = float(Math::Length(positions[cuts[i].ChildNodeId] - positions[cuts[i].NodeId]));
+                        ratio = length > 1e-9f ? float(Math::Length(cuts[i].Intersection - positions[cuts[i].NodeId])) / length : 1.0f;
+                    }
+                    PatchLog("LW1 mode=%d P=%u child=%u r_P=%.4f segmentLen=%.4f descendantJoints=%zu\n",
+                        PatchLengthWeightsMode(), cuts[i].NodeId, cuts[i].ChildNodeId, ratio, length, descendants.size());
+                    if (!m_MultiPrepare && cuts[i].ChildNodeId != UINT32_MAX)
+                    {
+                        const float planeErr = Math::Dot(plane.WorldPlane, Math::Vector4(selected.Intersection, 1));
+                        const float selectionRatio = length > 1e-9f
+                            ? std::min(float(Math::Length(selected.Intersection - positions[cuts[i].NodeId])) / length, 1.0f) : 1.0f;
+                        PatchLog("LW1 selection planeErr_mm=%.6f selFracDiff=%.6f\n", planeErr * 1000.0f, selectionRatio - ratio);
+                    }
+                }
+
+                // 표의 자손 집합이 Frozen이면서 P_i 자신이 아닌 joint 집합과 같은지 확인한다.
+                bool descendantMatch = table.Descendant.size() == m_SkinSnapshots[0].Frozen.size();
+                for (size_t k = 0; descendantMatch && k < table.Descendant.size(); ++k)
+                {
+                    const bool isRoot = std::find(cutRoots.begin(), cutRoots.end(), jointNodes[k]) != cutRoots.end();
+                    descendantMatch = (table.Descendant[k] != 0) == (m_SkinSnapshots[0].Frozen[k] != 0 && !isRoot);
+                }
+                PatchLog("LW1 table size=%zu descendantMatch=%s\n", table.Ratio.size(), descendantMatch ? "PASS" : "FAIL");
             }
         }
 
@@ -2385,6 +2470,12 @@ namespace Viewer
         uint32_t split = 0;
         uint32_t cap = 0;
         skin->Rims2 = skin->Caps3 = skin->FallbackK = 0;
+
+        // 옵션이 켜진 A 조각이면 정점의 자손 가중치 합(그루터기 끌림의 원인)을 모을 표를 고른다.
+        const RemainLengthTable* lengthTable = body < m_RemainLengthTables.size() && !m_RemainLengthTables[body].Ratio.empty()
+            ? &m_RemainLengthTables[body] : nullptr;
+        uint32_t stumpVertices = 0;
+        double stumpSum = 0.0, stumpMax = 0.0;
         const bool follow = built && PatchAnimFollowEnabled() && snapshot.AnimFollow;
         double maxError = built ? 0.0 : INFINITY;
         if (built)
@@ -2438,6 +2529,21 @@ namespace Viewer
                             continue;
                         }
                         posed = posed + (palette[joints[k]].posXform * source) * (float(weights[k]) / total);
+                    }
+
+                    // 비율 0인 자손 joint에 걸린 가중치 합을 구해 평균과 최댓값에 반영한다.
+                    if (lengthTable)
+                    {
+                        float descendant = 0.0f;
+                        for (uint32_t k = 0; k < 4; ++k)
+                            if (joints[k] < lengthTable->Descendant.size() && lengthTable->Descendant[joints[k]])
+                                descendant += float(weights[k]) / total;
+                        if (descendant > 0.0f)
+                        {
+                            ++stumpVertices;
+                            stumpSum += descendant;
+                            stumpMax = std::max(stumpMax, double(descendant));
+                        }
                     }
 
                     // 끝점 보간 종류(1 내부 교점, 2 rim, 3 cap)가 있으면 GPU와 같이 두 원본 끝점을 각각 skin한 뒤 t로 보간한다.
@@ -2560,6 +2666,11 @@ namespace Viewer
         PatchLog("PS2 case=%u side=%s vertices=%u copied=%u split=%u cap=%u maxError_mm=%.6f result=%s\n",
             m_SkinCheckCase, label, vertices, copied, split, cap, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
 
+        // 자손 가중치가 남은 A 조각 정점 수와 그 합의 평균·최댓값을 기록한다(주 레코드만 집계하며 끝점·경계 구분은 이후 단계).
+        if (lengthTable)
+            PatchLog("LW1 case=%u side=%s mainRecordOnly descendantWeightVertices=%u of %u avg=%.4f max=%.4f\n", m_SkinCheckCase, label,
+                stumpVertices, vertices, stumpVertices ? stumpSum / stumpVertices : 0.0, stumpMax);
+
         // PS3 동기 GPU 진단은 break 검사에서만 수행하며 게시 경로에는 연결하지 않는다.
         uint32_t poseChecks = 0;
         CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", poseChecks);
@@ -2577,6 +2688,7 @@ namespace Viewer
         m_Name.clear();
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
+        m_RemainLengthTables.clear();
         m_Attachments.clear();
         m_PieceIds.clear();
         m_BoundaryWait = 0;

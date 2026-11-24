@@ -535,6 +535,58 @@ namespace Viewer
         return enabled;
     }
 
+    // 길이 비율 재분배 옵션을 실행 중 한 번만 읽는다. 기본값은 0이며 0..2로 자른다.
+    int PatchLengthWeightsMode()
+    {
+        // 옵션은 최초 호출에서 읽고 이후 변하지 않는다.
+        static const int mode = []
+        {
+            uint32_t value = 0;
+            CommandLineArgs::GetInteger(L"patch-length-weights", value);
+            return int(std::min(value, 2u));
+        }();
+        return mode;
+    }
+
+    // 잘린 본 P_i별 남은 길이 비율 r_P를 구해 팔레트 joint마다 Ratio와 CutRoot를 채운다.
+    RemainLengthTable BuildRemainLengthTable(const std::vector<RemainLengthCut>& cuts,
+        const std::vector<Math::Vector3>& positions, const std::vector<uint32_t>& jointNodes,
+        const std::vector<uint32_t>& nodeGroups, int mode)
+    {
+        // 모든 항목을 비율 1과 소속 없음으로 시작한다.
+        RemainLengthTable table;
+        table.Ratio.assign(jointNodes.size(), 1.0f);
+        table.CutRoot.assign(jointNodes.size(), -1);
+        table.Descendant.assign(jointNodes.size(), 0);
+
+        // P_i마다 |I - parent| / |child - parent|를 [0, 1]로 잘라 r_P를 구한다(선분이 없으면 1).
+        std::vector<float> remain(cuts.size(), 1.0f);
+        for (size_t i = 0; i < cuts.size(); ++i)
+        {
+            const uint32_t parent = cuts[i].NodeId, child = cuts[i].ChildNodeId;
+            if (parent >= positions.size() || child >= positions.size())
+                continue;
+            const float length = float(Math::Length(positions[child] - positions[parent]));
+            if (length <= 1e-9f)
+                continue;
+            const float partial = float(Math::Length(cuts[i].Intersection - positions[parent]));
+            remain[i] = std::min(std::max(partial / length, 0.0f), 1.0f);
+        }
+
+        // 노드 소속으로 자손(비율 0)과 P_i 자신(모드 1은 1, 모드 2는 r_P)을 정한다.
+        for (size_t k = 0; k < jointNodes.size(); ++k)
+        {
+            const uint32_t node = jointNodes[k];
+            if (node >= nodeGroups.size() || nodeGroups[node] == 0 || nodeGroups[node] > cuts.size())
+                continue;
+            const size_t cut = nodeGroups[node] - 1;
+            table.CutRoot[k] = int(cut);
+            table.Descendant[k] = node == cuts[cut].NodeId ? 0 : 1;
+            table.Ratio[k] = table.Descendant[k] ? 0.0f : (mode == 2 ? remain[cut] : 1.0f);
+        }
+        return table;
+    }
+
     // 절단 시점의 고정 본을 현재 부착 프레임으로 옮기거나(기본) 애니메이션 joint를 따르게 하며 normal 행렬도 다시 계산한다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
         const Math::Matrix4* currentNodes, std::vector<Joint>& out,

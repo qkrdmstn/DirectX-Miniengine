@@ -247,6 +247,7 @@ namespace Viewer
         // 추출된 section의 공통 N을 확정하고 체크 실행에서만 PS-1 결과를 기록한다.
         void CheckPatchSkin(const SkeletalPatchBuffers& patch);
         std::vector<PatchSkinSnapshot> m_SkinSnapshots;
+        std::vector<RemainLengthTable> m_RemainLengthTables; // body별 남은 길이 비율 표(LW-1). 옵션 0·boneCut·B 조각은 빈 표다.
         std::vector<Math::Matrix4> m_SkinSectionNodes;
         std::vector<float> m_SkinPaletteErrors;
         uint32_t m_SkinCheckCase = 0;
