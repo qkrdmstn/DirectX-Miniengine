@@ -129,6 +129,8 @@ PS-6 후속: 재절단 node 쪽은 [PatchRecutSkinning.md](PatchRecutSkinning.md
 
 `-patch-anim-follow 1`(기본)에서는 A 조각의 고정 팔레트가 절단 시점 값에 묶이지 않고 애니메이션 포즈를 따르며, rim·cap은 원본 변의 끝점 레코드(ExtInternal 2·3)로 스키닝한다. 옵션 0은 이 문서의 고정 방식이다. 자세한 내용은 [PatchAnimFollow.md](PatchAnimFollow.md).
 
+옵션 `-patch-length-weights 1|2`로 A 조각 가중치를 남은 본 길이 비율로 재분배할 수 있다(기본 0). 자세한 내용은 [PatchLengthWeights.md](PatchLengthWeights.md).
+
 ## 범위 밖
 
 - 재절단 결과 조각의 스키닝 승계, 다중 절단 snapshot 수명 관리.

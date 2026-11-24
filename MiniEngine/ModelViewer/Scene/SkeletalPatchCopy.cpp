@@ -2635,7 +2635,6 @@ namespace Viewer
                 baselineContext.Finish(true);
             }
 
-
             // 현재 pose 대신 실제 t_cut joint와 부착 node를 전달하여 고정 본과 K를 복원한다.
             std::vector<Math::Matrix4> nodes(size_t(snapshot.AttachNode) + 1, Math::Matrix4(Math::kIdentity));
             nodes[snapshot.AttachNode] = snapshot.AttachAtCut;

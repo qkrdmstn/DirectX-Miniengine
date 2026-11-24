@@ -128,9 +128,8 @@ uint RemapFrame(uint packed, float3x3 inverseNew, float3x3 oldNormal)
     return value.x | (value.y << 10) | (value.z << 20) | (packed & 0xc0000000);
 }
 
-// 복사 정점의 u16 skin 입력(joints 전체 팔레트 인덱스, weights u16)을 남은 길이 비율로 재분배하고 bind 위치·법선·탄젠트를 다시 계산한다.
-// 재분배 대상 weight가 없거나 폴백 본 없음, 비가역이면 입력을 그대로 두고 false를 돌려주며, 법선 행렬만 비가역이면 법선·탄젠트만 유지하고 계수한다.
-// base는 계수 버퍼의 시작 바이트이다(0은 주 레코드, 32는 끝점 레코드이며 각 묶음의 24는 법선 비가역, 28은 법선 갱신 수이다).
+// 복사 정점·끝점의 skin 레코드를 남은 길이 비율로 재분배하고 bind 위치·법선·탄젠트를 다시 계산한다.
+// 계산할 수 없으면 입력을 유지하고 false를 돌려준다. base는 계수 버퍼 시작 바이트(주 0, 끝점 32)이다.
 bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inout uint normal, inout uint tangent, bool hasTangent, uint base)
 {
     // weight가 있는 슬롯 중 비율 1 미만이 없으면 연산 없이 원래 레코드를 유지한다(weight 0 슬롯의 비율은 무시한다).
