@@ -11,6 +11,8 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <array>
+#include <unordered_set>
 
 namespace Viewer
 {
@@ -168,6 +170,105 @@ namespace Viewer
         }
         readback.Unmap();
         return true;
+    }
+
+    // 원본 VB/IB를 한 번 읽어 패치 꼭짓점이 원본에 남는 삼각형과 위치를 공유하는지 표로 만든다.
+    // 위치는 section 노드 행렬로 공통 공간에 옮긴 뒤 10 마이크로 격자로 용접하고 이웃 27칸을 함께 조회한다.
+    std::vector<uint32_t> BuildPatchBoundaryFlags(const GeometryRevision& source,
+        const std::vector<uint32_t>& patchTriangles, const std::vector<uint32_t>& previousState,
+        const std::vector<Math::Matrix4>& sectionNodes)
+    {
+        // 원본 Data 전체를 readback으로 복사하고 GPU 완료를 기다린다.
+        auto& buffer = const_cast<ByteAddressBuffer&>(source.GetDataBuffer());
+        const uint32_t size = uint32_t(buffer.GetBufferSize());
+        ReadbackBuffer readback;
+        readback.Create(L"Patch boundary source", size, 1);
+        auto& context = GraphicsContext::Begin(L"Patch boundary readback");
+        context.CopyBuffer(readback, buffer);
+        context.TransitionResource(buffer, D3D12_RESOURCE_STATE_GENERIC_READ);
+        context.Finish(true);
+
+        // 전역 삼각형 번호에서 패치 삼각형 번호를 찾는 표를 만든다.
+        uint32_t total = 0;
+        for (size_t s = 0; s < source.GetSections().size(); ++s)
+            for (uint32_t d = 0; d < source.GetMesh(s).numDraws; ++d)
+                total += source.GetMesh(s).draw[d].primCount / 3;
+        std::vector<uint32_t> patchOf(total, UINT32_MAX);
+        for (uint32_t t = 0; t < patchTriangles.size(); ++t)
+            if (patchTriangles[t] < total)
+                patchOf[patchTriangles[t]] = t;
+
+        // 모든 삼각형의 꼭짓점 위치를 읽어 패치 꼭짓점은 따로 두고, 남는 삼각형의 위치는 집합에 모은다.
+        using Key = std::array<int64_t, 3>;
+        struct KeyHash
+        {
+            size_t operator()(const Key& key) const
+            {
+                return size_t(uint64_t(key[0]) * 73856093ull ^ uint64_t(key[1]) * 19349663ull ^ uint64_t(key[2]) * 83492791ull);
+            }
+        };
+        const auto* bytes = static_cast<const uint8_t*>(readback.Map());
+        std::unordered_set<Key, KeyHash> kept;
+        std::vector<Key> corners(patchTriangles.size() * 3);
+        bool valid = bytes != nullptr;
+        uint32_t global = 0;
+        for (size_t s = 0; valid && s < source.GetSections().size(); ++s)
+        {
+            const auto& mesh = source.GetMesh(s);
+            const bool index32 = mesh.ibFormat == DXGI_FORMAT_R32_UINT;
+            for (uint32_t d = 0; valid && d < mesh.numDraws; ++d)
+                for (uint32_t tri = 0; valid && tri < mesh.draw[d].primCount / 3; ++tri, ++global)
+                {
+                    // 이전 절단으로 이미 제거된 삼각형은 원본에 남는 삼각형이 아니다.
+                    const bool inPatch = patchOf[global] != UINT32_MAX;
+                    if (!inPatch && global < previousState.size() && (previousState[global] & 0x80000000u))
+                        continue;
+                    for (uint32_t corner = 0; valid && corner < 3; ++corner)
+                    {
+                        // PatchSkinBuildCS의 Index와 같은 방식으로 IB와 baseVertex를 해석해 정점 위치를 읽는다.
+                        const uint32_t at = mesh.draw[d].startIndex + tri * 3 + corner;
+                        const uint64_t indexAddress = uint64_t(mesh.ibOffset) + uint64_t(at) * (index32 ? 4u : 2u);
+                        if (indexAddress + (index32 ? 4 : 2) > size)
+                        {
+                            valid = false;
+                            break;
+                        }
+                        uint32_t index = 0;
+                        std::memcpy(&index, bytes + indexAddress, index32 ? 4 : 2);
+                        const uint64_t vertexAddress = uint64_t(mesh.vbOffset) + uint64_t(index + mesh.draw[d].baseVertex) * mesh.vbStride;
+                        float p[3];
+                        if (vertexAddress + sizeof(p) > size)
+                        {
+                            valid = false;
+                            break;
+                        }
+                        std::memcpy(p, bytes + vertexAddress, sizeof(p));
+
+                        // section 노드 행렬로 공통 공간 위치를 만든 뒤 격자 칸 번호로 바꾼다.
+                        const Math::Vector3 local(p[0], p[1], p[2]);
+                        const Math::Vector3 common = s < sectionNodes.size()
+                            ? Math::Vector3(sectionNodes[s] * Math::Vector4(local, 1)) : local;
+                        const Key key = { std::llround(float(common.GetX()) * 1e5f), std::llround(float(common.GetY()) * 1e5f),
+                            std::llround(float(common.GetZ()) * 1e5f) };
+                        if (inPatch)
+                            corners[size_t(patchOf[global]) * 3 + corner] = key;
+                        else
+                            kept.insert(key);
+                    }
+                }
+        }
+        readback.Unmap();
+        if (!valid)
+            return {};
+
+        // 패치 꼭짓점 주변 27칸에 남는 삼각형의 위치가 있으면 경계로 표시한다.
+        std::vector<uint32_t> flags(corners.size());
+        for (size_t i = 0; i < corners.size(); ++i)
+            for (int64_t dx = -1; dx <= 1 && !flags[i]; ++dx)
+                for (int64_t dy = -1; dy <= 1 && !flags[i]; ++dy)
+                    for (int64_t dz = -1; dz <= 1 && !flags[i]; ++dz)
+                        flags[i] = kept.count({ corners[i][0] + dx, corners[i][1] + dy, corners[i][2] + dz }) ? 1u : 0u;
+        return flags;
     }
 
     // 부모 skin의 복사 정점 레코드는 통째로 잇고 새 절단면 정점은 K 슬롯 레코드로 자식 skin VB를 만든다.

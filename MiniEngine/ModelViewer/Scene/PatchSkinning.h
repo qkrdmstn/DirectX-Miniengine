@@ -123,6 +123,12 @@ namespace Viewer
         const std::vector<Math::Vector3>& positions, const std::vector<uint32_t>& jointNodes,
         const std::vector<uint32_t>& nodeGroups, int mode);
 
+    // 패치 꼭짓점(추출 정점 번호 = 삼각형*3+corner)별로 원본에 남는 삼각형과 위치를 공유하면 1인 경계 플래그 표를 만든다.
+    // patchTriangles는 패치 삼각형의 전역 번호, previousState는 기존 제거 상태(비어 있을 수 있다), sectionNodes는 section별 mesh node 행렬이다.
+    std::vector<uint32_t> BuildPatchBoundaryFlags(const GeometryRevision& source,
+        const std::vector<uint32_t>& patchTriangles, const std::vector<uint32_t>& previousState,
+        const std::vector<Math::Matrix4>& sectionNodes);
+
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
     // animFollow가 켜지고 snapshot.AnimFollow와 애니메이션 입력이 있으면 고정 본은 C(t)·A_k(t)·O_k를 쓴다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,

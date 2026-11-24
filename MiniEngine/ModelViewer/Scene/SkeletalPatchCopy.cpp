@@ -1682,6 +1682,7 @@ namespace Viewer
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
         m_RemainLengthTables.clear();
+        m_PatchBoundaryFlags.clear();
         m_Attachments.clear();
         m_PieceIds.clear();
         m_BoundaryWait = 0;
@@ -2087,6 +2088,7 @@ namespace Viewer
             m_SkinSnapshots.resize(boneCut ? 1 : groups.AttachNodes.size());
             m_SkinPaletteErrors.assign(m_SkinSnapshots.size(), 0);
             m_RemainLengthTables.assign(m_SkinSnapshots.size(), {});
+            m_PatchBoundaryFlags.clear();
             uint32_t checks = 0;
             CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
             m_SkinCheckCase = checks ? m_BreakCheck + 1 : 0;
@@ -2432,6 +2434,55 @@ namespace Viewer
             diagnosticCase, label, vertices, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
     }
 
+    // A 조각 정점 중 SP7e2 경계 짝(위치 기준)과 경계 플래그를 대조해 누락(짝인데 플래그 없음)과 초과(플래그인데 짝 아님)를 센다.
+    // 짝과 플래그는 모두 A 조각 skin VB 정점 번호로 비교하며, 복사 정점이 아닌 정점은 플래그가 없는 것으로 본다.
+    void SkeletalPatchCopy::CheckBoundaryFlags(const MeshComponent& pieceA)
+    {
+        // 플래그나 A 조각 skin이 없으면 대조하지 않는다.
+        if (m_PatchBoundaryFlags.empty() || !pieceA.PatchSkin || !pieceA.GetGeometry() || !pieceA.GetGeometry()->GetGenerated())
+            return;
+
+        // A 조각의 Provenance를 읽어 정점별 추출 정점 번호를 얻는다.
+        const auto& skin = *pieceA.PatchSkin;
+        auto& provenanceBuffer = const_cast<ByteAddressBuffer&>(pieceA.GetGeometry()->GetGenerated()->Provenance);
+        ReadbackBuffer readback;
+        readback.Create(L"LW2a provenance", uint32_t(provenanceBuffer.GetBufferSize()), 1);
+        auto& context = GraphicsContext::Begin(L"LW2a provenance readback");
+        context.CopyBuffer(readback, provenanceBuffer);
+        context.TransitionResource(provenanceBuffer, D3D12_RESOURCE_STATE_GENERIC_READ);
+        context.Finish(true);
+        const auto* provenance = static_cast<const uint32_t*>(readback.Map());
+
+        // SP7e2가 A 조각(piece 0)에서 경계로 짝지은 skin 정점 집합을 만든다.
+        std::set<uint32_t> paired;
+        for (const auto& pair : m_BoundaryPairs)
+            if (pair.Piece == 0 && pair.PieceSection < skin.Sections.size())
+                paired.insert(skin.Sections[pair.PieceSection].FirstVertex + pair.PieceVertex);
+
+        // 짝이 있는데 플래그가 없는 정점(누락)과 플래그가 있는데 짝이 없는 정점(초과)을 센다.
+        size_t flagged = 0, missed = 0, extra = 0;
+        const auto flagOf = [&](uint32_t vertex)
+        {
+            const uint32_t* origin = provenance + size_t(vertex) * 8;
+            return origin[0] != 0xffffffffu && origin[2] == origin[3] && origin[2] < m_PatchBoundaryFlags.size()
+                && m_PatchBoundaryFlags[origin[2]];
+        };
+        for (const auto& section : skin.Sections)
+            for (uint32_t v = section.FirstVertex; v < section.FirstVertex + section.VertexCount; ++v)
+            {
+                const bool flag = flagOf(v);
+                flagged += flag;
+                extra += flag && !paired.count(v);
+            }
+        for (uint32_t vertex : paired)
+            missed += !flagOf(vertex);
+        readback.Unmap();
+
+        // 결과를 한 줄로 남긴다(누락은 0이어야 한다).
+        PatchLog("LW2a vs SP7e2 flaggedPieceVertices=%zu sp7e2Paired=%zu missed=%zu extra=%zu %s\n",
+            flagged, paired.size(), missed, extra, missed == 0 ? "PASS" : "FAIL");
+    }
+
     // 생성 skin VB를 보관하고 진단 옵션에서 Data 비교와 rim/cap 대응 쌍 생성을 수행한다.
     void SkeletalPatchCopy::BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
         SkeletalPatchBuffers& patch, uint32_t body)
@@ -2455,6 +2506,16 @@ namespace Viewer
                 skin->VertexCount += count;
             }
             piece.PatchSkin = skin;
+        }
+
+        // 옵션이 켜진 A 조각이면 패치 꼭짓점의 경계 플래그를 한 번 계산해 둔다(LW-2b가 GPU 버퍼로 올린다).
+        // 같은 절단에서 두 호출 경로가 모두 오면 이미 계산한 플래그를 재사용하고, 끝나면 기존 제거 상태 복사본을 놓는다.
+        if (built && m_PatchBoundaryFlags.empty() && body < m_RemainLengthTables.size() && !m_RemainLengthTables[body].Ratio.empty())
+        {
+            m_PatchBoundaryFlags = BuildPatchBoundaryFlags(*m_SourceRevision, patch.Triangles, patch.PreviousState, m_SkinSectionNodes);
+            patch.PreviousState = {};
+            const size_t flagged = size_t(std::count(m_PatchBoundaryFlags.begin(), m_PatchBoundaryFlags.end(), 1u));
+            PatchLog("LW2a boundaryFlags patchVertices=%zu flagged=%zu\n", m_PatchBoundaryFlags.size(), flagged);
         }
 
         // 전체 VB readback과 CPU 비교는 요청된 자동 진단에서만 수행한다.
@@ -2689,6 +2750,7 @@ namespace Viewer
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
         m_RemainLengthTables.clear();
+        m_PatchBoundaryFlags.clear();
         m_Attachments.clear();
         m_PieceIds.clear();
         m_BoundaryWait = 0;
@@ -4290,6 +4352,8 @@ namespace Viewer
 
                     // 짝 누락도 게시·after60 측정에서 FAIL로 집계하도록 대응 결과를 보존한다.
                     PairBoundary(pieces, m_Boundary, m_BoundaryPairs);
+                    if (pieces[0])
+                        CheckBoundaryFlags(*pieces[0]);
                 }
                 LogCutResult(scene, reason, caps, uncapped, result.Error);
                 return;
@@ -4561,6 +4625,8 @@ namespace Viewer
         const auto* triangleMask = source.GetTriangleMask();
         c.HasState = triangleMask != nullptr;
         m_State = triangleMask ? triangleMask->Pending : std::vector<uint32_t>{};
+        if (PatchLengthWeightsMode())
+            m_Output->PreviousState = m_State;
         c.Triangles = uint32_t(triangles); c.Draws = uint32_t(draws.size());
         c.DepthOffset = vertices * 28; c.IndexOffset = vertices * 44;
         geometry.Data.Create(L"Patch packed geometry", vertices * 48, 1);
