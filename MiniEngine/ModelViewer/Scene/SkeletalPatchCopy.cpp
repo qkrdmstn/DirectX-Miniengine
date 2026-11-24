@@ -30,6 +30,8 @@
 #include <algorithm>
 #include <tuple>
 #include <sstream>
+#include <chrono>
+#include <unordered_map>
 #include "SystemTime.h"
 #include "../../Model/json.hpp"
 
@@ -481,7 +483,15 @@ namespace Viewer
             {
                 // 값이 0이거나 없으면 꺼진 상태이다.
                 uint32_t value = 0;
-                CommandLineArgs::GetInteger(L"topology-island-viz", value);
+                try
+                {
+                    CommandLineArgs::GetInteger(L"topology-island-viz", value);
+                }
+                catch (...)
+                {
+                    // 정수가 아니면 꺼진 상태로 둔다.
+                    value = 0;
+                }
                 return value != 0;
             }();
             return enabled;
@@ -518,7 +528,15 @@ namespace Viewer
 
             // 시각화 값이 2이면 기본 비율의 수평 평면을 쓴다.
             uint32_t value = 0;
-            CommandLineArgs::GetInteger(L"topology-island-viz", value);
+            try
+            {
+                CommandLineArgs::GetInteger(L"topology-island-viz", value);
+            }
+            catch (...)
+            {
+                // 정수가 아니면 기본 평면을 쓰지 않는다.
+                value = 0;
+            }
             return value == 2;
         }
 
@@ -532,6 +550,280 @@ namespace Viewer
                 Color(1.00f, 0.55f, 0.10f), Color(0.55f, 0.35f, 0.15f), Color(1.00f, 0.50f, 0.75f),
                 Color(0.60f, 0.90f, 0.20f), Color(0.50f, 0.50f, 1.00f), Color(0.95f, 0.95f, 0.95f) };
             return colors[rank % 12];
+        }
+
+        // 정수 옵션을 읽고 없으면 기본값을 돌려준다.
+        uint32_t TopologyIslandVizOption(const wchar_t* name, uint32_t fallback)
+        {
+            // 옵션이 없으면 읽기 전에 채운 기본값이 그대로 남는다.
+            uint32_t value = fallback;
+            try
+            {
+                CommandLineArgs::GetInteger(name, value);
+            }
+            catch (...)
+            {
+                // 정수가 아니면 기본값으로 되돌린다.
+                value = fallback;
+            }
+            return value;
+        }
+
+        // -topology-island-viz-method 값을 한 번만 읽는다. 0은 메시 방식, 1은 NDC 셀 그래프 방식이다.
+        uint32_t TopologyIslandVizMethod()
+        {
+            // 프로세스 수명 동안 같은 값을 쓴다.
+            static const uint32_t method = TopologyIslandVizOption(L"topology-island-viz-method", 0) != 0 ? 1 : 0;
+            return method;
+        }
+
+        // -topology-island-viz-neighbors 값을 한 번만 읽는다. 6이 아니면 26으로 본다.
+        uint32_t TopologyIslandVizNeighbors()
+        {
+            // 프로세스 수명 동안 같은 값을 쓴다.
+            static const uint32_t neighbors = TopologyIslandVizOption(L"topology-island-viz-neighbors", 26) == 6 ? 6 : 26;
+            return neighbors;
+        }
+
+        // -topology-island-viz-draw 값을 한 번만 읽는다. 1이면 셀 그래프를 그린다.
+        bool TopologyIslandVizDrawGraph()
+        {
+            // 프로세스 수명 동안 같은 값을 쓴다.
+            static const bool draw = TopologyIslandVizOption(L"topology-island-viz-draw", 0) != 0;
+            return draw;
+        }
+
+        // 단조 시계의 현재 시각을 밀리초로 돌려준다.
+        double TopologyNowMs()
+        {
+            // MSVC steady_clock은 QueryPerformanceCounter 기반이다.
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+
+        // 캐시된 셀 그래프와 그 그래프를 만들 때의 모델 규모를 함께 보관한다.
+        struct CachedCellGraph
+        {
+            LatticeCellGraph Graph;
+            size_t VertexCount = 0;
+            size_t IndexCount = 0;
+            float CellSize = 0.0f;
+        };
+
+        // 모델별 NDC 셀 그래프를 캐시하고 정점 수·인덱스 수·셀 크기가 달라지면 다시 만든다. 빌드 시간과 개수를 기록한다.
+        const LatticeCellGraph& TopologyCellGraph(const void* key, const LatticeTopology& topology,
+            const std::vector<SkinCpuSection>& sections)
+        {
+            // 현재 모델의 검증 값을 구한다.
+            size_t vertexCount = 0;
+            for (const auto& section : sections)
+            {
+                vertexCount += section.size();
+            }
+            size_t indexCount = 0;
+            for (const auto& indices : topology.Indices)
+            {
+                indexCount += indices.size();
+            }
+
+            // 같은 모델이고 검증 값이 모두 같으면 캐시를 그대로 돌려준다.
+            static std::map<const void*, CachedCellGraph> cache;
+            const auto found = cache.find(key);
+            if (found != cache.end() && found->second.VertexCount == vertexCount
+                && found->second.IndexCount == indexCount && found->second.CellSize == topology.CellSize)
+            {
+                return found->second.Graph;
+            }
+
+            // 처음이거나 검증 값이 다르면 그래프를 만들고 시간을 잰다.
+            const double start = TopologyNowMs();
+            CachedCellGraph entry;
+            entry.Graph = BuildLatticeCellGraph(topology);
+            entry.VertexCount = vertexCount;
+            entry.IndexCount = indexCount;
+            entry.CellSize = topology.CellSize;
+            const double elapsed = TopologyNowMs() - start;
+            PatchLog("TIV cellgraph build ms=%.2f cells=%zu samples=%zu\n",
+                elapsed, entry.Graph.CellCoords.size(), entry.Graph.SampleCell.size());
+            cache[key] = std::move(entry);
+            return cache[key].Graph;
+        }
+
+        // 셀 아일랜드 방식의 정점 아일랜드로 삼각형 간선을 색칠한다. 두 끝 아일랜드가 다르면 평면 교점이나 중점에서 나눈다.
+        void AddCellIslandWireframe(std::vector<CollisionDebugDraw::WorldLine>& lines, const LatticeTopology& topology,
+            const std::vector<std::vector<Math::Vector3>>& positions, const std::vector<std::vector<float>>& distances,
+            const std::vector<std::vector<uint32_t>>& vertexIsland)
+        {
+            // 같은 간선을 두 삼각형이 공유하므로 한 번만 낸다.
+            std::set<std::array<uint32_t, 3>> emitted;
+            for (uint32_t skin = 0; skin < positions.size(); ++skin)
+            {
+                if (positions[skin].empty())
+                {
+                    continue;
+                }
+                const auto& indices = topology.Indices[skin];
+                for (size_t i = 0; i + 2 < indices.size(); i += 3)
+                {
+                    for (uint32_t e = 0; e < 3; ++e)
+                    {
+                        // 간선 끝점 두 개를 읽고 중복 간선을 건너뛴다.
+                        const uint32_t a = indices[i + e];
+                        const uint32_t b = indices[i + (e + 1) % 3];
+                        if (!emitted.insert({ skin, std::min(a, b), std::max(a, b) }).second)
+                        {
+                            continue;
+                        }
+
+                        // 두 끝이 같은 아일랜드면 통째로 그 색이다.
+                        const uint32_t islandA = vertexIsland[skin][a];
+                        const uint32_t islandB = vertexIsland[skin][b];
+                        if (islandA == islandB)
+                        {
+                            lines.push_back({ positions[skin][a], positions[skin][b], TopologyIslandColor(islandA) });
+                            continue;
+                        }
+
+                        // 평면을 가로지르면 교점에서, 아니면 중점에서 나눈다.
+                        const float da = distances[skin][a];
+                        const float db = distances[skin][b];
+                        float fraction = 0.5f;
+                        if (da * db < 0.0f)
+                        {
+                            fraction = da / (da - db);
+                        }
+                        const Math::Vector3 split = positions[skin][a] + (positions[skin][b] - positions[skin][a]) * fraction;
+                        lines.push_back({ positions[skin][a], split, TopologyIslandColor(islandA) });
+                        lines.push_back({ split, positions[skin][b], TopologyIslandColor(islandB) });
+                    }
+                }
+            }
+        }
+
+        // 반대 방향 중복을 피하려고 사전식으로 양인 오프셋만 허용하고, 6-이웃이면 면 이웃만 허용한다.
+        bool IsForwardNeighborOffset(int dx, int dy, int dz, uint32_t neighborhood)
+        {
+            // 사전식으로 양인 오프셋인지 판정한다.
+            const bool forward = dx > 0 || (dx == 0 && dy > 0) || (dx == 0 && dy == 0 && dz > 0);
+
+            // 6-이웃이면 0이 아닌 축이 하나인 오프셋만 남긴다.
+            const int nonZero = (dx != 0) + (dy != 0) + (dz != 0);
+            return forward && (neighborhood != 6 || nonZero == 1);
+        }
+
+        // 포즈된 표본 평균으로 셀 중심을 구해 십자와 유지된 인접 간선을 아일랜드 색으로 그린다.
+        void AddCellGraphLines(std::vector<CollisionDebugDraw::WorldLine>& lines, const LatticeCellGraph& graph,
+            const std::vector<std::vector<Math::Vector3>>& positions, const std::vector<int8_t>& cellSides,
+            const CellIslandLabels& labels, uint32_t neighborhood, float crossHalf)
+        {
+            // 표본의 포즈 위치를 정점 위치의 무게중심 보간으로 구해 셀별로 누적한다.
+            const size_t cellCount = graph.CellCoords.size();
+            std::vector<Math::Vector3> centers(cellCount, Math::Vector3(Math::kZero));
+            std::vector<uint32_t> counts(cellCount, 0);
+            for (size_t k = 0; k < graph.SampleCell.size(); ++k)
+            {
+                const auto& section = positions[graph.SampleSection[k]];
+                if (section.empty())
+                {
+                    continue;
+                }
+                Math::Vector3 position(Math::kZero);
+                for (uint32_t c = 0; c < 3; ++c)
+                {
+                    position = position + section[graph.SampleVertices[k][c]] * graph.SampleWeights[k][c];
+                }
+                centers[graph.SampleCell[k]] = centers[graph.SampleCell[k]] + position;
+                ++counts[graph.SampleCell[k]];
+            }
+            for (size_t cell = 0; cell < cellCount; ++cell)
+            {
+                if (counts[cell])
+                {
+                    centers[cell] = centers[cell] * (1.0f / counts[cell]);
+                }
+            }
+
+            // 셀 좌표로 셀 id를 찾는 표를 만든다.
+            const auto makeKey = [](int64_t x, int64_t y, int64_t z)
+            {
+                return uint64_t((x * 65536 + y) * 65536 + z);
+            };
+            std::unordered_map<uint64_t, uint32_t> lookup;
+            for (uint32_t cell = 0; cell < cellCount; ++cell)
+            {
+                const auto& c = graph.CellCoords[cell];
+                lookup.emplace(makeKey(c[0], c[1], c[2]), cell);
+            }
+
+            // 셀마다 십자를 그리고 양의 방향 이웃 중 같은 side인 셀과 간선을 잇는다.
+            for (uint32_t cell = 0; cell < cellCount; ++cell)
+            {
+                if (!counts[cell])
+                {
+                    continue;
+                }
+                const Color color = TopologyIslandColor(labels.CellIsland[cell]);
+                const Math::Vector3 center = centers[cell];
+                lines.push_back({ center - Math::Vector3(crossHalf, 0, 0), center + Math::Vector3(crossHalf, 0, 0), color });
+                lines.push_back({ center - Math::Vector3(0, crossHalf, 0), center + Math::Vector3(0, crossHalf, 0), color });
+                lines.push_back({ center - Math::Vector3(0, 0, crossHalf), center + Math::Vector3(0, 0, crossHalf), color });
+                const auto& c = graph.CellCoords[cell];
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    for (int dy = -1; dy <= 1; ++dy)
+                    {
+                        for (int dz = -1; dz <= 1; ++dz)
+                        {
+                            // 이웃 종류에 맞는 양의 방향 오프셋이 아니면 건너뛴다.
+                            if (!IsForwardNeighborOffset(dx, dy, dz, neighborhood))
+                            {
+                                continue;
+                            }
+
+                            // 점유되고 side가 같은 이웃만 잇는다. side 0은 +1로 본다.
+                            const int64_t nx = int64_t(c[0]) + dx;
+                            const int64_t ny = int64_t(c[1]) + dy;
+                            const int64_t nz = int64_t(c[2]) + dz;
+                            if (nx < 0 || ny < 0 || nz < 0)
+                            {
+                                continue;
+                            }
+                            const auto found = lookup.find(makeKey(nx, ny, nz));
+                            if (found == lookup.end() || !counts[found->second])
+                            {
+                                continue;
+                            }
+                            if ((cellSides[found->second] >= 0) != (cellSides[cell] >= 0))
+                            {
+                                continue;
+                            }
+                            lines.push_back({ center, centers[found->second], color });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 셀 아일랜드에 속한 정점들의 bind weight를 palette 인덱스별로 합산한다.
+        std::vector<std::map<uint32_t, double>> CellIslandJointScores(const std::vector<SkinCpuSection>& sections,
+            const std::vector<std::vector<uint32_t>>& vertexIsland, uint32_t islandCount)
+        {
+            // 정점의 네 weight를 자기 아일랜드의 joint 점수에 더한다.
+            std::vector<std::map<uint32_t, double>> scores(islandCount);
+            for (size_t s = 0; s < sections.size(); ++s)
+            {
+                for (size_t v = 0; v < sections[s].size(); ++v)
+                {
+                    const auto& vertex = sections[s][v];
+                    for (uint32_t j = 0; j < 4; ++j)
+                    {
+                        if (vertex.Weights[j])
+                        {
+                            scores[vertexIsland[s][v]][sections[s].StartJoint + vertex.Joints[j]] += vertex.Weights[j];
+                        }
+                    }
+                }
+            }
+            return scores;
         }
 
         // 투표·선택·추출 패스가 공유하는 root signature와 compute PSO를 준비한다.
@@ -2290,7 +2582,8 @@ namespace Viewer
     void SkeletalPatchCopy::BuildTopologyIslandViz(const GameObject& target, const MeshComponent& mesh,
         const Math::Matrix4& world, const MeshCutting::CutPlaneData& requestedPlane)
     {
-        // 요청 평면을 복사해 두고 아래에서 필요하면 교체한다.
+        // 스키닝 시간 측정을 시작하고 요청 평면을 복사해 둔다. 아래에서 필요하면 평면을 교체한다.
+        const double startMs = TopologyNowMs();
         MeshCutting::CutPlaneData plane = requestedPlane;
 
         // 이전 snapshot을 비우고 준비된 포즈가 없으면 로그만 남기고 건너뛴다.
@@ -2335,6 +2628,16 @@ namespace Viewer
             }
             frames[skin] = sourceInverse * nodes[geometry.GetMesh(s).meshCBV];
             hasFrame[skin] = 1;
+        }
+
+        // 포즈 프레임이 없는 skin section 수를 센다. 셀 방식은 모든 section의 포즈가 필요하다.
+        uint32_t unposedSections = 0;
+        for (uint32_t skin = 0; skin < skinTotal; ++skin)
+        {
+            if (!hasFrame[skin])
+            {
+                ++unposedSections;
+            }
         }
 
         // 모든 skin 정점을 스키닝해 월드 위치와 전체 경계를 구한다.
@@ -2447,10 +2750,66 @@ namespace Viewer
                 signs[skin][v] = std::abs(distance) <= 1e-5f ? 0 : distance > 0 ? 1 : -1;
             }
         }
+        const double skinMs = TopologyNowMs() - startMs;
 
-        // 몸체 투표는 쓰지 않고 아일랜드 연결만 구한 뒤 큰 순서로 색 순위를 정한다.
+        // 시각화 옵션을 읽는다.
+        uint32_t method = TopologyIslandVizMethod();
+        const uint32_t neighbors = TopologyIslandVizNeighbors();
+        bool drawGraph = TopologyIslandVizDrawGraph();
+
+        // 그래프 그리기는 셀 방식 데이터가 필요하므로 메시 방식이면 셀 방식으로 바꾼다.
+        if (drawGraph && method == 0)
+        {
+            PatchLog("TIV draw=1 needs method=1, falling back to method 1\n");
+            method = 1;
+        }
+
+        // 포즈 없는 section이 있으면 셀 방식을 건너뛰고 요청이 셀 방식이면 메시 방식으로 되돌린다.
+        const bool useCellMethod = unposedSections == 0;
+        if (!useCellMethod)
+        {
+            PatchLog("TIV cell method skipped: unposed sections=%u\n", unposedSections);
+            if (method == 1 || drawGraph)
+            {
+                PatchLog("TIV cell method unavailable, falling back to method 0\n");
+                method = 0;
+                drawGraph = false;
+            }
+        }
+
+        // 메시 방식 라벨링 시간만 잰다. 몸체 투표는 쓰지 않고 아일랜드 연결만 구한다.
+        const double meshStart = TopologyNowMs();
         const auto labels = LabelPatchIslands(model.m_LatticeTopology, model.m_SkinCpuSections,
             triangles, signs, [](uint32_t) { return 0u; });
+        const double meshMs = TopologyNowMs() - meshStart;
+
+        // 셀 방식이 가능하면 그래프를 캐시에서 가져온다. 그래프 빌드는 비교 시간에서 제외한다.
+        const LatticeCellGraph* graph = nullptr;
+        if (useCellMethod)
+        {
+            graph = &TopologyCellGraph(&model, model.m_LatticeTopology, model.m_SkinCpuSections);
+        }
+
+        // 셀 방식 라벨링 시간만 잰다. 가능하면 메시 방식과 항상 함께 실행해 비교한다.
+        std::vector<int8_t> cellSides;
+        CellIslandLabels cellLabels;
+        std::vector<std::vector<uint32_t>> vertexIsland;
+        double cellMs = 0.0;
+        if (useCellMethod)
+        {
+            const double cellStart = TopologyNowMs();
+            cellSides = CellSidesFromVertexDistances(*graph, distances);
+            cellLabels = LabelLatticeCellIslands(*graph, cellSides, neighbors);
+            vertexIsland = VertexIslands(*graph, cellLabels);
+            cellMs = TopologyNowMs() - cellStart;
+        }
+
+        // 스키닝과 두 방식의 라벨링 시간을 기록한다.
+        PatchLog("TIV skin ms=%.2f\n", skinMs);
+        PatchLog("TIV timing mesh_ms=%.2f cell_ms=%.2f (cell excludes graph build) mesh_islands=%u cell_islands=%u\n",
+            meshMs, cellMs, labels.IslandCount, cellLabels.IslandCount);
+
+        // 메시 방식 아일랜드를 큰 순서로 색 순위를 정한다.
         std::vector<uint32_t> order(labels.Islands.size());
         std::iota(order.begin(), order.end(), 0u);
         std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b)
@@ -2464,9 +2823,12 @@ namespace Viewer
             rank[order[i]] = i;
         }
 
-        // 삼각형마다 각 side 아일랜드에 속한 부분의 간선을 그 색의 선분으로 만든다.
+        // 셀 방식이면 메시 방식 삼각형 순회를 건너뛰고 아래에서 셀 아일랜드 색으로 그린다.
+        // 메시 방식이면 삼각형마다 각 side 아일랜드에 속한 부분의 간선을 그 색의 선분으로 만든다.
         std::set<std::array<uint32_t, 5>> emitted;
-        for (size_t t = 0; t < triangles.size(); ++t)
+        const bool useMeshMethod = method == 0;
+        const size_t meshTriangleCount = useMeshMethod ? triangles.size() : 0;
+        for (size_t t = 0; t < meshTriangleCount; ++t)
         {
             const uint32_t skin = triangles[t][0];
             const uint32_t tri = triangles[t][1];
@@ -2520,6 +2882,22 @@ namespace Viewer
             }
         }
 
+        // 셀 방식이면 메시 간선 색칠 또는 셀 그래프 그리기를 선택해 선분을 만든다.
+        if (method == 1)
+        {
+            if (drawGraph)
+            {
+                // 십자 크기는 셀 크기에 월드 배율을 곱해 정한다.
+                const float worldScale = float(Math::Length(Math::Vector3(world.GetX())));
+                AddCellGraphLines(m_TopologyViz, *graph, positions, cellSides, cellLabels, neighbors,
+                    0.15f * model.m_LatticeTopology.CellSize * worldScale);
+            }
+            else
+            {
+                AddCellIslandWireframe(m_TopologyViz, model.m_LatticeTopology, positions, distances, vertexIsland);
+            }
+        }
+
         // 나눈 기준 평면을 흰색 테두리와 8x8 격자로 같은 snapshot에 덧붙인다.
         const Color planeColor(1.0f, 1.0f, 1.0f);
         const auto& corners = plane.WorldCorners;
@@ -2546,7 +2924,41 @@ namespace Viewer
         m_TopologyViz.push_back({ tip, tip - normal * 0.04f - side * 0.025f, planeColor });
 
         // 아일랜드 수와 크기 순서별 side, 삼각형 수, 기여 상위 두 joint를 기록한다.
-        PatchLog("TIV islands=%u triangles=%zu lines=%zu\n", labels.IslandCount, triangles.size(), m_TopologyViz.size());
+        PatchLog("TIV method=%u neighbors=%u draw=%u islands=%u triangles=%zu lines=%zu\n", method, neighbors,
+            drawGraph ? 1u : 0u, method == 0 ? labels.IslandCount : cellLabels.IslandCount, triangles.size(),
+            m_TopologyViz.size());
+
+        // 셀 방식이면 아일랜드별 side, 셀 수, 정점 weight 기준 상위 두 joint를 기록한다.
+        if (method == 1)
+        {
+            const auto jointScores = CellIslandJointScores(model.m_SkinCpuSections, vertexIsland, cellLabels.IslandCount);
+            for (uint32_t i = 0; i < cellLabels.IslandCount; ++i)
+            {
+                // 점수 상위 두 joint를 고른다.
+                std::vector<std::pair<uint32_t, double>> scores(jointScores[i].begin(), jointScores[i].end());
+                const size_t top = std::min<size_t>(2, scores.size());
+                std::partial_sort(scores.begin(), scores.begin() + top, scores.end(),
+                    [](const auto& a, const auto& b) { return a.second > b.second; });
+
+                // 한 줄로 적는다.
+                std::ostringstream line;
+                line << "TIV island=" << i << " color=" << i % 12 << " side=" << int(cellLabels.IslandSide[i])
+                    << " cells=" << cellLabels.IslandCells[i];
+                for (size_t k = 0; k < top; ++k)
+                {
+                    const uint32_t node = model.m_JointIndices[scores[k].first];
+                    line << " joint" << k << "=" << SafeDiagnosticNodeName(target.GetName(), node)
+                        << ":" << scores[k].second;
+                }
+                line << '\n';
+                PatchLog("%s", line.str().c_str());
+            }
+
+            // 셀 방식 기록을 마쳤으므로 아래 나머지는 메시 방식 전용이다.
+            return;
+        }
+
+        // 메시 방식이면 크기 순서별로 기록한다.
         for (uint32_t i = 0; i < order.size(); ++i)
         {
             // 점수 상위 두 joint를 고른다.
