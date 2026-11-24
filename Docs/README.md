@@ -42,7 +42,7 @@
 | [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 병렬 block scan과 Mode 2 scatter의 블록 offset 적용(CP-5 Mode 7 제거) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19); CP-5 Mode 7 제거 a23fe252 |
 | [PerfBaseline.md](GPU/PerfBaseline.md) | per-vertex 추출·compacted IB 변경 전 절단 GPU/CPU·메모리 및 렌더 측정 | 측정 기록 — 기준 `5f360fa7`, 임시 계측 패치 보관·코드 원복 (2026-11-20) |
 | [CutPerfImprovement.md](GPU/CutPerfImprovement.md) | 절단 성능 1차: CPU 압축 IB로 퇴화 IB·TriangleMaskCS 대체(CP-8에서 GPU 생성으로 이동), CPU Update 4.9 s 원인 확정, 추출 Mode 7 합치기·coarsening | 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 8a7812e6(K=1 유지), CP-4c a4b9ea23, CP-8 f49c2bab |
-| [VertexSelection.md](GPU/VertexSelection.md) | 패치 추출 Mode 0의 정점 판정 중복 제거: 정점당 한 번 판정한 1비트 배열(Mode 8)을 Mode 0이 읽음 | 진행 중 — VS-1 구현(커밋 대기, 2026-11-24) |
+| [VertexSelection.md](GPU/VertexSelection.md) | 패치 추출 Mode 0의 정점 판정 중복 제거: 정점당 한 번 판정한 1비트 배열(Mode 8)을 Mode 0이 읽음 | 완료 — VS-1 b9d9a999 (2026-11-24), 추출 시간 HEAD와 같음 |
 | [PatchAdjacentMarks.md](GPU/PatchAdjacentMarks.md) | 패치 추출 Mode 5 인접 집계를 정점 표시 비트로 O(N)화(부분 제거 Mode 5 34.35 ms → Mode 8+5 0.28 ms) | 폐기 — RM-1에서 제거 (2026-11-19) |
 | [PatchDiagnosticRemoval.md](GPU/PatchDiagnosticRemoval.md) | 패치 추출 진단 전용 계산 제거: Mode 5/8 인접 집계(RM-1), 기본 경로 평면 교차·미포함 교차 수(RM-2) | 완료 — RM-1 `49c8a002`, RM-2 `6d5e91b4` (2026-11-19) |
 | [PatchDiagnosticRemoval.md](GPU/PatchDiagnosticRemoval.md) | 패치 추출 진단 계산 제거: Mode 5/8 인접 집계(RM-1), 기본 경로 평면 교차 수(RM-2) | 진행 중 — RM-1 커밋, RM-2 대기 (2026-11-19) |
