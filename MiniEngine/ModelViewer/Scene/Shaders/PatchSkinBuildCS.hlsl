@@ -25,7 +25,7 @@ RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
 //   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
 //   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
-//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16) | joints 8(+20) | weights 8(+28)
+//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16, cap은 K 법선을 끝점 스키닝 이전 방향으로 되돌린 값) | joints 8(+20) | weights 8(+28)
 static const uint ExtInternal = 96;
 static const uint ExtEndpoint0 = 88;
 static const uint ExtEndpoint1 = 52;
@@ -78,29 +78,34 @@ uint SourceAddress(uint vertex, out DrawInput draw)
     return draw.VbOffset + Index(draw, sourceTriangle.z * 3 + vertex % 3) * draw.SourceStride;
 }
 
-// 끝점의 원본 법선을 절단 시점 팔레트(JointsAtCut)로 스키닝해 PreparePoseCS의 SkinEndpoint와 같은 공간의 UNORM 법선으로 압축한다.
-uint CutTimeNormal(uint address, DrawInput draw)
+// cap 법선(K 프레임)을 끝점 스키닝 이전의 방향으로 되돌려 UNORM으로 압축한다.
+// 절단 시점 팔레트(JointsAtCut)가 끝점에 주는 법선 변환의 역행렬을 K 법선에 곱하므로, 런타임에 현재 팔레트로 같은 스키닝을 하면 절단 시점에는 K 법선이, 이후에는 끝점이 실제로 받은 회전을 그대로 따른 법선이 나온다.
+uint CutTimeNormal(uint address, DrawInput draw, float3 capNormal)
 {
-    // 원본 법선과 정규화 weight, 전체 팔레트 인덱스를 읽는다.
-    float3 normal = Frame(Source.Load(address + 12)).xyz;
+    // 정규화 weight와 전체 팔레트 인덱스를 읽는다.
     uint4 skin = Source.Load4(address + draw.SourceStride - 16);
     uint4 indices = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
     float4 weights = float4(skin.z & 65535, skin.z >> 16, skin.w & 65535, skin.w >> 16);
     weights /= max(dot(weights, 1), 1);
 
-    // 네 영향의 법선 행렬을 섞어 법선을 변환하고 정규화한다.
+    // 네 영향의 법선 행렬을 섞어 3x3 변환을 만든다.
     float4x3 skinNormal = JointsAtCut[indices.x].NrmMatrix * weights.x + JointsAtCut[indices.y].NrmMatrix * weights.y
         + JointsAtCut[indices.z].NrmMatrix * weights.z + JointsAtCut[indices.w].NrmMatrix * weights.w;
-    float3 skinned = mul(skinNormal, normal).xyz;
-    skinned = dot(skinned, skinned) > 1e-20 ? normalize(skinned) : float3(0, 1, 0);
+    float3x3 m = float3x3(skinNormal[0], skinNormal[1], skinNormal[2]);
+
+    // cofactor 행렬로 역변환하고 정규화한다(역행렬이 없으면 K 법선을 그대로 쓴다).
+    float3x3 cofactor = float3x3(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
+    float determinant = dot(m[0], cofactor[0]);
+    float3 bind = mul(capNormal, cofactor) * (determinant < 0 ? -1 : 1);
+    bind = dot(bind, bind) > 1e-20 && abs(determinant) > 1e-12 ? normalize(bind) : capNormal;
 
     // UNORM 10-10-10-2로 압축한다.
-    uint3 value = uint3(round(saturate(skinned * .5 + .5) * 1023));
+    uint3 value = uint3(round(saturate(bind * .5 + .5) * 1023));
     return value.x | (value.y << 10) | (value.z << 20) | (3u << 30);
 }
 
-// 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다. cap 끝점은 탄젠트 칸에 절단 시점 법선(K 프레임)을 넣는다.
-void StoreEndpoint(uint output, uint vertex, bool cap)
+// 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다. cap 끝점은 탄젠트 칸에 K 법선을 끝점 스키닝 이전으로 되돌린 방향을 넣는다.
+void StoreEndpoint(uint output, uint vertex, bool cap, float3 capNormal)
 {
     // 두 끝점의 weight를 합치지 않고 각각의 skin 입력을 복사한다.
     DrawInput draw;
@@ -108,9 +113,9 @@ void StoreEndpoint(uint output, uint vertex, bool cap)
     Result.Store4(output, Source.Load4(address));
     Result.Store(output + EndpointTangent, (draw.SourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff);
 
-    // cap은 PreparePoseCS가 끝점의 절단 시점 → 현재 법선 회전을 구할 수 있게 절단 시점 팔레트로 스키닝한 법선을 기록한다.
+    // cap은 PreparePoseCS가 현재 팔레트로 스키닝해 끝점이 받은 회전을 따르게 하는 스키닝 이전 방향을 기록한다.
     if (cap)
-        Result.Store(output + EndpointTangent, CutTimeNormal(address, draw));
+        Result.Store(output + EndpointTangent, CutTimeNormal(address, draw, capNormal));
     uint4 skin = Source.Load4(address + draw.SourceStride - 16);
     uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
     Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
@@ -131,6 +136,7 @@ void main(uint3 id : SV_DispatchThreadID)
     uint address = vertex * 28;
     uint sourceFlags = 31;
     uint startJoint = 0;
+    uint normalPacked = 0;
     uint4 skin = uint4(RigidJoint, 0, 65535, 0);
 
     // 복사된 패치 정점을 section/draw/sourceTriangle과 corner로 원본 VB에 대응시킨다.
@@ -147,7 +153,8 @@ void main(uint3 id : SV_DispatchThreadID)
     else
     {
         Result.Store3(output, asuint(mul(InverseNode, float4(asfloat(Data.Load3(address)), 1)).xyz));
-        Result.Store(output + 12, RotateFrame(Data.Load(address + 12)));
+        normalPacked = RotateFrame(Data.Load(address + 12));
+        Result.Store(output + 12, normalPacked);
     }
 
     // section별 flags의 합집합을 사용하고 없는 속성에는 기본값을 넣는다.
@@ -186,8 +193,9 @@ void main(uint3 id : SV_DispatchThreadID)
     Result.Store2(output + Stride - ExtInternal, uint2(interpolation, Provenance.Load(vertex * 32 + 16)));
     if (interpolation)
     {
-        StoreEndpoint(output + Stride - ExtEndpoint0, origin.z, interpolation == 3);
-        StoreEndpoint(output + Stride - ExtEndpoint1, origin.w, interpolation == 3);
+        const float3 capNormal = Frame(normalPacked).xyz;
+        StoreEndpoint(output + Stride - ExtEndpoint0, origin.z, interpolation == 3, capNormal);
+        StoreEndpoint(output + Stride - ExtEndpoint1, origin.w, interpolation == 3, capNormal);
     }
 
     // 전체 팔레트를 직접 참조하도록 네 joint 모두에 section startJoint를 더한다.

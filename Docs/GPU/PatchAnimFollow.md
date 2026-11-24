@@ -48,7 +48,7 @@ D4. cap은 대응 rim과 같은 끝점
 - `PatchSkinBuildCS`는 cap에 internal = 3으로 끝점 레코드를 쓰고, 끝점 번호 범위를 검사한다(범위 밖이면 K).
 - 용접 차이: 링 용접 때문에 cap 위치가 rim과 수십 μm 다를 수 있다. 판정은 "t_cut 대비 rim–cap 간격 변화"로 한다.
 - cap 법선: internal = 3이면 `PreparePoseCS`가 위치만 끝점 보간하고, 법선·탄젠트는 주 레코드(K, bind = 평면 법선) 결과를 그대로 쓴다.
-  - AF-6 수정: K 법선만 쓰면 cap이 회색으로 밝게 보였다. 그래서 `PatchSkinBuildCS`가 끝점 Source 법선을 `JointsAtCut` 팔레트(SRV t5)로 스키닝한 절단 시점 법선을 cap 끝점 레코드의 탄젠트 칸에 저장한다. `PreparePoseCS`는 끝점마다 "그 법선 → 현재 법선" 최단 회전을 스키닝된 K 법선·탄젠트에 적용한 뒤 t로 보간한다. 재절단 cap은 그 칸이 0이라 K 법선을 유지한다(한계).
+  - AF-6 수정: K 법선만 쓰면 cap이 회색으로 밝게 보였다. `PatchSkinBuildCS`가 K 법선에 끝점의 절단 시점 팔레트(`JointsAtCut`, SRV t5) 법선 행렬의 역변환을 곱해 "끝점 스키닝 이전 방향"을 만들고 cap 끝점 레코드의 탄젠트 칸에 저장한다. `PreparePoseCS`는 두 끝점의 현재 팔레트로 그 방향을 다시 스키닝해 t로 보간하고, 탄젠트는 K 법선에서 새 법선으로 가는 최단 회전으로 맞춘다. 절단 시점에는 정확히 K 법선이 되고 이후에는 끝점이 받은 실제 회전을 따른다. 재절단 cap은 그 칸이 0이라 K 법선을 유지한다(한계).
   - 2b9fc2db의 버그: 출력 버퍼(`Data`)를 끝점(입력 패치 VB) 번호로 읽었고, 회전을 스키닝 전 bind 법선에 적용했다.
 - rim(D3)과 cap(D4)은 함께 켠다.
 
@@ -104,5 +104,5 @@ D6. 재절단(`PatchRecutSkinning.md`)
 - 캡처(CesiumMan, `-skeletal-break-demo 2 -capture-count 3 -capture-step 60`, 게시·+60·+120프레임, 옵션 0/1 비교)
   - 위팔(`Skeleton_arm_joint_L__4_`): 옵션 0은 그루터기가 절단 순간 각도로 굳고, 옵션 1은 걷기 흔들림을 따라 늘어진다. rim·cap 사이 틈은 보이지 않았다.
   - 허벅지(`leg_joint_R_1`)와 다중 본(`-skeletal-union-checks 1 -skeletal-multi-cut 1`): 옵션 1에서 각 그루터기가 다리 움직임을 따른다.
-  - cap 법선: 처음 캡처에서 옵션 1의 cap이 회색으로 밝았다. 원인은 cap 위치는 끝점을 따르는데 법선은 K로 강체였던 것이다. 끝점 법선의 절단 시점→현재 회전(D4)으로 고쳤고, 진단 `AF6 capnormal`로 수식을 검증했다: (a) 팔레트를 절단 시점 값으로 둔 정체성 검사 최대 0.052°, (b) 현재 팔레트 CPU 재계산과 PreparePoseCS 출력 일치 최대 0.028°(publish·after60). 다만 수식 검증 뒤에도 옵션 1 팔 캡이 흰회색으로 보이는 관찰이 남아 있어 원인은 미확인이다.
+  - cap 법선: 처음 캡처에서 옵션 1의 cap이 회색으로 밝았다. 원인은 cap 위치는 끝점을 따르는데 법선은 K로 강체였던 것이다. 끝점 법선의 절단 시점→현재 회전(D4)으로 고쳤고, 진단 `AF6 capnormal`로 수식을 검증했다: (a) 팔레트를 절단 시점 값으로 둔 정체성 검사 최대 0.052°, (b) 현재 팔레트 CPU 재계산과 PreparePoseCS 출력 일치 최대 0.028°(publish·after60). 이 방식은 데모 프레임(+60)에서 cap 법선이 면 법선에서 평균 46° 벗어났다(임시 진단 측정). 끝점 표면 법선의 최단 회전은 팔 흔들림 축과 법선 방향에 따라 끝점마다 다른 회전이 되어 cap 평면 법선을 따르지 못했기 때문이다. 끝점의 실제 법선 행렬로 스키닝하는 방식으로 바꿔 흰회색이 사라졌다. 진단 `AF6 capnormal`은 (a) 정체성 ≤0.5°, (b) CPU 재계산 일치 ≤0.5°에 더해 cap 면 법선(외적)과 정점 법선의 평균 각도 `faceMeanDeg` ≤5°(최대 `faceMaxDeg`는 INFO)를 PASS 기준으로 둔다. 수정 후 측정은 정체성 최대 0.063°, 일치 최대 0.02°, faceMeanDeg는 case 1·2에서 ≤0.08°, case 3은 publish 0.30°·after60 1.97°(faceMaxDeg 7.5°)였다. 법선을 K로만 두면 case 3 after60의 faceMeanDeg가 30.5°로 FAIL한다.
   - 허벅지 옵션 1의 한 장면에서 그루터기 하단에 얇은 선·점 모양 간극 후보가 보였다. 수치 근거는 없다.

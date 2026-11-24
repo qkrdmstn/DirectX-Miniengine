@@ -24,7 +24,7 @@ RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
 //   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
 //   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
-//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16, cap은 절단 시점 팔레트로 스키닝한 법선) | joints 8(+20) | weights 8(+28)
+//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16, cap은 K 법선을 절단 시점 팔레트의 역변환으로 끝점 스키닝 이전 방향으로 되돌린 값) | joints 8(+20) | weights 8(+28)
 static const uint ExtFlag = 0x200;
 static const uint ExtInternal = 96;
 static const uint ExtT = 92;
@@ -60,6 +60,21 @@ void SkinEndpoint(uint address, uint skinAddress, out float4 position, out float
     position = mul(skin, position);
     normal = mul(skinNormal, normal).xyz;
     tangent.xyz = mul(skinNormal, tangent.xyz).xyz;
+}
+
+// 한 끝점의 원래 weight로 만든 법선 행렬을 방향 v에 적용한다.
+float3 SkinDirection(uint skinAddress, float3 v)
+{
+    // 정규화 weight와 팔레트 인덱스를 읽는다.
+    uint4 packed = Source.Load4(skinAddress);
+    uint4 indices = uint4(packed.x & 65535, packed.x >> 16, packed.y & 65535, packed.y >> 16);
+    float4 weights = float4(packed.z & 65535, packed.z >> 16, packed.w & 65535, packed.w >> 16);
+    weights /= max(dot(weights, 1), 1);
+
+    // 네 영향의 법선 행렬을 섞어 방향을 변환한다.
+    float4x3 skinNormal = Joints[indices.x].NrmMatrix * weights.x + Joints[indices.y].NrmMatrix * weights.y
+        + Joints[indices.z].NrmMatrix * weights.z + Joints[indices.w].NrmMatrix * weights.w;
+    return mul(skinNormal, v).xyz;
 }
 
 // 단위 벡터 a를 b로 옮기는 최단 회전을 v에 적용한다(거의 반대 방향이면 v를 그대로 둔다).
@@ -102,7 +117,7 @@ void main(uint3 id : SV_DispatchThreadID)
                 float t = asfloat(Source.Load(address + SourceStride - ExtT));
                 position = lerp(p0, p1, t);
 
-                // rim·교점(1·2)은 끝점 방향을 보간하고, cap(3)은 끝점의 절단 시점→현재 법선 회전을 단일 skin(K 프레임) 결과 방향에 적용해 보간한다.
+                // rim·교점(1·2)은 끝점 방향을 보간하고, cap(3)은 끝점이 받는 현재 스키닝으로 K 법선을 다시 만들어 보간한다.
                 if (interpolation != 3)
                 {
                     normal = normalize(lerp(n0, n1, t));
@@ -110,17 +125,23 @@ void main(uint3 id : SV_DispatchThreadID)
                 }
                 else
                 {
-                    // 끝점 탄젠트 칸에는 절단 시점 법선이 들어 있고, 0이면 없음이라 주 레코드(K) 방향을 유지한다.
+                    // 끝점 탄젠트 칸에는 K 법선을 끝점 스키닝 이전으로 되돌린 방향이 들어 있고, 0이면 없음이라 주 레코드(K) 방향을 유지한다.
                     uint cut0 = Source.Load(address + SourceStride - ExtEndpoint0 + EndpointTangent);
                     uint cut1 = Source.Load(address + SourceStride - ExtEndpoint1 + EndpointTangent);
                     if (cut0 != 0 && cut1 != 0)
                     {
-                        float3 a0 = normalize(DecodeFrame(cut0).xyz), a1 = normalize(DecodeFrame(cut1).xyz);
-                        float3 b0 = normalize(n0), b1 = normalize(n1);
-                        float3 cn = normalize(lerp(RotateArc(a0, b0, normal), RotateArc(a1, b1, normal), t));
-                        float3 ct = normalize(lerp(RotateArc(a0, b0, tangent.xyz), RotateArc(a1, b1, tangent.xyz), t));
-                        normal = cn;
-                        tangent.xyz = ct;
+                        // 두 끝점의 현재 스키닝을 되돌린 방향에 적용하고 t로 보간해 정규화한다.
+                        float3 s0 = SkinDirection(address + SourceStride - ExtEndpoint0 + EndpointSkin, DecodeFrame(cut0).xyz);
+                        float3 s1 = SkinDirection(address + SourceStride - ExtEndpoint1 + EndpointSkin, DecodeFrame(cut1).xyz);
+                        float3 cn = lerp(normalize(s0), normalize(s1), t);
+
+                        // 퇴화하지 않으면 K 법선이 새 법선으로 가는 최단 회전을 탄젠트에 적용한다.
+                        if (dot(cn, cn) > 1e-8)
+                        {
+                            cn = normalize(cn);
+                            tangent.xyz = normalize(RotateArc(normalize(normal), cn, tangent.xyz));
+                            normal = cn;
+                        }
                     }
                 }
             }
