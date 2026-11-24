@@ -137,9 +137,9 @@ namespace Viewer
             lengthEnabled ? boundaryFlags->data() : &dummyFlag);
 
         // 계수 버퍼를 0으로 초기화해 만든다.
-        const uint32_t zeros[8] = {};
+        const uint32_t zeros[16] = {};
         ByteAddressBuffer counters;
-        counters.Create(L"Patch skin length counters", 8, sizeof(uint32_t), zeros);
+        counters.Create(L"Patch skin length counters", 16, sizeof(uint32_t), zeros);
 
         out.Data.Create(L"Patch skin vertices", end, stride);
         out.Flags = flags;
@@ -190,7 +190,7 @@ namespace Viewer
         readback.Create(L"Patch skin bind bounds", end, stride);
         graphics.CopyBuffer(readback, out.Data);
         ReadbackBuffer counterReadback;
-        counterReadback.Create(L"Patch skin length counters", 8, sizeof(uint32_t));
+        counterReadback.Create(L"Patch skin length counters", 16, sizeof(uint32_t));
         graphics.TransitionResource(counters, D3D12_RESOURCE_STATE_COPY_SOURCE);
         graphics.CopyBuffer(counterReadback, counters);
 
@@ -223,7 +223,7 @@ namespace Viewer
         }
         // 재분배 계수를 복사해 호출자가 로그로 남기게 한다.
         const auto* counts = static_cast<const uint32_t*>(counterReadback.Map());
-        std::copy(counts, counts + 7, out.LengthCounters);
+        std::copy(counts, counts + 16, out.LengthCounters);
         counterReadback.Unmap();
         readback.Unmap();
         return true;

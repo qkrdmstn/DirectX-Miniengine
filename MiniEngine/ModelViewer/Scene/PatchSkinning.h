@@ -19,6 +19,7 @@ namespace Viewer
     constexpr uint32_t kSkinExtT = 92;
     constexpr uint32_t kSkinExtEndpoint0 = 88;
     constexpr uint32_t kSkinEndpointSize = 36;
+    constexpr uint32_t kSkinEndpointTangent = 16;
     constexpr uint32_t kSkinEndpointJoints = 20;
     constexpr uint32_t kSkinEndpointWeights = 28;
 
@@ -30,8 +31,9 @@ namespace Viewer
         std::vector<Math::BoundingSphere> BindBounds;
 
         // 남은 길이 재분배(LW-2b) 계수: 0 재분배, 1 경계 유지, 2 합 0 폴백, 3 폴백 본 없음 유지, 4 비가역 유지, 5 변화 없음(재분배 대상 weight 없음), 6 법선 행렬 비가역이라 법선·탄젠트만 유지(LW-2c).
+        // 7은 재분배로 법선 비트가 실제로 바뀐 수(LW-2c)이다. 8..15는 같은 순서의 끝점 레코드 계수이다(LW-3, 끝점 한 개를 한 건으로 센다).
         // LengthEnabled는 재분배 경로가 실제로 켜졌는지(표·플래그 크기가 맞는지)를 나타낸다.
-        uint32_t LengthCounters[7] = {};
+        uint32_t LengthCounters[16] = {};
         bool LengthEnabled = false;
     };
 

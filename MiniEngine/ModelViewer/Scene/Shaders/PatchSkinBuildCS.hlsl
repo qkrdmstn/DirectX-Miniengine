@@ -42,6 +42,8 @@ static const uint ExtEndpoint0 = 88;
 static const uint ExtEndpoint1 = 52;
 static const uint EndpointTangent = 16;
 static const uint EndpointSkin = 20;
+// 끝점 재분배 계수의 시작 바이트이다(주 레코드 계수 32B 뒤).
+static const uint EndpointCounters = 32;
 
 // cutter와 같은 UNORM 프레임을 방향 벡터로 복원한다.
 float4 Frame(uint packed)
@@ -110,23 +112,6 @@ uint CutTimeNormal(uint address, DrawInput draw)
     return value.x | (value.y << 10) | (value.z << 20) | (3u << 30);
 }
 
-// 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다. cap 끝점은 탄젠트 칸에 절단 시점 법선(K 프레임)을 넣는다.
-void StoreEndpoint(uint output, uint vertex, bool cap)
-{
-    // 두 끝점의 weight를 합치지 않고 각각의 skin 입력을 복사한다.
-    DrawInput draw;
-    uint address = SourceAddress(vertex, draw);
-    Result.Store4(output, Source.Load4(address));
-    Result.Store(output + EndpointTangent, (draw.SourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff);
-
-    // cap은 PreparePoseCS가 끝점의 절단 시점 → 현재 법선 회전을 구할 수 있게 절단 시점 팔레트로 스키닝한 법선을 기록한다.
-    if (cap)
-        Result.Store(output + EndpointTangent, CutTimeNormal(address, draw));
-    uint4 skin = Source.Load4(address + draw.SourceStride - 16);
-    uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
-    Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16), skin.zw));
-}
-
 // 법선 행렬 합의 새 역행렬과 옛 행렬을 이어 bind 방향 하나를 다시 계산해 압축한다(w 두 비트는 유지하고, 퇴화하면 원래 값을 돌려준다).
 uint RemapFrame(uint packed, float3x3 inverseNew, float3x3 oldNormal)
 {
@@ -145,7 +130,8 @@ uint RemapFrame(uint packed, float3x3 inverseNew, float3x3 oldNormal)
 
 // 복사 정점의 u16 skin 입력(joints 전체 팔레트 인덱스, weights u16)을 남은 길이 비율로 재분배하고 bind 위치·법선·탄젠트를 다시 계산한다.
 // 재분배 대상 weight가 없거나 폴백 본 없음, 비가역이면 입력을 그대로 두고 false를 돌려주며, 법선 행렬만 비가역이면 법선·탄젠트만 유지하고 계수한다.
-bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inout uint normal, inout uint tangent, bool hasTangent)
+// base는 계수 버퍼의 시작 바이트이다(0은 주 레코드, 32는 끝점 레코드이며 각 묶음의 24는 법선 비가역, 28은 법선 갱신 수이다).
+bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inout uint normal, inout uint tangent, bool hasTangent, uint base)
 {
     // weight가 있는 슬롯 중 비율 1 미만이 없으면 연산 없이 원래 레코드를 유지한다(weight 0 슬롯의 비율은 무시한다).
     bool affected = false;
@@ -158,7 +144,7 @@ bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inou
     }
     if (!affected)
     {
-        LengthCounters.InterlockedAdd(20, 1);
+        LengthCounters.InterlockedAdd(base + 20, 1);
         return false;
     }
 
@@ -185,13 +171,13 @@ bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inou
         int fallback = LengthTable[joints[best]].Fallback;
         if (fallback < 0)
         {
-            LengthCounters.InterlockedAdd(12, 1);
+            LengthCounters.InterlockedAdd(base + 12, 1);
             return false;
         }
         newJoints[best] = uint(fallback);
         quantized = uint4(0, 0, 0, 0);
         quantized[best] = 65535;
-        LengthCounters.InterlockedAdd(8, 1);
+        LengthCounters.InterlockedAdd(base + 8, 1);
     }
     else
     {
@@ -226,7 +212,7 @@ bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inou
     float oldDeterminant = dot(oldLinear[0], cross(oldLinear[1], oldLinear[2]));
     if (!(abs(determinant) > 1e-4 * abs(oldDeterminant)) || abs(determinant) < 1e-20)
     {
-        LengthCounters.InterlockedAdd(16, 1);
+        LengthCounters.InterlockedAdd(base + 16, 1);
         return false;
     }
 
@@ -251,20 +237,62 @@ bool Reweight(inout float3 bind, inout uint4 joints, inout uint4 weights16, inou
     float oldNormalDeterminant = dot(oldNormal[0], cross(oldNormal[1], oldNormal[2]));
     if (!(abs(normalDeterminant) > 1e-4 * abs(oldNormalDeterminant)) || abs(normalDeterminant) < 1e-20)
     {
-        LengthCounters.InterlockedAdd(24, 1);
+        LengthCounters.InterlockedAdd(base + 24, 1);
     }
     else
     {
         // 법선과 탄젠트 xyz를 같은 식으로 다시 계산한다.
         float3x3 inverseNormal = transpose(normalCofactor) / normalDeterminant;
+        uint originalNormal = normal;
         normal = RemapFrame(normal, inverseNormal, oldNormal);
+        if (normal != originalNormal)
+        {
+            LengthCounters.InterlockedAdd(base + 28, 1);
+        }
         if (hasTangent)
         {
             tangent = RemapFrame(tangent, inverseNormal, oldNormal);
         }
     }
-    LengthCounters.InterlockedAdd(0, 1);
+    LengthCounters.InterlockedAdd(base + 0, 1);
     return true;
+}
+
+// 끝점은 원본 속성과 전체 팔레트 인덱스를 별도로 보관한다. cap 끝점은 탄젠트 칸에 절단 시점 법선(K 프레임)을 넣는다.
+// 재분배가 켜져 있으면 경계가 아닌 끝점의 weight와 bind 위치·법선·탄젠트를 복사 정점과 같은 규칙으로 다시 계산한다(cap의 절단 시점 법선은 원본 weight 기준 그대로다).
+void StoreEndpoint(uint output, uint vertex, bool cap)
+{
+    // 두 끝점의 weight를 합치지 않고 각각의 원본 속성과 skin 입력을 읽는다.
+    DrawInput draw;
+    uint address = SourceAddress(vertex, draw);
+    float3 bind = asfloat(Source.Load3(address));
+    uint normal = Source.Load(address + 12);
+    uint tangent = (draw.SourceFlags & 4) ? Source.Load(address + 16) : 0xe00803ff;
+    uint4 skin = Source.Load4(address + draw.SourceStride - 16);
+    uint4 joints = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + draw.StartJoint;
+    uint4 weights16 = uint4(skin.z & 65535, skin.z >> 16, skin.w & 65535, skin.w >> 16);
+
+    // 경계 끝점은 원래 레코드를 유지하고, 그 밖의 끝점은 재분배한다(cap은 탄젠트 칸을 따로 쓰므로 탄젠트를 바꾸지 않는다).
+    if (LengthEntries)
+    {
+        if (vertex >= BoundaryCount || BoundaryFlags[vertex])
+        {
+            LengthCounters.InterlockedAdd(EndpointCounters + 4, 1);
+        }
+        else
+        {
+            Reweight(bind, joints, weights16, normal, tangent, !cap && (draw.SourceFlags & 4) != 0, EndpointCounters);
+        }
+    }
+
+    // 위치·법선·탄젠트 칸을 기록하고, cap은 탄젠트 칸에 절단 시점 법선을 넣어 PreparePoseCS가 끝점의 절단 시점 → 현재 법선 회전을 구하게 한다.
+    Result.Store3(output, asuint(bind));
+    Result.Store(output + 12, normal);
+    Result.Store(output + EndpointTangent, cap ? CutTimeNormal(address, draw) : tangent);
+
+    // 전체 팔레트를 가리키는 joints와 weights를 기록한다.
+    Result.Store4(output + EndpointSkin, uint4(joints.x | (joints.y << 16), joints.z | (joints.w << 16),
+        weights16.x | (weights16.y << 16), weights16.z | (weights16.w << 16)));
 }
 
 // 복사 정점은 원본 bind로 복원하며(재분배가 켜진 A mesh의 비경계 복사 정점은 weight와 bind 위치·법선·탄젠트를 다시 계산한다) 내부 교점(1)과, 조각 플래그가 켜진 실제 분리 rim(2)·cap(3)에는 두 끝점의 원본 skin 입력을 덧붙인다.
@@ -311,7 +339,7 @@ void main(uint3 id : SV_DispatchThreadID)
             {
                 uint4 full = uint4(skin.x & 65535, skin.x >> 16, skin.y & 65535, skin.y >> 16) + startJoint;
                 uint4 packed = uint4(skin.z & 65535, skin.z >> 16, skin.w & 65535, skin.w >> 16);
-                reweighted = Reweight(bind, full, packed, copiedNormal, copiedTangent, (sourceFlags & 4) != 0);
+                reweighted = Reweight(bind, full, packed, copiedNormal, copiedTangent, (sourceFlags & 4) != 0, 0);
                 if (reweighted)
                 {
                     newJoints = full;

@@ -2552,6 +2552,8 @@ namespace Viewer
             {
                 PatchLog("LW2b reweighted=%u unchanged=%u boundaryKept=%u sumZeroFallback=%u fallbackMissingKept=%u singularKept=%u normalSingularKept=%u\n",
                     counters[0], counters[5], counters[1], counters[2], counters[3], counters[4], counters[6]);
+                PatchLog("LW3 endpoint reweighted=%u unchanged=%u boundaryKept=%u sumZeroFallback=%u fallbackMissingKept=%u singularKept=%u normalSingularKept=%u normalChanged=%u\n",
+                    counters[8], counters[13], counters[9], counters[10], counters[11], counters[12], counters[14], counters[15]);
             }
             else
             {
@@ -2592,6 +2594,16 @@ namespace Viewer
         // 복사 정점의 게시 순간 법선(새 레코드 스키닝)과 절단 시점 Data 법선의 최대 각도(도)와 최대 성분 차를 모은다.
         uint32_t normalChecked = 0;
         double normalMaxAngle = 0.0, normalMaxComponent = 0.0;
+
+        // 끝점 보간 정점(1 내부 교점, 2 rim, 3 cap)의 수와 위치 오차 최댓값(mm), 재분배 없는 기준 빌드의 위치 오차와 기준 대비 위치 차 최댓값(mm), cap 끝점 절단 시점 법선 칸의 비교 수와 비트 차 수를 모은다.
+        uint32_t endpointVertices[4] = {};
+        double endpointMaxError[4] = {};
+        double endpointBaselineDelta[4] = {};
+        double endpointBaselineError[4] = {};
+        uint32_t capNormalCount = 0;
+        uint32_t capNormalDiff = 0;
+        PatchSkinVertices baseline;
+        bool baselineBuilt = false;
         const bool follow = built && PatchAnimFollowEnabled() && snapshot.AnimFollow;
         double maxError = built ? 0.0 : INFINITY;
         if (built)
@@ -2608,6 +2620,21 @@ namespace Viewer
                 context.TransitionResource(*buffers[i], D3D12_RESOURCE_STATE_GENERIC_READ);
             }
             context.Finish(true);
+            // 재분배 없는 기준 skin VB를 같은 입력으로 한 번 더 만들어 읽는다(옵션이 켜진 A 조각의 끝점 위치와 cap 절단 시점 법선 칸 비교용이다).
+            ReadbackBuffer baselineReadback;
+            const bool hasBaseline = lengthTable
+                && BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources, geometry, snapshot, baseline, patch.Islands.TriangleSideBody)
+                && baseline.Stride == skin->Vertices.Stride && baseline.Data.GetBufferSize() == skin->Vertices.Data.GetBufferSize();
+            baselineBuilt = hasBaseline;
+            if (hasBaseline)
+            {
+                auto& baselineContext = GraphicsContext::Begin(L"LW3 baseline readback");
+                baselineReadback.Create(L"LW3 baseline readback", baseline.Data.GetBufferSize(), 1);
+                baselineContext.CopyBuffer(baselineReadback, baseline.Data);
+                baselineContext.TransitionResource(baseline.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
+                baselineContext.Finish(true);
+            }
+
 
             // 현재 pose 대신 실제 t_cut joint와 부착 node를 전달하여 고정 본과 K를 복원한다.
             std::vector<Math::Matrix4> nodes(size_t(snapshot.AttachNode) + 1, Math::Matrix4(Math::kIdentity));
@@ -2617,6 +2644,29 @@ namespace Viewer
             const auto* bind = static_cast<const uint8_t*>(readbacks[0].Map());
             const auto* data = static_cast<const uint8_t*>(readbacks[1].Map());
             const auto* provenance = static_cast<const uint32_t*>(readbacks[2].Map());
+
+            // 기준 skin VB의 끝점 보간 위치를 같은 방식(두 끝점을 각각 skin한 뒤 t로 보간)으로 구하는 함수이다.
+            const auto* baselineBytes = hasBaseline ? static_cast<const uint8_t*>(baselineReadback.Map()) : nullptr;
+            const auto interpolatedPosition = [&](const uint8_t* record)
+            {
+                float t;
+                std::memcpy(&t, record + skin->Vertices.Stride - kSkinExtT, sizeof(t));
+                Math::Vector4 ends[2];
+                for (uint32_t e = 0; e < 2; ++e)
+                {
+                    float endBind[3];
+                    uint16_t ids[4], ws[4];
+                    const auto* endpoint = record + skin->Vertices.Stride - kSkinExtEndpoint0 + e * kSkinEndpointSize;
+                    std::memcpy(endBind, endpoint, sizeof(endBind));
+                    std::memcpy(ids, endpoint + kSkinEndpointJoints, sizeof(ids));
+                    std::memcpy(ws, endpoint + kSkinEndpointWeights, sizeof(ws));
+                    const float total = float(std::max(1u, uint32_t(ws[0]) + ws[1] + ws[2] + ws[3]));
+                    ends[e] = Math::Vector4(Math::kZero);
+                    for (uint32_t k = 0; k < 4 && ids[k] < palette.size(); ++k)
+                        ends[e] = ends[e] + (palette[ids[k]].posXform * Math::Vector4(endBind[0], endBind[1], endBind[2], 1)) * (float(ws[k]) / total);
+                }
+                return ends[0] * (1 - t) + ends[1] * t;
+            };
             std::vector<uint32_t> rimVertices;
             std::vector<uint32_t> capVertices;
             for (const auto& section : skin->Sections)
@@ -2734,6 +2784,33 @@ namespace Viewer
                     const double error = double(float(Math::Length(actual
                         - Math::Vector3(expected[0], expected[1], expected[2])))) * 1000.0;
                     maxError = !valid || !std::isfinite(error) ? INFINITY : std::max(maxError, error);
+
+                    // 끝점 보간 정점의 위치 오차를 종류별로 모으고, 기준 빌드가 있으면 위치 차와 cap 끝점의 절단 시점 법선 칸 비트 차를 센다.
+                    if (interpolation && interpolation < 4)
+                    {
+                        ++endpointVertices[interpolation];
+                        endpointMaxError[interpolation] = !valid || !std::isfinite(error) ? INFINITY : std::max(endpointMaxError[interpolation], error);
+                    }
+                    if (interpolation && interpolation < 4 && baselineBytes)
+                    {
+                        const auto* baselineRecord = baselineBytes + size_t(v) * skin->Vertices.Stride;
+                        const Math::Vector3 moved(snapshot.MeshNodeAtCut * (posed - interpolatedPosition(baselineRecord)));
+                        const double delta = double(float(Math::Length(moved))) * 1000.0;
+                        endpointBaselineDelta[interpolation] = std::isfinite(delta) ? std::max(endpointBaselineDelta[interpolation], delta) : INFINITY;
+                        const Math::Vector3 baselineActual(snapshot.MeshNodeAtCut * interpolatedPosition(baselineRecord));
+                        const double baselineError = double(float(Math::Length(baselineActual - Math::Vector3(expected[0], expected[1], expected[2])))) * 1000.0;
+                        endpointBaselineError[interpolation] = std::isfinite(baselineError) ? std::max(endpointBaselineError[interpolation], baselineError) : INFINITY;
+                    }
+                    if (interpolation == 3 && baselineBytes)
+                    {
+                        const auto* baselineRecord = baselineBytes + size_t(v) * skin->Vertices.Stride;
+                        for (uint32_t e = 0; e < 2; ++e)
+                        {
+                            const size_t slot = skin->Vertices.Stride - kSkinExtEndpoint0 + e * kSkinEndpointSize + kSkinEndpointTangent;
+                            capNormalDiff += std::memcmp(input + slot, baselineRecord + slot, sizeof(uint32_t)) != 0;
+                            ++capNormalCount;
+                        }
+                    }
                     const auto* origin = provenance + size_t(v) * 8;
                     if (origin[0] == UINT32_MAX)
                     {
@@ -2807,9 +2884,11 @@ namespace Viewer
                     rimVertices.size(), capVertices.size(), unmatched, double(nearestMax) * 1000.0);
             }
 
-            // 동기 진단에서 사용한 세 버퍼의 매핑을 해제한다.
+            // 동기 진단에서 사용한 버퍼(기준 빌드 포함)의 매핑을 해제한다.
             for (auto& readback : readbacks)
                 readback.Unmap();
+            if (baselineBytes)
+                baselineReadback.Unmap();
         }
 
         // 생성 실패와 빈 결과도 오차 한계로 PASS가 되지 않게 같은 형식으로 기록한다.
@@ -2834,9 +2913,27 @@ namespace Viewer
             PatchLog("LW2b case=%u side=%s counterSum=%u copied=%u boundaryKept=%u lw2aBoundary=%u %s\n", m_SkinCheckCase, label,
                 accounted, copied, counters[1], copiedBoundary, countsMatch ? "PASS" : "FAIL");
 
-            // 게시 순간 법선 차는 UNORM 10비트 반올림 두 번(레코드 재압축, Data 압축; 각 약 1e-3)의 합인 2.5e-3 안이어야 한다.
-            PatchLog("LW2c case=%u side=%s normalChecked=%u maxAngle_deg=%.4f maxComponent=%.6f %s\n", m_SkinCheckCase, label,
-                normalChecked, normalMaxAngle, normalMaxComponent, normalChecked && normalMaxComponent <= 2.5e-3 ? "PASS" : "FAIL");
+            // 게시 순간 법선 차는 UNORM 10비트 반올림 두 번(레코드 재압축, Data 압축; 각 약 1e-3)의 합인 3e-3 안이어야 하고, 재분배된 법선이 있으면 일부는 원래 비트와 달라야 한다.
+            const bool normalUpdated = counters[0] == 0 || counters[7] > 0;
+            PatchLog("LW2c case=%u side=%s normalChecked=%u normalChanged=%u maxAngle_deg=%.4f maxComponent=%.6f %s%s\n", m_SkinCheckCase, label,
+                normalChecked, counters[7], normalMaxAngle, normalMaxComponent,
+                normalChecked && normalMaxComponent <= 3e-3 && normalUpdated ? "PASS" : "FAIL", normalUpdated ? "" : " normal not updated");
+
+            // 끝점 레코드 계수의 합은 끝점 보간 정점 수의 두 배와 같아야 한다.
+            const uint32_t endpointAccounted = counters[8] + counters[13] + counters[9] + counters[11] + counters[12];
+            const uint32_t endpointRecords = 2 * (endpointVertices[1] + endpointVertices[2] + endpointVertices[3]);
+            PatchLog("LW3 case=%u side=%s endpointRecords=%u counterSum=%u %s\n", m_SkinCheckCase, label,
+                endpointRecords, endpointAccounted, enabled && endpointAccounted == endpointRecords ? "PASS" : "FAIL");
+
+            // 끝점 위치 오차(mm)의 기준 빌드 대비 증가는 1e-4 mm 이하, cap 절단 시점 법선 칸의 비트 차는 0이어야 한다(기준 대비 위치 차는 참고용이다).
+            const double increaseMax = std::max({ endpointMaxError[1] - endpointBaselineError[1], endpointMaxError[2] - endpointBaselineError[2],
+                endpointMaxError[3] - endpointBaselineError[3] });
+            PatchLog("LW3 case=%u side=%s endpointPos_mm rim=%.6f(base %.6f, n=%u) cap=%.6f(base %.6f, n=%u) internal=%.6f(base %.6f, n=%u) increaseMax=%.6f deltaVsBaseline rim=%.6f cap=%.6f %s\n",
+                m_SkinCheckCase, label, endpointMaxError[2], endpointBaselineError[2], endpointVertices[2],
+                endpointMaxError[3], endpointBaselineError[3], endpointVertices[3], endpointMaxError[1], endpointBaselineError[1], endpointVertices[1],
+                increaseMax, endpointBaselineDelta[2], endpointBaselineDelta[3], enabled && baselineBuilt && increaseMax <= 1e-4 ? "PASS" : "FAIL");
+            PatchLog("LW3 case=%u side=%s capCutTimeNormals=%u bitDiff=%u %s\n", m_SkinCheckCase, label,
+                capNormalCount, capNormalDiff, enabled && baselineBuilt && capNormalDiff == 0 ? "PASS" : "FAIL");
         }
 
         // PS3 동기 GPU 진단은 break 검사에서만 수행하며 게시 경로에는 연결하지 않는다.
