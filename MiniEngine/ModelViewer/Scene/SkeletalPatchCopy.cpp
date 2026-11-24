@@ -41,7 +41,7 @@ namespace Viewer
             uint32_t VbOffset, Stride, IbOffset, Index32;
             uint32_t StartIndex, BaseVertex, Triangles, PoseOffset;
             uint32_t FirstTriangle, MaskOffset, Flags, SectionId;
-            uint32_t DrawId, JointCount, VertexCount, Reserved1;
+            uint32_t DrawId, JointCount, VertexCount, WordOffset;
         };
         struct Parameters
         {
@@ -50,7 +50,7 @@ namespace Viewer
             Math::Matrix4 LocalToWorld;
             float Epsilon, HalfWidth, HalfHeight;
             uint32_t Triangles, Draws, DepthOffset, IndexOffset, Mode;
-            uint32_t NodeCount, Influence, HasState, Padding1;
+            uint32_t NodeCount, Influence, HasState, BitDraw;
         };
         static_assert(sizeof(DrawInput) == 64 && sizeof(Parameters) == 192, "Patch shader layout");
         static_assert(sizeof(SkeletalPatchResult) == 4, "Patch counts readback layout");
@@ -476,11 +476,12 @@ namespace Viewer
             // 여러 C 요청 사이에 파이프라인을 재사용한다.
             static bool initialized = false;
             if (initialized) return;
-            PatchRoot.Reset(12);
+            PatchRoot.Reset(13);
             PatchRoot[0].InitAsConstantBuffer(0);
             for (uint32_t i = 0; i < 4; ++i) PatchRoot[i + 1].InitAsBufferSRV(i);
             for (uint32_t i = 0; i < 6; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
             PatchRoot[11].InitAsBufferSRV(4);
+            PatchRoot[12].InitAsBufferUAV(6);
             PatchRoot.Finalize(L"Skeletal patch extraction");
             PatchPSO.SetRootSignature(PatchRoot);
             PatchPSO.SetComputeShader(g_pPatchExtractCS, sizeof(g_pPatchExtractCS));
@@ -4417,6 +4418,10 @@ namespace Viewer
         std::vector<DrawInput> draws;
         std::vector<uint32_t> masks;
         uint64_t triangles = 0;
+        // 정점 선택 비트 버퍼에 필요한 총 word 수를 section별로 누적한다.
+        uint64_t bitWords = 0;
+        // skin section별 첫 draw 번호와 정점 수를 모아 Mode 8 dispatch 입력으로 쓴다.
+        std::vector<std::pair<uint32_t, uint32_t>> bitSections; // skin section의 첫 draw 번호와 정점 수
         for (uint32_t s = 0; s < input.GetSections().size(); ++s)
         {
             const auto& mesh = input.GetMesh(s);
@@ -4427,17 +4432,28 @@ namespace Viewer
                     input.GetSource()->m_JointIndices.get() + mesh.startJoint + mesh.numJoints);
             else masks.insert(masks.end(), m_SelectionMasks[s].begin(), m_SelectionMasks[s].end());
             m_PoseOffsets.push_back(posed.GetOffset(input.GetSections()[s].SourceMesh));
+
+            // section의 정점 선택 비트는 32비트 word 경계에서 시작한다.
+            const uint32_t wordOffset = uint32_t(bitWords);
+            const size_t drawsBefore = draws.size();
             for (uint32_t d = 0; d < mesh.numDraws; ++d)
             {
                 const auto& draw = mesh.draw[d];
                 if (!draw.primCount) continue;
                 draws.push_back({ mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
                     draw.startIndex, draw.baseVertex, draw.primCount / 3, m_PoseOffsets.back(),
-                    uint32_t(triangles), maskOffset, mesh.psoFlags, s, d, mesh.numJoints, mesh.vbSize / mesh.vbStride, 0 });
+                    uint32_t(triangles), maskOffset, mesh.psoFlags, s, d, mesh.numJoints, mesh.vbSize / mesh.vbStride, wordOffset });
                 triangles += draw.primCount / 3;
             }
+
+            // draw가 있는 skin section만 정점 수만큼 비트 word를 확보한다.
+            if ((mesh.psoFlags & PSOFlags::kHasSkin) && draws.size() > drawsBefore)
+            {
+                bitSections.push_back({ uint32_t(drawsBefore), mesh.vbSize / mesh.vbStride });
+                bitWords += (uint64_t(mesh.vbSize / mesh.vbStride) + 31) / 32;
+            }
         }
-        if (!triangles || triangles > UINT32_MAX / (3 * 48ull)
+        if (!triangles || triangles > UINT32_MAX / (3 * 48ull) || bitWords > UINT32_MAX / 64
             || !input.GetSource()->m_NumNodes || input.GetSource()->m_NumNodes > UINT32_MAX / 8) return false;
 
         // 대상 전체 삼각형 수를 상한으로 잡아 compaction 출력 overflow를 없앤다.
@@ -4521,6 +4537,14 @@ namespace Viewer
         alignas(16) const uint32_t selectedNode[4] = { node, 0, 0, 0 };
         m_Selected.Create(L"Patch selected NodeId", 1, 4, selectedNode);
 
+        // 정점 선택 비트 버퍼는 job이 재사용하고 모자랄 때만 이전 자원을 fence까지 보존한 뒤 다시 만든다.
+        if (!m_Bits.GetResource() || bitWords > m_BitCapacity)
+        {
+            if (m_Bits.GetResource()) Graphics::g_CommandManager.RetireResource(m_Bits.GetResource());
+            m_BitCapacity = uint32_t(std::max<uint64_t>(bitWords, 1));
+            m_Bits.Create(L"Patch vertex selection bits", m_BitCapacity, 4);
+        }
+
         // 마스크가 없으면 State SRV에 바인딩할 0 버퍼를 준비한다.
         const std::vector<uint32_t> emptyState(triangleMask ? 4 : (size_t(triangles) + 3) & ~size_t(3), 0);
         m_EmptyState.Create(L"Empty triangle state", uint32_t(emptyState.size()), 4, emptyState.data());
@@ -4547,6 +4571,8 @@ namespace Viewer
             compute.TransitionResource(*outputs[i], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.SetBufferUAV(i + 5, *outputs[i]);
         }
+        compute.TransitionResource(m_Bits, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        compute.SetBufferUAV(12, m_Bits);
         const uint32_t groups = blocks;
 
         // GPU 선택 결과를 CPU 대기 없이 추출에 연결한다.
@@ -4560,6 +4586,20 @@ namespace Viewer
             compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
             compute.Dispatch(1);
             compute.InsertUAVBarrier(m_Selected);
+        }
+
+        // skin section마다 정점 선택을 한 번씩만 판정해 비트로 모으고 추출 패스가 읽기 전에 완료를 보장한다.
+        if (!bitSections.empty())
+        {
+            c.Mode = 8;
+            for (const auto& section : bitSections)
+            {
+                c.BitDraw = section.first;
+                compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+                const uint32_t bitGroups = (section.second + 63) / 64;
+                compute.Dispatch(std::min(bitGroups, 65535u), (bitGroups + 65534) / 65535);
+            }
+            compute.InsertUAVBarrier(m_Bits);
         }
 
         // 블록 prefix와 블록 offset을 계산하고 추출할 때 두 값을 더한다.

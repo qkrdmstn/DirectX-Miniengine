@@ -1,4 +1,4 @@
-상태: 설계안 — base `0583e8ff` (2026-11-24)
+상태: 진행 중 — VS-1 구현(커밋 대기), base `65ffecaf` (2026-11-24)
 
 # 정점 단위 선택 판정 (VS)
 
@@ -52,4 +52,27 @@
 - 추출을 부르는 경로가 여럿이면(원본, 재절단, 검사용) 한 곳이라도 빠지면 비트가 비어 선택이 0이 된다. 회귀 2·3이 이를 잡는다.
 
 ## 7. 결과
-(VS-1 후 기록)
+### VS-1 (base `65ffecaf`, 커밋 대기, 2026-11-24)
+- 변경: `PatchExtractCS`에 `Mode 8`(정점 1개당 스레드 1개, groupshared `InterlockedOr` 뒤 word당 1회 store)과 `SelectedBit`(Mode 0이 비트 3개만 읽음)을 추가했다. `DrawInput.Reserved1`은 `WordOffset`으로 이름을 바꿨고 `Parameters.Padding1`은 `BitDraw`(Mode 8이 맡은 section의 첫 draw 번호)로 쓴다. `SkeletalPatchJob::Submit`이 section별 word offset·`bitSections`·비트 버퍼(`m_Bits`, 모자랄 때만 `RetireResource` 뒤 재생성)를 만들고, skin section마다 Mode 8을 따로 dispatch한 뒤(Mode 3/4 뒤, Mode 0 앞) UAV barrier를 한 번 둔다. skin 없는 section은 dispatch하지 않으며 `SelectedBit`이 비트를 읽기 전에 false를 반환하므로 비트 버퍼 초기화는 필요 없다. `Selected`는 `Chosen`을 한 번만 읽도록 바꿨고 판정식은 같다. `PatchRoot`에 UAV u6(root 12)을 추가했다. 변경 3파일 +83/-12줄.
+- 호출 지점: PatchExtractCS를 dispatch하는 곳은 `SkeletalPatchJob::Submit` 하나뿐이다. 원본 절단·재절단·검사가 모두 이 함수를 거친다.
+- Release/Windows(x64) 빌드 오류 0, NVIDIA GeForce MX450(1906 MB). 회귀 모두 exit=0, FAIL 0: `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1`(20요청 GPU==CPU), `-skeletal-patch-break-checks 1` Parent/Rig(boundary pass=4/fail=0/n/a=2), `-skeletal-mask-checks 1`, `-skeletal-recut-repro 1`. 계측 제거 뒤 최종 바이너리로도 같은 결과다.
+- 바이트 비교(CP-5 방식, `-capture-frame 3 -animation-step-ms 16`, HEAD 계측 빌드 대비): surface VB·depth VB·IB 유효 구간·TriangleSources·Meta 44바이트가 데모 1/2 각 1요청, 재절단 2요청, offset-copy 20요청 합계 **24요청·72파일 전체 일치**. 재절단 두 번째 요청은 비동기 시점 차이로 frame이 109~110으로 어긋나는 실행이 많아 기준과 같은 frame=111인 재실행으로 비교했다.
+- `-debug 1`: Xbot 데모, patch-checks+offset-copy, 재절단 모두 exit=0, D3D12 ERROR/CORRUPTION 0(기존 WARNING만).
+- 추출 GPU 시간 1: Mode별 timestamp(각 Mode 직전 barrier flush, `-debug 0`, 새 프로세스 3회 평균 µs, 재절단 6표본). 첫 구현 v1은 정점마다 draw를 이진 탐색하는 단일 dispatch, 현재 v2는 section별 dispatch다.
+
+| 조건 | HEAD Mode 0 | v1 Mode 8 + Mode 0 | v2 Mode 8 + Mode 0 |
+| --- | ---: | ---: | ---: |
+| Xbot | 70.4 | 32.3 + 45.6 = 77.9 | 42.0 + 45.5 = 87.5 |
+| CesiumMan | 23.2 | 11.4 + 10.8 = 22.2 | 11.2 + 11.0 = 22.2 |
+| 재절단(중앙값) | 75.2 | 32.8 + 49.2 = 82.0 | 43.3 + 48.9 = 92.2 |
+
+- 추출 GPU 시간 2: dispatch별 flush·timestamp가 section마다 Mode 8의 겹침을 막아 v2를 부풀리므로, 시작·끝 timestamp만 둔 추출 전체 시간도 따로 쟀다(새 프로세스 3회, 재절단 6표본, µs).
+
+| 추출 전체 | HEAD | v1 | v2 |
+| --- | ---: | ---: | ---: |
+| Xbot 평균 | 312.5 | 313.1 | 314.1 |
+| CesiumMan 평균 | 54.7 | 52.3 | 52.4 |
+| 재절단 중앙값 | 310.3 | 313.3 | 317.3 |
+
+- 해석: Mode 0은 Xbot에서 70.4→45.5 µs로 줄지만 Mode 8이 그만큼을 되가져가 전체 시간은 HEAD와 사실상 같다(Xbot +0.6~1.6 µs, CesiumMan -2.3 µs, 재절단 +3~7 µs, 모두 잡음 범위 근처). 이진 탐색 제거와 section별 dispatch는 이득이 없었다. dispatch마다 고정 비용이 있고 Mode 8의 시간이 정점 수보다 지연에 좌우되는 것으로 보이며(미검증), v1이 v2보다 약간 낫거나 같다. 재절단의 v2 평균 342.3 µs는 6표본 중 439 µs 이상치 1개 때문이다. 유지 여부는 **사용자가 결정**한다. 이 결과만으로는 VS-1이 성능을 개선하지 못하며, 이득은 이 비트 배열을 나중에 PS discard 마스크(MC5·MC6)가 쓸 때 생긴다.
+- 제한: 단일 GPU·드라이버 미통제, 한 세션 3회 표본. 근거·로그는 `%TEMP%/VS1/`에 보관한다(커밋하지 않음). 임시 계측(timestamp·덤프)은 모두 제거했고 최종 실행 파일에 계측 문자열이 없음을 확인했다.
