@@ -84,11 +84,12 @@ namespace Viewer
         static bool initialized = false;
         if (!initialized)
         {
-            root.Reset(7);
+            root.Reset(8);
             root[0].InitAsConstantBuffer(0);
             for (uint32_t i = 0; i < 5; ++i)
                 root[i + 1].InitAsBufferSRV(i);
             root[6].InitAsBufferUAV(0);
+            root[7].InitAsBufferSRV(5);
             root.Finalize(L"Patch skin build");
             pso.SetRootSignature(root);
             pso.SetComputeShader(g_pPatchSkinBuildCS, sizeof(g_pPatchSkinBuildCS));
@@ -99,6 +100,8 @@ namespace Viewer
         // section flags의 합집합을 단일 출력 레이아웃으로 보관한다.
         StructuredBuffer descriptors;
         descriptors.Create(L"Patch skin draws", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
+        StructuredBuffer cutJoints;
+        cutJoints.Create(L"Patch skin joints at cut", uint32_t(snapshot.JointsAtCut.size()), sizeof(Joint), snapshot.JointsAtCut.data());
         out.Data.Create(L"Patch skin vertices", end, stride);
         out.Flags = flags;
         out.Stride = stride;
@@ -113,6 +116,8 @@ namespace Viewer
             compute.TransitionResource(*inputs[i], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             compute.SetBufferSRV(i + 1, *inputs[i]);
         }
+        compute.TransitionResource(cutJoints, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        compute.SetBufferSRV(7, cutJoints);
         compute.TransitionResource(out.Data, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         compute.SetBufferUAV(6, out.Data);
         Parameters c{ Math::Invert(snapshot.MeshNodeAtCut), 0, 0, flags, stride,

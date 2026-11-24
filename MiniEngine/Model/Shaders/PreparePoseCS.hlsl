@@ -24,7 +24,7 @@ RWByteAddressBuffer Result : register(u0);
 // 확장 skin 정점 배치: 정점 끝에서 거꾸로 센 바이트 거리(Stride 기준).
 //   -96 끝점 보간 종류(uint: 0 없음, 1 내부 교점, 2 실제 분리 rim, 3 cap) | -92 보간 t(float)
 //   -88 끝점0 36B | -52 끝점1 36B | -16 기존 joints+weights
-//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16, cap은 절단 시점 법선) | joints 8(+20) | weights 8(+28)
+//   끝점 36B = 위치 12 + 법선 4 | 탄젠트 4(+16, cap은 절단 시점 팔레트로 스키닝한 법선) | joints 8(+20) | weights 8(+28)
 static const uint ExtFlag = 0x200;
 static const uint ExtInternal = 96;
 static const uint ExtT = 92;
@@ -88,8 +88,6 @@ void main(uint3 id : SV_DispatchThreadID)
     if (Flags & 0x100)
     {
         // 일반 복사 정점과 실제 rim/cap은 기존 단일 skin 경로를 유지한다.
-        const float3 bindNormal = normal;
-        const float3 bindTangent = tangent.xyz;
         SkinEndpoint(address, address + SourceStride - 16, position, normal, tangent);
         if (Flags & ExtFlag)
         {
@@ -104,7 +102,7 @@ void main(uint3 id : SV_DispatchThreadID)
                 float t = asfloat(Source.Load(address + SourceStride - ExtT));
                 position = lerp(p0, p1, t);
 
-                // rim·교점(1·2)은 끝점 방향을 보간하고, cap(3)은 끝점의 절단 시점→현재 법선 회전을 K 방향에 적용해 보간한다.
+                // rim·교점(1·2)은 끝점 방향을 보간하고, cap(3)은 끝점의 절단 시점→현재 법선 회전을 단일 skin(K 프레임) 결과 방향에 적용해 보간한다.
                 if (interpolation != 3)
                 {
                     normal = normalize(lerp(n0, n1, t));
@@ -117,10 +115,10 @@ void main(uint3 id : SV_DispatchThreadID)
                     uint cut1 = Source.Load(address + SourceStride - ExtEndpoint1 + EndpointTangent);
                     if (cut0 != 0 && cut1 != 0)
                     {
-                        float3 a0 = DecodeFrame(cut0).xyz, a1 = DecodeFrame(cut1).xyz;
+                        float3 a0 = normalize(DecodeFrame(cut0).xyz), a1 = normalize(DecodeFrame(cut1).xyz);
                         float3 b0 = normalize(n0), b1 = normalize(n1);
-                        float3 cn = normalize(lerp(RotateArc(a0, b0, bindNormal), RotateArc(a1, b1, bindNormal), t));
-                        float3 ct = normalize(lerp(RotateArc(a0, b0, bindTangent), RotateArc(a1, b1, bindTangent), t));
+                        float3 cn = normalize(lerp(RotateArc(a0, b0, normal), RotateArc(a1, b1, normal), t));
+                        float3 ct = normalize(lerp(RotateArc(a0, b0, tangent.xyz), RotateArc(a1, b1, tangent.xyz), t));
                         normal = cn;
                         tangent.xyz = ct;
                     }
