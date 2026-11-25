@@ -767,7 +767,104 @@ namespace Viewer
         return table;
     }
 
-    // 절단 시점의 고정 본을 현재 부착 프레임으로 옮기거나(기본) 애니메이션 joint를 따르게 하며 normal 행렬도 다시 계산한다.
+    // LB 식을 성분별로 재계산하고 절단 순간과 이후 프레임의 수치 상태를 기록한다.
+    std::string CheckLengthBlendPalette(const PatchSkinSnapshot& snapshot, const std::vector<Joint>& palette,
+        const Math::Matrix4* nodes, const Joint* animJoints, const Math::Matrix4* animNodes,
+        const char* side, int frame)
+    {
+        // 렌더와 같은 추종 조건이 성립한 LB 조각만 검사한다.
+        const size_t count = snapshot.JointsAtCut.size();
+        if (!PatchLengthBlendEnabled() || !PatchAnimFollowEnabled() || !snapshot.AnimFollow
+            || !nodes || !animJoints || !animNodes || snapshot.AnimOffset.size() != count
+            || snapshot.LengthBlendRatio.size() != count || palette.size() != count + 1)
+            return {};
+        const Math::Matrix4 correction = nodes[snapshot.AttachNode] * Math::Invert(animNodes[snapshot.AttachNode]);
+        const Math::Matrix4 delta = nodes[snapshot.AttachNode] * Math::Invert(snapshot.AttachAtCut);
+        float error = 0, cutError = 0, minDet = INFINITY, minDetJ = 0, minDetF = 0;
+        size_t minDetJoint = 0;
+        uint32_t zero = 0, one = 0, middle = 0, compared = 0, badNormalDir = 0;
+
+        // 정점 influence 입력이 없으므로 축 3개와 단위 대각선 4개의 법선 방향을 검사한다.
+        const Math::Vector3 directions[] = {
+            Math::Vector3(1, 0, 0), Math::Vector3(0, 1, 0), Math::Vector3(0, 0, 1),
+            Math::Vector3(1, 1, 1), Math::Vector3(1, 1, -1),
+            Math::Vector3(1, -1, 1), Math::Vector3(-1, 1, 1)
+        };
+
+        // 위치 16성분과 법선 9성분을 독립 가중합 기대값과 비교한다.
+        for (size_t k = 0; k < count; ++k)
+        {
+            const float ratio = snapshot.LengthBlendRatio[k];
+            zero += ratio == 0;
+            one += ratio == 1;
+            middle += ratio != 0 && ratio != 1;
+            if (!snapshot.Frozen[k]) continue;
+            ++compared;
+            const Math::Matrix4 joint = correction * animJoints[k].posXform * snapshot.AnimOffset[k];
+            const Math::Matrix4 frozen = delta * snapshot.JointsAtCut[k].posXform;
+            const Math::Matrix4 actual[] = { palette[k].posXform, Math::Matrix4(palette[k].nrmXform) };
+            const Math::Matrix4 j[] = { joint, Math::Matrix4(Math::InverseTranspose(joint.Get3x3())) };
+            const Math::Matrix4 f[] = { frozen, Math::Matrix4(Math::InverseTranspose(frozen.Get3x3())) };
+            const Math::Matrix4 cut[] = { snapshot.JointsAtCut[k].posXform,
+                Math::Matrix4(Math::InverseTranspose(snapshot.JointsAtCut[k].posXform.Get3x3())) };
+            for (int kind = 0; kind < 2; ++kind)
+            {
+                // 절단 시점 동일성은 위치와 법선의 원래 팔레트를 모두 비교한다.
+                DirectX::XMFLOAT4X4 a, b, c, original;
+                DirectX::XMStoreFloat4x4(&a, actual[kind]);
+                DirectX::XMStoreFloat4x4(&b, j[kind]);
+                DirectX::XMStoreFloat4x4(&c, f[kind]);
+                DirectX::XMStoreFloat4x4(&original, cut[kind]);
+                const int size = kind ? 3 : 4;
+                for (int row = 0; row < size; ++row)
+                    for (int col = 0; col < size; ++col)
+                    {
+                        const float value = a.m[row][col];
+                        const float diff = std::abs(value - (ratio * b.m[row][col] + (1 - ratio) * c.m[row][col]));
+                        error = std::isfinite(diff) ? std::max(error, diff) : INFINITY;
+                        const float cutDiff = std::abs(value - original.m[row][col]);
+                        cutError = std::isfinite(cutDiff) ? std::max(cutError, cutDiff) : INFINITY;
+                    }
+            }
+
+            // 혼합 법선 행렬에 단위 방향을 적용해 비유한 결과와 길이 붕괴를 센다.
+            for (const Math::Vector3& direction : directions)
+            {
+                const auto result = DirectX::XMVector3TransformNormal(
+                    DirectX::XMVector3Normalize(direction), actual[1]);
+                DirectX::XMFLOAT3 normal;
+                DirectX::XMStoreFloat3(&normal, result);
+                const float length = DirectX::XMVectorGetX(DirectX::XMVector3Length(result));
+                badNormalDir += !std::isfinite(normal.x) || !std::isfinite(normal.y)
+                    || !std::isfinite(normal.z) || !std::isfinite(length) || length < 1e-4f;
+            }
+
+            // 최소 혼합 행렬식의 joint와 원래 J/F 행렬식을 함께 기록한다.
+            const float det = DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(palette[k].posXform));
+            const float candidate = std::isfinite(det) ? det : -INFINITY;
+            if (compared == 1 || candidate < minDet)
+            {
+                minDet = candidate;
+                minDetJoint = k;
+                minDetJ = DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(joint));
+                minDetF = DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(frozen));
+            }
+        }
+
+        // cut 검사는 요청 시점에만 판정하고 이후에는 절단 pose와의 차이를 수치로 남긴다.
+        char line[768], determinant[192];
+        const bool checked = compared != 0;
+        if (checked)
+            sprintf_s(determinant, "minDet=%g minDetJoint=%zu detJ=%g detF=%g", minDet, minDetJoint, minDetJ, minDetF);
+        else
+            sprintf_s(determinant, "minDet=N/A minDetJoint=N/A detJ=N/A detF=N/A");
+        sprintf_s(line, "LB2 side=%s frame=%d r0=%u r1=%u rMid=%u compared=%u maxAbs=%g formula=%s cutAbs=%g cutIdentity=%s %s badNormalDir=%u\n",
+            side, frame, zero, one, middle, compared, error, !checked ? "N/A" : error <= 1e-5f ? "PASS" : "FAIL",
+            cutError, frame != -1 || !checked ? "N/A" : cutError <= 1e-5f ? "PASS" : "FAIL", determinant, badNormalDir);
+        return line;
+    }
+
+    // 고정 본의 따르기·고정 팔레트를 선택하고 LB에서는 위치와 법선을 각각 혼합한다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
         const Math::Matrix4* currentNodes, std::vector<Joint>& out,
         const Joint* animJoints, const Math::Matrix4* animNodes, bool animFollow)
@@ -784,13 +881,38 @@ namespace Viewer
         if (follow)
             correction = currentNodes[snapshot.AttachNode] * Math::Invert(animNodes[snapshot.AttachNode]);
 
-        // 고정 본만 치환하고 최종 위치 행렬의 역전치로 법선을 만든다.
+        // 기존 따르기 조건과 비율 배열이 유효할 때만 길이 혼합을 적용한다.
+        const bool blend = follow && PatchLengthBlendEnabled() && snapshot.LengthBlendRatio.size() == count;
+
+        // 고정 본만 치환하며 혼합 전 두 행렬의 역전치를 따로 구한다.
         for (size_t k = 0; k < count; ++k)
         {
             if (!snapshot.Frozen[k]) continue;
             out[k].posXform = follow ? correction * animJoints[k].posXform * snapshot.AnimOffset[k]
                 : delta * snapshot.JointsAtCut[k].posXform;
             out[k].nrmXform = Math::InverseTranspose(out[k].posXform.Get3x3());
+            if (blend)
+            {
+                // 고정 팔레트 F와 법선용 역전치 IT(F)를 준비한다.
+                const float ratio = snapshot.LengthBlendRatio[k];
+                const Math::Matrix4 frozen = delta * snapshot.JointsAtCut[k].posXform;
+                const Math::Matrix3 normal = Math::InverseTranspose(frozen.Get3x3());
+
+                // 위치 팔레트의 J와 F를 비율에 따라 혼합한다.
+                const DirectX::XMMATRIX joint = out[k].posXform;
+                const DirectX::XMMATRIX fixed = frozen;
+                DirectX::XMMATRIX mixed;
+                for (int row = 0; row < 4; ++row)
+                    mixed.r[row] = DirectX::XMVectorAdd(DirectX::XMVectorScale(joint.r[row], ratio),
+                        DirectX::XMVectorScale(fixed.r[row], 1.0f - ratio));
+                out[k].posXform = Math::Matrix4(mixed);
+
+                // 법선 팔레트의 IT(J)와 IT(F)를 같은 비율로 혼합한다.
+                out[k].nrmXform = Math::Matrix3(
+                    out[k].nrmXform.GetX() * ratio + normal.GetX() * (1.0f - ratio),
+                    out[k].nrmXform.GetY() * ratio + normal.GetY() * (1.0f - ratio),
+                    out[k].nrmXform.GetZ() * ratio + normal.GetZ() * (1.0f - ratio));
+            }
         }
 
         // 새 경계와 cap 정점이 사용할 단일 강체 슬롯을 마지막에 추가한다.

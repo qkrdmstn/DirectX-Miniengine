@@ -137,15 +137,19 @@ namespace Viewer
             out = m_PatchNodeFrame * m_PatchPalette.back().posXform;
             return true;
         }
-        // RS-2b 진단용으로 마지막 Update의 N과 팔레트 posXform을 복사한다. 없으면 false다.
+        // RS-2b 진단용으로 마지막 Update의 N과 실제 위치·법선 팔레트를 복사한다.
         bool TryGetRecutCheckInput(RecutCheckInput& out) const
         {
             // N·D를 만들 수 있는 상태에서만 팔레트를 복사한다.
             if (!m_HasPatchNodeFrame || m_PatchPalette.empty()) return false;
             out.Node = m_PatchNodeFrame;
             out.Palette.clear();
+            out.NormalPalette.clear();
             for (const auto& joint : m_PatchPalette)
+            {
                 out.Palette.push_back(joint.posXform);
+                out.NormalPalette.push_back(joint.nrmXform);
+            }
             return true;
         }
         // 편집할 target TRS를 읽는다.

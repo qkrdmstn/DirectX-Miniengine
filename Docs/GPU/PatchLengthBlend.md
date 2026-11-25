@@ -1,4 +1,4 @@
-상태: 진행 중 (2026-11-25) — LB-1 완료(미커밋, 기준 `60c36279`), Release·회귀 LB 0/1 PASS. LB-2~4 미구현. 기본값 0, 렌더 연결 전.
+상태: 진행 중 (2026-11-25) — LB-1 `b1c00fda`, LB-2 완료·리뷰 진단 보완(미커밋, 기준 `b1c00fda`). Release·회귀 LB 0/1 및 follow 0 PASS. LB-3~4 미구현. 기본값 0.
 
 # 잘린 본 팔레트를 남은 길이 비율로 따르기·고정 혼합 (개선 방안 4)
 
@@ -77,3 +77,18 @@ D5. 알려진 한계와 확인할 것
 - LB 0/1의 고정 16ms 다리 데모 게시 직후·60프레임 후 post RAW 두 쌍은 SHA-256이 각각 일치했다. `%TEMP%/lb1-leg-{off,on}-demo-{000,001}-post.raw`. 렌더 미연결 상태를 확인했다.
 - `-patch-length-blend 1`과 `-patch-length-weights 1` 및 `2`는 각각 시작 시 예외 종료(exit=-1073740791). 오류는 `patch-length-blend 1 cannot be combined with nonzero patch-length-weights`이다.
 - 추가 시도한 `-skeletal-patch-break-checks 1 -skeletal-multi-cut 1` 조합은 `-skeletal-union-checks 1` 유무 모두 비정상 종료했다(exit=-1073740791). LB=0에서도 동일하게 재현되어 이번 범위에서 수정하지 않았다. 필수 회귀와 위 다중 절단 데모는 정상 종료했다.
+
+## LB-2 구현·검증 (2026-11-25)
+
+- `BuildPatchPalette`의 기존 `follow` 조건과 `Frozen` 집합을 유지한다. 유효한 `LengthBlendRatio`가 있을 때만 위치는 J/F, 법선은 IT(J)/IT(F)를 각각 가중합한다. 빈 배열은 기존 경로이며 M의 역전치는 계산하지 않는다.
+- `TryGetRecutCheckInput`은 실제 `NormalPalette`도 복사하고 재절단 법선 진단이 이를 사용한다. `CheckAnimFollowFrame`은 혼합 위치 기대값을 비교한다. LB1 검사 항목 0개는 `N/A`로 기록한다.
+- `CheckLengthBlendPalette`의 `frame=-1`은 절단 요청 시점, `-2`는 부착 node만 이동시킨 합성 C≠I 검사다. 게시 후 0/30/60프레임에도 기록한다. r 개수는 전체 비율 배열, `compared`는 실제 비교한 Frozen 항목 수다. 0개면 `formula`·`cutIdentity`·`minDet`는 `N/A`다. `cutIdentity`는 위치와 IT(JointsAtCut) 법선 모두 비교하며, 이후 프레임은 절단 pose에서 이동했으므로 `N/A`다.
+- `badNormalDir`는 각 혼합 법선 행렬에 단위 축 3개와 정규화한 대각선 4개를 적용해 비유한 결과 또는 길이 < 1e-4인 방향 수를 센다. 이 함수에는 정점 influence·실제 정점 법선 입력이 없어 정점별 Σw·N·n 붕괴는 검사하지 않는다. `minDetJoint`는 최소 혼합 위치 행렬식의 팔레트 joint 인덱스이며 `detJ`·`detF`는 해당 joint의 혼합 전 행렬식이다.
+- Release 빌드 성공, 오류 0. 전체 빌드 99.94초, 마지막 증분 빌드 27.75초. 로그 `%TEMP%/lb2-build.log`, `lb2-build-final.log`.
+- 지정 `regress.sh Release`에 추가 인수 없음 / `-patch-length-blend 1` / `-patch-length-blend 1 -patch-anim-follow 0`: 각각 6종 PASS, 모든 프로세스 exit=0(각 검사 6~11초). SP6 20행, SP7e2 pass=4 fail=0 n/a=2, BC-12a/b·AR4·Rig PASS. 로그 `%TEMP%/lb2-regress-{default,enabled,frozen}.txt`와 `lb2-{default,enabled,frozen}-patch.log`.
+- 실제 함수와 `b1c00fda` 함수를 추출한 외부 CPU fixture: LB 0·빈 배열·추종 비활성 조건 408개 바이트 일치, 위치·법선 혼합식 144개 및 집합 밖 joint 24개 불변 PASS. fixture는 아래 `scratchpad/lb/palette-tests.cpp`에 보관했다.
+- 리뷰 보완 후 Release 빌드 성공(12.17초, 오류 0). 지정 `regress.sh Release -patch-length-blend 1` 6종 모두 PASS·exit=0. 로그 `%TEMP%/lb2-review-build.log`, `lb2-review-regress.txt`. 외부 진단 fixture에서 Frozen 0개 N/A, 항등 정상, 영행렬이 아닌 대각선·축 방향 붕괴, 비유한 법선 검출 모두 PASS(`%TEMP%/lb2-review-fixture/result.txt`).
+- CesiumMan `leg_joint_R_1`, fraction 0.35, cut-time 0.5, delay 2의 LB 1 데모를 리뷰 보완 후 25.11초 실행하고 해당 프로세스만 종료했다. r0=3/r1=15/rMid=1, compared=4, 절단 순간 maxAbs=0·cutAbs=1.19209e-7·cutIdentity=PASS(위치·법선). 합성 C≠I와 게시 후 0/30/60프레임도 maxAbs=0, badNormalDir=0. +60의 minDet=0.524648, minDetJoint=12, detJ=1, detF=1은 D5의 부피 축소 가능성을 보여준다. 로그 `%TEMP%/lb2-review-demo/SP6-SkeletalPatchChecks.log`.
+- 데모 게시 결과 `caps=1 uncapped=0 error=0`, failedEarSegments=0, badBoundaryMask=0, D3D12 ERROR 0건. LB 0 비교 실행도 동일하다. LB-3의 독립 cap·재절단 검증 완료를 뜻하지는 않는다.
+- 실행 환경은 Release x64, `-debug 1`, NVIDIA GeForce MX450, 드라이버 591.86이다. 두 비교 실행 모두 창이 있는 출력과 어댑터가 달라 발생하는 DXGI `GetContainingOutput` #80 로그가 있으며, 위 D3D12 ERROR 수와 구분한다.
+- 동일 카메라 eye=(9.5,-1,3), at=(12.5,-0.5,0), Applied+60/+80 캡처: `C:/Users/Pes/AppData/Local/Temp/claude/80629d7db37982f2/518c1cc2-650b-4503-b9cf-db7aa22eec9c/scratchpad/lb/stump-comparison.png`. 같은 폴더에 실행 스크립트, `blend0/`·`blend1/` RAW와 debugger·LB2 로그를 보관했다.

@@ -1365,13 +1365,13 @@ namespace Viewer
                 return std::acos(cosine) * 57.29578f;
             };
 
-            // 팔레트 두 벌(절단 시점 값·현재 값)의 법선 행렬을 한 번만 만든다. 절단 시점 팔레트의 K 슬롯은 항등이다.
+            // 절단 시점과 실제 현재 법선을 사용한다. LB 위치 행렬은 역전치하지 않는다.
             std::vector<XMMATRIX> cutNormals, nowNormals;
             for (const auto& joint : skin.Snapshot.JointsAtCut)
                 cutNormals.push_back(normalOf(joint.posXform));
             cutNormals.push_back(XMMatrixIdentity());
-            for (const auto& matrix : checkInput.Palette)
-                nowNormals.push_back(normalOf(matrix));
+            for (const auto& matrix : checkInput.NormalPalette)
+                nowNormals.push_back(Math::Matrix4(matrix));
             const XMMATRIX nodeNormal = normalOf(checkInput.Node);
             const bool paletteOk = nowNormals.size() == cutNormals.size();
 
@@ -2608,7 +2608,25 @@ namespace Viewer
 
                 // LB는 원래 비율 표를 snapshot에 보관하고 LW 모드 0·1의 P=1 처리는 별도로 유지한다.
                 if (PatchLengthBlendEnabled())
+                {
                     m_SkinSnapshots[0].LengthBlendRatio = lengthTable.Ratio;
+
+                    // 절단 요청 시점의 실제 입력으로 혼합 팔레트 항등성을 검사한다.
+                    std::vector<Joint> palette;
+                    BuildPatchPalette(m_SkinSnapshots[0], joints, nodes, palette,
+                        mesh->GetPreparedAnimJoints(), mesh->GetPreparedAnimNodes(), PatchAnimFollowEnabled());
+                    PatchLog("%s", CheckLengthBlendPalette(m_SkinSnapshots[0], palette, nodes,
+                        mesh->GetPreparedAnimJoints(), mesh->GetPreparedAnimNodes(), "A", -1).c_str());
+
+                    // 합성 C≠I 입력에서도 부착 노드의 C와 D를 중복 적용하지 않는지 검사한다.
+                    std::vector<Matrix4> movedNodes(nodes, nodes + parents.size());
+                    movedNodes[m_SkinSnapshots[0].AttachNode] = Matrix4(Math::AffineTransform(
+                        Math::Matrix3(Math::kIdentity), Math::Vector3(0.25f, -0.5f, 0.75f))) * movedNodes[m_SkinSnapshots[0].AttachNode];
+                    BuildPatchPalette(m_SkinSnapshots[0], joints, movedNodes.data(), palette,
+                        mesh->GetPreparedAnimJoints(), mesh->GetPreparedAnimNodes(), PatchAnimFollowEnabled());
+                    PatchLog("%s", CheckLengthBlendPalette(m_SkinSnapshots[0], palette, movedNodes.data(),
+                        mesh->GetPreparedAnimJoints(), mesh->GetPreparedAnimNodes(), "A-C!=I", -2).c_str());
+                }
                 if (PatchLengthWeightsMode() != 2)
                     for (size_t k = 0; k < lengthTable.Ratio.size(); ++k)
                         if (lengthTable.CutRoot[k] >= 0 && !lengthTable.Descendant[k])
@@ -2665,7 +2683,7 @@ namespace Viewer
                             }
                         PatchLog("LB1 P=%u r_P=%.4f descendants=%u paletteEntries=%u duplicates=%u match=%s\n",
                             cuts[i].NodeId, ratio, uint32_t(descendants.size()), rootEntries,
-                            rootEntries ? rootEntries - 1 : 0, mismatches ? "FAIL" : "PASS");
+                            rootEntries ? rootEntries - 1 : 0, !rootEntries ? "N/A" : mismatches ? "FAIL" : "PASS");
                     }
 
                     if (!m_MultiPrepare && cuts[i].ChildNodeId != UINT32_MAX)

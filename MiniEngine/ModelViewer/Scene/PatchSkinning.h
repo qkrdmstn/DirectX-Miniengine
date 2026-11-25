@@ -81,6 +81,7 @@ namespace Viewer
     {
         Math::Matrix4 Node{ Math::kIdentity };
         std::vector<Math::Matrix4> Palette;
+        std::vector<Math::Matrix3> NormalPalette; // 혼합 위치 행렬을 역전치하지 않고 실제 법선을 보관한다.
     };
 
     // 재절단 skin 생성의 정점 구성과 readback 비용이다.
@@ -147,6 +148,11 @@ namespace Viewer
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
         const Math::Matrix4* currentNodes, std::vector<Joint>& out,
         const Joint* animJoints = nullptr, const Math::Matrix4* animNodes = nullptr, bool animFollow = false);
+
+    // LB 위치·법선 식과 절단 시점 항등성, 행렬식 및 법선 유효성을 CPU에서 검사한다.
+    std::string CheckLengthBlendPalette(const PatchSkinSnapshot& snapshot, const std::vector<Joint>& palette,
+        const Math::Matrix4* nodes, const Joint* animJoints, const Math::Matrix4* animNodes,
+        const char* side, int frame);
 
     // 원본 revision과 추출 출처를 이용해 조각의 skin VB를 만들고 GPU 완료 후 반환한다.
     // lengthTable이 있으면 lengthMeshes(piece.Meshes 번호, A 조각 section의 SourceMesh)에 속한 mesh의 복사 정점만

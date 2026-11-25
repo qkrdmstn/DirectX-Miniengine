@@ -914,9 +914,7 @@ namespace Viewer
         return true;
     }
 
-    // AF2b 진단: 게시 후 몇 프레임에서 고정 joint 팔레트를 C·A_k·O_k로 CPU 재계산해 렌더 팔레트와 비교한다.
-    // 이전 K 방식(D·JointsAtCut) 대비 이동량과 부착 node의 물리 override 여부도 함께 기록한다.
-    // 렌더 식과 같은 식을 재계산하므로 입력 연결만 검증한다.
+    // 게시 후 추종·LB 혼합 기대값을 실제 팔레트와 비교하고 입력 연결 및 수치 상태를 기록한다.
     void MeshComponent::CheckAnimFollowFrame(const MeshComponent& source)
     {
         // 게시(0), +30, +60 프레임에서만 검사한다.
@@ -942,6 +940,7 @@ namespace Viewer
         const Matrix4 delta = nodes[snapshot.AttachNode] * Invert(snapshot.AttachAtCut);
         uint32_t frozen = 0;
         float maxRel = 0, followDelta = 0;
+        const bool blend = PatchLengthBlendEnabled() && snapshot.LengthBlendRatio.size() == snapshot.JointsAtCut.size();
         for (size_t k = 0; k < snapshot.JointsAtCut.size(); ++k)
         {
             if (!snapshot.Frozen[k])
@@ -953,6 +952,14 @@ namespace Viewer
             DirectX::XMStoreFloat4x4(&actual, m_PatchPalette[k].posXform);
             DirectX::XMStoreFloat4x4(&expected, correction * animJoints[k].posXform * snapshot.AnimOffset[k]);
             DirectX::XMStoreFloat4x4(&old, delta * snapshot.JointsAtCut[k].posXform);
+            if (blend)
+            {
+                // 기대 위치도 추종·고정 행렬의 성분별 가중합으로 바꾼다.
+                const float ratio = snapshot.LengthBlendRatio[k];
+                for (uint32_t r = 0; r < 4; ++r)
+                    for (uint32_t c = 0; c < 4; ++c)
+                        expected.m[r][c] = ratio * expected.m[r][c] + (1 - ratio) * old.m[r][c];
+            }
             const float scale = std::max(1.0f, std::sqrt(expected.m[3][0] * expected.m[3][0]
                 + expected.m[3][1] * expected.m[3][1] + expected.m[3][2] * expected.m[3][2]));
             for (uint32_t r = 0; r < 4; ++r)
@@ -992,6 +999,8 @@ namespace Viewer
         sprintf_s(line, "AF2b palette side=%s frame=%u frozen=%u maxrel=%g followDelta=%g attachOverridden=%d result=%s\n",
             PatchSkin->Side, frame, frozen, maxRel, followDelta, overridden, maxRel <= 1e-5f ? "PASS" : "FAIL");
         Utility::Print(line);
+        const std::string lb = CheckLengthBlendPalette(snapshot, m_PatchPalette, nodes, animJoints, animNodes, PatchSkin->Side, int(frame));
+        Utility::Print(lb.c_str());
         FILE* file = nullptr;
         if (GetTempPathA(MAX_PATH, path))
         {
@@ -999,6 +1008,7 @@ namespace Viewer
             if (!fopen_s(&file, path, "a"))
             {
                 fputs(line, file);
+                fputs(lb.c_str(), file);
                 fclose(file);
             }
         }
@@ -1202,7 +1212,7 @@ namespace Viewer
                 const bool animFollow = PatchAnimFollowEnabled();
                 BuildPatchPalette(PatchSkin->Snapshot, patchSource->GetPreparedJoints(), patchSource->GetPreparedNodes(), m_PatchPalette,
                     patchSource->GetPreparedAnimJoints(), patchSource->GetPreparedAnimNodes(), animFollow);
-                if (skinChecks && animFollow && PatchSkin->Snapshot.AnimFollow)
+                if ((skinChecks || PatchLengthBlendEnabled()) && animFollow && PatchSkin->Snapshot.AnimFollow)
                 {
                     CheckAnimFollowFrame(*patchSource);
                 }
