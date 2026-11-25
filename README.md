@@ -9,6 +9,7 @@ DirectX 12 MiniEngine 위에서 **메시를 실시간으로 자르는 기능**�
 - 3주차: [Canva 슬라이드](https://canva.link/ycxk54ec6bttauh)
 - 4주차: [Canva 슬라이드](https://canva.link/s9wl6s8f998jn9c)
 - 5주차: [Canva 슬라이드](https://canva.link/sud2w71bgb2q4da)
+- 6주차: [Canva 슬라이드](https://canva.link/ianimje8swrt1ru)
 
 ## 주요 기능
 
