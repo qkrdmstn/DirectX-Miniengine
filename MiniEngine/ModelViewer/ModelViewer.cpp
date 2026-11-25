@@ -162,7 +162,7 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
-    float m_DemoDelay = 0, m_DemoCutTime = -1, m_DemoSwitchDelay = 1;
+    float m_DemoDelay = 0, m_DemoCutTime = -1, m_DemoSwitchDelay = 1, m_DemoTilt = 0;
     float m_DemoPlayback = 0, m_DemoPreviousTime = 0;
     uint32_t m_DemoStartClip = 0, m_DemoNextClip = 0, m_DemoStartFrame = 0;
     bool m_DemoSwitched = false;
@@ -419,7 +419,7 @@ void ModelViewer::Startup( void )
     {
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-bone",
             L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
-            L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
+            L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt",
             L"skeletal-break-demo-unmask", L"attached-recut-checks", L"rig-bone-cut-checks",
             L"skeletal-union-checks", L"skeletal-patch-offset-copy", L"model", L"demo-cut-sec",
             L"skeletal-multi-cut", L"skeletal-multi-stale", L"skeletal-multi-fail", L"skeletal-multi-reject" })
@@ -433,7 +433,8 @@ void ModelViewer::Startup( void )
     // 녹화 재현 옵션은 실제 시연과 함께 사용하고 시간 값 전체를 검증한다.
     std::wstring demoValue;
     for (const wchar_t* option : { L"skeletal-break-demo-delay", L"skeletal-break-demo-anim",
-        L"skeletal-break-demo-cut-time", L"skeletal-break-demo-next", L"skeletal-break-demo-switch" })
+        L"skeletal-break-demo-cut-time", L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
+        L"skeletal-break-demo-tilt" })
         if (CommandLineArgs::GetString(option, demoValue) && !m_SkeletalBreakDemo)
             throw std::invalid_argument("skeletal demo animation options require skeletal-break-demo");
     const auto readSeconds = [](const std::wstring& value)
@@ -453,6 +454,15 @@ void ModelViewer::Startup( void )
         throw std::invalid_argument("skeletal demo next clip must not be empty");
     if (CommandLineArgs::GetString(L"skeletal-break-demo-cut-time", m_DemoCut) && m_DemoCut != L"auto")
         m_DemoCutTime = readSeconds(m_DemoCut);
+
+    // 기울기는 양방향 각도를 허용하되 비유한 값과 숫자 뒤의 문자를 거절한다.
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-tilt", demoValue))
+    {
+        size_t end = 0;
+        m_DemoTilt = std::stof(demoValue, &end);
+        if (end != demoValue.size() || !std::isfinite(m_DemoTilt))
+            throw std::invalid_argument("skeletal demo tilt must be finite degrees");
+    }
 
     // 기존 독립 검사 옵션을 읽는다.
     uint32_t attachedRecut = 0;
@@ -496,7 +506,7 @@ void ModelViewer::Startup( void )
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
             L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
-            L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
+            L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt",
             L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
             L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
             L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
@@ -641,7 +651,7 @@ void ModelViewer::Startup( void )
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
         L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"skeletal-break-demo-bone",
         L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
-        L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
+        L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt",
         L"capture", L"capture-frame", L"animation-step-ms",
         L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cap-threads",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
@@ -1371,6 +1381,29 @@ void ModelViewer::Update( float deltaT )
                 {
                     plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
                 }
+
+                // 모델 +X를 평면에 투영한 축으로 중심을 고정해 회전하고 기존 크기를 보존한다.
+                if (m_DemoTilt != 0)
+                {
+                    const Matrix4 transform = Invert(plane.WorldToPlane);
+                    const Vector3 normal(plane.WorldPlane);
+                    const Vector3 lateral = object->GetTransform().GetRotation() * Vector3(kXUnitVector);
+                    const Vector3 projected = lateral - normal * Dot(lateral, normal);
+                    const Vector3 axis = float(LengthSquare(projected)) > 1e-6f
+                        ? Normalize(projected) : Normalize(Vector3(transform.GetX()));
+                    const Quaternion rotation(axis, std::fmod(m_DemoTilt, 360.0f) * (3.14159265f / 180.0f));
+                    if (!MeshCutting::TryBuildCutPlaneData({ plane.HalfWidth * 2, plane.HalfHeight * 2 },
+                        AffineTransform(rotation * Vector3(transform.GetX()), rotation * Vector3(transform.GetY()),
+                            rotation * Vector3(transform.GetZ()), Vector3(transform.GetW())), plane))
+                        throw std::runtime_error("Skeletal demo invalid tilted plane");
+
+                    // 회전 전 본 방향과 새 법선을 함께 남겨 사선 절단 여부를 확인한다.
+                    Utility::Printf("Skeletal demo tilt=%.1f normal=(%.4f,%.4f,%.4f) boneNormal=(%.4f,%.4f,%.4f)\n",
+                        m_DemoTilt, float(plane.WorldPlane.GetX()), float(plane.WorldPlane.GetY()), float(plane.WorldPlane.GetZ()),
+                        float(normal.GetX()), float(normal.GetY()), float(normal.GetZ()));
+                }
+
+                // 회전된 평면을 기존 패치 절단 경로로 제출한다.
                 m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
                 Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
                 break;
