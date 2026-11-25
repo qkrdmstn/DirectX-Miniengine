@@ -6,14 +6,14 @@ cbuffer Parameters : register(b0)
     float Epsilon, HalfWidth, HalfHeight;
     uint Triangles;
     uint Draws, DepthOffset, IndexOffset, Mode;
-    uint NodeCount, Influence, HasState, Padding1;
+    uint NodeCount, Influence, HasState, BitDraw;
 };
 struct DrawInput
 {
     uint VbOffset, Stride, IbOffset, Index32;
     uint StartIndex, BaseVertex, Triangles, PoseOffset;
     uint FirstTriangle, MaskOffset, Flags, SectionId;
-    uint DrawId, JointCount, VertexCount, Reserved1;
+    uint DrawId, JointCount, VertexCount, WordOffset;
 };
 ByteAddressBuffer Source : register(t0);
 ByteAddressBuffer SourcePose : register(t1);
@@ -26,7 +26,9 @@ RWByteAddressBuffer Meta : register(u2); // 선택 수 0, 예약 영역 4..11(�
 RWByteAddressBuffer Scan : register(u3); // 블록 안 inclusive prefix·예약 값 0, 뒤쪽 16바이트 간격 블록 offset
 RWByteAddressBuffer Votes : register(u4); // NodeId별 uint64 (lo, hi)
 RWByteAddressBuffer Chosen : register(u5);
+RWByteAddressBuffer Bits : register(u6); // 정점당 선택 1비트, section은 word 경계에서 시작
 groupshared uint Prefix[64];
+groupshared uint Words[2];
 
 // 그룹의 선택 합계를 Hillis-Steele inclusive scan으로 계산한다.
 uint ScanTotals(uint lane, uint value)
@@ -60,16 +62,26 @@ uint Index(DrawInput s, uint i)
 // PreparePose와 같은 정규화 weight로 선택 팔레트의 영향을 판정한다.
 bool Selected(DrawInput s, uint i)
 {
-    // skin이 없는 section은 선택 본의 영향을 받지 않는다.
-    if (!(s.Flags&256) || (Influence && Chosen.Load(0)==0xffffffff)) return false;
+    // skin이 없는 section은 선택 본의 영향을 받지 않으며 선택 NodeId는 한 번만 읽는다.
+    uint chosen=Influence ? Chosen.Load(0) : 0;
+    if (!(s.Flags&256) || (Influence && chosen==0xffffffff)) return false;
     uint4 p=Source.Load4(s.VbOffset+i*s.Stride+s.Stride-16);
     uint4 joints=uint4(p.x&65535,p.x>>16,p.y&65535,p.y>>16);
     float4 weights=float4(p.z&65535,p.z>>16,p.w&65535,p.w>>16);
     weights/=max(dot(weights,1),1);
     bool selected=false;
     [unroll] for(uint k=0;k<4;k++)
-        if(joints[k]<s.JointCount && weights[k]>0) selected|=Influence ? Mask[s.MaskOffset+joints[k]]==Chosen.Load(0) : Mask[s.MaskOffset+joints[k]]!=0;
+        if(joints[k]<s.JointCount && weights[k]>0) selected|=Influence ? Mask[s.MaskOffset+joints[k]]==chosen : Mask[s.MaskOffset+joints[k]]!=0;
     return selected;
+}
+// Mode 8이 기록한 정점 선택 비트를 읽는다.
+bool SelectedBit(DrawInput s, uint v)
+{
+    // skin이 없는 section과 범위 밖 정점은 비트 영역이 없어 선택되지 않은 것으로 본다.
+    if (!(s.Flags&256) || v>=s.VertexCount) return false;
+
+    // section word offset에서 정점의 비트 하나를 꺼낸다.
+    return ((Bits.Load((s.WordOffset+(v>>5))*4)>>(v&31))&1)!=0;
 }
 // CPU ClipCoplanarSegmentToCutPlaneRectangle과 같은 닫힌 구간 겹침을 검사한다.
 bool Overlaps(float3 a, float3 b)
@@ -153,6 +165,25 @@ void main(uint3 id : SV_DispatchThreadID)
             }
         }
         Chosen.Store(0,selected);
+        return;
+    }
+
+    // BitDraw draw의 section 정점마다 Selected를 한 번만 판정해 32정점씩 한 word로 모은다.
+    if(Mode==8)
+    {
+        // 그룹이 맡은 두 word의 누적기를 비우고 모든 lane이 기다린다.
+        uint lane=t%64;
+        if(lane<2) Words[lane]=0;
+        GroupMemoryBarrierWithGroupSync();
+
+        // 스레드 번호가 곧 section 안 정점 번호이며 범위 안 정점만 판정해 group 안에 비트를 모은다.
+        DrawInput s=Inputs[BitDraw];
+        if(t<s.VertexCount && Selected(s,t)) InterlockedOr(Words[lane/32],1u<<(lane%32));
+        GroupMemoryBarrierWithGroupSync();
+
+        // word 하나당 한 번만 전역 버퍼에 기록한다.
+        uint word=t/64*2+lane;
+        if(lane<2 && word<(s.VertexCount+31)/32) Bits.Store((s.WordOffset+word)*4,Words[lane]);
         return;
     }
 
@@ -246,9 +277,9 @@ void main(uint3 id : SV_DispatchThreadID)
             Meta.InterlockedMin(36,x,ignored); Meta.InterlockedMax(40,x,ignored);
         }
 
-        // 제거 상태를 선택 조건에 더해 prefix와 모든 출력에 함께 반영한다.
+        // 제거 상태를 선택 조건에 더하고 정점 선택 비트 세 개를 읽어 prefix와 모든 출력에 반영한다.
         bool available=!HasState || !(State[t]&0x80000000u);
-        bool selected=available && (Selected(s,indices.x)||Selected(s,indices.y)||Selected(s,indices.z));
+        bool selected=available && (SelectedBit(s,indices.x)||SelectedBit(s,indices.y)||SelectedBit(s,indices.z));
         Scan.Store2(t*8,uint2(selected,0)); return;
     }
 

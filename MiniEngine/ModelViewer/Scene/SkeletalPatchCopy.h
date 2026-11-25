@@ -92,6 +92,8 @@ namespace Viewer
         Math::Matrix4 m_SourceWorld;
         StructuredBuffer m_Descriptors, m_Masks;
         ByteAddressBuffer m_Scan, m_Votes, m_Selected;
+        ByteAddressBuffer m_Bits; // 정점 선택 1비트 배열(재사용)
+        uint32_t m_BitCapacity = 0;
         bool m_Influence = false;
         std::shared_ptr<SkeletalPatchBuffers> m_Output;
         std::shared_ptr<const GeometryRevision> m_Input;
