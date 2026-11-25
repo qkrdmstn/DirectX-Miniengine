@@ -1,0 +1,2140 @@
+diff --git a/MiniEngine/Core/Display.cpp b/MiniEngine/Core/Display.cpp
+index 8f9b6c0f..ac66d883 100644
+--- a/MiniEngine/Core/Display.cpp
++++ b/MiniEngine/Core/Display.cpp
+@@ -13,6 +13,7 @@
+ 
+ #include "pch.h"
+ #include "Display.h"
++#include "GameCore.h"
+ #include "GraphicsCore.h"
+ #include "BufferManager.h"
+ #include "ColorBuffer.h"
+@@ -494,8 +495,12 @@ void Graphics::PreparePresentSDR(void)
+ }
+ 
+ // 출력 프레임을 표시하고 Present 실패 시 장치 제거 원인을 보고한다.
++// RP 측정에서는 vsync를 끄고 기존 표시와 프레임 시간 갱신을 수행한다.
+ void Display::Present(void)
+ {
++    // 측정 실행에서만 엔진의 vsync 설정을 덮어쓴다.
++    if (RP::Enabled) s_EnableVSync = false;
++
+     // 현재 출력 형식에 맞게 백 버퍼를 준비한다.
+     if (g_bEnableHDROutput)
+         PreparePresentHDR();
+diff --git a/MiniEngine/Core/GameCore.cpp b/MiniEngine/Core/GameCore.cpp
+index b49b521f..65fe21ea 100644
+--- a/MiniEngine/Core/GameCore.cpp
++++ b/MiniEngine/Core/GameCore.cpp
+@@ -25,6 +25,14 @@
+ 
+ #pragma comment(lib, "runtimeobject.lib") 
+ 
++namespace RP
++{
++    bool Enabled = false;
++    double CpuMs = 0, PaletteMs = 0;
++    uint64_t PaletteCalls = 0;
++    void (*CompleteFrame)() = nullptr;
++}
++
+ namespace GameCore
+ {
+     using namespace Graphics;
+@@ -54,8 +62,14 @@ namespace GameCore
+         GameInput::Shutdown();
+     }
+ 
++    // 입력부터 Present까지 전체 CPU tick과 팔레트 호출을 프레임별로 기록한다.
+     bool UpdateApplication( IGameApp& game )
+     {
++        // 측정 옵션에서만 tick을 읽고 이번 프레임 누적값을 초기화한다.
++        const int64_t rpStart = RP::Enabled ? SystemTime::GetCurrentTick() : 0;
++        RP::PaletteMs = 0;
++        RP::PaletteCalls = 0;
++
+         EngineProfiling::Update();
+ 
+         float DeltaTime = Graphics::GetFrameTime();
+@@ -83,6 +97,13 @@ namespace GameCore
+ 
+         Display::Present();
+ 
++        // Present를 포함한 시간을 저장한 뒤 같은 프레임의 CPU 값을 확정한다.
++        if (RP::Enabled)
++        {
++            RP::CpuMs = SystemTime::TicksToMillisecs(SystemTime::GetCurrentTick() - rpStart);
++            if (RP::CompleteFrame) RP::CompleteFrame();
++        }
++
+         return !game.IsDone();
+     }
+ 
+diff --git a/MiniEngine/Core/GameCore.h b/MiniEngine/Core/GameCore.h
+index f7dd4be1..96ad14a1 100644
+--- a/MiniEngine/Core/GameCore.h
++++ b/MiniEngine/Core/GameCore.h
+@@ -15,6 +15,15 @@
+ 
+ #include "pch.h"
+ 
++// 임시 RP 계측의 CPU 누적값과 프레임 완료 훅을 공유한다.
++namespace RP
++{
++    extern bool Enabled;
++    extern double CpuMs, PaletteMs;
++    extern uint64_t PaletteCalls;
++    extern void (*CompleteFrame)();
++}
++
+ namespace GameCore
+ {
+     extern bool gIsSupending;
+diff --git a/MiniEngine/Model/Model.vcxproj b/MiniEngine/Model/Model.vcxproj
+index dbe8d74c..26fc3e53 100644
+--- a/MiniEngine/Model/Model.vcxproj
++++ b/MiniEngine/Model/Model.vcxproj
+@@ -238,4 +238,38 @@
+       <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+     </PropertyGroup>
+   </Target>
++  <ItemGroup>
++    <FxCompile Include="Shaders\VCDefaultVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoUV1VS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoUV1SkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentNoUV1VS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentNoUV1SkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoUV1PS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentNoUV1PS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDepthOnlyVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDepthOnlySkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCCutoutDepthVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCCutoutDepthSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCCutoutDepthPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCMaskDepthPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++  </ItemGroup>
++  <ItemGroup>
++    <FxCompile Include="Shaders\ClipCutoutDepthSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipCutoutDepthVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentNoUV1SkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentNoUV1VS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoUV1SkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoUV1VS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDepthOnlySkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\ClipDepthOnlyVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++  </ItemGroup>
+ </Project>
+diff --git a/MiniEngine/Model/Model.vcxproj.filters b/MiniEngine/Model/Model.vcxproj.filters
+index f3529ac0..b34dd9e4 100644
+--- a/MiniEngine/Model/Model.vcxproj.filters
++++ b/MiniEngine/Model/Model.vcxproj.filters
+@@ -241,4 +241,38 @@
+       <Filter>Shaders</Filter>
+     </FxCompile>
+   </ItemGroup>
++  <ItemGroup>
++    <FxCompile Include="Shaders\VCDefaultVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoUV1VS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoUV1SkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentNoUV1VS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentNoUV1SkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoUV1PS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDefaultNoTangentNoUV1PS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDepthOnlyVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCDepthOnlySkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCCutoutDepthVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCCutoutDepthSkinVS.hlsl"><ShaderType>Vertex</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCCutoutDepthPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++    <FxCompile Include="Shaders\VCMaskDepthPS.hlsl"><ShaderType>Pixel</ShaderType></FxCompile>
++  </ItemGroup>
++  <ItemGroup>
++    <FxCompile Include="Shaders\ClipCutoutDepthSkinVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipCutoutDepthVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentNoUV1SkinVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentNoUV1VS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentSkinVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoTangentVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoUV1SkinVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultNoUV1VS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultSkinVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDefaultVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDepthOnlySkinVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++    <FxCompile Include="Shaders\ClipDepthOnlyVS.hlsl"><Filter>Shaders</Filter></FxCompile>
++  </ItemGroup>
+ </Project>
+diff --git a/MiniEngine/Model/Renderer.cpp b/MiniEngine/Model/Renderer.cpp
+index dde7890f..1f5e34c6 100644
+--- a/MiniEngine/Model/Renderer.cpp
++++ b/MiniEngine/Model/Renderer.cpp
+@@ -50,7 +50,42 @@
+ #include "CompiledShaders/WireframeNoUV1PS.h"
+ #include "CompiledShaders/WireframeNoTangentPS.h"
+ #include "CompiledShaders/WireframeNoTangentNoUV1PS.h"
++#include "CompiledShaders/VCDefaultVS.h"
++#include "CompiledShaders/VCDefaultSkinVS.h"
++#include "CompiledShaders/VCDefaultNoUV1VS.h"
++#include "CompiledShaders/VCDefaultNoUV1SkinVS.h"
++#include "CompiledShaders/VCDefaultNoTangentVS.h"
++#include "CompiledShaders/VCDefaultNoTangentSkinVS.h"
++#include "CompiledShaders/VCDefaultNoTangentNoUV1VS.h"
++#include "CompiledShaders/VCDefaultNoTangentNoUV1SkinVS.h"
++#include "CompiledShaders/VCDefaultPS.h"
++#include "CompiledShaders/VCDefaultNoUV1PS.h"
++#include "CompiledShaders/VCDefaultNoTangentPS.h"
++#include "CompiledShaders/VCDefaultNoTangentNoUV1PS.h"
++#include "CompiledShaders/VCDepthOnlyVS.h"
++#include "CompiledShaders/VCDepthOnlySkinVS.h"
++#include "CompiledShaders/VCCutoutDepthVS.h"
++#include "CompiledShaders/VCCutoutDepthSkinVS.h"
++#include "CompiledShaders/VCCutoutDepthPS.h"
++#include "CompiledShaders/VCMaskDepthPS.h"
++#include "CompiledShaders/ClipCutoutDepthSkinVS.h"
++#include "CompiledShaders/ClipCutoutDepthVS.h"
++#include "CompiledShaders/ClipDefaultNoTangentNoUV1SkinVS.h"
++#include "CompiledShaders/ClipDefaultNoTangentNoUV1VS.h"
++#include "CompiledShaders/ClipDefaultNoTangentSkinVS.h"
++#include "CompiledShaders/ClipDefaultNoTangentVS.h"
++#include "CompiledShaders/ClipDefaultNoUV1SkinVS.h"
++#include "CompiledShaders/ClipDefaultNoUV1VS.h"
++#include "CompiledShaders/ClipDefaultSkinVS.h"
++#include "CompiledShaders/ClipDefaultVS.h"
++#include "CompiledShaders/ClipDepthOnlySkinVS.h"
++#include "CompiledShaders/ClipDepthOnlyVS.h"
++
+ #include <cstddef>
++#include "../Core/GameCore.h"
++#include "../Core/ReadbackBuffer.h"
++#include "../Core/CommandListManager.h"
++#include <fstream>
+ 
+ #pragma warning(disable:4319) // '~': zero extending 'uint32_t' to 'uint64_t' of greater size
+ 
+@@ -71,6 +106,8 @@ namespace Renderer
+     // 원본 인덱스를 공유하되 mesh.pso와 sort key의 범위를 늘리지 않는다.
+     std::vector<GraphicsPSO> s_WireframePSOs;
+     std::vector<GraphicsPSO> s_VertexPSOs;
++    std::vector<GraphicsPSO> s_VCPSOs;
++    std::vector<GraphicsPSO> s_ClipPSOs;
+     static_assert(offsetof(GlobalConstants, InvViewportSize) == 184, "GS b1 c11.zw layout");
+ 
+     TextureRef s_RadianceCubeMap;
+@@ -111,6 +148,8 @@ void Renderer::Initialize(void)
+     m_RootSig[kCommonCBV].InitAsConstantBuffer(1);
+     m_RootSig[kSkinMatrices].InitAsBufferSRV(20, D3D12_SHADER_VISIBILITY_VERTEX);
+     m_RootSig[kPosedVertices].InitAsBufferSRV(21, D3D12_SHADER_VISIBILITY_VERTEX);
++    m_RootSig[kVertexMask].InitAsBufferSRV(22, D3D12_SHADER_VISIBILITY_VERTEX);
++    m_RootSig[kVertexMaskOffset].InitAsConstants(2, 1, D3D12_SHADER_VISIBILITY_VERTEX);
+     m_RootSig.Finalize(L"RootSig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+ 
+     DXGI_FORMAT ColorFormat = g_SceneColorBuffer.GetFormat();
+@@ -204,6 +243,33 @@ void Renderer::Initialize(void)
+     sm_PSOs.push_back(SkinCutoutDepthPSO);
+ 
+     ASSERT(sm_PSOs.size() == 8);
++    // 깊이와 그림자 PSO의 입력 레이아웃을 유지하며 discard PS를 추가한다.
++    for (uint32_t i = 0; i < 8; ++i)
++    {
++        GraphicsPSO masked = sm_PSOs[i];
++        switch (i % 4)
++        {
++        case 0: masked.SetVertexShader(g_pVCDepthOnlyVS, sizeof(g_pVCDepthOnlyVS)); break;
++        case 1: masked.SetVertexShader(g_pVCCutoutDepthVS, sizeof(g_pVCCutoutDepthVS)); break;
++        case 2: masked.SetVertexShader(g_pVCDepthOnlySkinVS, sizeof(g_pVCDepthOnlySkinVS)); break;
++        case 3: masked.SetVertexShader(g_pVCCutoutDepthSkinVS, sizeof(g_pVCCutoutDepthSkinVS)); break;
++        }
++        if (i & 1) masked.SetPixelShader(g_pVCCutoutDepthPS, sizeof(g_pVCCutoutDepthPS));
++        else masked.SetPixelShader(g_pVCMaskDepthPS, sizeof(g_pVCMaskDepthPS));
++        masked.Finalize();
++        s_VCPSOs.push_back(masked);
++        // clip은 기존 깊이 PSO를 복사해 PS 없는 상태를 그대로 보존한다.
++        GraphicsPSO clipped = sm_PSOs[i];
++        switch (i % 4)
++        {
++        case 0: clipped.SetVertexShader(g_pClipDepthOnlyVS, sizeof(g_pClipDepthOnlyVS)); break;
++        case 1: clipped.SetVertexShader(g_pClipCutoutDepthVS, sizeof(g_pClipCutoutDepthVS)); break;
++        case 2: clipped.SetVertexShader(g_pClipDepthOnlySkinVS, sizeof(g_pClipDepthOnlySkinVS)); break;
++        case 3: clipped.SetVertexShader(g_pClipCutoutDepthSkinVS, sizeof(g_pClipCutoutDepthSkinVS)); break;
++        }
++        clipped.Finalize();
++        s_ClipPSOs.push_back(clipped);
++    }
+ 
+     // Default PSO
+ 
+@@ -320,6 +386,8 @@ void Renderer::SetIBLBias(float LODBias)
+ 
+ void Renderer::Shutdown(void)
+ {
++    // GPU idle 이후 결과를 배출한다.
++    RPShutdown();
+     s_RadianceCubeMap = nullptr;
+     s_IrradianceCubeMap = nullptr;
+     TextureManager::Shutdown();
+@@ -328,6 +396,7 @@ void Renderer::Shutdown(void)
+ }
+ 
+ // 원본 입력·스키닝을 유지하며 선은 깊이 오차를 보정하는 읽기 전용 PSO로 캐시한다.
++// 원본 상태와 대응하는 정점 마스크 PSO를 함께 준비한다.
+ uint8_t Renderer::GetPSO(uint16_t psoFlags)
+ {
+     using namespace PSOFlags;
+@@ -437,6 +506,130 @@ uint8_t Renderer::GetPSO(uint16_t psoFlags)
+         }
+     }
+ 
++    // 기존 색상 PSO와 같은 재질 상태에서 VC 변형을 만든다.
++    GraphicsPSO clipped = ColorPSO;
++    if (psoFlags & kHasSkin)
++    {
++        if (psoFlags & kHasTangent)
++        {
++            if (psoFlags & kHasUV1)
++            {
++                clipped.SetVertexShader(g_pClipDefaultSkinVS, sizeof(g_pClipDefaultSkinVS));
++            }
++            else
++            {
++                clipped.SetVertexShader(g_pClipDefaultNoUV1SkinVS, sizeof(g_pClipDefaultNoUV1SkinVS));
++            }
++        }
++        else
++        {
++            if (psoFlags & kHasUV1)
++            {
++                clipped.SetVertexShader(g_pClipDefaultNoTangentSkinVS, sizeof(g_pClipDefaultNoTangentSkinVS));
++            }
++            else
++            {
++                clipped.SetVertexShader(g_pClipDefaultNoTangentNoUV1SkinVS, sizeof(g_pClipDefaultNoTangentNoUV1SkinVS));
++            }
++        }
++    }
++    else
++    {
++        if (psoFlags & kHasTangent)
++        {
++            if (psoFlags & kHasUV1)
++            {
++                clipped.SetVertexShader(g_pClipDefaultVS, sizeof(g_pClipDefaultVS));
++            }
++            else
++            {
++                clipped.SetVertexShader(g_pClipDefaultNoUV1VS, sizeof(g_pClipDefaultNoUV1VS));
++            }
++        }
++        else
++        {
++            if (psoFlags & kHasUV1)
++            {
++                clipped.SetVertexShader(g_pClipDefaultNoTangentVS, sizeof(g_pClipDefaultNoTangentVS));
++            }
++            else
++            {
++                clipped.SetVertexShader(g_pClipDefaultNoTangentNoUV1VS, sizeof(g_pClipDefaultNoTangentNoUV1VS));
++            }
++        }
++    }
++
++    clipped.Finalize();
++    s_ClipPSOs.push_back(clipped);
++    clipped.SetDepthStencilState(DepthStateTestEqual);
++    clipped.Finalize();
++    s_ClipPSOs.push_back(clipped);
++    GraphicsPSO masked = ColorPSO;
++    if (psoFlags & kHasSkin)
++    {
++        if (psoFlags & kHasTangent)
++        {
++            if (psoFlags & kHasUV1)
++            {
++                masked.SetVertexShader(g_pVCDefaultSkinVS, sizeof(g_pVCDefaultSkinVS));
++                masked.SetPixelShader(g_pVCDefaultPS, sizeof(g_pVCDefaultPS));
++            }
++            else
++            {
++                masked.SetVertexShader(g_pVCDefaultNoUV1SkinVS, sizeof(g_pVCDefaultNoUV1SkinVS));
++                masked.SetPixelShader(g_pVCDefaultNoUV1PS, sizeof(g_pVCDefaultNoUV1PS));
++            }
++        }
++        else
++        {
++            if (psoFlags & kHasUV1)
++            {
++                masked.SetVertexShader(g_pVCDefaultNoTangentSkinVS, sizeof(g_pVCDefaultNoTangentSkinVS));
++                masked.SetPixelShader(g_pVCDefaultNoTangentPS, sizeof(g_pVCDefaultNoTangentPS));
++            }
++            else
++            {
++                masked.SetVertexShader(g_pVCDefaultNoTangentNoUV1SkinVS, sizeof(g_pVCDefaultNoTangentNoUV1SkinVS));
++                masked.SetPixelShader(g_pVCDefaultNoTangentNoUV1PS, sizeof(g_pVCDefaultNoTangentNoUV1PS));
++            }
++        }
++    }
++    else
++    {
++        if (psoFlags & kHasTangent)
++        {
++            if (psoFlags & kHasUV1)
++            {
++                masked.SetVertexShader(g_pVCDefaultVS, sizeof(g_pVCDefaultVS));
++                masked.SetPixelShader(g_pVCDefaultPS, sizeof(g_pVCDefaultPS));
++            }
++            else
++            {
++                masked.SetVertexShader(g_pVCDefaultNoUV1VS, sizeof(g_pVCDefaultNoUV1VS));
++                masked.SetPixelShader(g_pVCDefaultNoUV1PS, sizeof(g_pVCDefaultNoUV1PS));
++            }
++        }
++        else
++        {
++            if (psoFlags & kHasUV1)
++            {
++                masked.SetVertexShader(g_pVCDefaultNoTangentVS, sizeof(g_pVCDefaultNoTangentVS));
++                masked.SetPixelShader(g_pVCDefaultNoTangentPS, sizeof(g_pVCDefaultNoTangentPS));
++            }
++            else
++            {
++                masked.SetVertexShader(g_pVCDefaultNoTangentNoUV1VS, sizeof(g_pVCDefaultNoTangentNoUV1VS));
++                masked.SetPixelShader(g_pVCDefaultNoTangentNoUV1PS, sizeof(g_pVCDefaultNoTangentNoUV1PS));
++            }
++        }
++    }
++
++    masked.Finalize();
++    s_VCPSOs.push_back(masked);
++    masked.SetDepthStencilState(DepthStateTestEqual);
++    masked.Finalize();
++    s_VCPSOs.push_back(masked);
++
+     // If not found, keep the new one, and return its index
+     sm_PSOs.push_back(ColorPSO);
+ 
+@@ -542,7 +735,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
+     D3D12_GPU_VIRTUAL_ADDRESS materialCBV,
+     D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
+     const Joint* skeleton, const GpuBuffer* posedBuffer, uint32_t posedOffset,
+-    std::shared_ptr<const MeshRenderOverride> renderOverride)
++    std::shared_ptr<const MeshRenderOverride> renderOverride, const GpuBuffer* vertexMask)
+ {
+     // override는 원본 draw와 일대일 대응하며 공유 Mesh의 메타데이터는 수정하지 않는다.
+     ASSERT(!renderOverride || renderOverride->Draws.size() == mesh.numDraws);
+@@ -604,7 +797,7 @@ void MeshSorter::AddMesh( const Mesh& mesh, float distance,
+ 
+     // 정렬 목록이 override를 공유 소유하므로 호출자의 임시 shared_ptr가 사라져도 유효하다.
+     SortObject object = { &mesh, skeleton, meshCBV, materialCBV, bufferPtr,
+-        posedBuffer, posedOffset, renderOverride };
++        posedBuffer, posedOffset, renderOverride, vertexMask };
+     m_SortObjects.push_back(object);
+ }
+ 
+@@ -615,6 +808,279 @@ void MeshSorter::Sort()
+ }
+ 
+ // 모든 패스가 같은 section override 또는 기존 IB와 draw를 읽고 원본 baseVertex를 유지한다.
++namespace Renderer
++{
++    RenderMaskMode MaskMode = RenderMaskMode::Compact;
++    constexpr uint32_t RPModes = 6, RPCycles = 3, RPWindow = 230;
++    namespace
++    {
++        constexpr uint32_t RPSlots = 8, RPBytes = sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
++        struct RPFrame
++        {
++            ReadbackBuffer Data;
++            uint64_t Fence = 0, Draws[4]{}, Indices[4]{};
++            uint32_t Frame = 0, Mode = 0;
++            double Cpu = 0, Palette = 0, Calls = 0;
++        };
++        struct RPSample
++        {
++            D3D12_QUERY_DATA_PIPELINE_STATISTICS Stats[4];
++            uint64_t Times[8], Draws[4], Indices[4];
++            uint32_t Frame, Mode;
++            double Cpu, Palette, Calls;
++        };
++        std::vector<RPSample> rpSamples;
++        RPFrame rpFrames[RPSlots];
++        Microsoft::WRL::ComPtr<ID3D12QueryHeap> rpStats, rpTimes;
++        RPFrame* rpCurrent = nullptr;
++        uint64_t rpFrequency = 0;
++        uint32_t rpWritten = 0, rpSkipped = 0, rpCounts[6]{};
++        bool rpFinished = false;
++        std::ofstream rpCsv, rpSummary;
++        std::wstring rpStem;
++        double rpSums[6][4][11]{};
++        const char* rpModes[] = { "None-orig", "None-R32", "Degenerate", "Compact", "VC-clip", "VC-discard-any" };
++        const char* rpNames[] = { "shadow", "depth", "opaque", "transparent" };
++    }
++
++    uint64_t rpMemory[6]{};
++    namespace
++    {
++        Microsoft::WRL::ComPtr<ID3D12QueryHeap> updateTimes;
++        ReadbackBuffer updateReadback;
++        struct UpdateEvent { std::string Label; double CpuMs; };
++        std::vector<UpdateEvent> updateEvents;
++    }
++
++    // GPU 갱신 범위 시작을 기록하며 파일 출력은 종료까지 미룬다.
++    uint32_t RPUpdateBegin(GraphicsContext& context, const char* label)
++    {
++        // 성능 실험이 아니면 계측하지 않는다.
++        if (!RP::Enabled) return UINT32_MAX;
++        if (!updateTimes)
++        {
++            D3D12_QUERY_HEAP_DESC desc{ D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 256, 0 };
++            if (FAILED(Graphics::g_Device->CreateQueryHeap(&desc, IID_PPV_ARGS(&updateTimes))))
++                throw std::runtime_error("VC update query allocation failed");
++            updateReadback.Create(L"VC updates readback", 256, sizeof(uint64_t));
++            updateEvents.reserve(128);
++        }
++
++        // 이벤트마다 독립 두 쿼리를 사용해 여러 게시와 복사를 구분한다.
++        const uint32_t event = uint32_t(updateEvents.size());
++        if (event >= 128) throw std::runtime_error("VC update query overflow");
++        updateEvents.push_back({ label, 0 });
++        context.InsertTimeStamp(updateTimes.Get(), event * 2);
++        return event;
++    }
++
++    // 갱신 종료와 CPU 기록 시간을 저장하고 같은 목록에서 쿼리를 resolve한다.
++    void RPUpdateEnd(GraphicsContext& context, uint32_t event, double cpuMs)
++    {
++        // 계측하지 않은 호출은 기존 실행만 유지한다.
++        if (event == UINT32_MAX) return;
++        updateEvents.at(event).CpuMs = cpuMs;
++        context.InsertTimeStamp(updateTimes.Get(), event * 2 + 1);
++        context.GetCommandList()->ResolveQueryData(updateTimes.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
++            event * 2, 2, updateReadback.GetResource(), event * 2 * sizeof(uint64_t));
++    }
++    // 측정 준비가 끝난 컴포넌트의 논리 버퍼 크기와 조각 수를 보존한다.
++    void RPSetMemory(uint64_t state, uint64_t replaced, uint64_t compact, uint64_t pieces, uint64_t removed, uint64_t degenerate)
++    {
++        // 요약 행마다 동일한 준비 완료 시점 값을 쓴다.
++        const uint64_t values[] = { state, replaced, compact, pieces, removed, degenerate };
++        std::copy_n(values, 6, rpMemory);
++    }
++
++    // 프레임 끝에서 GPU 슬롯과 같은 프레임의 CPU 누적값을 확정한다.
++    void RPCompleteFrame()
++    {
++        // 미완료 GPU 결과는 다음 프레임에서만 확인한다.
++        if (!rpCurrent) return;
++        rpCurrent->Cpu = RP::CpuMs;
++        rpCurrent->Palette = RP::PaletteMs;
++        rpCurrent->Calls = double(RP::PaletteCalls);
++        rpCurrent = nullptr;
++    }
++
++    // 네 패스 쿼리와 여덟 프레임 readback 및 종료 시 출력 경로를 준비한다.
++    void RPInitialize(const std::wstring& model, uint32_t cuts, uint32_t instances)
++    {
++        // 쿼리 생성 실패는 Release에서도 즉시 보고한다.
++        D3D12_QUERY_HEAP_DESC desc{ D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS, RPSlots * 4, 0 };
++        if (FAILED(Graphics::g_Device->CreateQueryHeap(&desc, IID_PPV_ARGS(&rpStats))))
++            throw std::runtime_error("RP pipeline statistics heap failed");
++        desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
++        desc.Count *= 2;
++        if (FAILED(Graphics::g_Device->CreateQueryHeap(&desc, IID_PPV_ARGS(&rpTimes))))
++            throw std::runtime_error("RP timestamp heap failed");
++        Graphics::g_CommandManager.GetCommandQueue()->GetTimestampFrequency(&rpFrequency);
++        for (auto& slot : rpFrames) slot.Data.Create(L"RP readback", 4 * RPBytes + 8 * sizeof(uint64_t), 1);
++
++        // 측정 중 재할당 없이 아홉 창의 숫자 표본을 보관한다.
++        rpSamples.reserve(RPModes * RPCycles * 200);
++
++        // 모델과 절단 횟수로 고정 경로를 만들고 열 이름을 명시한다.
++        wchar_t temp[MAX_PATH];
++        GetTempPathW(MAX_PATH, temp);
++        const std::wstring dir = std::wstring(temp) + L"MC5\\";
++        if (!CreateDirectoryW(dir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
++            throw std::runtime_error("RP output directory failed");
++        const auto stem = model + L"-c" + std::to_wstring(cuts) + L"-i" + std::to_wstring(instances);
++        rpStem = dir + stem;
++        RP::CompleteFrame = RPCompleteFrame;
++    }
++
++    // 완료 fence만 읽고 고정된 모드 창에 해당하는 프레임만 쿼리에 배정한다.
++    void RPBeginFrame(uint32_t frame, uint32_t start)
++    {
++        // 대기하지 않고 완료 슬롯의 원시 숫자와 프레임 정보만 저장한다.
++        bool pending = false;
++        for (auto& slot : rpFrames)
++        {
++            if (!slot.Fence) continue;
++            if (!Graphics::g_CommandManager.IsFenceComplete(slot.Fence))
++            {
++                pending = true;
++                continue;
++            }
++            auto* bytes = static_cast<uint8_t*>(slot.Data.Map());
++            if (!bytes) throw std::runtime_error("RP readback map failed");
++            RPSample sample{};
++            std::copy_n(reinterpret_cast<const D3D12_QUERY_DATA_PIPELINE_STATISTICS*>(bytes), 4, sample.Stats);
++            std::copy_n(reinterpret_cast<const uint64_t*>(bytes + 4 * RPBytes), 8, sample.Times);
++            std::copy_n(slot.Draws, 4, sample.Draws);
++            std::copy_n(slot.Indices, 4, sample.Indices);
++            sample.Frame = slot.Frame;
++            sample.Mode = slot.Mode;
++            sample.Cpu = slot.Cpu;
++            sample.Palette = slot.Palette;
++            sample.Calls = slot.Calls;
++            rpSamples.push_back(sample);
++            slot.Data.Unmap();
++            slot.Fence = 0;
++            ++rpCounts[slot.Mode];
++            ++rpWritten;
++        }
++
++        // 마지막 창 이후 모든 제출 결과가 도착하면 평균을 쓰고 종료를 허용한다.
++        if (!start || frame < start) return;
++        const uint32_t age = frame - start;
++        if (age >= RPModes * RPCycles * RPWindow)
++        {
++            if (pending || rpFinished) return;
++
++            rpFinished = true;
++            return;
++        }
++
++        // 슬롯이 모두 사용 중이면 표본을 건너뛰며 GPU를 기다리지 않는다.
++        MaskMode = static_cast<RenderMaskMode>((age / RPWindow) % RPModes);
++        if (age % RPWindow < 30) return;
++        for (auto& slot : rpFrames)
++            if (!slot.Fence)
++            {
++                slot.Frame = frame;
++                slot.Mode = (age / RPWindow) % RPModes;
++                std::fill_n(slot.Draws, 4, 0);
++                std::fill_n(slot.Indices, 4, 0);
++                rpCurrent = &slot;
++                return;
++            }
++        ++rpSkipped;
++    }
++
++    // 장면 명령 제출 fence를 현재 슬롯에 연결한다.
++    void RPSubmit(uint64_t fence)
++    {
++        // CPU 프레임 완료 전까지 현재 슬롯을 유지한다.
++        if (rpCurrent) rpCurrent->Fence = fence;
++    }
++
++    // 정상 종료와 사용자 중단 모두 장치보다 먼저 임시 자원을 해제한다.
++    void RPShutdown()
++    {
++        // GPU idle 이후 갱신 비용을 표본 CSV와 별도로 배출한다.
++        if (updateTimes)
++        {
++            const auto* times = static_cast<const uint64_t*>(updateReadback.Map());
++            std::ofstream updates(rpStem + L"-updates.csv");
++            updates.precision(12);
++            updates << "event,label,cpu_ms,gpu_ms\n";
++            for (size_t i = 0; i < updateEvents.size(); ++i)
++                updates << i << ',' << updateEvents[i].Label << ',' << updateEvents[i].CpuMs << ','
++                    << double(times[i * 2 + 1] - times[i * 2]) * 1000.0 / rpFrequency << '\n';
++            updateReadback.Unmap();
++            updateReadback.Destroy();
++            updateTimes.Reset();
++        }
++
++        // 호출자는 GPU idle을 보장하며 추가 대기는 수행하지 않는다.
++        if (rpFinished)
++        {
++        rpCsv.open(rpStem + L".csv");
++        rpSummary.open(rpStem + L"-summary.csv");
++        if (!rpCsv || !rpSummary) throw std::runtime_error("RP CSV open failed");
++        for (auto* file : { &rpCsv, &rpSummary })
++        {
++            file->precision(12);
++            *file << "frame_or_samples,mode";
++            for (const auto* pass : rpNames)
++                for (const auto* field : { "IAPrimitives", "VSInvocations", "CInvocations", "CPrimitives", "PSInvocations", "gpu_ms", "draws", "indices", "cpu_tick_ms_present_included", "palette_ms", "palette_calls" })
++                    *file << ',' << pass << '_' << field;
++            *file << ",state_bytes,vertex_mask_bytes,compact_ib_bytes,pieces,removed_triangles,degenerate_ib_bytes\n";
++        }
++
++            // 측정 창이 모두 끝난 뒤에만 문자열 변환과 파일 쓰기를 수행한다.
++            for (const auto& sample : rpSamples)
++            {
++                rpCsv << sample.Frame << ',' << rpModes[sample.Mode];
++                for (uint32_t p = 0; p < 4; ++p)
++                {
++                    const double values[] = { double(sample.Stats[p].IAPrimitives), double(sample.Stats[p].VSInvocations),
++                        double(sample.Stats[p].CInvocations), double(sample.Stats[p].CPrimitives), double(sample.Stats[p].PSInvocations),
++                        double(sample.Times[p * 2 + 1] - sample.Times[p * 2]) * 1000.0 / rpFrequency,
++                        double(sample.Draws[p]), double(sample.Indices[p]), sample.Cpu, sample.Palette, sample.Calls };
++                    for (uint32_t v = 0; v < 11; ++v)
++                    {
++                        rpCsv << ',' << values[v];
++                        rpSums[sample.Mode][p][v] += values[v];
++                    }
++                }
++                for (auto value : rpMemory) rpCsv << ',' << value;
++                rpCsv << '\n';
++            }
++
++            // 모드별 평균을 기록하고 파일을 닫은 뒤 종료를 허용한다.
++            for (uint32_t m = 0; m < RPModes; ++m)
++            {
++                rpSummary << rpCounts[m] << ',' << rpModes[m];
++                for (uint32_t p = 0; p < 4; ++p)
++                    for (double sum : rpSums[m][p]) rpSummary << ',' << sum / std::max(1u, rpCounts[m]);
++                for (auto value : rpMemory) rpSummary << ',' << value;
++                rpSummary << '\n';
++            }
++            rpCsv.close();
++            rpSummary.close();
++            Utility::Printf("RP complete frames=%u skipped=%u\n", rpWritten, rpSkipped);
++
++        }
++        RP::CompleteFrame = nullptr;
++        for (auto& slot : rpFrames) slot.Data.Destroy();
++        rpStats.Reset();
++        rpTimes.Reset();
++    }
++
++    // 표본 창 종료 상태를 반환하며 CSV는 종료 정리에서 배출한다.
++    bool RPDone()
++    {
++        // 비측정 실행에는 종료 조건을 추가하지 않는다.
++        return rpFinished;
++    }
++}
++
++
++// 패스별 정렬 객체를 그리며 임시 통계와 시간을 기록한다.
+ void MeshSorter::RenderMeshes(
+     DrawPass pass,
+     GraphicsContext& context,
+@@ -623,6 +1089,15 @@ void MeshSorter::RenderMeshes(
+     // 공통 루트 시그니처와 디스크립터 힙을 준비한다.
+ 	ASSERT(m_DSV != nullptr);
+ 
++    // 비어 있는 패스도 동일한 쿼리 구간으로 기록한다.
++    const uint32_t rpPass = m_BatchType == kShadows ? 0 : uint32_t(pass) + 1;
++    const uint32_t rpQuery = rpCurrent ? uint32_t(rpCurrent - rpFrames) * 4 + rpPass : 0;
++    if (rpCurrent)
++    {
++        context.FlushResourceBarriers();
++        context.EndQuery(rpTimes.Get(), D3D12_QUERY_TYPE_TIMESTAMP, rpQuery * 2);
++        context.BeginQuery(rpStats.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, rpQuery);
++    }
+     Renderer::UpdateGlobalDescriptors();
+ 
+     context.SetRootSignature(m_RootSig);
+@@ -764,7 +1239,8 @@ void MeshSorter::RenderMeshes(
+             // 현재 표시 모드의 PSO를 선택한다.
+             const auto& psos = points ? s_VertexPSOs :
+                 (colorPass && m_RenderMode == RenderMode::Wireframe ? s_WireframePSOs : sm_PSOs);
+-            context.SetPipelineState(psos[key.psoIdx]);
++            context.SetPipelineState(object.vertexMask ? (MaskMode == RenderMaskMode::Clip ? s_ClipPSOs : s_VCPSOs)[key.psoIdx] : psos[key.psoIdx]);
++            if (object.vertexMask) context.SetBufferSRV(kVertexMask, *object.vertexMask);
+ 
+             // 깊이와 색상 패스의 기존 정점 버퍼 레이아웃을 사용한다.
+             if (m_CurrentPass == kZPass)
+@@ -793,9 +1269,19 @@ void MeshSorter::RenderMeshes(
+                     context.SetBufferSRV(kPosedVertices, *object.posedBuffer,
+                         object.posedOffset + uint64_t(mesh.draw[i].baseVertex) * PosedGeometry::VertexStride);
+ 
++                // SV_VertexID의 draw 상대 주소에 원본 baseVertex를 더한다.
++                if (object.vertexMask) context.SetConstant(kVertexMaskOffset, 0, mesh.draw[i].baseVertex);
++
+                 // override가 없으면 기존 인덱스 수와 시작 위치를 그대로 사용한다.
+                 const uint32_t indexCount = renderOverride ? renderOverride->Draws[i].IndexCount : mesh.draw[i].primCount;
+                 const uint32_t startIndex = renderOverride ? renderOverride->Draws[i].StartIndex : mesh.draw[i].startIndex;
++                // 실제 제출한 비어 있지 않은 draw만 센다.
++                if (!indexCount) continue;
++                if (rpCurrent)
++                {
++                    ++rpCurrent->Draws[rpPass];
++                    rpCurrent->Indices[rpPass] += indexCount;
++                }
+                 context.DrawIndexed(indexCount, startIndex, mesh.draw[i].baseVertex);
+             }
+ 
+@@ -804,6 +1290,16 @@ void MeshSorter::RenderMeshes(
+         }
+     }
+ 
++    // 렌더 호출과 같은 명령 목록에서 통계와 시간을 resolve한다.
++    if (rpCurrent)
++    {
++        context.EndQuery(rpStats.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, rpQuery);
++        context.EndQuery(rpTimes.Get(), D3D12_QUERY_TYPE_TIMESTAMP, rpQuery * 2 + 1);
++        context.ResolveQueryData(rpStats.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, rpQuery, 1,
++            rpCurrent->Data.GetResource(), rpPass * RPBytes);
++        context.ResolveQueryData(rpTimes.Get(), D3D12_QUERY_TYPE_TIMESTAMP, rpQuery * 2, 2,
++            rpCurrent->Data.GetResource(), 4 * RPBytes + rpPass * 16);
++    }
+     // 다음 렌더 작업을 위해 토폴로지와 그림자 읽기 상태를 복원한다.
+     context.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+ 	if (m_BatchType == kShadows)
+diff --git a/MiniEngine/Model/Renderer.h b/MiniEngine/Model/Renderer.h
+index 20c4b5a3..8b48b59c 100644
+--- a/MiniEngine/Model/Renderer.h
++++ b/MiniEngine/Model/Renderer.h
+@@ -47,6 +47,19 @@ namespace Renderer
+     extern DescriptorHeap s_SamplerHeap;
+     extern DescriptorHandle m_CommonTextures;
+ 
++    // 실험 모드 순서는 CSV 이름 배열과 같다. VertexColor는 정점 하나라도 숨김이면 삼각형 전체를 버리는 discard-any다.
++    enum class RenderMaskMode { NoneOrig, NoneR32, Degenerate, Compact, Clip, VertexColor };
++    extern RenderMaskMode MaskMode;
++    void RPInitialize(const std::wstring& model, uint32_t cuts, uint32_t instances);
++    void RPSetMemory(uint64_t state, uint64_t vertex, uint64_t compact, uint64_t pieces, uint64_t removed, uint64_t degenerate);
++    void RPBeginFrame(uint32_t frame, uint32_t start);
++    void RPSubmit(uint64_t fence);
++    void RPShutdown();
++    bool RPDone();
++    // 갱신 명령의 GPU 타임스탬프와 CPU 기록 비용을 종료 시 배출한다.
++    uint32_t RPUpdateBegin(GraphicsContext& context, const char* label);
++    // 같은 명령 목록에서 종료 타임스탬프를 기록한다.
++    void RPUpdateEnd(GraphicsContext& context, uint32_t event, double cpuMs);
+     enum class RenderMode { Solid, Wireframe, Vertices };
+ 
+     // 한 section의 draw 순서는 공유 Mesh.draw와 일치하며 baseVertex는 원본을 사용한다.
+@@ -74,6 +87,8 @@ namespace Renderer
+         kSkinMatrices,
+         kPosedVertices,
+ 
++        kVertexMask,
++        kVertexMaskOffset,
+         kNumRootBindings
+     };
+ 
+@@ -131,7 +146,7 @@ namespace Renderer
+             D3D12_GPU_VIRTUAL_ADDRESS bufferPtr,
+             const Joint* skeleton = nullptr, const GpuBuffer* posedBuffer = nullptr,
+             uint32_t posedOffset = 0,
+-            std::shared_ptr<const MeshRenderOverride> renderOverride = nullptr);
++            std::shared_ptr<const MeshRenderOverride> renderOverride = nullptr, const GpuBuffer* vertexMask = nullptr);
+ 
+         // override가 있으면 원본 IB view와 draw 범위를 대체한다.
+         // GPU 버퍼 자체는 호출자가 제출된 명령의 완료까지 보존하고 INDEX_BUFFER 상태로 준비한다.
+@@ -167,6 +182,7 @@ namespace Renderer
+             const GpuBuffer* posedBuffer;
+             uint32_t posedOffset;
+             std::shared_ptr<const MeshRenderOverride> renderOverride;
++            const GpuBuffer* vertexMask;
+         };
+ 
+         std::vector<SortObject> m_SortObjects;
+diff --git a/MiniEngine/Model/Shaders/ClipCutoutDepthSkinVS.hlsl b/MiniEngine/Model/Shaders/ClipCutoutDepthSkinVS.hlsl
+new file mode 100644
+index 00000000..26417507
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipCutoutDepthSkinVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "CutoutDepthSkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipCutoutDepthVS.hlsl b/MiniEngine/Model/Shaders/ClipCutoutDepthVS.hlsl
+new file mode 100644
+index 00000000..63d9b24a
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipCutoutDepthVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "CutoutDepthVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultNoTangentNoUV1SkinVS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultNoTangentNoUV1SkinVS.hlsl
+new file mode 100644
+index 00000000..d76c4b6f
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultNoTangentNoUV1SkinVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentNoUV1SkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultNoTangentNoUV1VS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultNoTangentNoUV1VS.hlsl
+new file mode 100644
+index 00000000..4a6ebfb4
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultNoTangentNoUV1VS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentNoUV1VS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultNoTangentSkinVS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultNoTangentSkinVS.hlsl
+new file mode 100644
+index 00000000..ca41fdfe
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultNoTangentSkinVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentSkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultNoTangentVS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultNoTangentVS.hlsl
+new file mode 100644
+index 00000000..d8089eab
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultNoTangentVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultNoUV1SkinVS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultNoUV1SkinVS.hlsl
+new file mode 100644
+index 00000000..248efc92
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultNoUV1SkinVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoUV1SkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultNoUV1VS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultNoUV1VS.hlsl
+new file mode 100644
+index 00000000..6098e3b6
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultNoUV1VS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoUV1VS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultSkinVS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultSkinVS.hlsl
+new file mode 100644
+index 00000000..390e592d
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultSkinVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultSkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDefaultVS.hlsl b/MiniEngine/Model/Shaders/ClipDefaultVS.hlsl
+new file mode 100644
+index 00000000..1d7751b2
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDefaultVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDepthOnlySkinVS.hlsl b/MiniEngine/Model/Shaders/ClipDepthOnlySkinVS.hlsl
+new file mode 100644
+index 00000000..a13ba70d
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDepthOnlySkinVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DepthOnlySkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/ClipDepthOnlyVS.hlsl b/MiniEngine/Model/Shaders/ClipDepthOnlyVS.hlsl
+new file mode 100644
+index 00000000..e39bf031
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/ClipDepthOnlyVS.hlsl
+@@ -0,0 +1,4 @@
++#define VC_CLIP 1
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DepthOnlyVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/Common.hlsli b/MiniEngine/Model/Shaders/Common.hlsli
+index bb05d33f..43b75a3c 100644
+--- a/MiniEngine/Model/Shaders/Common.hlsli
++++ b/MiniEngine/Model/Shaders/Common.hlsli
+@@ -29,6 +29,8 @@
+     "CBV(b1), " \
+     "SRV(t20, visibility = SHADER_VISIBILITY_VERTEX), " \
+     "SRV(t21, visibility = SHADER_VISIBILITY_VERTEX), " \
++    "SRV(t22, visibility = SHADER_VISIBILITY_VERTEX), " \
++    "RootConstants(num32BitConstants = 1, b2, visibility = SHADER_VISIBILITY_VERTEX), " \
+     "StaticSampler(s10, maxAnisotropy = 8, visibility = SHADER_VISIBILITY_PIXEL)," \
+     "StaticSampler(s11, visibility = SHADER_VISIBILITY_PIXEL," \
+         "addressU = TEXTURE_ADDRESS_CLAMP," \
+diff --git a/MiniEngine/Model/Shaders/CutoutDepthPS.hlsl b/MiniEngine/Model/Shaders/CutoutDepthPS.hlsl
+index 15583add..38001aa5 100644
+--- a/MiniEngine/Model/Shaders/CutoutDepthPS.hlsl
++++ b/MiniEngine/Model/Shaders/CutoutDepthPS.hlsl
+@@ -16,7 +16,12 @@
+ struct VSOutput
+ {
+     float4 pos : SV_Position;
++#ifdef VC_MASK
++    float mask : TEXCOORD7;
++#endif
++#ifndef VC_NO_ALPHA
+     float2 uv : TexCoord0;
++#endif
+ };
+ 
+ Texture2D<float4> baseColorTexture          : register(t0);
+@@ -34,7 +39,13 @@ cbuffer MaterialConstants : register(b0)
+ [RootSignature(Renderer_RootSig)]
+ void main(VSOutput vsOutput)
+ {
++#ifdef VC_MASK
++    // 숨김 정점이 하나라도 있는 삼각형은 보간값이 0보다 크므로 통째로 버린다.
++    if (vsOutput.mask > 0) discard;
++#endif
++#ifndef VC_NO_ALPHA
+     float cutoff = f16tof32(flags >> 16);
+     if (baseColorTexture.Sample(baseColorSampler, vsOutput.uv).a < cutoff)
+         discard;
++#endif
+ }
+diff --git a/MiniEngine/Model/Shaders/DefaultPS.hlsl b/MiniEngine/Model/Shaders/DefaultPS.hlsl
+index 7b64efbc..9ac91c2d 100644
+--- a/MiniEngine/Model/Shaders/DefaultPS.hlsl
++++ b/MiniEngine/Model/Shaders/DefaultPS.hlsl
+@@ -54,6 +54,9 @@ cbuffer GlobalConstants : register(b1)
+ struct VSOutput
+ {
+     float4 position : SV_POSITION;
++#ifdef VC_MASK
++    float mask : TEXCOORD7;
++#endif
+     float3 normal : NORMAL;
+ #ifndef NO_TANGENT_FRAME
+     float4 tangent : TANGENT;
+@@ -242,6 +245,10 @@ float3 ComputeNormal(VSOutput vsOutput)
+ [RootSignature(Renderer_RootSig)]
+ float4 main(VSOutput vsOutput) : SV_Target0
+ {
++#ifdef VC_MASK
++    // 숨김 정점이 하나라도 있는 삼각형은 보간값이 0보다 크므로 통째로 버린다.
++    if (vsOutput.mask > 0) discard;
++#endif
+     // Load and modulate textures
+     float4 baseColor = baseColorFactor * baseColorTexture.Sample(baseColorSampler, UVSET(BASECOLOR));
+     float2 metallicRoughness = metallicRoughnessFactor * 
+diff --git a/MiniEngine/Model/Shaders/DefaultVS.hlsl b/MiniEngine/Model/Shaders/DefaultVS.hlsl
+index 6e29709e..9ba94960 100644
+--- a/MiniEngine/Model/Shaders/DefaultVS.hlsl
++++ b/MiniEngine/Model/Shaders/DefaultVS.hlsl
+@@ -64,9 +64,17 @@ struct VSInput
+ #endif
+ };
+ 
++#ifdef VC_MASK
++ByteAddressBuffer VertexMask : register(t22);
++cbuffer VCParameters : register(b2) { uint MaskBaseVertex; };
++#endif
++
+ struct VSOutput
+ {
+     float4 position : SV_POSITION;
++#if defined(VC_MASK) && !defined(VC_CLIP)
++    float mask : TEXCOORD7;
++#endif
+     float3 normal : NORMAL;
+ #ifndef NO_TANGENT_FRAME
+     float4 tangent : TANGENT;
+@@ -78,6 +86,9 @@ struct VSOutput
+     float3 worldPos : TEXCOORD2;
+     float3 sunShadowCoord : TEXCOORD3;
+     nointerpolation float3 overlayColor : COLOR0;
++#if defined(VC_MASK) && defined(VC_CLIP)
++    float mask : SV_ClipDistance0;
++#endif
+ };
+ 
+ [RootSignature(Renderer_RootSig)]
+@@ -150,5 +161,16 @@ VSOutput main(VSInput vsInput, uint vertexId : SV_VertexID)
+ 
+     // 보간 없는 메시 색상은 선과 점의 PS에서만 사용한다.
+     vsOutput.overlayColor = OverlayColor;
++#ifdef VC_MASK
++    // 원본 draw 상대 정점 번호를 section 마스크 주소로 바꾼다.
++    uint maskVertex = vertexId + MaskBaseVertex;
++    vsOutput.mask = (VertexMask.Load((maskVertex >> 5) * 4) >> (maskVertex & 31)) & 1;
++#ifdef VC_CLIP
++    vsOutput.mask -= 0.5;
++#else
++    // discard-any 모드는 숨김=1, 보임=0으로 보간해 숨김 정점이 하나라도 있으면 양수가 되게 한다.
++    vsOutput.mask = 1.0 - vsOutput.mask;
++#endif
++#endif
+     return vsOutput;
+ }
+diff --git a/MiniEngine/Model/Shaders/DepthOnlyVS.hlsl b/MiniEngine/Model/Shaders/DepthOnlyVS.hlsl
+index 283ecc6f..b6e36e4d 100644
+--- a/MiniEngine/Model/Shaders/DepthOnlyVS.hlsl
++++ b/MiniEngine/Model/Shaders/DepthOnlyVS.hlsl
+@@ -54,12 +54,23 @@ struct VSInput
+ #endif
+ };
+ 
++#ifdef VC_MASK
++ByteAddressBuffer VertexMask : register(t22);
++cbuffer VCParameters : register(b2) { uint MaskBaseVertex; };
++#endif
++
+ struct VSOutput
+ {
+     float4 position : SV_POSITION;
++#if defined(VC_MASK) && !defined(VC_CLIP)
++    float mask : TEXCOORD7;
++#endif
+ #ifdef ENABLE_ALPHATEST
+     float2 uv0 : TEXCOORD0;
+ #endif
++#if defined(VC_MASK) && defined(VC_CLIP)
++    float mask : SV_ClipDistance0;
++#endif
+ };
+ 
+ [RootSignature(Renderer_RootSig)]
+@@ -97,5 +108,16 @@ VSOutput main(VSInput vsInput, uint vertexId : SV_VertexID)
+     vsOutput.uv0 = vsInput.uv0;
+ #endif
+ 
++#ifdef VC_MASK
++    // 원본 draw 상대 정점 번호를 section 마스크 주소로 바꾼다.
++    uint maskVertex = vertexId + MaskBaseVertex;
++    vsOutput.mask = (VertexMask.Load((maskVertex >> 5) * 4) >> (maskVertex & 31)) & 1;
++#ifdef VC_CLIP
++    vsOutput.mask -= 0.5;
++#else
++    // discard-any 모드는 숨김=1, 보임=0으로 보간해 숨김 정점이 하나라도 있으면 양수가 되게 한다.
++    vsOutput.mask = 1.0 - vsOutput.mask;
++#endif
++#endif
+     return vsOutput;
+ }
+diff --git a/MiniEngine/Model/Shaders/VCCutoutDepthPS.hlsl b/MiniEngine/Model/Shaders/VCCutoutDepthPS.hlsl
+new file mode 100644
+index 00000000..7d033065
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCCutoutDepthPS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "CutoutDepthPS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCCutoutDepthSkinVS.hlsl b/MiniEngine/Model/Shaders/VCCutoutDepthSkinVS.hlsl
+new file mode 100644
+index 00000000..db7c00e4
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCCutoutDepthSkinVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "CutoutDepthSkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCCutoutDepthVS.hlsl b/MiniEngine/Model/Shaders/VCCutoutDepthVS.hlsl
+new file mode 100644
+index 00000000..9e3b572a
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCCutoutDepthVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "CutoutDepthVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1PS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1PS.hlsl
+new file mode 100644
+index 00000000..3c884c55
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1PS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentNoUV1PS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1SkinVS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1SkinVS.hlsl
+new file mode 100644
+index 00000000..a048c534
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1SkinVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentNoUV1SkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1VS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1VS.hlsl
+new file mode 100644
+index 00000000..91cda532
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoTangentNoUV1VS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentNoUV1VS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoTangentPS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoTangentPS.hlsl
+new file mode 100644
+index 00000000..3df51137
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoTangentPS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentPS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoTangentSkinVS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoTangentSkinVS.hlsl
+new file mode 100644
+index 00000000..8e5928cf
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoTangentSkinVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentSkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoTangentVS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoTangentVS.hlsl
+new file mode 100644
+index 00000000..2c8714a8
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoTangentVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoTangentVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoUV1PS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoUV1PS.hlsl
+new file mode 100644
+index 00000000..d0065377
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoUV1PS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoUV1PS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoUV1SkinVS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoUV1SkinVS.hlsl
+new file mode 100644
+index 00000000..c8c981ad
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoUV1SkinVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoUV1SkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultNoUV1VS.hlsl b/MiniEngine/Model/Shaders/VCDefaultNoUV1VS.hlsl
+new file mode 100644
+index 00000000..ad71f23c
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultNoUV1VS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultNoUV1VS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultPS.hlsl b/MiniEngine/Model/Shaders/VCDefaultPS.hlsl
+new file mode 100644
+index 00000000..b20c5808
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultPS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultPS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultSkinVS.hlsl b/MiniEngine/Model/Shaders/VCDefaultSkinVS.hlsl
+new file mode 100644
+index 00000000..c4d88946
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultSkinVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultSkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDefaultVS.hlsl b/MiniEngine/Model/Shaders/VCDefaultVS.hlsl
+new file mode 100644
+index 00000000..cbd254d1
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDefaultVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DefaultVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDepthOnlySkinVS.hlsl b/MiniEngine/Model/Shaders/VCDepthOnlySkinVS.hlsl
+new file mode 100644
+index 00000000..867c0f40
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDepthOnlySkinVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DepthOnlySkinVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCDepthOnlyVS.hlsl b/MiniEngine/Model/Shaders/VCDepthOnlyVS.hlsl
+new file mode 100644
+index 00000000..af0e21fc
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCDepthOnlyVS.hlsl
+@@ -0,0 +1,3 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#include "DepthOnlyVS.hlsl"
+diff --git a/MiniEngine/Model/Shaders/VCMaskDepthPS.hlsl b/MiniEngine/Model/Shaders/VCMaskDepthPS.hlsl
+new file mode 100644
+index 00000000..d2112d31
+--- /dev/null
++++ b/MiniEngine/Model/Shaders/VCMaskDepthPS.hlsl
+@@ -0,0 +1,4 @@
++// 임시 VC 실험의 기존 셰이더 변형이다.
++#define VC_MASK
++#define VC_NO_ALPHA
++#include "CutoutDepthPS.hlsl"
+diff --git a/MiniEngine/ModelViewer/ModelViewer.cpp b/MiniEngine/ModelViewer/ModelViewer.cpp
+index 6ca15e9c..4056f0ee 100644
+--- a/MiniEngine/ModelViewer/ModelViewer.cpp
++++ b/MiniEngine/ModelViewer/ModelViewer.cpp
+@@ -118,6 +118,10 @@ public:
+     // 진단 종료 프레임 이후 GPU 절단 완료를 기다리고 정상 종료한다.
+     virtual bool IsDone() override
+     {
++        // RP는 recut의 짧은 기존 종료 창 대신 CSV 배출 완료까지 실행한다.
++        if (RP::Enabled)
++            return (m_RPCaptureOnly && m_RPCaptured == 7) || Renderer::RPDone() || m_SkeletalDemoFailed || m_RecutFailed[0] || m_RecutFailed[1] || IGameApp::IsDone();
++
+         // 재현은 결과 이후 최대 120프레임만 관찰하고 독립적으로 종료한다.
+         if (m_RecutRepro)
+             return (m_RecutResultFrame && m_QueryFrame >= m_RecutResultFrame + 120)
+@@ -160,6 +164,8 @@ private:
+     uint32_t m_SkeletalPatchBreakChecks = 0;
+     bool m_SkeletalPatchBreakDone = false;
+     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
++    uint32_t m_RPCuts = 1, m_RPStart = 0, m_RPInstances = 1, m_RPCharacterOnly = 0, m_RPCaptureOnly = 0, m_RPCaptured = 0;
++    std::vector<Viewer::ObjectId> m_RPOwners;
+     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+     uint32_t m_RecutRepro = 0, m_RecutRequested[2]{}, m_RecutApplied[2]{};
+     uint32_t m_RecutResultFrame = 0, m_RecutCaptured = 0, m_AttachedRecutFrame = 0;
+@@ -384,6 +390,58 @@ static std::string GetDeviceGpuName()
+ // 시작 옵션과 모델·물리를 준비하고 최종 배치 pose로 skin owner의 rig를 사전 등록한다.
+ void ModelViewer::Startup( void )
+ {
++    // RP 전용 옵션은 기존 데모 조합 검증 전에 엄격하게 검사하고 거절 이유를 남긴다.
++    std::wstring rpValue, rpCuts = L"1", rpInstances = L"1", rpDemo, rpRecut;
++    const bool rpPresent = CommandLineArgs::GetString(L"rp-measure", rpValue);
++    const bool rpHasCuts = CommandLineArgs::GetString(L"rp-cuts", rpCuts);
++    const bool rpHasInstances = CommandLineArgs::GetString(L"rp-instances", rpInstances);
++    if (rpPresent || rpHasCuts || rpHasInstances)
++    {
++        std::string reason;
++        CommandLineArgs::GetString(L"skeletal-break-demo", rpDemo);
++        CommandLineArgs::GetString(L"skeletal-recut-repro", rpRecut);
++        if (rpValue != L"1") reason = "rp-measure must be 1";
++        else if (rpCuts != L"0" && rpCuts != L"1" && rpCuts != L"2") reason = "rp-cuts must be 0, 1 or 2";
++        else if (rpInstances.empty() || rpInstances.find_first_not_of(L"0123456789") != std::wstring::npos
++            || rpInstances.size() > 3 || std::stoul(rpInstances) < 1) reason = "rp-instances must be 1..999";
++        else if (rpCuts == L"2" ? (rpRecut != L"1" || !rpDemo.empty())
++            : ((rpDemo != L"1" && rpDemo != L"2") || !rpRecut.empty()))
++            reason = "cuts 0/1 require break-demo 1/2; cuts 2 requires recut-repro 1 alone";
++        for (const wchar_t* option : { L"capture", L"capture-count", L"capture-frame", L"capture-step",
++            L"skeletal-break-demo-unmask", L"physics-query-exit", L"model", L"view", L"animation-step-ms",
++            L"skeletal-patch-break-checks", L"skeletal-patch-checks", L"skeletal-mask-checks", L"skeletal-auto-rig-checks",
++            L"skeletal-break-checks", L"skeletal-break-xbot", L"xbot-arm-checks", L"edit-target-checks", L"edit-apply-checks",
++            L"edit-delete-checks", L"retired-resource-checks", L"component-checks", L"physics-sim-checks",
++            L"physics-query-checks", L"physics-query-self-test", L"physics-cut-checks", L"physics-cut-scenario",
++            L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cut-scene", L"cut-transform-checks", L"cut-validate",
++            L"cut-expect-loops", L"cut-expect-publications", L"demo-tower", L"skeletal-multi-cut",
++            L"attached-recut-checks", L"rig-bone-cut-checks", L"skeletal-union-checks", L"skeletal-patch-offset-copy" })
++            if (CommandLineArgs::GetString(option, rpValue)) reason = "RP incompatible capture/unmask/exit/model/view/animation option";
++        if (!reason.empty())
++        {
++            Utility::Printf("RP rejected: %s\n", reason.c_str());
++            wchar_t rpTemp[MAX_PATH];
++            GetTempPathW(MAX_PATH, rpTemp);
++            std::ofstream(std::wstring(rpTemp) + L"RP-rejected.log", std::ios::app) << "RP rejected: " << reason << '\n';
++            throw std::invalid_argument(reason);
++        }
++        RP::Enabled = true;
++        // HDR 경계 비교의 프레임별 지터를 제거한다.
++        TemporalEffects::EnableTAA = false;
++        m_RPCuts = uint32_t(rpCuts[0] - L'0');
++        m_RPInstances = uint32_t(std::stoul(rpInstances));
++        CommandLineArgs::GetInteger(L"rp-capture-only", m_RPCaptureOnly);
++
++        // 배경 포함 실행은 별도 이름으로 저장해 캐릭터 전용 결과를 보존한다.
++        CommandLineArgs::GetInteger(L"rp-character-only", m_RPCharacterOnly);
++        Renderer::RPInitialize(std::wstring(rpDemo == L"2" ? L"CesiumMan" : L"Xbot")
++            + (m_RPCaptureOnly ? L"-capture" : L"") + (m_RPCharacterOnly == 1 ? L"" : L"-bg"), m_RPCuts, m_RPInstances);
++    }
++
++    // 캐릭터 전용 표시는 기본 실행에 영향을 주지 않고 명시적으로 켠다.
++    CommandLineArgs::GetInteger(L"rp-character-only", m_RPCharacterOnly);
++    CommandLineArgs::GetInteger(L"rp-capture-only", m_RPCaptureOnly);
++
+     // 파이프라인 사전 준비보다 먼저 단면 스레드 그룹 크기를 적용한다.
+     uint32_t capThreads = 512;
+     CommandLineArgs::GetInteger(L"cap-threads", capThreads);
+@@ -849,6 +907,44 @@ void ModelViewer::Startup( void )
+             }
+         }
+     }
++    // 원본 rig 등록 뒤 같은 모델과 애니메이션의 비물리 인스턴스를 격자로 추가한다.
++    if (RP::Enabled)
++    {
++        Viewer::GameObject* first = nullptr;
++        for (const auto& object : m_Scene.GetObjects())
++            if (object->GetName() == (m_SkeletalBreakDemo == 2 ? "CesiumMan" : "Xbot")) first = object.get();
++        if (!first) throw std::runtime_error("RP character missing");
++        m_RPOwners.push_back(first->GetId());
++        const uint32_t columns = uint32_t(std::ceil(std::sqrt(float(m_RPInstances))));
++        for (uint32_t i = 1; i < m_RPInstances; ++i)
++        {
++            auto& object = m_Scene.CreateObject("RPInstance" + std::to_string(i), first->GetModelInstance()->GetModel());
++            auto transform = first->GetTransform();
++            transform.SetTranslation(transform.GetTranslation() + Vector3(float(i % columns) * 5.0f, float(i / columns) * 5.0f, 0));
++            object.SetTransform(transform);
++            object.PlayAnimation(0);
++            object.SetNotCuttable(true);
++            m_RPOwners.push_back(object.GetId());
++        }
++
++        // 컬링 전 모델 삼각형 수를 남겨 캐릭터 전용 실행에서 제외한 배경을 식별한다.
++        wchar_t temp[MAX_PATH];
++        GetTempPathW(MAX_PATH, temp);
++        std::ofstream inventory(std::wstring(temp) + L"MC5/background.csv");
++        inventory << "object,triangles\n";
++        for (const auto& object : m_Scene.GetObjects())
++        {
++            if (std::find(m_RPOwners.begin(), m_RPOwners.end(), object->GetId()) != m_RPOwners.end()) continue;
++            uint64_t triangles = 0;
++            for (const auto& mesh : object->GetMeshComponents())
++                for (size_t section = 0; section < mesh->GetGeometry()->GetSections().size(); ++section)
++                {
++                    const auto& data = mesh->GetGeometry()->GetMesh(section);
++                    for (uint32_t d = 0; d < data.numDraws; ++d) triangles += data.draw[d].primCount / 3;
++                }
++            inventory << object->GetName() << ',' << triangles << '\n';
++        }
++    }
+ }
+ 
+ // GPU 절단과 조회 body를 정리한 뒤 장면·렌더러를 종료한다.
+@@ -1119,7 +1215,7 @@ void ModelViewer::Update( float deltaT )
+     m_SkeletalChecks.BeforeStep(m_Physics);
+     const unsigned steps = m_Physics.UpdateFrame(gfxContext,
+         (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+-        (m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
++        (RP::Enabled && m_RPStart) ? 0.0f : (m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
+     m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
+ 
+     // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
+@@ -1237,7 +1333,9 @@ void ModelViewer::Update( float deltaT )
+                 {
+                     plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
+                 }
+-                m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
++                // 0회 측정은 같은 시점과 장면을 유지하고 절단 요청만 생략한다.
++                if (RP::Enabled && m_RPCuts == 0) m_DemoAppliedFrame = m_QueryFrame;
++                else m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
+                 FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
+                 Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
+                 break;
+@@ -1500,6 +1598,75 @@ void ModelViewer::RenderScene( void )
+         m_SkeletalMaskDone = true;
+     }
+ 
++    // 마지막 게시 후 60프레임에 물리와 애니메이션을 멈추고 같은 모델 카메라를 고정한다.
++    if (RP::Enabled)
++    {
++        const uint32_t published = m_RPCuts == 2 ? m_RecutApplied[1] : m_DemoAppliedFrame;
++        if (!m_RPStart && published && m_QueryFrame >= published + (m_RPCaptureOnly ? 0 : 60))
++        {
++            // 마스크 복사와 원본 IB readback 및 압축 업로드를 표본 창 전에 끝낸다.
++            auto* first = m_Scene.FindObject(m_RPOwners.front());
++            const auto* mask = first->GetMeshComponents().front()->GetTriangleMask();
++            std::vector<uint8_t> source;
++            uint64_t state = 0, replaced = 0, compact = 0, pieces = 0, removed = 0, degenerate = 0;
++            for (auto id : m_RPOwners)
++            {
++                auto* object = m_Scene.FindObject(id);
++                auto& mesh = *object->GetMeshComponents().front();
++                if (mask && id != first->GetId() && !mesh.SetTriangleMask(mask->Pending))
++                    throw std::runtime_error("RP mask copy failed");
++                // 추가 인스턴스의 두 마스크를 측정 전에 완성한다.
++                if (mask && id != first->GetId()) mesh.CopyVCMask(*first->GetMeshComponents().front());
++                if (const auto* data = mesh.GetTriangleMask())
++                {
++                    state += data->State.GetBufferSize();
++                    for (const auto& vertex : data->VertexMasks) if (vertex) replaced += vertex->GetBufferSize();
++                    compact += data->CompactIB ? data->CompactIB->GetBufferSize() : 0;
++                    degenerate += data->DegenerateIB ? data->DegenerateIB->GetBufferSize() : 0;
++                    for (auto value : data->Pending) removed += (value >> 31);
++                }
++                pieces += object->GetMeshComponents().size() - 1;
++            }
++            Renderer::RPSetMemory(state, replaced, compact, pieces, removed, degenerate);
++            m_RPStart = m_QueryFrame + 1;
++        }
++        if (m_RPStart)
++        {
++            g_PhysicsRunning = false;
++            m_Physics.SetSimulationRunning(false);
++            for (const auto& object : m_Scene.GetObjects())
++                if (object->GetName() == (m_SkeletalBreakDemo == 2 ? "CesiumMan" : "Xbot"))
++                {
++                    // 세로 격자 전체를 같은 정면 카메라 안에 담는다.
++                    const uint32_t columns = uint32_t(std::ceil(std::sqrt(float(m_RPInstances))));
++                    const uint32_t rows = (m_RPInstances + columns - 1) / columns;
++                    const Vector3 center = object->GetTransform().ToAffine() * object->GetModelInstance()->GetModel()->m_BoundingSphere.GetCenter()
++                        + Vector3(float(columns - 1) * 2.5f, float(rows - 1) * 2.5f, 0);
++                    const float distance = 5.5f * float(std::max(columns, rows));
++                    m_Camera.SetEyeAtUp(center + Vector3(0, 0, distance), center, Vector3(kYUnitVector));
++                    m_Camera.Update();
++                }
++        }
++        // 별도 캡처 실행에서는 쿼리 표본을 수집하지 않는다.
++        if (!m_RPCaptureOnly) Renderer::RPBeginFrame(m_QueryFrame, m_RPStart);
++        else {
++            // 캡처 순서는 Compact, None-orig, None-R32, Degenerate, VC-clip, VC-discard-any, Compact 반복이다.
++            using Mode = Renderer::RenderMaskMode;
++            const Mode order[] = { Mode::Compact, Mode::NoneOrig, Mode::NoneR32, Mode::Degenerate, Mode::Clip, Mode::VertexColor, Mode::Compact };
++            Renderer::MaskMode = order[std::min(m_RPCaptured, 6u)];
++        }
++    }
++
++    // 두 렌더 목록에 동일한 owner 필터를 적용하고 조각은 owner와 함께 유지한다.
++    const auto renderObjects = [&](MeshSorter& sorter)
++    {
++        // 옵션이 없으면 기존 장면 등록 경로를 그대로 사용한다.
++        if (m_RPCharacterOnly != 1) { m_Scene.Render(sorter); return; }
++        for (const auto& object : m_Scene.GetObjects())
++            if (object->GetName() == (m_SkeletalBreakDemo == 2 ? "CesiumMan" : "Xbot")
++                || object->GetName().find("RPInstance") == 0)
++                for (const auto& mesh : object->GetMeshComponents()) mesh->Render(sorter);
++    };
+     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
+     if (breakCapture) TemporalEffects::ClearHistory(gfxContext);
+ 
+@@ -1538,7 +1705,7 @@ void ModelViewer::RenderScene( void )
+ 		sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
+ 		sorter.AddRenderTarget(g_SceneColorBuffer);
+ 
+-        m_Scene.Render(sorter);
++        renderObjects(sorter);
+ 
+         sorter.Sort();
+ 
+@@ -1560,7 +1727,7 @@ void ModelViewer::RenderScene( void )
+ 				shadowSorter.SetCamera(m_SunShadowCamera);
+ 				shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
+ 
+-                m_Scene.Render(shadowSorter);
++                renderObjects(shadowSorter);
+ 
+                 shadowSorter.Sort();
+                 shadowSorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
+@@ -1570,7 +1737,7 @@ void ModelViewer::RenderScene( void )
+             gfxContext.ClearColor(g_SceneColorBuffer);
+ 
+             // 깊이를 쓰지 않는 선·점의 실루엣 가장자리를 배경이 덮지 않도록 먼저 그린다.
+-            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
++            if (m_RPCharacterOnly != 1) Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+ 
+             {
+                 ScopedTimer _prof(L"Render Color", gfxContext);
+@@ -1588,7 +1755,7 @@ void ModelViewer::RenderScene( void )
+             // 다음 클릭에서 장면 깊이와 동일한 카메라·뷰포트를 사용한다.
+             m_PickDepthCamera = m_Camera;
+             m_PickDepthReady = true;
+-            const unsigned planeCount = Viewer::RenderCutPlanes(gfxContext, m_CutPlanes, m_Target.Object,
++            const unsigned planeCount = m_RPCharacterOnly == 1 ? 0 : Viewer::RenderCutPlanes(gfxContext, m_CutPlanes, m_Target.Object,
+                 m_Camera, viewport, scissor);
+             if (m_ViewDiagnosticPending)
+                 Utility::Printf("ModelViewer diagnostic: plane draw queued, planes=%u, lines=%u\n", planeCount, planeCount * 22);
+@@ -1602,7 +1769,7 @@ void ModelViewer::RenderScene( void )
+ 
+     TemporalEffects::ResolveImage(gfxContext);
+ 
+-    ParticleEffectManager::Render(gfxContext, m_Camera, g_SceneColorBuffer, g_SceneDepthBuffer,  g_LinearDepth[FrameIndex]);
++    if (m_RPCharacterOnly != 1) ParticleEffectManager::Render(gfxContext, m_Camera, g_SceneColorBuffer, g_SceneDepthBuffer,  g_LinearDepth[FrameIndex]);
+ 
+     // Until I work out how to couple these two, it's "either-or".
+     if (DepthOfField::Enable)
+@@ -1629,7 +1796,18 @@ void ModelViewer::RenderScene( void )
+         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
+         && (!m_CaptureCount || (m_CaptureFrame - m_CaptureTargetFrame) % m_CaptureStep == 0)
+         && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())))));
+-    gfxContext.Finish(m_ViewDiagnosticPending || capture);
++    const uint64_t rpFence = gfxContext.Finish(m_ViewDiagnosticPending || capture);
++    if (RP::Enabled) Renderer::RPSubmit(rpFence);
++    // 고정 pose의 두 모드를 인접 프레임에서 기존 RAW 캡처 경로로 저장한다.
++    if (m_RPCaptureOnly && m_RPStart && m_QueryFrame >= m_RPStart + 30 && m_RPCaptured < 7)
++    {
++        wchar_t temp[MAX_PATH];
++        GetTempPathW(MAX_PATH, temp);
++        m_ActiveCapturePath = std::wstring(temp) + L"MC5/" + (m_SkeletalBreakDemo == 2 ? L"CesiumMan" : m_RPCuts == 2 ? L"Xbot2" : L"Xbot") + (m_RPCaptured == 0 ? L"-Compact" : m_RPCaptured == 1 ? L"-None-orig" : m_RPCaptured == 2 ? L"-None-R32" : m_RPCaptured == 3 ? L"-Degenerate" : m_RPCaptured == 4 ? L"-VC-clip" : m_RPCaptured == 5 ? L"-VC-discard-any" : L"-Compact-repeat");
++        ++m_RPCaptured;
++        g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-hdr.raw");
++        m_CapturePostPending = true;
++    }
+     if (capture)
+     {
+         // 패치 진단은 45도 blend-zone의 A/B 간격을 모델별 파일에 저장한다.
+diff --git a/MiniEngine/ModelViewer/ModelViewer.vcxproj b/MiniEngine/ModelViewer/ModelViewer.vcxproj
+index a6a12e2f..b1f4fd57 100644
+--- a/MiniEngine/ModelViewer/ModelViewer.vcxproj
++++ b/MiniEngine/ModelViewer/ModelViewer.vcxproj
+@@ -511,4 +511,4 @@
+     <ClInclude Include="Scene\tests\AttachedRecutChecks.h" />
+     <ClInclude Include="Scene\tests\RigBoneCutChecks.h" />
+   </ItemGroup>
+-</Project>
++<ItemGroup><FxCompile Include="Scene\Shaders\VCMaskApplyCS.hlsl"><ShaderType>Compute</ShaderType></FxCompile></ItemGroup></Project>
+diff --git a/MiniEngine/ModelViewer/ModelViewer.vcxproj.filters b/MiniEngine/ModelViewer/ModelViewer.vcxproj.filters
+index 081fb23e..f3000664 100644
+--- a/MiniEngine/ModelViewer/ModelViewer.vcxproj.filters
++++ b/MiniEngine/ModelViewer/ModelViewer.vcxproj.filters
+@@ -341,4 +341,4 @@
+     <ClInclude Include="Scene\tests\AttachedRecutChecks.h"><Filter>Header Files</Filter></ClInclude>
+     <ClInclude Include="Scene\tests\RigBoneCutChecks.h"><Filter>Header Files</Filter></ClInclude>
+   </ItemGroup>
+-</Project>
++<ItemGroup><FxCompile Include="Scene\Shaders\VCMaskApplyCS.hlsl"><Filter>Shaders</Filter></FxCompile></ItemGroup></Project>
+diff --git a/MiniEngine/ModelViewer/Scene/MeshComponent.cpp b/MiniEngine/ModelViewer/Scene/MeshComponent.cpp
+index a3fce26c..094472a7 100644
+--- a/MiniEngine/ModelViewer/Scene/MeshComponent.cpp
++++ b/MiniEngine/ModelViewer/Scene/MeshComponent.cpp
+@@ -10,6 +10,8 @@
+ #include <algorithm>
+ #include "CompiledShaders/PatchSkinBakeCS.h"
+ #include "CompiledShaders/TriangleCompactCS.h"
++#include "CompiledShaders/VCMaskApplyCS.h"
++#include "GameCore.h"
+ #include "ReadbackBuffer.h"
+ #include <cstdio>
+ #include <chrono>
+@@ -93,6 +95,29 @@ namespace Viewer
+         if (!triangles || triangles != state.size()) return false;
+         for (uint32_t value : state) if (value & 0x7fff0000u) return false;
+ 
++        // 임시 실험: 시험 모델의 IB 형식과 draw baseVertex를 한 번만 파일에 남긴다.
++        static bool ibLogged = false;
++        if (RP::Enabled && !ibLogged)
++        {
++            ibLogged = true;
++            wchar_t logTemp[MAX_PATH];
++            GetTempPathW(MAX_PATH, logTemp);
++            FILE* log = _wfopen((std::wstring(logTemp) + L"MC5\\ib-info.txt").c_str(), L"a");
++            if (log)
++            {
++                fwprintf(log, L"RUN %ls\n", GetCommandLineW());
++                for (size_t s = 0; s < m_Geometry->GetSections().size(); ++s)
++                {
++                    const Mesh& mesh = m_Geometry->GetMesh(s);
++                    fprintf(log, "section %zu ibFormat=%s numJoints=%u draws=%u baseVertex=[", s,
++                        mesh.ibFormat == DXGI_FORMAT_R32_UINT ? "R32" : "R16", unsigned(mesh.numJoints), unsigned(mesh.numDraws));
++                    for (uint32_t d = 0; d < mesh.numDraws; ++d) fprintf(log, "%s%u", d ? "," : "", unsigned(mesh.draw[d].baseVertex));
++                    fprintf(log, "]\n");
++                }
++                fclose(log);
++            }
++        }
++
+         // 같은 상태는 재할당하지 않는다.
+         if (m_TriangleMask && m_TriangleMask->Pending == state) return true;
+         const auto started = std::chrono::steady_clock::now();
+@@ -101,6 +126,10 @@ namespace Viewer
+         const size_t sectionCount = m_Geometry->GetSections().size();
+         std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> overrides(sectionCount);
+         std::vector<std::shared_ptr<Renderer::MeshRenderOverride>> views;
++        std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> degenerateOverrides(sectionCount);
++        std::vector<std::shared_ptr<Renderer::MeshRenderOverride>> degenerateViews;
++        std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> fullOverrides(sectionCount);
++        std::vector<std::shared_ptr<Renderer::MeshRenderOverride>> fullViews;
+         std::vector<CompactDrawInput> inputs;
+         uint32_t first = 0, work = 0, kept = 0;
+         const auto isRemoved = [](uint32_t value) { return (value & 0x80000000u) != 0; };
+@@ -119,12 +148,16 @@ namespace Viewer
+             // 원본 draw 순서대로 남는 인덱스 범위를 정한다. section 출력 시작은 앞 section까지 남은 수다.
+             auto view = std::make_shared<Renderer::MeshRenderOverride>();
+             uint32_t sectionKept = 0;
++            // 같은 section의 원본 크기 사본은 draw 개수와 범위가 원본과 같다.
++            auto degenerate = std::make_shared<Renderer::MeshRenderOverride>();
++            const uint32_t sectionWork = work;
+             for (uint32_t d = 0; d < mesh.numDraws; ++d)
+             {
+                 const uint32_t drawTriangles = mesh.draw[d].primCount / 3;
+                 const uint32_t survivors = drawTriangles - uint32_t(std::count_if(state.begin() + first,
+                     state.begin() + first + drawTriangles, isRemoved));
+                 view->Draws.push_back({ sectionKept * 3, survivors * 3 });
++                degenerate->Draws.push_back({ (work - sectionWork) * 3, drawTriangles * 3 });
+                 if (drawTriangles)
+                     inputs.push_back({ mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT, mesh.draw[d].startIndex,
+                         drawTriangles, first, work, 0, 0 });
+@@ -133,7 +166,14 @@ namespace Viewer
+                 sectionKept += survivors;
+             }
+             view->IndexBuffer = { kept * 12ull, sectionKept * 12, DXGI_FORMAT_R32_UINT };
++            degenerate->IndexBuffer = { sectionWork * 12ull, (work - sectionWork) * 12, DXGI_FORMAT_R32_UINT };
+             kept += sectionKept;
++            // 아무것도 제거하지 않는 R32 전체 사본도 같은 draw 범위를 쓴다.
++            auto full = std::make_shared<Renderer::MeshRenderOverride>(*degenerate);
++            fullOverrides[s] = full;
++            fullViews.push_back(std::move(full));
++            degenerateOverrides[s] = degenerate;
++            degenerateViews.push_back(std::move(degenerate));
+             overrides[s] = view;
+             views.push_back(std::move(view));
+         }
+@@ -151,6 +191,7 @@ namespace Viewer
+         // 원본 IB와 State에서 압축 IB를 만드는 dispatch를 렌더보다 먼저 같은 graphics queue에 제출한다.
+         const auto dispatchStarted = std::chrono::steady_clock::now();
+         std::unique_ptr<ByteAddressBuffer> compact;
++        std::unique_ptr<ByteAddressBuffer> degenerate, fullCopy;
+         if (!views.empty())
+         {
+             // 미리 만들어 둔 압축 파이프라인을 가져온다.
+@@ -176,6 +217,7 @@ namespace Viewer
+             compute.SetBufferSRV(3, m_TriangleMask->State);
+             compute.SetBufferUAV(4, scan);
+             compute.SetBufferUAV(5, *compact);
++            const uint32_t compactEvent = Renderer::RPUpdateBegin(context, "Compact-IB-GPU");
+ 
+             // 블록 prefix, 블록 offset, 쓰기 순서로 실행하고 앞 두 단계 뒤 scan 의존성을 보장한다.
+             for (uint32_t mode = 0; mode < 3; ++mode)
+@@ -187,6 +229,43 @@ namespace Viewer
+                 if (mode < 2) compute.InsertUAVBarrier(scan);
+             }
+ 
++            // 압축 구간의 GPU 시간과 CPU 비용(개수 계산 + 기록)을 갱신 이벤트로 남긴다.
++            Renderer::RPUpdateEnd(context, compactEvent, cpuUs / 1000.0
++                + std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dispatchStarted).count());
++
++            // 임시 실험: 같은 입력으로 원본 크기 IB 사본을 만들고 제거 삼각형은 첫 인덱스 세 개로 축퇴시킨다.
++            if (RP::Enabled)
++            {
++                const auto degenerateStarted = std::chrono::steady_clock::now();
++                degenerate = std::make_unique<ByteAddressBuffer>();
++                degenerate->Create(L"Component degenerate IB", std::max(1u, work * 3), 4);
++                const uint32_t degenerateEvent = Renderer::RPUpdateBegin(context, "Degenerate-IB-GPU");
++                compute.TransitionResource(*degenerate, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++                compute.SetBufferUAV(5, *degenerate);
++                const uint32_t constants[] = { work, uint32_t(inputs.size()), 3, 0 };
++                compute.SetConstantArray(0, 4, constants);
++                compute.Dispatch(std::min(blocks, 65535u), (blocks + 65534) / 65535);
++                Renderer::RPUpdateEnd(context, degenerateEvent,
++                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - degenerateStarted).count());
++                context.TransitionResource(*degenerate, D3D12_RESOURCE_STATE_INDEX_BUFFER);
++                for (auto& view : degenerateViews) view->IndexBuffer.BufferLocation += degenerate->GetGpuVirtualAddress();
++
++                // 임시 실험: 같은 Mode 3 경로에서 제거 없이 복사한 R32 전체 사본(None-R32, VC 모드 공용)을 만든다.
++                const auto fullStarted = std::chrono::steady_clock::now();
++                fullCopy = std::make_unique<ByteAddressBuffer>();
++                fullCopy->Create(L"Component full R32 IB", std::max(1u, work * 3), 4);
++                const uint32_t fullEvent = Renderer::RPUpdateBegin(context, "NoneR32-IB-GPU");
++                compute.TransitionResource(*fullCopy, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++                compute.SetBufferUAV(5, *fullCopy);
++                const uint32_t fullConstants[] = { work, uint32_t(inputs.size()), 4, 0 };
++                compute.SetConstantArray(0, 4, fullConstants);
++                compute.Dispatch(std::min(blocks, 65535u), (blocks + 65534) / 65535);
++                Renderer::RPUpdateEnd(context, fullEvent,
++                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fullStarted).count());
++                context.TransitionResource(*fullCopy, D3D12_RESOURCE_STATE_INDEX_BUFFER);
++                for (auto& view : fullViews) view->IndexBuffer.BufferLocation += fullCopy->GetGpuVirtualAddress();
++            }
++
+             // 압축 IB를 INDEX_BUFFER로 전환해 제출하고 임시 버퍼는 fence 완료까지 보존한다.
+             context.TransitionResource(data, D3D12_RESOURCE_STATE_GENERIC_READ);
+             context.TransitionResource(*compact, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+@@ -199,6 +278,14 @@ namespace Viewer
+         // 이전 IB의 제출 명령은 기존 fence로 추적하며 wrapper 해제 뒤에도 자원 참조를 보존한다.
+         if (m_TriangleMask->CompactIB)
+             Graphics::g_CommandManager.RetireResource(m_TriangleMask->CompactIB->GetResource());
++        if (m_TriangleMask->DegenerateIB)
++            Graphics::g_CommandManager.RetireResource(m_TriangleMask->DegenerateIB->GetResource());
++        m_TriangleMask->DegenerateIB = std::move(degenerate);
++        m_TriangleMask->DegenerateOverrides = std::move(degenerateOverrides);
++        if (m_TriangleMask->NoneR32IB)
++            Graphics::g_CommandManager.RetireResource(m_TriangleMask->NoneR32IB->GetResource());
++        m_TriangleMask->NoneR32IB = std::move(fullCopy);
++        m_TriangleMask->NoneR32Overrides = std::move(fullOverrides);
+         m_TriangleMask->CompactIB = std::move(compact);
+         m_TriangleMask->RenderOverrides = std::move(overrides);
+         Utility::Printf("TriangleMask compact triangles=%u cpuUs=%.3f dispatchUs=%.3f kept=%u\n",
+@@ -206,6 +293,83 @@ namespace Viewer
+         return true;
+     }
+ 
++    // 게시가 확정된 GPU 후보를 section별 원본 마스크에 누적한다.
++    void MeshComponent::AccumulateVCMask(ByteAddressBuffer& candidate, const std::vector<uint32_t>& offsets)
++    {
++        // 게시 전에 선택 결과를 CPU로 읽거나 원본 마스크에 반영하지 않는다.
++        const auto started = std::chrono::steady_clock::now();
++        auto& mask = *m_TriangleMask;
++        mask.VertexMasks.resize(m_Geometry->GetSections().size());
++        static RootSignature root;
++        static ComputePSO pso(L"VC publish mask");
++        static bool ready = false;
++        if (!ready)
++        {
++            root.Reset(3);
++            root[0].InitAsConstants(0, 3);
++            root[1].InitAsBufferSRV(0);
++            root[2].InitAsBufferUAV(0);
++            root.Finalize(L"VC publish mask");
++            pso.SetRootSignature(root);
++            pso.SetComputeShader(g_pVCMaskApplyCS, sizeof(g_pVCMaskApplyCS));
++            pso.Finalize();
++            ready = true;
++        }
++
++        // 같은 graphics queue에서 렌더보다 앞서 후보를 적용한다.
++        auto& graphics = GraphicsContext::Begin(L"VC publish mask");
++        const uint32_t event = Renderer::RPUpdateBegin(graphics, "VC-apply-publish");
++        auto& compute = graphics.GetComputeContext();
++        compute.SetRootSignature(root);
++        compute.SetPipelineState(pso);
++        compute.TransitionResource(candidate, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++        compute.SetBufferSRV(1, candidate);
++        for (size_t s = 0; s < mask.VertexMasks.size(); ++s)
++        {
++            const uint32_t words = offsets.at(s + 1) - offsets.at(s);
++            const bool initialize = !mask.VertexMasks[s];
++            if (initialize)
++            {
++                mask.VertexMasks[s] = std::make_unique<ByteAddressBuffer>();
++                mask.VertexMasks[s]->Create(L"VC packed original mask", words, 4);
++            }
++            auto& output = *mask.VertexMasks[s];
++            compute.TransitionResource(output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++            compute.SetConstants(0, words, offsets[s], uint32_t(initialize));
++            compute.SetBufferUAV(2, output);
++            compute.Dispatch((words + 63) / 64);
++            compute.TransitionResource(output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++        }
++
++        // 비용을 보관하고 제출 뒤에도 후보의 수명을 fence로 보장한다.
++        Renderer::RPUpdateEnd(graphics, event, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
++        graphics.Finish(false);
++        Graphics::g_CommandManager.RetireResource(candidate.GetResource());
++    }
++
++    // 측정용 추가 인스턴스에 첫 인스턴스의 누적 비트를 GPU 복사한다.
++    void MeshComponent::CopyVCMask(const MeshComponent& source)
++    {
++        // CPU는 버퍼 크기만 사용하고 비트 값은 읽지 않는다.
++        auto& mask = *m_TriangleMask;
++        const auto& input = source.m_TriangleMask->VertexMasks;
++        mask.VertexMasks.resize(input.size());
++        auto& copy = GraphicsContext::Begin(L"Copy VC instance masks");
++        for (size_t s = 0; s < input.size(); ++s)
++        {
++            if (!input[s]) continue;
++            auto buffer = std::make_unique<ByteAddressBuffer>();
++            buffer->Create(L"VC instance mask bits", uint32_t(input[s]->GetBufferSize() / 4), 4);
++            copy.CopyBuffer(*buffer, *input[s]);
++            copy.TransitionResource(*input[s], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++            copy.TransitionResource(*buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++            mask.VertexMasks[s] = std::move(buffer);
++        }
++
++        // 렌더와 같은 queue에 제출하여 추가 CPU 대기를 만들지 않는다.
++        copy.Finish(false);
++    }
++
+     // 이전 프레임이 읽는 자원을 기다린 뒤 원본 인덱스 경로로 복귀한다.
+     void MeshComponent::ClearTriangleMask()
+     {
+@@ -1166,13 +1330,35 @@ namespace Viewer
+             const BoundingSphere sphereVS(view * sphere.GetCenter(), sphere.GetRadius());
+             if (!sorter.GetViewFrustum().IntersectSphere(sphereVS))
+                 continue;
++            // VC 모드에서 마스크 버퍼가 없으면 조용히 원본으로 그리지 않고 한 번만 경고한다.
++            const GpuBuffer* vertexMask = nullptr;
++            if (m_TriangleMask && (Renderer::MaskMode == Renderer::RenderMaskMode::VertexColor || Renderer::MaskMode == Renderer::RenderMaskMode::Clip))
++            {
++                if (i < m_TriangleMask->VertexMasks.size() && m_TriangleMask->VertexMasks[i]) vertexMask = m_TriangleMask->VertexMasks[i].get();
++                else
++                {
++                    static bool warned = false;
++                    if (!warned) { warned = true; Utility::Printf("MC5 WARNING: VC mode has no vertex mask for section %zu\n", i); }
++                }
++            }
++            // 모드별 IB: Compact/Degenerate는 각자의 R32 사본, None-R32와 VC 모드는 제거 없는 R32 전체 사본, None-orig는 원본이다.
++            std::shared_ptr<const Renderer::MeshRenderOverride> indexOverride;
++            if (m_TriangleMask)
++            {
++                using Mode = Renderer::RenderMaskMode;
++                const Mode mode = Renderer::MaskMode;
++                if (mode == Mode::Compact) indexOverride = m_TriangleMask->RenderOverrides[i];
++                else if (mode == Mode::Degenerate && i < m_TriangleMask->DegenerateOverrides.size()) indexOverride = m_TriangleMask->DegenerateOverrides[i];
++                else if ((mode == Mode::NoneR32 || mode == Mode::Clip || mode == Mode::VertexColor) && i < m_TriangleMask->NoneR32Overrides.size())
++                    indexOverride = m_TriangleMask->NoneR32Overrides[i];
++            }
+             sorter.AddMesh(mesh, -sphereVS.GetCenter().GetZ() - sphereVS.GetRadius(),
+                 m_ConstantsGPU.GetGpuVirtualAddress() + sizeof(MeshConstants) * mesh.meshCBV,
+                 m_Geometry->GetMaterialAddress(mesh),
+                 m_Geometry->GetDataBuffer().GetGpuVirtualAddress(), joints,
+                 posed ? &m_PosedGeometry->GetBuffer() : nullptr,
+                 posed ? m_PosedGeometry->GetOffset(sections[i].SourceMesh) : 0,
+-                m_TriangleMask ? m_TriangleMask->RenderOverrides[i] : nullptr);
++                indexOverride, vertexMask);
+         }
+     }
+ }
+diff --git a/MiniEngine/ModelViewer/Scene/MeshComponent.h b/MiniEngine/ModelViewer/Scene/MeshComponent.h
+index 3c57fe5b..24a96149 100644
+--- a/MiniEngine/ModelViewer/Scene/MeshComponent.h
++++ b/MiniEngine/ModelViewer/Scene/MeshComponent.h
+@@ -46,7 +46,11 @@ namespace Viewer
+     struct TriangleMask
+     {
+         StructuredBuffer State;
++        std::vector<std::unique_ptr<ByteAddressBuffer>> VertexMasks;
+         std::unique_ptr<ByteAddressBuffer> CompactIB;
++        // 임시 실험: 원본 크기 IB 사본과 그 draw 범위(제거 삼각형은 축퇴)다.
++        std::unique_ptr<ByteAddressBuffer> DegenerateIB, NoneR32IB;
++        std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> DegenerateOverrides, NoneR32Overrides;
+         std::vector<std::shared_ptr<const Renderer::MeshRenderOverride>> RenderOverrides;
+         uint32_t Revision = 0, AppliedRevision = 0;
+         std::vector<uint32_t> Pending;
+@@ -200,6 +204,10 @@ namespace Viewer
+         bool SetTriangleMask(const std::vector<uint32_t>& state);
+         // 제출된 GPU 사용이 끝난 뒤 마스크를 해제하여 원래 IB로 복귀한다.
+         void ClearTriangleMask();
++        // GPU 후보를 게시 순간 누적한다.
++        void AccumulateVCMask(ByteAddressBuffer& candidate, const std::vector<uint32_t>& offsets);
++        // 측정용 추가 원본에 GPU 마스크를 복사한다.
++        void CopyVCMask(const MeshComponent& source);
+         // 컴포넌트 전용 마스크 자원을 읽는다.
+         const TriangleMask* GetTriangleMask() const
+         {
+diff --git a/MiniEngine/ModelViewer/Scene/PatchSkinning.cpp b/MiniEngine/ModelViewer/Scene/PatchSkinning.cpp
+index 213b32ef..828fadc5 100644
+--- a/MiniEngine/ModelViewer/Scene/PatchSkinning.cpp
++++ b/MiniEngine/ModelViewer/Scene/PatchSkinning.cpp
+@@ -1,4 +1,6 @@
+ #include "PatchSkinning.h"
++#include "GameCore.h"
++#include "SystemTime.h"
+ #include "GeometryRevision.h"
+ #include "CommandContext.h"
+ #include "RootSignature.h"
+@@ -450,6 +452,9 @@ namespace Viewer
+     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
+         const Math::Matrix4* currentNodes, std::vector<Joint>& out)
+     {
++        // Release에서도 모든 팔레트 호출의 CPU 시간을 누적한다.
++        const int64_t rpStart = RP::Enabled ? SystemTime::GetCurrentTick() : 0;
++
+         // 전체 owner 팔레트를 유지하고 부착 노드의 모델 공간 변화량을 구한다.
+         const size_t count = snapshot.JointsAtCut.size();
+         out.assign(currentJoints, currentJoints + count);
+@@ -468,5 +473,12 @@ namespace Viewer
+         rigid.posXform = delta;
+         rigid.nrmXform = Math::InverseTranspose(delta.Get3x3());
+         out.push_back(rigid);
++
++        // 정상 호출이 끝난 시점의 경과 시간과 호출 수를 프레임에 더한다.
++        if (RP::Enabled)
++        {
++            RP::PaletteMs += SystemTime::TicksToMillisecs(SystemTime::GetCurrentTick() - rpStart);
++            ++RP::PaletteCalls;
++        }
+     }
+ }
+diff --git a/MiniEngine/ModelViewer/Scene/Shaders/PatchExtractCS.hlsl b/MiniEngine/ModelViewer/Scene/Shaders/PatchExtractCS.hlsl
+index 9e4a1d93..781c7efa 100644
+--- a/MiniEngine/ModelViewer/Scene/Shaders/PatchExtractCS.hlsl
++++ b/MiniEngine/ModelViewer/Scene/Shaders/PatchExtractCS.hlsl
+@@ -26,6 +26,7 @@ RWByteAddressBuffer Meta : register(u2); // 선택 수 0, 예약 영역 4..11(
+ RWByteAddressBuffer Scan : register(u3); // 블록 안 inclusive prefix·예약 값 0, 뒤쪽 16바이트 간격 블록 offset
+ RWByteAddressBuffer Votes : register(u4); // NodeId별 uint64 (lo, hi)
+ RWByteAddressBuffer Chosen : register(u5);
++RWByteAddressBuffer VCCandidate : register(u6);
+ groupshared uint Prefix[64];
+ 
+ // 그룹의 선택 합계를 Hillis-Steele inclusive scan으로 계산한다.
+@@ -138,6 +139,12 @@ void main(uint3 id : SV_DispatchThreadID)
+ {
+     // 64비트 투표를 비교하고 동점이면 작은 NodeId를 보존한다.
+     uint t=id.x+id.y*(65535*64);
++    // 후보 초기화는 CPU 선택 계산 없이 GPU에서 수행한다.
++    if (Mode == 7)
++    {
++        if (t < Padding1) VCCandidate.Store(t * 4, 0xffffffffu);
++        return;
++    }
+     if(Mode==4)
+     {
+         if(t!=0) return;
+@@ -248,7 +255,15 @@ void main(uint3 id : SV_DispatchThreadID)
+ 
+         // 제거 상태를 선택 조건에 더해 prefix와 모든 출력에 함께 반영한다.
+         bool available=!HasState || !(State[t]&0x80000000u);
+-        bool selected=available && (Selected(s,indices.x)||Selected(s,indices.y)||Selected(s,indices.z));
++        bool3 vertexSelected = bool3(Selected(s, indices.x), Selected(s, indices.y), Selected(s, indices.z));
++        // 중복 정점과 다중 draw가 같은 word를 만져도 원자적 AND로 누적한다.
++        [unroll] for (uint corner = 0; corner < 3; ++corner)
++            if (vertexSelected[corner])
++            {
++                uint v = indices[corner];
++                VCCandidate.InterlockedAnd((s.Reserved1 + (v >> 5)) * 4, ~(1u << (v & 31)));
++            }
++        bool selected=available && any(vertexSelected);
+         Scan.Store2(t*8,uint2(selected,0)); return;
+     }
+ 
+diff --git a/MiniEngine/ModelViewer/Scene/Shaders/TriangleCompactCS.hlsl b/MiniEngine/ModelViewer/Scene/Shaders/TriangleCompactCS.hlsl
+index 044e8c8d..8f6e1243 100644
+--- a/MiniEngine/ModelViewer/Scene/Shaders/TriangleCompactCS.hlsl
++++ b/MiniEngine/ModelViewer/Scene/Shaders/TriangleCompactCS.hlsl
+@@ -86,6 +86,25 @@ void main(uint3 id : SV_DispatchThreadID)
+         return;
+     }
+ 
++    // 임시 실험: 모든 삼각형을 원본 위치에 쓴다. Mode 3은 제거 삼각형을 첫 인덱스 세 개로 축퇴시키고 Mode 4는 아무것도 제거하지 않는 R32 전체 사본이다.
++    if (Mode == 3 || Mode == 4)
++    {
++        if (t >= Triangles) return;
++        DrawInput degenerateDraw;
++        uint degenerateLocal;
++        bool keeps = Keeps(t, degenerateDraw, degenerateLocal) || Mode == 4;
++        uint firstIndex = 0;
++        [unroll] for (uint j = 0; j < 3; j++)
++        {
++            uint at = degenerateDraw.StartIndex + degenerateLocal * 3 + j;
++            uint word = Source.Load(degenerateDraw.IbOffset + (degenerateDraw.Index32 ? at * 4 : (at / 2) * 4));
++            uint value = degenerateDraw.Index32 ? word : ((word >> ((at & 1) * 16)) & 65535);
++            if (j == 0) firstIndex = value;
++            Output.Store((t * 3 + j) * 4, keeps ? value : firstIndex);
++        }
++        return;
++    }
++
+     // 남는 삼각형의 순위를 구해 원본 상대 인덱스 3개를 그대로 쓴다.
+     if (t >= Triangles) return;
+     DrawInput draw;
+diff --git a/MiniEngine/ModelViewer/Scene/Shaders/VCMaskApplyCS.hlsl b/MiniEngine/ModelViewer/Scene/Shaders/VCMaskApplyCS.hlsl
+new file mode 100644
+index 00000000..1e83df93
+--- /dev/null
++++ b/MiniEngine/ModelViewer/Scene/Shaders/VCMaskApplyCS.hlsl
+@@ -0,0 +1,15 @@
++cbuffer Parameters : register(b0) { uint Words, Offset, Initialize; };
++ByteAddressBuffer Candidate : register(t0);
++RWByteAddressBuffer Original : register(u0);
++
++// 게시가 확정된 후보만 원본 비트 마스크에 누적한다.
++[numthreads(64,1,1)]
++void main(uint id : SV_DispatchThreadID)
++{
++    // 처음 게시하는 section은 모든 비트가 살아 있는 상태로 취급한다.
++    if (id >= Words) return;
++    uint prior = Initialize ? 0xffffffffu : Original.Load(id * 4);
++
++    // CPU 선택 계산이나 readback 없이 이전 절단의 0을 보존한다.
++    Original.Store(id * 4, prior & Candidate.Load((Offset + id) * 4));
++}
+diff --git a/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.cpp b/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.cpp
+index 35c7a4c9..f19ac2bc 100644
+--- a/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.cpp
++++ b/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.cpp
+@@ -476,11 +476,12 @@ namespace Viewer
+             // 여러 C 요청 사이에 파이프라인을 재사용한다.
+             static bool initialized = false;
+             if (initialized) return;
+-            PatchRoot.Reset(12);
++            PatchRoot.Reset(13);
+             PatchRoot[0].InitAsConstantBuffer(0);
+             for (uint32_t i = 0; i < 4; ++i) PatchRoot[i + 1].InitAsBufferSRV(i);
+             for (uint32_t i = 0; i < 6; ++i) PatchRoot[i + 5].InitAsBufferUAV(i);
+             PatchRoot[11].InitAsBufferSRV(4);
++            PatchRoot[12].InitAsBufferUAV(6);
+             PatchRoot.Finalize(L"Skeletal patch extraction");
+             PatchPSO.SetRootSignature(PatchRoot);
+             PatchPSO.SetComputeShader(g_pPatchExtractCS, sizeof(g_pPatchExtractCS));
+@@ -2543,6 +2544,8 @@ namespace Viewer
+                     }
+                     if (!m_DemoUnmask && !source->SetTriangleMask(m_Removal))
+                         throw std::runtime_error("SP7e invalid removal mask");
++                    // 동일 추출 제출의 Selected(v)를 게시 마스크에 누적한다.
++                    if (!m_DemoUnmask) source->AccumulateVCMask(m_Job.VCCandidate, m_Job.VCOffsets);
+                     for (auto& piece : pieces)
+                         owner->CommitMeshComponent(std::move(piece));
+                     PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=%u nodes=%u/%u\n",
+@@ -4058,10 +4061,12 @@ namespace Viewer
+         std::vector<DrawInput> draws;
+         std::vector<uint32_t> masks;
+         uint64_t triangles = 0;
++        VCOffsets.assign(1, 0);
+         for (uint32_t s = 0; s < input.GetSections().size(); ++s)
+         {
+             const auto& mesh = input.GetMesh(s);
+             if (!influence && m_SelectionMasks[s].size() != mesh.numJoints) return false;
++            VCOffsets.push_back(VCOffsets.back() + (mesh.vbSize / mesh.vbStride + 31) / 32);
+             const uint32_t maskOffset = uint32_t(masks.size());
+             if (influence)
+                 masks.insert(masks.end(), input.GetSource()->m_JointIndices.get() + mesh.startJoint,
+@@ -4074,7 +4079,7 @@ namespace Viewer
+                 if (!draw.primCount) continue;
+                 draws.push_back({ mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
+                     draw.startIndex, draw.baseVertex, draw.primCount / 3, m_PoseOffsets.back(),
+-                    uint32_t(triangles), maskOffset, mesh.psoFlags, s, d, mesh.numJoints, mesh.vbSize / mesh.vbStride, 0 });
++                    uint32_t(triangles), maskOffset, mesh.psoFlags, s, d, mesh.numJoints, mesh.vbSize / mesh.vbStride, VCOffsets[s] });
+                 triangles += draw.primCount / 3;
+             }
+         }
+@@ -4167,6 +4172,9 @@ namespace Viewer
+         m_EmptyState.Create(L"Empty triangle state", uint32_t(emptyState.size()), 4, emptyState.data());
+ 
+         // 같은 graphics queue에서 pose 준비 뒤 추출하고 패스 사이 UAV 의존성을 보장한다.
++        // 후보는 GPU 초기화 뒤 Mode 0이 선택 정점의 비트만 내린다.
++        const auto vcCpuStart = SystemTime::GetCurrentTick();
++        VCCandidate.Create(L"VC candidate bits", VCOffsets.back(), 4);
+         auto& graphics = GraphicsContext::Begin(L"Extract skeletal patch");
+         auto& compute = graphics.GetComputeContext();
+         if (triangleMask) const_cast<MeshComponent&>(source).UpdateTriangleMask(graphics);
+@@ -4188,6 +4196,15 @@ namespace Viewer
+             compute.TransitionResource(*outputs[i], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+             compute.SetBufferUAV(i + 5, *outputs[i]);
+         }
++        // VC 전용 구간은 Mode 7 후보 초기화만 잰다. Mode 0 추출과 IB 생성은 제외한다.
++        const uint32_t vcEvent = Renderer::RPUpdateBegin(graphics, "VC-init-mode7");
++        compute.TransitionResource(VCCandidate, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++        compute.SetBufferUAV(12, VCCandidate);
++        c.Mode = 7; c.Padding1 = VCOffsets.back();
++        compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
++        compute.Dispatch((c.Padding1 + 63) / 64);
++        compute.InsertUAVBarrier(VCCandidate);
++        Renderer::RPUpdateEnd(graphics, vcEvent, SystemTime::TicksToMillisecs(SystemTime::GetCurrentTick() - vcCpuStart));
+         const uint32_t groups = blocks;
+ 
+         // GPU 선택 결과를 CPU 대기 없이 추출에 연결한다.
+@@ -4213,6 +4230,8 @@ namespace Viewer
+             if (c.Mode == 6) compute.Dispatch(1);
+             else compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+ 
++            // Mode 0 뒤에는 후보 비트 쓰기가 끝나도록 UAV 의존성만 보장한다.
++            if (mode == 0) compute.InsertUAVBarrier(VCCandidate);
+             // 다음 패스가 읽을 scan과 기존 bounds 초기화의 UAV 의존성을 보장한다.
+             if (c.Mode != 2)
+             {
+diff --git a/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.h b/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.h
+index d501843f..56388a6b 100644
+--- a/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.h
++++ b/MiniEngine/ModelViewer/Scene/SkeletalPatchCopy.h
+@@ -73,6 +73,12 @@ namespace Viewer
+         // 이전 작업을 무효화하고 제출 자원의 GPU 사용 완료를 보장한다.
+         void Cancel();
+         // 완료된 GPU 선택을 로깅에만 사용한다.
++        // 추출 제출 때 고정된 팔레트 선택을 게시 마스크에서 재사용한다.
++        const std::vector<std::vector<uint32_t>>& VCSelection() const
++        {
++            // GPU Mode 0과 같은 입력이며 다음 제출 전까지 보존된다.
++            return m_SelectionMasks;
++        }
+         uint32_t SelectedNode() const
+         {
+             // 추출과 같은 제출의 NodeId이다.
+@@ -92,6 +98,10 @@ namespace Viewer
+         Math::Matrix4 m_SourceWorld;
+         StructuredBuffer m_Descriptors, m_Masks;
+         ByteAddressBuffer m_Scan, m_Votes, m_Selected;
++    public:
++        ByteAddressBuffer VCCandidate;
++        std::vector<uint32_t> VCOffsets;
++    private:
+         bool m_Influence = false;
+         std::shared_ptr<SkeletalPatchBuffers> m_Output;
+         std::shared_ptr<const GeometryRevision> m_Input;
