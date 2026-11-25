@@ -39,6 +39,7 @@
 #include "Scene/CutPlaneRenderer.h"
 #include "Scene/CuttingSystem.h"
 #include "Scene/SkeletalPatchCopy.h"
+#include "Scene/CutPerfLog.h"
 #include "Scene/PatchSkinning.h"
 #include "Scene/SkeletalMaskChecks.h"
 #include "Scene/CollisionDebugDraw.h"
@@ -163,6 +164,7 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+    bool m_CutPerfSecondDone = false; // -cut-perf-second-bone의 두 번째 절단을 이미 요청했는지
     float m_DemoDelay = 0, m_DemoCutTime = -1, m_DemoSwitchDelay = 1, m_DemoTilt = 0, m_DemoBoneFraction = 0.5f;
     float m_DemoPlayback = 0, m_DemoPreviousTime = 0;
     uint32_t m_DemoStartClip = 0, m_DemoNextClip = 0, m_DemoStartFrame = 0;
@@ -1069,6 +1071,16 @@ void ModelViewer::Update( float deltaT )
 {
     ScopedTimer _prof(L"Update State");
     ++m_QueryFrame;
+
+    // 절단 성능 로그가 켜진 경우에만 직전 프레임 기록과 GPU 쿼리 회수를 하며, 이 호출은 Update CPU 측정 밖이다.
+    Viewer::CutPerf::FrameBegin(m_Scene, m_QueryFrame, m_SkeletalBreakDemo ? (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan") : nullptr);
+    Viewer::CutPerf::FrameCpu cutPerfUpdateCpu(0);
+
+    // -cut-perf-focus 1이면 3프레임째에 카메라를 데모 대상에 맞춰 화면 안에 둔다.
+    if (Viewer::CutPerf::Enabled() && m_SkeletalBreakDemo && m_QueryFrame == 3 && Viewer::CutPerf::Value(L"cut-perf-focus", 0))
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
+                FocusBreakCamera(object->GetTransform().ToAffine() * object->GetModelInstance()->GetModel()->m_BoundingSphere.GetCenter());
     if (m_QuerySelfTest)
     {
         Viewer::RunPhysicsQueryChecks(m_Scene,m_Physics,m_UsePhysicsQuery != 0,m_PhysicsCapacity);
@@ -1262,10 +1274,12 @@ void ModelViewer::Update( float deltaT )
     {
         m_DemoStartFrame = m_QueryFrame;
         Utility::Printf("Skeletal demo start frame=%u delay=%.2f\n", m_QueryFrame, m_DemoDelay);
+        Viewer::CutPerf::Log("DEMOSTART frame=%llu\n", Graphics::GetFrameCount());
     }
 
     // 공통 프레임 경로에서 고정 step과 GPU pose 준비를 완료한다.
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
+    Viewer::CutPerf::Block cutPerfSceneUpdate(L"CP Scene Update", gfxContext);
     m_SkeletalChecks.BeforeStep(m_Physics);
     const unsigned steps = m_Physics.UpdateFrame(gfxContext,
         demoHolding ? 0.0f : (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
@@ -1279,6 +1293,7 @@ void ModelViewer::Update( float deltaT )
         m_ComponentChecksPending = false;
     }
 
+    cutPerfSceneUpdate.End();
     gfxContext.Finish();
     m_Physics.SyncColliders();
 
@@ -1428,6 +1443,30 @@ void ModelViewer::Update( float deltaT )
                 // 회전된 평면을 기존 패치 절단 경로로 제출한다.
                 m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
                 Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
+                break;
+            }
+    }
+
+    // -cut-perf-second-bone: 첫 게시 120프레임 뒤 같은 프로세스에서 다른 본을 한 번 더 잘라 warm 절단을 잰다.
+    std::wstring secondBone;
+    if (Viewer::CutPerf::Enabled() && m_SkeletalBreakDemo && m_DemoAppliedFrame && !m_CutPerfSecondDone
+        && m_QueryFrame >= m_DemoAppliedFrame + 120 && !m_SkeletalPatchCopy.IsPending() && !m_Cutting.IsBusy()
+        && CommandLineArgs::GetString(L"cut-perf-second-bone", secondBone) && !secondBone.empty())
+    {
+        m_CutPerfSecondDone = true;
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
+            {
+                // 두 번째 본의 node와 다음 번호 node 사이 중점 평면을 같은 경로로 제출한다.
+                const std::string bone(secondBone.begin(), secondBone.end());
+                const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
+                const auto found = std::find(names.begin(), names.end(), bone);
+                if (found == names.end() || found + 1 == names.end())
+                    throw std::invalid_argument("cut-perf-second-bone not found: " + bone);
+                const uint32_t node = uint32_t(found - names.begin());
+                const auto plane = Viewer::BuildSkeletalBonePlane(*object, node, node + 1, m_DemoBoneFraction);
+                m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
+                Utility::Printf("Skeletal demo second request frame=%u bone=%s\n", m_QueryFrame, bone.c_str());
                 break;
             }
     }
@@ -1633,6 +1672,7 @@ void ModelViewer::FocusBreakCamera(const Vector3& center)
 // opt-in 진단은 장면 GPU 완료와 톤매핑 전 HDR 픽셀을 기록한다.
 void ModelViewer::RenderScene( void )
 {
+    Viewer::CutPerf::FrameCpu cutPerfRenderCpu(1);
     // 원래 owner에 조각이 commit된 것을 확인해 데모 캡처 신호 없이 게시를 판정한다.
     if (m_RecutRepro && !m_RecutResultFrame)
     {
@@ -1703,6 +1743,7 @@ void ModelViewer::RenderScene( void )
     }
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
+    Viewer::CutPerf::Block cutPerfRender(L"CP Render", gfxContext);
     if (breakCapture) TemporalEffects::ClearHistory(gfxContext);
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
@@ -1751,6 +1792,7 @@ void ModelViewer::RenderScene( void )
 
         {
             ScopedTimer _prof(L"Depth Pre-Pass", gfxContext);
+            Viewer::CutPerf::Block cutPerfDepth(L"CP Depth", gfxContext);
             sorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
         }
 
@@ -1762,6 +1804,7 @@ void ModelViewer::RenderScene( void )
 
             {
                 ScopedTimer _prof(L"Sun Shadow Map", gfxContext);
+                Viewer::CutPerf::Block cutPerfShadow(L"CP Shadow", gfxContext);
 
                 MeshSorter shadowSorter(MeshSorter::kShadows);
 				shadowSorter.SetCamera(m_SunShadowCamera);
@@ -1788,6 +1831,7 @@ void ModelViewer::RenderScene( void )
 
             {
                 ScopedTimer _prof(L"Render Color", gfxContext);
+                Viewer::CutPerf::Block cutPerfColor(L"CP Color", gfxContext);
 
                 gfxContext.TransitionResource(g_SSAOFullScreen, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_READ);
@@ -1843,6 +1887,7 @@ void ModelViewer::RenderScene( void )
         && !m_AutoCuts && !m_BenchmarkRemaining && !m_Cutting.IsBusy()
         && (!m_CaptureCount || (m_CaptureFrame - m_CaptureTargetFrame) % m_CaptureStep == 0)
         && (!m_SkeletalPatchChecks || (m_SkeletalPatchCaptured < 4 && m_SkeletalPatchCheckIndex == (m_SkeletalPatchCaptured / 2) * 10 + (m_SkeletalPatchCaptured % 2) + 9 && !m_SkeletalPatchCopy.IsPending())))));
+    cutPerfRender.End();
     gfxContext.Finish(m_ViewDiagnosticPending || capture);
     if (capture)
     {

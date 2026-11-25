@@ -4,6 +4,7 @@
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
 #include "EngineProfiling.h"
+#include "CutPerfLog.h"
 #include "Util/CommandLineArg.h"
 #include "RootSignature.h"
 #include "PipelineState.h"
@@ -83,6 +84,9 @@ namespace Viewer
     // CPU가 draw별 남은 개수를 세고 GPU가 압축 IB를 만들며 이전 IB는 제출 fence 완료까지 보존한다.
     bool MeshComponent::SetTriangleMask(const std::vector<uint32_t>& state)
     {
+        // 성능 로그용 CPU 구간이다.
+        CutPerf::Cpu cutPerfMask("SetTriangleMask");
+
         // 생성 geometry에는 원본 삼각형 번호를 적용하지 않는다.
         if (m_Geometry->IsGenerated()) return false;
         uint64_t triangles = 0;
@@ -164,6 +168,8 @@ namespace Viewer
             ByteAddressBuffer scan;
             scan.Create(L"Component compact scan", work + blocks, 4);
             auto& context = GraphicsContext::Begin(L"Compact component triangle mask");
+            // 압축 IB 생성 GPU 구간을 성능 로그용으로 잰다.
+            CutPerf::Gpu cutPerfCompactIb(context, "SourceMaskCompactIB-whole");
             UpdateTriangleMask(context);
             auto& compute = context.GetComputeContext();
             auto& data = const_cast<ByteAddressBuffer&>(m_Geometry->GetDataBuffer());
@@ -191,6 +197,7 @@ namespace Viewer
             // 압축 IB를 INDEX_BUFFER로 전환해 제출하고 임시 버퍼는 fence 완료까지 보존한다.
             context.TransitionResource(data, D3D12_RESOURCE_STATE_GENERIC_READ);
             context.TransitionResource(*compact, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+            cutPerfCompactIb.End();
             context.Finish(false);
             Graphics::g_CommandManager.RetireResource(scan.GetResource());
             for (auto& view : views) view->IndexBuffer.BufferLocation += compact->GetGpuVirtualAddress();
@@ -1205,7 +1212,7 @@ namespace Viewer
                     CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
                     return checks;
                 }();
-                if (skinChecks && !PatchSkinTimingName.empty())
+                if ((skinChecks || CutPerf::GpuEnabled()) && !PatchSkinTimingName.empty())
                     EngineProfiling::BeginBlock(PatchSkinTimingName, &context);
 
                 // 조각 팔레트 생성과 GPU 스키닝 명령 기록을 함께 측정한다.
@@ -1221,7 +1228,7 @@ namespace Viewer
                 m_PosedGeometry->UpdateSkinnedGenerated(context, PatchSkin->Vertices.Data, m_PatchPalette, node);
                 m_PatchNodeFrame = node;
                 m_HasPatchNodeFrame = true;
-                if (skinChecks && !PatchSkinTimingName.empty())
+                if ((skinChecks || CutPerf::GpuEnabled()) && !PatchSkinTimingName.empty())
                     EngineProfiling::EndBlock(&context);
 
                 // 측정 구간 뒤에서 원본 월드와 조각 bounds를 준비한다.

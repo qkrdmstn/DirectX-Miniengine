@@ -1,4 +1,5 @@
 #include "SkeletalPatchCopy.h"
+#include "CutPerfLog.h"
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
 #include "EngineProfiling.h"
@@ -83,6 +84,9 @@ namespace Viewer
         // Release 실행에서도 확인할 수 있도록 추출 로그를 파일과 debugger에 남긴다.
         void PatchLog(const char* format, ...)
         {
+            // 성능 측정의 quiet 모드에서는 파일 기록을 하지 않는다.
+            if (CutPerf::Quiet()) return;
+
             // 가변 인자를 한 번 포맷하고 동일한 문자열을 두 출력에 쓴다.
             char line[1024];
             va_list args;
@@ -319,6 +323,9 @@ namespace Viewer
         template<typename BuildText>
         void WritePatchLogSafely(const BuildText& buildText) noexcept
         {
+            // quiet 모드에서는 로그 문자열도 만들지 않는다.
+            if (CutPerf::Quiet()) return;
+
             // 기존 패치 로그 경로를 유지하며 진단 실패만 무시한다.
             try
             {
@@ -1637,6 +1644,8 @@ namespace Viewer
 
         // 겹침 측정 실패도 이미 등록된 rig의 성공 상태를 바꾸지 않는다.
         const double milliseconds = SystemTime::TicksToMillisecs(SystemTime::GetCurrentTick() - start);
+        CutPerf::Log("RIGPRELOAD owner=%s bodies=%zu joints=%zu create_register_ms=%.3f\n",
+            target->GetName().c_str(), asset.Bodies.size(), asset.Joints.size(), milliseconds);
         try
         {
             LogRigPreload(target->GetName(), pose, asset, milliseconds);
@@ -2050,6 +2059,9 @@ namespace Viewer
     void SkeletalPatchCopy::Request(const Scene& scene, const MeshCutting::CutPlaneData& requestedPlane, bool diagnostic,
         SkeletalJointMode mode, uint32_t diagnosticCase, PhysicsSystem* physics)
     {
+        // 절단 성능 로그의 요청 시작 시각을 기록한다.
+        CutPerf::BeginRequest();
+
         // 명시 다중 옵션의 진단 평면만 요청 내부에서 교체한다.
         auto plane = requestedPlane;
 
@@ -2760,6 +2772,9 @@ namespace Viewer
                 unionCut.ChildSides[0], unionCut.ChildSides[1]);
         }
 
+        // 본 선택까지 끝난 시각을 성능 로그에 남긴다.
+        CutPerf::Mark("select-done");
+
         // 기본 실행은 단일 P를, 합집합 진단은 P_i 배열과 자식 snapshot을 제출한다.
         const bool submitted = unionCut.Roots.empty()
             ? m_Job.Submit(*mesh, local, selected.PaletteMasks, world, selected.NodeId, diagnostic, influence,
@@ -2772,6 +2787,7 @@ namespace Viewer
         {
             m_BodySides = { 0, 1 };
         }
+        CutPerf::Mark("extract-submitted");
         m_BonePending = boneCut && submitted;
         if (!submitted && diagnostic)
             throw std::runtime_error("Skeletal patch diagnostic submit rejected");
@@ -4088,6 +4104,7 @@ namespace Viewer
             BreakStatus status;
             if (!m_Physics->TryGetBreakResult(m_RequestId, status))
                 return false;
+            CutPerf::Mark("break-result");
             SkeletalRigState state;
             m_Physics->GetSkeletalPhysics().ReadDiagnosticState(m_Break.Owner, state);
             unsigned dynamic = 0;
@@ -4131,6 +4148,11 @@ namespace Viewer
                                 + L"/" + std::to_wstring(piece->GetId());
                         }
 
+                        // 절단 성능 로그가 켜진 경우 프레임별 조각 스키닝 시간을 읽도록 타이머 이름만 지정한다.
+                        if (CutPerf::Enabled() && !m_BreakCheck)
+                            piece->PatchSkinTimingName = L"Patch Skinning " + std::to_wstring(owner->GetId())
+                                + L"/" + std::to_wstring(piece->GetId());
+
                         // 게시 전 준비 목록에 조각을 보관한다.
                         pieces.push_back(std::move(piece));
                     }
@@ -4145,6 +4167,28 @@ namespace Viewer
                     auto& context = GraphicsContext::Begin(L"Publish attached skeletal pieces");
                     scene.PrepareMeshes(context);
                     context.Finish();
+                    CutPerf::Mark("published");
+
+                    // 게시된 조각이 상주시키는 버퍼의 논리·할당 크기를 성능 로그에만 남긴다.
+                    if (CutPerf::Enabled())
+                    {
+                        for (const auto& published : owner->GetMeshComponents())
+                        {
+                            if (!published->PatchSkin) continue;
+                            const auto generated = published->GetGeometry()->GetGenerated();
+                            if (!generated) continue;
+                            CutPerf::Memory("piece", "Data-VB-depth-IB-shared", generated->Data);
+                            CutPerf::Memory("piece", "Provenance", generated->Provenance);
+                            CutPerf::Memory("piece", "CapMaterial", generated->CapMaterial);
+                            CutPerf::Memory("piece", "SkinVB", published->PatchSkin->Vertices.Data);
+                            CutPerf::Memory("piece", "PosedGeometry", published->GetPosedGeometry().GetBuffer());
+                        }
+                        if (const auto* mask = source->GetTriangleMask())
+                        {
+                            CutPerf::Memory("source-mask", "State", mask->State);
+                            if (mask->CompactIB) CutPerf::Memory("source-mask", "CompactIB", *mask->CompactIB);
+                        }
+                    }
 
                     // 시연 캡처는 A/B 게시와 렌더 준비가 완료된 프레임부터 시작한다.
                     if (m_Demo)
@@ -4219,6 +4263,7 @@ namespace Viewer
                 throw;
             }
             owner->SetNotCuttable(true);
+            CutPerf::Mark("cut-submitted");
             PatchLog("Skeletal patch cut submitted=%u owner=%llu\n", m_CutInFlight ? 1u : 0u,
                 static_cast<unsigned long long>(m_CopyOwner));
             if (!m_CutInFlight)
@@ -4238,6 +4283,7 @@ namespace Viewer
         std::shared_ptr<SkeletalPatchBuffers> patch;
         if (!m_Job.Poll(result, patch))
             return false;
+        CutPerf::Mark("extract-polled");
         CheckPatchSkin(*patch);
         m_SkinPatch = !m_SkinSnapshots.empty() ? patch : nullptr;
         m_SelectedNode = m_Job.SelectedNode();
@@ -4335,6 +4381,7 @@ namespace Viewer
         owner.GetMeshComponents().front()->Update(context, *owner.GetModelInstance(), owner.GetTransform());
         context.Finish();
         m_CutPending = true;
+        CutPerf::Mark("copy-prepared");
 
         // Static batch·벤치마크·자동 재절단과 격리된 owner가 정확히 하나인지 검사한다.
         size_t copies = 0;
@@ -4602,6 +4649,7 @@ namespace Viewer
 
         // 각 section의 실제 출력 삼각형만 dispatch하고 합산 카운터를 초기화한다.
         auto& graphics = GraphicsContext::Begin(L"Classify patch output bodies");
+        CutPerf::Gpu cutPerfClassify(graphics, "BodyClassify-whole");
         auto& compute = graphics.GetComputeContext();
         auto& provenance = const_cast<ByteAddressBuffer&>(geometry.Provenance);
         compute.TransitionResource(provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -4632,6 +4680,7 @@ namespace Viewer
         graphics.CopyBuffer(readback, counters);
         graphics.TransitionResource(provenance, D3D12_RESOURCE_STATE_GENERIC_READ);
         graphics.TransitionResource(bodies, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        cutPerfClassify.End();
         graphics.Finish(true);
         const auto* counts = static_cast<const uint32_t*>(readback.Map());
         PatchLog("MI3a side=%u tris=%u cap=%u body0=%u body1=%u invalid=%u idMismatch=%u reassigned=%u\n",
@@ -4885,6 +4934,7 @@ namespace Viewer
 
         // 업로드 메모리는 같은 제출의 fence까지 유지되어 동기 대기가 없다.
         auto& graphics = GraphicsContext::Begin(L"Compact actual patch bodies");
+        CutPerf::Gpu cutPerfCompact(graphics, "BodyCompact-whole");
         auto upload = graphics.ReserveUploadMemory(layouts.size() * sizeof(uint32_t));
         std::memcpy(upload.DataPtr, layouts.data(), layouts.size() * sizeof(uint32_t));
         graphics.CopyBufferRegion(job.Layouts, 0, upload.Buffer, upload.Offset, layouts.size() * sizeof(uint32_t));
@@ -4940,6 +4990,7 @@ namespace Viewer
                 graphics.TransitionResource(const_cast<ByteAddressBuffer&>(*buffer), D3D12_RESOURCE_STATE_GENERIC_READ);
         for (auto* buffer : { &output->Data, &output->Provenance, &output->CapMaterial })
             graphics.TransitionResource(*buffer, D3D12_RESOURCE_STATE_GENERIC_READ);
+        cutPerfCompact.End();
         job.Fence = graphics.Finish(false);
         m_BodyState = PatchBodyState::InProgress;
     }
@@ -4957,6 +5008,12 @@ namespace Viewer
         if (!m_CopyOwner || result.Owner != m_CopyOwner) return false;
         if (!m_CutInFlight) return true;
 
+        // 절단기가 직접 잰 GPU 구간(ms)과 요청부터 결과까지의 벽시계를 함께 남긴다.
+        CutPerf::Mark("cut-result-received");
+        CutPerf::Log("CUTTER id=%u gpu_ms=%.6f ready_ms=%.3f clip=%.6f boundary=%.6f cap=%.6f finalize=%.6f loops=%u status=%u\n",
+            CutPerf::RequestId(), result.GpuMs, result.ReadyMs, result.StageMs[0], result.StageMs[1], result.StageMs[2],
+            result.StageMs[3], result.Loops, unsigned(result.Status));
+
         // batch가 비었을 때 단독 제출했으므로 Last 진단은 이 결과에 대응한다.
         m_CutInFlight = false;
         // A는 양의 반공간이므로 B를 음의 법선으로 0.1 m 이동해 간격을 만든다.
@@ -4970,6 +5027,7 @@ namespace Viewer
                 const std::shared_ptr<const GeometryBuffers> inputs[] = {
                     owner->FindMeshComponent(ids[0])->GetGeometry()->GetGenerated(),
                     owner->FindMeshComponent(ids[1])->GetGeometry()->GetGenerated() };
+                CutPerf::Cpu cutPerfBodies("OnCutResult-classify-compact-submit");
                 try
                 {
                     // 분류나 압축 실패는 기존 A/B 게시 준비에 전파하지 않는다.
@@ -5263,6 +5321,10 @@ namespace Viewer
     // 요청 몸체 수의 준비 ID와 skin을 확보한 뒤 단일 또는 batch break를 제출한다.
     void SkeletalPatchCopy::FinishCutResult(Scene& scene, const CutResultEntry& result, uint32_t caps, uint32_t uncapped)
     {
+        // 성능 로그에 마무리 단계 시작 시각과 CPU 구간을 남긴다.
+        CutPerf::Mark("finish-start");
+        CutPerf::Cpu cutPerfFinish("FinishCutResult");
+
         // 지연 처리에서도 동일한 절단 기록으로 성공과 실패 이유를 복원한다.
         const char* reason = result.Status == CutResultStatus::Published ? "published A/B" :
             result.Reason ? result.Reason : result.Error & 1 ? "finite rectangle endpoints outside" :
@@ -5788,6 +5850,7 @@ namespace Viewer
 
         // 같은 graphics queue에서 pose 준비 뒤 추출하고 패스 사이 UAV 의존성을 보장한다.
         auto& graphics = GraphicsContext::Begin(L"Extract skeletal patch");
+        CutPerf::Gpu cutPerfExtract(graphics, "Extract-whole");
         auto& compute = graphics.GetComputeContext();
         if (triangleMask) const_cast<MeshComponent&>(source).UpdateTriangleMask(graphics);
         compute.SetRootSignature(PatchRoot); compute.SetPipelineState(PatchPSO);
@@ -5846,8 +5909,13 @@ namespace Viewer
             // 블록 합계 scan만 한 그룹을 쓰고 나머지는 기존 2D 분할을 유지한다.
             c.Mode = mode;
             compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
-            if (c.Mode == 6) compute.Dispatch(1);
-            else compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            {
+                // 모드별 dispatch 시간을 따로 잰다. 이름은 Mode 번호를 따른다.
+                const char* modeNames[] = { "Extract-mode0", "Extract-mode1", "Extract-mode2", "", "", "", "Extract-mode6" };
+                CutPerf::Gpu cutPerfMode(compute, modeNames[c.Mode]);
+                if (c.Mode == 6) compute.Dispatch(1);
+                else compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            }
 
             // 다음 패스가 읽을 scan과 기존 bounds 초기화의 UAV 의존성을 보장한다.
             if (c.Mode != 2)
@@ -5882,6 +5950,7 @@ namespace Viewer
         graphics.TransitionResource(geometry.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
         graphics.TransitionResource(m_Output->TriangleSources, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         graphics.TransitionResource(m_Output->LocalBounds, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        cutPerfExtract.End();
         m_Fence = graphics.Finish();
         return true;
     }

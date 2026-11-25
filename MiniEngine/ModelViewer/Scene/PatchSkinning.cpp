@@ -1,4 +1,5 @@
 #include "PatchSkinning.h"
+#include "CutPerfLog.h"
 #include "GeometryRevision.h"
 #include "CommandContext.h"
 #include "RootSignature.h"
@@ -146,6 +147,7 @@ namespace Viewer
         out.Flags = flags;
         out.Stride = stride;
         auto& graphics = GraphicsContext::Begin(L"Build patch skin vertices");
+        CutPerf::Gpu cutPerfSkinBuild(graphics, "PatchSkinBuild-whole");
         auto& compute = graphics.GetComputeContext();
         compute.SetRootSignature(root);
         compute.SetPipelineState(pso);
@@ -201,6 +203,7 @@ namespace Viewer
         graphics.TransitionResource(out.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
 
         // 호출자가 보관한 원본·출처·조각과 임시 descriptor는 완료 뒤에만 해제할 수 있다.
+        cutPerfSkinBuild.End();
         graphics.Finish(true);
 
         // 원본 경계 방식처럼 section 전체 구를 모든 joint에 공통 사용하며 K 위치도 그대로 포함한다.
