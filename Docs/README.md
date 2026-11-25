@@ -14,7 +14,7 @@
 
 | 문서 | 용도 | 상태 |
 | --- | --- | --- |
-| [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — BreakConstraint M1과 master `913031f3` 병합 검증; 다중 Static CutJob·cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30) |
+| [CodeMap.md](Current/CodeMap.md) | 현재 Scene·GameObject·선택·평면 기하·렌더 흐름 | 완료 — BreakConstraint M1과 master `913031f3` 병합 검증; 다중 Static CutJob·cap 단계 1 기록 유지, cap 결과 불변은 미확인 (2026-10-30); 2026-11-25(base `547587a9`, 미커밋): 두 데모의 절단 시 자동 카메라 초점 제거, 자동 검사 프레이밍 유지 |
 | [CutPlaneDesign.md](Current/CutPlaneDesign.md) | 유한 평면 기하·선택·편집·표시 계약과 검증 한계 | 완료 — 평면 `527ed749`, GPU 연결 `673b56b6`; 스켈레탈 겹침 클릭 깊이 판정은 `Fix cut plane picking near skinned meshes`에 포함 |
 | [RenderModes.md](Current/RenderModes.md) | Solid/Wireframe/Vertices·입력·깊이·픽셀 캡처 계약 | 완료 — 본 부착 패치 선·점 초록색, D/R 빌드·두 모드 캡처 확인 (2026-11-06) |
 | [Scene.md](Current/Scene.md) | GameObject·다중 MeshComponent·선택·Gizmo | `3dc5d6ba` 기반 조각 hull 선택·중심 기즈모·노란 선택 모서리 구현, CPU/실행 진단 통과; 수동 화면 미확인 |
@@ -33,7 +33,7 @@
 | [ConcurrentCutJobs.md](GPU/ConcurrentCutJobs.md) | 여러 Static CutJob 제출·작업별 snapshot·완료 게시 | 완료 — `f2138029` 기준 1단계, Debug/Release·20회 실행 검증 `1532fc60` |
 | [CutInputFromRevision.md](GPU/CutInputFromRevision.md) | Static 절단 입력을 PG에서 revision Data+section 행렬로 교체, GB::Pose 제거, 패치 조각 강체 유지 결정 | 진행 중 — CI-1a `62b5228c`, CI-1b `7947cfb1`, CI-2 `6dd6fe35`, CI-3 `f7b0bb9c`, CI-4 `6bfa3092`, CI-5 GB::Pose 제거 D/R 검증 완료; 재절단 법선 오차 미측정 (2026-11-04) |
 | [SkeletalPatchCopyCut.md](GPU/SkeletalPatchCopyCut.md) | C 입력으로 영향 본 선택→패치 GPU 복사→정적 복사본 무한 절단 | 진행 중 — SP-7e 게시·부착 구현(미커밋, base `9400691f`); 경계 오차·강제 Stale·캡처 확장 진단 미완료 (2026-11-03) |
-| [SkeletalPatchBreak.md](GPU/SkeletalPatchBreak.md) | SP-7: 선택 joint BreakConstraint, 자동 rig, 원본 숨김(상태 버퍼+치환 IB), A/B node 부착 | 진행 중 — SP-7e 게시·부착 및 연속 캡처 시연 옵션(미커밋, base `03b5c8a1`, 2026-11-06); 시연 후속 C 거절·실패 종료·진단 옵션 격리; 호출자 Release 관찰 기록, 리뷰 수정 빌드·실행 미수행 |
+| [SkeletalPatchBreak.md](GPU/SkeletalPatchBreak.md) | SP-7: 선택 joint BreakConstraint, 자동 rig, 원본 숨김(상태 버퍼+치환 IB), A/B node 부착 | 진행 중 — SP-7e 게시·부착 및 연속 캡처 시연 옵션(미커밋, base `03b5c8a1`, 2026-11-06); 시연 후속 C 거절·실패 종료·진단 옵션 격리; 호출자 Release 관찰 기록, 리뷰 수정 빌드·실행 미수행; 2026-11-25(base `547587a9`, 미커밋): 두 데모의 절단 시 자동 카메라 초점 제거, 자동 검사 프레이밍 유지 |
 | [AttachedPatchRecut.md](GPU/AttachedPatchRecut.md) | 부착 패치 조각 Static 재절단: node 쪽 부착 유지, 반대쪽 독립 낙하 | 완료 — AR-4 bb766e1b, Debug/Release 실행 PASS(2026-11-12) |
 | [MeshIslandMultiBoneCut.md](GPU/MeshIslandMultiBoneCut.md) | 격자 아일랜드를 실제 절단 loop·반공간 및 weight로 몸체에 배정하고 여러 본을 합쳐 자르기 | 완료 — MI-4 `e123cad1`, MI-5 `bffcf22f`(2026-11-17): 위팔491/167·허리90→A·cap54 drop, 양 허벅지300/187/175·constraint18→16·mask1회, 실제 척추182/337 및 P=1 옵션 비교18 PNG·Release 회귀6건 PASS·D3D12 ERROR0. 몸통 접힘·척추 절단 양팔 틈(uncapped17/loop fallback34)·작은 파편 미해결. 다중 경계 측정·Applied 이후 복구·기본값 on 결정 후속 |
 | [PatchSkinning.md](GPU/PatchSkinning.md) | 스켈레탈 패치 조각 스키닝: 끊은 쪽 joint를 부착 node 상대로 고정, 새 정점은 강체 | 완료 — PS-0~PS-6·비용 측정, SP7e2 PASS, Debug/Release 회귀 PASS(2026-11-13) |

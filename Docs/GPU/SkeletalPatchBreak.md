@@ -1,4 +1,4 @@
-상태: 진행 중 — SP-7e 게시·부착 구현; 연속 캡처 시연 옵션·리뷰 수정(미커밋, base `03b5c8a1`, 2026-11-06), 리뷰 수정은 정적 검토만 수행
+상태: 진행 중 — SP-7e 게시·부착 구현; 연속 캡처 시연 옵션·리뷰 수정(미커밋, base `03b5c8a1`, 2026-11-06), 리뷰 수정은 정적 검토만 수행; 2026-11-25(base `547587a9`, 미커밋): 두 데모의 절단 시 자동 카메라 초점 제거, 자동 검사 프레이밍 유지
 
 # Skeletal 패치 절단 + BreakConstraint (SP-7)
 
@@ -6,7 +6,7 @@
 
 - `ModelViewer::Update`는 `-skeletal-break-demo 1|2`에서 기본 장면·애니메이션·물리 실행을 사용하고 60프레임 이후 정상 `SkeletalPatchCopy::Request`를 한 번 호출한다. 고정 스텝은 `PhysicsStepClock::FixedSeconds`다.
 - `BuildSkeletalBreakPlane`을 `RunBreakChecks`와 공유한다. 1은 Xbot P60→61(JointId 43), 2는 CesiumMan P8→9(JointId 5)이며 현재 본 중점·본 방향 수직의 0.3×0.3 m 평면이다.
-- `FocusBreakCamera`는 요청 시 평면 중심을 향해 `2.5 * normalize(0.5, 0.2, 0.8660254)` m 오프셋으로 한 번 배치한다.
+- `-skeletal-break-demo`와 `-skeletal-recut-repro`는 절단 시 카메라를 이동하지 않는다(2026-11-25); `-capture`도 현재 시점을 사용하며, 자동 검사 전용 `FocusBreakCamera`·patch diagnostic 프레이밍은 유지한다.
 - `SkeletalPatchCopy::Update`의 Applied·A/B 게시 완료를 `TakeCaptureRequest`로 전달한다. `-capture <prefix>`이면 해당 프레임부터 +0,+20,…,+140에 `<prefix>-demo-000`부터 `007`까지 `-hdr.raw`·`-post.raw`를 저장한다. `-physics-query-exit` 프레임 종료는 게시 성공 후 캡처가 없거나 8장을 모두 저장했을 때 허용한다. 종료 옵션이 없으면 성공 시 창을 유지한다.
 - `-skeletal-break-demo-unmask 1`은 `SetTriangleMask`를 생략하고 break·A/B 부착을 유지한다. 제거 상태·patch id도 게시되지 않으므로 첫 C 게시 이후 수동 C를 포함한 모든 후속 C 요청을 로그와 함께 거절한다. D6 연속 절단을 지원하는 모드가 아니며 재절단에는 재시작이 필요하다. 기본값 0이며 시연 외에는 적용하지 않는다.
 - 시연 요청 이후 pending 작업이 끝났는데 Applied·A/B 게시 신호가 없으면 요청 거절 또는 게시 실패로 판단한다. 오류 로그를 남기고 `IsDone`으로 정상 정리 후 종료하며 캡처나 `-physics-query-exit` 프레임을 기다리지 않는다. 사용자 일시정지 중 실제 step을 기다리는 요청은 실패로 판정하지 않는다.

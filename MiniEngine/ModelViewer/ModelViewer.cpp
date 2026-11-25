@@ -186,7 +186,7 @@ private:
         Utility::Printf("RecutRepro FAIL reason=%s request=%u frame=%u\n", reason, request, m_QueryFrame);
     }
     // 절단 대상에 카메라를 한 번 배치하고 다음 사용자 이동의 기준도 맞춘다.
-    void FocusBreakCamera(const Vector3& center, bool demo);
+    void FocusBreakCamera(const Vector3& center);
     Viewer::SkeletalPatchCopy m_SkeletalPatchCopy;
     Viewer::SkeletalJointMode m_SkeletalJointMode = Viewer::SkeletalJointMode::Rig;
     Camera m_Camera;
@@ -1323,7 +1323,6 @@ void ModelViewer::Update( float deltaT )
                 float(plane.WorldPlane.GetX()), float(plane.WorldPlane.GetY()), float(plane.WorldPlane.GetZ()),
                 float(plane.WorldPlane.GetW()), float(Dot(Vector3(plane.WorldPlane), center)) + float(plane.WorldPlane.GetW()));
             m_SkeletalPatchCopy.Request(m_Scene, plane, false, mode, UINT32_MAX, &m_Physics);
-            FocusBreakCamera(center, true);
             break;
         }
         if (!foundModel) FailRecut("model_missing", recutIndex + 1);
@@ -1373,7 +1372,6 @@ void ModelViewer::Update( float deltaT )
                     plane = Viewer::BuildSkeletalBreakPlane(*object, m_SkeletalBreakDemo);
                 }
                 m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
-                FocusBreakCamera((plane.WorldCorners[0] + plane.WorldCorners[2]) * 0.5f, true);
                 Utility::Printf("Skeletal demo request frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
                 break;
             }
@@ -1562,11 +1560,11 @@ void ModelViewer::Update( float deltaT )
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
-// 절단 중심을 향한 카메라와 이동 제어기의 자세를 한 번 동기화한다.
-void ModelViewer::FocusBreakCamera(const Vector3& center, bool demo)
+// 자동 진단 캡처를 위해 모델 중심을 향한 카메라와 이동 제어기의 자세를 동기화한다.
+void ModelViewer::FocusBreakCamera(const Vector3& center)
 {
-    // 시연은 수평 30도·약간 위에서 2.5 m 거리로 절단 부위를 담는다.
-    const Vector3 offset = demo ? Normalize(Vector3(0.5f, 0.2f, 0.8660254f)) * 2.5f : Vector3(0, 0, 5.5f);
+    // 기존 픽셀 진단과 같은 정면 5.5 m 거리로 모델을 담는다.
+    const Vector3 offset(0, 0, 5.5f);
     m_Camera.SetEyeAtUp(center + offset, center, Vector3(kYUnitVector));
     m_Camera.Update();
 
@@ -1639,7 +1637,7 @@ void ModelViewer::RenderScene( void )
             if (object->GetName() == (breakCapture == 1 ? "Xbot" : "CesiumMan"))
             {
                 const Vector3 center = object->GetTransform().ToAffine() * object->GetModelInstance()->GetModel()->m_BoundingSphere.GetCenter();
-                FocusBreakCamera(center, false);
+                FocusBreakCamera(center);
             }
 
     // 독립 픽셀 진단은 기존 프레임 명령 목록을 열기 전에 완료한다.
