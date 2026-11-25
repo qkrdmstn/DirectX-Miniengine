@@ -162,7 +162,7 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
-    float m_DemoDelay = 0, m_DemoCutTime = -1, m_DemoSwitchDelay = 1, m_DemoTilt = 0;
+    float m_DemoDelay = 0, m_DemoCutTime = -1, m_DemoSwitchDelay = 1, m_DemoTilt = 0, m_DemoBoneFraction = 0.5f;
     float m_DemoPlayback = 0, m_DemoPreviousTime = 0;
     uint32_t m_DemoStartClip = 0, m_DemoNextClip = 0, m_DemoStartFrame = 0;
     bool m_DemoSwitched = false;
@@ -419,7 +419,7 @@ void ModelViewer::Startup( void )
     {
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-bone",
             L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
-            L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt",
+            L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt", L"skeletal-break-demo-bone-fraction",
             L"skeletal-break-demo-unmask", L"attached-recut-checks", L"rig-bone-cut-checks",
             L"skeletal-union-checks", L"skeletal-patch-offset-copy", L"model", L"demo-cut-sec",
             L"skeletal-multi-cut", L"skeletal-multi-stale", L"skeletal-multi-fail", L"skeletal-multi-reject",
@@ -435,7 +435,7 @@ void ModelViewer::Startup( void )
     std::wstring demoValue;
     for (const wchar_t* option : { L"skeletal-break-demo-delay", L"skeletal-break-demo-anim",
         L"skeletal-break-demo-cut-time", L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
-        L"skeletal-break-demo-tilt" })
+        L"skeletal-break-demo-tilt", L"skeletal-break-demo-bone-fraction" })
         if (CommandLineArgs::GetString(option, demoValue) && !m_SkeletalBreakDemo)
             throw std::invalid_argument("skeletal demo animation options require skeletal-break-demo");
     const auto readSeconds = [](const std::wstring& value)
@@ -463,6 +463,17 @@ void ModelViewer::Startup( void )
         m_DemoTilt = std::stof(demoValue, &end);
         if (end != demoValue.size() || !std::isfinite(m_DemoTilt))
             throw std::invalid_argument("skeletal demo tilt must be finite degrees");
+    }
+
+    // 본 절단 위치는 명시한 본의 부모 관절에서 자식 방향으로 0~1 범위만 허용한다.
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-bone-fraction", demoValue))
+    {
+        std::wstring bone;
+        if (!CommandLineArgs::GetString(L"skeletal-break-demo-bone", bone) || bone.empty())
+            throw std::invalid_argument("skeletal-break-demo-bone-fraction requires skeletal-break-demo-bone");
+        m_DemoBoneFraction = readSeconds(demoValue);
+        if (m_DemoBoneFraction > 1)
+            throw std::invalid_argument("skeletal demo bone fraction must be in [0,1]");
     }
 
     // 기존 독립 검사 옵션을 읽는다.
@@ -513,7 +524,7 @@ void ModelViewer::Startup( void )
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
             L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
-            L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt",
+            L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt", L"skeletal-break-demo-bone-fraction",
             L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
             L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
             L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
@@ -658,7 +669,7 @@ void ModelViewer::Startup( void )
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
         L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"skeletal-break-demo-bone",
         L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
-        L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt",
+        L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt", L"skeletal-break-demo-bone-fraction",
         L"capture", L"capture-frame", L"animation-step-ms",
         L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cap-threads",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
@@ -1381,8 +1392,8 @@ void ModelViewer::Update( float deltaT )
                     if (found == names.end() || found + 1 == names.end())
                         throw std::invalid_argument("skeletal-break-demo-bone not found: " + bone);
                     const uint32_t node = uint32_t(found - names.begin());
-                    plane = Viewer::BuildSkeletalBonePlane(*object, node, node + 1);
-                    Utility::Printf("Skeletal demo bone=%s node=%u child=%u\n", bone.c_str(), node, node + 1);
+                    plane = Viewer::BuildSkeletalBonePlane(*object, node, node + 1, m_DemoBoneFraction);
+                    Utility::Printf("Skeletal demo bone=%s node=%u child=%u fraction=%.4f\n", bone.c_str(), node, node + 1, m_DemoBoneFraction);
                 }
                 else
                 {

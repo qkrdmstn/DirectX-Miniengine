@@ -20,8 +20,8 @@ namespace Viewer
     // break 진단과 시연의 기존 case 평면을 현재 pose에서 구성한다.
     MeshCutting::CutPlaneData BuildSkeletalBreakPlane(const GameObject& object, uint32_t index);
 
-    // 두 node의 현재 월드 중점에서 본 방향을 법선으로 하는 절단 평면을 구성한다.
-    MeshCutting::CutPlaneData BuildSkeletalBonePlane(const GameObject& object, uint32_t node, uint32_t child);
+    // 두 node 사이의 지정 비율 위치에서 본 방향을 법선으로 하는 절단 평면을 구성한다.
+    MeshCutting::CutPlaneData BuildSkeletalBonePlane(const GameObject& object, uint32_t node, uint32_t child, float fraction = 0.5f);
 
     struct SkeletalPatchResult
     {

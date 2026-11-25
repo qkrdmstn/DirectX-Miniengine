@@ -1,4 +1,4 @@
-상태: 완료 — 기준 `049c3579` 위 녹화용 재현 구현; 기준 `1ec89f9f` 위 CesiumMan 사선 절단 옵션·열린 GPU 패치 원인 조사 완료(미커밋, 2026-11-25); 45도 캡 문제는 미해결
+상태: 완료 — 기준 `049c3579` 위 녹화용 재현 구현; 기준 `1ec89f9f` 위 CesiumMan 사선 절단 옵션·열린 GPU 패치 원인 조사 완료(미커밋, 2026-11-25); 45도 캡 문제는 미해결; 개선 방안 2 비교 씬 추가(기준 `5672bb44`, 미커밋, 2026-11-25)
 
 # NDC 로컬 패치의 애니메이션 전환 문제 재현
 
@@ -138,3 +138,44 @@ Skeletal demo switch frame=190 clip=idle
 숫자 클립 6→2, cut-time 1.2, switch 0, 명시적 추종 1 조합도 요청 73·게시/전환 77프레임으로 실행했다.
 두 실행 모두 DXGI 출력 장치 불일치 #80과 D3D12 경고 #974/#1008이 있었다.
 이번 검증은 실행 로그 기준이며 녹화 영상의 육안 비교는 포함하지 않았다.
+
+## 개선 방안 2 비교 씬
+
+CesiumMan 걷기에서 오른쪽 허벅지 `leg_joint_R_1` → `leg_joint_R_2`의 부모 관절로부터 35% 지점을 자른다.
+`-skeletal-break-demo-bone-fraction <0..1>`은 이 선분을 따라 평면 중심을 옮긴다(기본 0.5). `-skeletal-break-demo`와 명시한 `-skeletal-break-demo-bone`이 필요하며, 범위 밖·비유한 값·숫자 뒤 문자는 거절한다. tilt는 옮긴 중심을 유지한다.
+`BuildSkeletalBonePlane`이 위치를 정하고, LW의 `BuildRemainLengthTable` 경로가 실제 절단 pose에서 구한 `r_P`를 기록한다. 모드 0의 표는 로그에만 사용한다.
+
+작업 디렉터리는 `MiniEngine/ModelViewer`이다. 아래 두 명령은 `-patch-length-weights` 값만 다르다.
+개선 방안 1은 완전 애니메이션 추종과 원본 가중치(0), 개선 방안 2는 자손 가중치 0 및 P×r_P 재분배(2)이다. CesiumMan의 기본 클립 0을 계속 재생하며 클립 전환은 없다.
+
+```text
+../Build/x64/Release/Output/ModelViewer/ModelViewer.exe -debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone leg_joint_R_1 -skeletal-break-demo-bone-fraction 0.35 -skeletal-break-demo-tilt 0 -skeletal-break-demo-cut-time 0.5 -skeletal-break-demo-delay 2 -patch-anim-follow 1 -patch-length-weights 0
+../Build/x64/Release/Output/ModelViewer/ModelViewer.exe -debug 1 -skeletal-break-demo 2 -skeletal-break-demo-bone leg_joint_R_1 -skeletal-break-demo-bone-fraction 0.35 -skeletal-break-demo-tilt 0 -skeletal-break-demo-cut-time 0.5 -skeletal-break-demo-delay 2 -patch-anim-follow 1 -patch-length-weights 2
+```
+
+카메라는 절단 시 이동하지 않는다. 두 녹화는 같은 측면 구도로 맞춘다. 검증 캡처는 기존 `ReviewCameraSide.cs`를 재사용해 시작 지연 중 `eye=(9.5,-1,3)`, `at=(12.5,-0.5,0)`을 한 번 설정했다. 이 메모리 override는 촬영 도구이며 제품 옵션은 아니다.
+캡처에는 두 명령에 동일하게 `-capture <경로>/review -capture-count 7 -capture-step 20`을 더했다. 경로만 각 실행 폴더로 구분한다. Applied 기준 상대 프레임으로 비교해야 하며 wall clock이나 절대 프레임은 시작 로딩에 따라 달라진다.
+
+검증(2026-11-25, 기준 `5672bb44` 위 미커밋): Release/Windows(x64) 빌드 exit=0(초회 40.30초, 최종 24.15초), Debug/Windows 빌드 exit=0(초회 103.35초, 최종 20.26초). 기존 C4756 등 경고와 `pwsh.exe` 미발견/fallback 메시지는 남아 있다. 최종 Release로 각 25초 실행하고 이 실행에서 만든 viewer/listener PID만 종료했다. GPU는 실행 로그의 NVIDIA GeForce MX450이며, 이번 드라이버 버전 조회는 권한 거부로 확인하지 못했다.
+
+```text
+# weights 0, PID 33556
+Skeletal demo start frame=101 delay=2.00
+LW1 mode=0 P=17 child=18 r_P=0.3500 segmentLen=0.6889 descendantJoints=3
+Skeletal demo request frame=130 model=2
+Skeletal demo Applied frame=134 model=2
+# weights 2, PID 20768
+Skeletal demo start frame=100 delay=2.00
+LW1 mode=2 P=17 child=18 r_P=0.3500 segmentLen=0.6889 descendantJoints=3
+Skeletal demo request frame=129 model=2
+Skeletal demo Applied frame=133 model=2
+# 두 실행 공통
+Skeletal patch cut result: published A/B components=2 caps=1 uncapped=0 error=0
+Static cut cap diagnostics: failedEarSegments=0 badBoundaryMask=0 capRounds=3 capMarked=13 capRemoved=13 capMaxLoop=16 capMappedLoops=0
+```
+
+D3D12 ERROR/CORRUPTION은 실행 PID별 각각 0/0건이다. 기존 DXGI 출력 장치 오류 #80과 D3D12 경고는 남아 있어 전체 디버그 로그가 무오류라는 뜻은 아니다. 모드 0에는 LW2/LW3 재분배가 없고, 모드 2는 `LW2b reweighted=495 boundaryKept=104`, `LW3 endpoint reweighted=164`(나머지 폴백 카운터 0)이다.
+Applied+60·+80 측면 캡처에서 모드 2 잔여부의 회전이 작아지는 차이를 확인했다. 원본과 부착 패치 사이에 모드 2에서 새로 열린 틈은 보이지 않았으며, 이는 캡처 시점의 시각 확인이고 전 프레임 경계 오차 계측은 아니다. 양쪽 모두 cap 가장자리의 얇은 돌출은 보인다. +120에서는 차이가 작으므로 녹화는 걷기 한 주기를 포함한다. r_P=0.35는 가중치 계수이며 최종 변위가 정확히 35%라는 뜻은 아니다.
+
+최종 근거 경로: `C:/Users/Pes/AppData/Local/Temp/claude/80629d7db37982f2/518c1cc2-650b-4503-b9cf-db7aa22eec9c/scratchpad/lw/`.
+`final0/`, `final2/`에 PID·명령·debug·패치·카메라 로그 및 RAW가 있다. `mode0-plus60.png`, `mode0-plus80.png`, `mode2-plus60.png`, `mode2-plus80.png`가 전체 측면 캡처이고 `stump-comparison.png`는 두 시점의 잔여부를 좌우 비교한다(+120 PNG도 보관). `run-lw.ps1`, `convert-final.ps1`로 재현할 수 있다. 초기 `mode0/`, `mode2/`는 수정 전 조사 자료이며 최종 결과가 아니다. 실행 시 GUI 카메라를 재현하려면 지연을 늘려 수동으로 같은 구도를 잡거나, 위 촬영 스크립트를 사용한다.

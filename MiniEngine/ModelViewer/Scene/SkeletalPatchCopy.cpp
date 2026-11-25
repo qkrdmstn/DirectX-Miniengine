@@ -1,4 +1,4 @@
-﻿#include "SkeletalPatchCopy.h"
+#include "SkeletalPatchCopy.h"
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
 #include "EngineProfiling.h"
@@ -1076,8 +1076,8 @@ namespace Viewer
         return BuildSkeletalBonePlane(object, nodes[index], children[index]);
     }
 
-    // 두 node의 현재 월드 중점에서 본 방향을 법선으로 하는 절단 평면을 구성한다.
-    MeshCutting::CutPlaneData BuildSkeletalBonePlane(const GameObject& object, uint32_t node, uint32_t child)
+    // 두 node 사이의 지정 비율 위치에서 본 방향을 법선으로 하는 절단 평면을 구성한다.
+    MeshCutting::CutPlaneData BuildSkeletalBonePlane(const GameObject& object, uint32_t node, uint32_t child, float fraction)
     {
         // 두 node의 현재 월드 좌표를 조회한다.
         const auto& instance = *object.GetModelInstance();
@@ -1090,10 +1090,10 @@ namespace Viewer
         const auto x = Math::Normalize(Math::Cross(normal, std::abs(float(normal.GetY())) < 0.9f
             ? Math::Vector3(Math::kYUnitVector) : Math::Vector3(Math::kXUnitVector)));
 
-        // 두 본의 중점에서 유한 절단 평면을 생성하고 유효성을 검사한다.
+        // 부모 관절에서 자식 방향의 비율 위치에 유한 절단 평면을 생성하고 유효성을 검사한다.
         MeshCutting::CutPlaneData plane;
         if (!MeshCutting::TryBuildCutPlaneData({ 0.3f, 0.3f },
-            Math::AffineTransform(Math::Matrix3(x, normal, Math::Cross(x, normal)), (a + b) * 0.5f), plane))
+            Math::AffineTransform(Math::Matrix3(x, normal, Math::Cross(x, normal)), fraction == 0.5f ? (a + b) * 0.5f : a + (b - a) * fraction), plane))
             throw std::runtime_error("SP7b invalid diagnostic plane");
         return plane;
     }
@@ -2555,8 +2555,10 @@ namespace Viewer
                 }
             }
 
-            // 옵션이 켜지면 A 조각(body 0)의 남은 길이 비율 표를 만든다(아직 GPU에 넘기지 않는다).
-            if (!boneCut && PatchLengthWeightsMode() && m_RemainLengthTables.size() == m_SkinSnapshots.size())
+            // 비교 데모는 모드 0도 같은 LW 계산으로 비율을 기록하고, 재분배는 기존 옵션을 따른다.
+            uint32_t lengthDemo = 0;
+            CommandLineArgs::GetInteger(L"skeletal-break-demo", lengthDemo);
+            if (!boneCut && (PatchLengthWeightsMode() || lengthDemo) && m_RemainLengthTables.size() == m_SkinSnapshots.size())
             {
                 // 절단 시점 pose의 월드 joint 위치를 구한다(snapshot의 JointsAtCut과 같은 pose).
                 size_t firstSkin = 0;
@@ -2601,10 +2603,9 @@ namespace Viewer
                     }
                     cuts.push_back(cut);
                 }
-                m_RemainLengthTables[0] = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups, PatchLengthWeightsMode());
+                auto lengthTable = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups, PatchLengthWeightsMode());
 
                 // 소속 P_i가 있는 joint마다 같은 section 팔레트 범위 안에서 P_i의 NodeId를 찾아 합 0 폴백 인덱스로 정한다(없으면 -1).
-                auto& lengthTable = m_RemainLengthTables[0];
                 for (size_t k = 0; k < jointNodes.size(); ++k)
                 {
                     if (lengthTable.CutRoot[k] < 0)
@@ -2625,7 +2626,7 @@ namespace Viewer
                 }
 
                 // P_i마다 r_P와 자손 joint 수를 기록하고, 단일 절단은 선택 시점 교점과의 pose 차이도 남긴다.
-                const auto& table = m_RemainLengthTables[0];
+                const auto& table = lengthTable;
                 for (size_t i = 0; i < cuts.size(); ++i)
                 {
                     std::set<uint32_t> descendants;
@@ -2657,6 +2658,10 @@ namespace Viewer
                     descendantMatch = (table.Descendant[k] != 0) == (m_SkinSnapshots[0].Frozen[k] != 0 && !isRoot);
                 }
                 PatchLog("LW1 table size=%zu descendantMatch=%s\n", table.Ratio.size(), descendantMatch ? "PASS" : "FAIL");
+
+                // 모드 0의 표는 진단에만 사용하고 GPU 재분배 경로로 넘기지 않는다.
+                if (PatchLengthWeightsMode())
+                    m_RemainLengthTables[0] = std::move(lengthTable);
             }
         }
 
