@@ -39,6 +39,7 @@
 #include "Scene/CutPlaneRenderer.h"
 #include "Scene/CuttingSystem.h"
 #include "Scene/SkeletalPatchCopy.h"
+#include "Scene/PatchSkinning.h"
 #include "Scene/SkeletalMaskChecks.h"
 #include "Scene/CollisionDebugDraw.h"
 #include <algorithm>
@@ -393,6 +394,9 @@ static std::string GetDeviceGpuName()
 // 시작 옵션과 모델·물리를 준비하고 최종 배치 pose로 skin owner의 rig를 사전 등록한다.
 void ModelViewer::Startup( void )
 {
+    // 렌더 준비 전에 길이 혼합 옵션과 LW 동시 사용 오류를 검증한다.
+    Viewer::PatchLengthBlendEnabled();
+
     // 파이프라인 사전 준비보다 먼저 단면 스레드 그룹 크기를 적용한다.
     uint32_t capThreads = 512;
     CommandLineArgs::GetInteger(L"cap-threads", capThreads);

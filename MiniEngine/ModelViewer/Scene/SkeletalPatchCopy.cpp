@@ -2558,7 +2558,8 @@ namespace Viewer
             // 비교 데모는 모드 0도 같은 LW 계산으로 비율을 기록하고, 재분배는 기존 옵션을 따른다.
             uint32_t lengthDemo = 0;
             CommandLineArgs::GetInteger(L"skeletal-break-demo", lengthDemo);
-            if (!boneCut && (PatchLengthWeightsMode() || lengthDemo) && m_RemainLengthTables.size() == m_SkinSnapshots.size())
+            if (!boneCut && (PatchLengthWeightsMode() || PatchLengthBlendEnabled() || lengthDemo)
+                && m_RemainLengthTables.size() == m_SkinSnapshots.size())
             {
                 // 절단 시점 pose의 월드 joint 위치를 구한다(snapshot의 JointsAtCut과 같은 pose).
                 size_t firstSkin = 0;
@@ -2603,7 +2604,15 @@ namespace Viewer
                     }
                     cuts.push_back(cut);
                 }
-                auto lengthTable = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups, PatchLengthWeightsMode());
+                auto lengthTable = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups);
+
+                // LB는 원래 비율 표를 snapshot에 보관하고 LW 모드 0·1의 P=1 처리는 별도로 유지한다.
+                if (PatchLengthBlendEnabled())
+                    m_SkinSnapshots[0].LengthBlendRatio = lengthTable.Ratio;
+                if (PatchLengthWeightsMode() != 2)
+                    for (size_t k = 0; k < lengthTable.Ratio.size(); ++k)
+                        if (lengthTable.CutRoot[k] >= 0 && !lengthTable.Descendant[k])
+                            lengthTable.Ratio[k] = 1.0f;
 
                 // 소속 P_i가 있는 joint마다 같은 section 팔레트 범위 안에서 P_i의 NodeId를 찾아 합 0 폴백 인덱스로 정한다(없으면 -1).
                 for (size_t k = 0; k < jointNodes.size(); ++k)
@@ -2641,6 +2650,24 @@ namespace Viewer
                     }
                     PatchLog("LW1 mode=%d P=%u child=%u r_P=%.4f segmentLen=%.4f descendantJoints=%zu\n",
                         PatchLengthWeightsMode(), cuts[i].NodeId, cuts[i].ChildNodeId, ratio, length, descendants.size());
+
+                    // 단일·다중·잎 본 모두 같은 로그를 쓰고 중복 section joint의 저장값도 확인한다.
+                    if (PatchLengthBlendEnabled())
+                    {
+                        uint32_t rootEntries = 0, mismatches = 0;
+                        const auto& ratios = m_SkinSnapshots[0].LengthBlendRatio;
+                        for (size_t k = 0; k < jointNodes.size(); ++k)
+                            if (jointNodes[k] == cuts[i].NodeId)
+                            {
+                                ++rootEntries;
+                                const float expected = table.Descendant[k] ? 0.0f : std::min(std::max(ratio, 0.0f), 1.0f);
+                                mismatches += ratios[k] != expected;
+                            }
+                        PatchLog("LB1 P=%u r_P=%.4f descendants=%u paletteEntries=%u duplicates=%u match=%s\n",
+                            cuts[i].NodeId, ratio, uint32_t(descendants.size()), rootEntries,
+                            rootEntries ? rootEntries - 1 : 0, mismatches ? "FAIL" : "PASS");
+                    }
+
                     if (!m_MultiPrepare && cuts[i].ChildNodeId != UINT32_MAX)
                     {
                         const float planeErr = Math::Dot(plane.WorldPlane, Math::Vector4(selected.Intersection, 1));

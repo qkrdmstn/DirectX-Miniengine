@@ -102,6 +102,8 @@ NDC 녹화 재현: `ModelViewer::ConfigureDemoAnimation`이 `ReadRigDiagnosticAn
 PatchAnimFollow(AF-1~6): ModelInstance::EvaluateAnimation이 물리 override 전 애니메이션 node와 Joint 배열(BuildJointArray, Model.cpp)을 따로 보존한다. SkeletalPatchCopy.cpp의 FillAnimFollow가 snapshot AnimFollow·O_k를 채우고, CheckAnimFollowAtCut(절단 시점)·MeshComponent::CheckAnimFollowFrame(프레임)이 팔레트 재계산을 진단한다. Viewer::PatchAnimFollowEnabled(PatchSkinning.cpp)는 `-patch-anim-follow`(기본 1)를 읽는다. PatchSkinBuildCS의 ExtInternal은 1 = 같은 body 내부 교점, 2 = 실제 분리 rim 끝점, 3 = cap 끝점이다. 설계·결과는 [PatchAnimFollow.md](../GPU/PatchAnimFollow.md).
 PatchLengthWeights(LW-1~4, 기본 off `-patch-length-weights 0|1|2`): `PatchLengthWeightsMode`가 옵션을 한 번 읽고, `BuildRemainLengthTable`이 A 조각 팔레트 joint별 남은 길이 비율과 소속 P를 만들며, `BuildPatchBoundaryFlags`가 원본과 공유되는 패치 정점을 표시한다. `PatchSkinBuildCS`의 `Reweight`가 복사 정점·rim·cap 끝점 레코드를 재분배하고 bind 위치·법선·탄젠트를 `RemapFrame` 등으로 다시 계산한다. cap 방향은 `CutTimeNormal`이 실제 저장할 끝점 skin의 절단 시점 법선 행렬로 역변환한다(master cofactor 설계 유지). 재절단은 부모 레코드를 복사하여 승계한다. 자세한 내용은 [PatchLengthWeights.md](../GPU/PatchLengthWeights.md).
 
+PatchLengthBlend(LB-1, 기본 off `-patch-length-blend 0|1`): `PatchLengthBlendEnabled`가 LW와 동시 사용을 거부한다. `BuildRemainLengthTable`의 모드 독립 비율(P=r_P, 자손=0, 나머지=1)을 A의 `PatchSkinSnapshot::LengthBlendRatio`에 저장하고 재절단은 값 복사로 승계한다. LW 모드별 P 처리는 호출부에 유지한다. 렌더에는 아직 연결하지 않는다. 자세한 내용은 [PatchLengthBlend.md](../GPU/PatchLengthBlend.md).
+
 
 BC-08a-1: ModelViewer/Scene/SkeletalPhysicsFrames.h의 TryBuildBodyFrame은 배율을 제거한 E*Gnode에 월드 m 단위 body offset을 적용한다. TrySplitUniformFrame은 양수 uniform scale·직교성·affine·finite를 검사하고 TryRestoreNodePose는 저장 배율을 복원하는 순수 좌표 왕복을 제공한다. SkeletalFrameTests는 Jolt/GPU 없이 검사한다. rig 저장·Kinematic 구동은 BC-08a-2, Scene 연결은 BC-11에서 완료했다.
 

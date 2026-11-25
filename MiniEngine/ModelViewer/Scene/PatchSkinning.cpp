@@ -13,6 +13,7 @@
 #include <cmath>
 #include <array>
 #include <unordered_set>
+#include <stdexcept>
 
 namespace Viewer
 {
@@ -708,10 +709,28 @@ namespace Viewer
         return mode;
     }
 
-    // 잘린 본 P_i별 남은 길이 비율 r_P를 구해 팔레트 joint마다 Ratio와 CutRoot를 채운다.
+    // 길이 혼합 옵션을 한 번 읽고 가중치 재분배와 함께 켜면 오류로 끝낸다.
+    bool PatchLengthBlendEnabled()
+    {
+        // 기본값은 0이며 기존 옵션처럼 정수 값을 읽는다.
+        static const bool enabled = []
+        {
+            // 혼합과 재분배를 동시에 적용하지 않도록 시작 시 검증한다.
+            uint32_t value = 0;
+            CommandLineArgs::GetInteger(L"patch-length-blend", value);
+            if (value > 1)
+                throw std::invalid_argument("patch-length-blend must be 0 or 1");
+            if (value && PatchLengthWeightsMode())
+                throw std::invalid_argument("patch-length-blend 1 cannot be combined with nonzero patch-length-weights");
+            return value != 0;
+        }();
+        return enabled;
+    }
+
+    // 잘린 본 P_i별 남은 길이 비율 r_P를 모드와 무관하게 구해 팔레트 joint마다 채운다.
     RemainLengthTable BuildRemainLengthTable(const std::vector<RemainLengthCut>& cuts,
         const std::vector<Math::Vector3>& positions, const std::vector<uint32_t>& jointNodes,
-        const std::vector<uint32_t>& nodeGroups, int mode)
+        const std::vector<uint32_t>& nodeGroups)
     {
         // 모든 항목을 비율 1과 소속 없음으로 시작한다.
         RemainLengthTable table;
@@ -734,7 +753,7 @@ namespace Viewer
             remain[i] = std::min(std::max(partial / length, 0.0f), 1.0f);
         }
 
-        // 노드 소속으로 자손(비율 0)과 P_i 자신(모드 1은 1, 모드 2는 r_P)을 정한다.
+        // 노드 소속으로 자손(비율 0)과 P_i 자신(비율 r_P)을 정한다.
         for (size_t k = 0; k < jointNodes.size(); ++k)
         {
             const uint32_t node = jointNodes[k];
@@ -743,7 +762,7 @@ namespace Viewer
             const size_t cut = nodeGroups[node] - 1;
             table.CutRoot[k] = int(cut);
             table.Descendant[k] = node == cuts[cut].NodeId ? 0 : 1;
-            table.Ratio[k] = table.Descendant[k] ? 0.0f : (mode == 2 ? remain[cut] : 1.0f);
+            table.Ratio[k] = table.Descendant[k] ? 0.0f : remain[cut];
         }
         return table;
     }

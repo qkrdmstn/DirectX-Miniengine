@@ -51,6 +51,7 @@ namespace Viewer
         bool SkinningAllowed = true;
         bool AnimFollow = false;                // 몸통 쪽 조각이 고정 joint의 애니메이션을 따를 수 있는지(AF-2a).
         std::vector<Math::Matrix4> AnimOffset;  // 고정 joint k의 O_k(AF-2a). 고정이 아닌 joint는 항등이다.
+        std::vector<float> LengthBlendRatio;    // LB: A 팔레트별 P=r_P, 자손=0, 나머지=1. 재절단은 값 복사로 승계한다.
     };
 
     // 렌더 연결 전까지 조각의 skin 입력과 section별 유효 정점 범위를 함께 보관한다.
@@ -108,6 +109,9 @@ namespace Viewer
     // -patch-length-weights 옵션을 최초 호출에서 한 번만 읽어 반환한다(0 끔, 1 자손만, 2 자손+P 비율).
     int PatchLengthWeightsMode();
 
+    // -patch-length-blend 옵션(기본 0)을 한 번 읽고 LW와의 동시 사용을 거부한다.
+    bool PatchLengthBlendEnabled();
+
     // 잘린 본 P_i의 선택 선분 snapshot이다(NodeId는 유효 부모, 교점과 joint 위치는 월드 공간).
     struct RemainLengthCut
     {
@@ -126,11 +130,11 @@ namespace Viewer
         std::vector<int> Fallback; // 합 0 폴백용 같은 section 범위의 P_i 팔레트 인덱스(없으면 -1)
     };
 
-    // P_i의 자손은 0, P_i는 모드 1에서 1 / 모드 2에서 r_P, 나머지는 1로 팔레트별 비율 표를 만든다.
+    // P_i의 자손은 0, P_i는 r_P, 나머지는 1로 모드와 무관한 팔레트별 비율 표를 만든다.
     // jointNodes는 팔레트 순서의 NodeId, nodeGroups는 BuildCutBodyGroups의 노드 소속(0=A, i=B_i)이다.
     RemainLengthTable BuildRemainLengthTable(const std::vector<RemainLengthCut>& cuts,
         const std::vector<Math::Vector3>& positions, const std::vector<uint32_t>& jointNodes,
-        const std::vector<uint32_t>& nodeGroups, int mode);
+        const std::vector<uint32_t>& nodeGroups);
 
     // 패치 꼭짓점(추출 정점 번호 = 삼각형*3+corner)별로 원본에 남는 삼각형과 위치를 공유하면 1인 경계 플래그 표를 만든다.
     // patchTriangles는 패치 삼각형의 전역 번호, previousState는 기존 제거 상태(비어 있을 수 있다), sectionNodes는 section별 mesh node 행렬이다.

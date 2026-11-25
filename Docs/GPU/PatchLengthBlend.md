@@ -1,4 +1,4 @@
-상태: 결정 (2026-11-25) — 구현 전. 기준: master + 남은 길이 가중치(LW) 브랜치 병합 후.
+상태: 진행 중 (2026-11-25) — LB-1 완료(미커밋, 기준 `60c36279`), Release·회귀 LB 0/1 PASS. LB-2~4 미구현. 기본값 0, 렌더 연결 전.
 
 # 잘린 본 팔레트를 남은 길이 비율로 따르기·고정 혼합 (개선 방안 4)
 
@@ -58,3 +58,22 @@ D5. 알려진 한계와 확인할 것
 | LB-2 | BuildPatchPalette 위치 혼합(D1)·법선 가중합(D2). 진단 입력(`RecutCheckInput`, getter)에 실제 법선 팔레트 전달, `CheckAnimFollowFrame`이 혼합 기대값을 쓰게 변경 | r = 0/1/중간·절단 순간·C≠I에서 식 일치, 유한값, 행렬식·법선 영벡터 검사 |
 | LB-3 | 끝점·cap·재절단 진단을 새 팔레트에 맞춤 | rim/cap 위치, cap 면 법선 독립 검사, snapshot 승계, 새 재절단 cap·폴백 경로 |
 | LB-4 | SP7e2 경계, 회귀 6종, 캡처, 문서 | LB 켬/끔 × follow 켬/끔 회귀 PASS, LW 1·2 동시 사용 오류 확인, CesiumMan·Xbot 캡처 |
+
+## LB-1 구현
+
+- `PatchLengthBlendEnabled`가 옵션을 한 번 읽고 LW와 동시 사용을 거부한다. `ModelViewer::Startup`에서 렌더 준비 전에 호출한다.
+- `BuildRemainLengthTable`은 LW 모드와 무관하게 P=r_P인 표를 만든다. `SkeletalPatchCopy::Request`의 LW 모드 0·1 처리는 P만 1로 되돌려 기존 표를 보존한다.
+- LB가 켜지면 몸통 snapshot의 `LengthBlendRatio`에 원래 표를 값 복사한다. `BuildRecutPatchSkinVertices`의 snapshot 값 복사로 승계한다.
+- `LB1` 로그의 `paletteEntries`와 `duplicates`는 같은 P의 section 중복 팔레트 수이며 `match`는 저장된 P 비율의 일치를 검사한다.
+- `BuildPatchPalette`, 가중치·bind·GPU 입력은 변경하지 않았다. D1·D2의 실제 혼합과 D5 진단은 후속 단계다.
+
+### LB-1 검증 (2026-11-25)
+
+- Release x64 `ModelViewer.slnx -p:Configuration=Release -p:Platform=Windows -m`: 성공, 84.72초, 오류 0. 로그 `%TEMP%/lb1-release-build.log`.
+- 지정 `regress.sh Release`와 `regress.sh Release -patch-length-blend 1`: 각각 6종 PASS, 모든 프로세스 exit=0. SP6 20행 PASS, SP7e2 pass=4 fail=0 n/a=2, BC-12a/b·AR4·Rig PASS. 실행별 6~10초. 로그 `%TEMP%/lb1-regress-default.txt`, `lb1-regress-enabled.txt`와 `lb1-default-patch.log`, `lb1-enabled-patch.log`.
+- 요청한 CesiumMan `leg_joint_R_1`, fraction 0.35, cut-time 0.5: exit=0, `LB1 P=17 r_P=0.3500 descendants=3 paletteEntries=1 duplicates=0 match=PASS`. 로그 `%TEMP%/lb1-leg-on-patch.log`.
+- 같은 다리 데모에 `-skeletal-multi-cut 1`: exit=0, P=14 r_P=0.4256 자손 2, P=17 r_P=0.3500 자손 3, 둘 다 match=PASS. 조각 3개 게시. 로그 `%TEMP%/lb1-multi-leg.log`.
+- 잎·중복 section NodeId는 실제 `BuildRemainLengthTable`과 구조체를 추출한 외부 CPU fixture에서 검증했다(실제 모델 절단 검증과 구분). P=1 r_P=0.3500 자손 1, 잎 P=3 r_P=1.0000 자손 0, 각각 paletteEntries=2 duplicates=1 PASS. 기존 `60c36279` 함수와 LW 모드 0/1/2 표의 비트 비교 303개 PASS. 소스·결과 `%TEMP%/lb1-ratio-tests.cpp`, `lb1-ratio-tests.txt`.
+- LB 0/1의 고정 16ms 다리 데모 게시 직후·60프레임 후 post RAW 두 쌍은 SHA-256이 각각 일치했다. `%TEMP%/lb1-leg-{off,on}-demo-{000,001}-post.raw`. 렌더 미연결 상태를 확인했다.
+- `-patch-length-blend 1`과 `-patch-length-weights 1` 및 `2`는 각각 시작 시 예외 종료(exit=-1073740791). 오류는 `patch-length-blend 1 cannot be combined with nonzero patch-length-weights`이다.
+- 추가 시도한 `-skeletal-patch-break-checks 1 -skeletal-multi-cut 1` 조합은 `-skeletal-union-checks 1` 유무 모두 비정상 종료했다(exit=-1073740791). LB=0에서도 동일하게 재현되어 이번 범위에서 수정하지 않았다. 필수 회귀와 위 다중 절단 데모는 정상 종료했다.
