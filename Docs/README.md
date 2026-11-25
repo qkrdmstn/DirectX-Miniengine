@@ -40,6 +40,7 @@
 | [PatchRecutSkinning.md](GPU/PatchRecutSkinning.md) | 스키닝 패치 재절단: node 쪽 결과가 부모 팔레트를 승계해 스키닝 유지, 새 절단면은 node 강체 | 완료 — RS-1~RS-5(2026-11-23): node 쪽 skin 승계, 경계 0 local, 연속 재절단 PASS, Release 회귀 6종 옵션 1·0 PASS. AR4 장면 육안 차이는 작음(옵션 0 11.2 mm 어긋남은 로그로 확인) |
 | [NdcAnimSwitchRepro.md](GPU/NdcAnimSwitchRepro.md) | Xbot 클립 전환·패치 고정 및 CesiumMan 사선 절단·완전 추종 한계 녹화 | 완료 — 기준 `1ec89f9f` 위 tilt·원인 조사(미커밋); 45도 열린 패치 캡은 미해결, 검증은 본문 참고 |
 | [PatchAnimFollow.md](GPU/PatchAnimFollow.md) | 몸통 쪽 A 조각이 끊은 본의 키네마틱 애니메이션을 따르기: 고정 joint를 애니메이션 포즈로, rim·cap은 끝점 스키닝 | 완료 — AF-1~6 구현·기본값 1(2026-11-23) |
+| [PatchLengthWeights.md](GPU/PatchLengthWeights.md) | A 조각 가중치를 남은 본 길이 비율로 재분배: 자손 0·P×r_P 옵션, 경계 유지, bind 재계산, LW-1~4 | 진행 중 (2026-11-25, LW-1~4·84a41849 cap 법선 병합 미커밋, Release·회귀 0/2 PASS, 기본 0) |
 | [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 병렬 block scan과 Mode 2 scatter의 블록 offset 적용(CP-5 Mode 7 제거) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19); CP-5 Mode 7 제거 a23fe252 |
 | [PerfBaseline.md](GPU/PerfBaseline.md) | per-vertex 추출·compacted IB 변경 전 절단 GPU/CPU·메모리 및 렌더 측정 | 측정 기록 — 기준 `5f360fa7`, 임시 계측 패치 보관·코드 원복 (2026-11-20) |
 | [CutPerfImprovement.md](GPU/CutPerfImprovement.md) | 절단 성능 1차: CPU 압축 IB로 퇴화 IB·TriangleMaskCS 대체(CP-8에서 GPU 생성으로 이동), CPU Update 4.9 s 원인 확정, 추출 Mode 7 합치기·coarsening | 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 8a7812e6(K=1 유지), CP-4c a4b9ea23, CP-8 f49c2bab |

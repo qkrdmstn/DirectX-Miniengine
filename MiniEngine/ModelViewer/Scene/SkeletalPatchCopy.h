@@ -51,6 +51,7 @@ namespace Viewer
         std::vector<CutCrossing> Crossings; // 몸체 i+1의 제출 포즈 선분 snapshot이다.
         std::vector<BoundaryVertex> Boundary; // 진단에서만 채우는 C 시점 바깥 경계 정점
         std::vector<BoundarySkin> BoundarySkins;
+        std::vector<uint32_t> PreviousState; // 제출 시점의 기존 제거 상태(경계 플래그용, LW 옵션이 켜진 때만 채운다)
     };
 
     // 단일 제출 작업이다. 호출자는 UpdateFrame/Finish 후 component-local 평면을 전달한다.
@@ -260,6 +261,10 @@ namespace Viewer
         void CheckPatchSkin(const SkeletalPatchBuffers& patch);
         std::vector<PatchSkinSnapshot> m_SkinSnapshots;
         std::vector<CollisionDebugDraw::WorldLine> m_TopologyViz; // -topology-island-viz가 만든 색 선분 snapshot이다.
+        std::vector<RemainLengthTable> m_RemainLengthTables; // body별 남은 길이 비율 표(LW-1). 옵션 0·boneCut·B 조각은 빈 표다.
+        std::vector<uint32_t> m_PatchBoundaryFlags; // A 조각 패치 꼭짓점(추출 정점 번호)별 경계 플래그(LW-2a). 옵션 0·B 조각은 비어 있다.
+        // A 조각 정점 중 SP7e2 경계 짝과 경계 플래그를 대조해 누락·초과 수를 기록한다.
+        void CheckBoundaryFlags(const MeshComponent& pieceA);
         std::vector<Math::Matrix4> m_SkinSectionNodes;
         std::vector<float> m_SkinPaletteErrors;
         uint32_t m_SkinCheckCase = 0;

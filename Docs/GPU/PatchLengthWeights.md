@@ -1,0 +1,137 @@
+상태: 진행 중 (2026-11-24) — LW-1 `5f671db6`, LW-2a `e32531a0`, LW-2b `5e151b57`, LW-2c `92bc9836`, LW-3 `5ab16b97`, LW-4(이번 커밋: 재절단 승계 확인·캡처 0/1/2·문서 동기화). 기본값 0 유지. 미검증 경로: 합 0 폴백·비가역·끝점 경계 유지는 CesiumMan에서 발동하지 않았고 탄젠트는 CesiumMan에 없어 실행하지 않음. 기준 master `0380b802`; `84a41849` cap 법선 설계와 수동 병합(2026-11-25, 미커밋)
+
+# 몸통 쪽 패치 가중치를 남은 본 길이 비율로 재분배
+
+## 목표
+
+몸통에 남는 A 조각의 스키닝 가중치를, 절단 뒤 몸쪽에 남은 본 길이 비율로 다시 나눈다. 목적은 절단 뒤 애니메이션을 더 그럴듯하게 보이게 하는 것이다.
+
+- 현재(`PatchSkinning.md`, `PatchAnimFollow.md`): A 조각의 가중치는 원본 그대로다. P와 자손 joint는 팔레트만 바뀐다. 옵션 `-patch-anim-follow 1`(기본)에서는 애니메이션 포즈를 따르고, 0에서는 절단 시점 값으로 굳는다.
+- 문제: 그루터기 정점에는 잘려 나간 자손 본(예: 아래팔·손)의 가중치가 남아 있다. 이 가중치가 자손 애니메이션을 따라 그루터기를 끌고 다닌다.
+- 사용자 제안: 본 1이 잘려 몸쪽에 30%만 남으면 본 1의 가중치에 0.3을 곱한다. 남는 1 − w₁·0.3은 나머지 본이 원래 비율(예: 본 2:본 3 = 5:5)대로 나눠 가진다.
+
+조사 메모: Sonnet 조사 한 건(2026-11-24, 코드 읽기만). 요점은 아래 결정에 반영했다.
+
+## 결정
+
+D1. 본별 남은 길이 비율 r_k
+- A 조각(body 0)의 각 팔레트 joint k에 r_k를 정한다.
+  - 잘린 본 P_i의 자손: r = 0. 자손 집합은 `BuildCutBodyGroups`의 `FrozenPalettes[0]`에서 P_i 자신을 뺀 것과 같게 한다.
+  - P_i 자신: 모드 1에서는 r = 1, 모드 2에서는 r = r_P.
+  - 나머지: r = 1.
+- r_P = |I − parent| / |child − parent|이고 [0, 1]로 자른다.
+  - I는 선택 결과의 평면 교점 `Intersection`이다. parent는 선택 결과의 `NodeId`(비영향 조상을 건너뛴 유효 부모), child는 `ChildNodeId`의 joint 위치다.
+  - 세 점 모두 선택 때 쓴 월드 공간 위치를 쓴다. 비균일 스케일에서도 선택과 같은 기준이 되게 하려는 것이다.
+  - 선택 결과에는 교점만 있고 fraction은 저장되지 않으므로, 비율을 다시 계산한다.
+- A는 항상 부모(뿌리) 쪽이므로 r_P는 부모 쪽 길이다.
+- `Kind::Leaf`처럼 선분이 없으면 r_P = 1이다. 이 경우 잎 본에는 자손이 없어 결과가 바뀌지 않는다.
+- 다중 본 절단(`BuildCutBodyGroups`)에서는 P_i마다 따로 적용한다. 사슬 위에서 자손인 P는 r = 0이다.
+- 섹션마다 중복된 같은 NodeId의 팔레트 항목에는 모두 같은 r을 준다.
+- 이유: 자손 0은 끌림의 직접 원인을 없앤다. r_P를 곱하면 남은 토막이 고무처럼 휠 수 있어, 어느 쪽이 나은지는 캡처로 비교한다.
+
+D2. 옵션 `-patch-length-weights 0|1|2`, 기본 0
+- 0: 지금 동작(가중치 원본).
+- 1: 자손만 0.
+- 2: 자손 0, P × r_P.
+- 옵션 함수 하나를 `PatchAnimFollowEnabled`와 같은 방식(최초 한 번 읽기)으로 `PatchSkinning.cpp`에 둔다.
+- 기본값 변경은 캡처 비교 뒤 별도로 결정한다.
+
+D3. 재분배 식
+- 원래 가중치 w에 대해 w'_k = w_k · r_k / Σ_j(w_j · r_j)로 계산한다. 그래서 r이 1인 본들 사이의 원래 비율은 유지된다.
+- u16 저장 값은 합이 65535가 되도록 반올림하고, 나머지는 가장 큰 항목에 더한다.
+- 가중치는 `PreparePoseCS`처럼 u16 값을 그 합으로 나눈 값으로 계산한다.
+- Σ(w·r) < 1e-3인 정점(자손에만 가중치가 있던 정점 포함)은 해당 P_i에 1로 붙인다. 작은 합을 재정규화하면 가중치가 크게 뒤바뀌기 때문이다.
+  - 다중 절단이면 그 정점의 최대 가중치 joint가 속한 P_i에 붙인다. 이를 위해 joint → P_i 표를 함께 넘긴다.
+  - P_i의 팔레트 인덱스는 정점이 속한 draw의 구간(StartJoint부터 joint 수만큼)에서 NodeId로 찾는다. 구간에 없으면 원래 레코드를 유지하고 수를 센다.
+- 정점이 P와 자손에만 가중치를 가졌다면 모드 2에서도 결과는 P = 1이다. 즉 r_P는 다른 본이 섞인 정점에만 영향을 준다.
+
+D4. 경계 정점은 원래 가중치 유지
+- 원본 메시에 남는 삼각형과 공유되는 패치 정점은 가중치와 bind를 바꾸지 않는다.
+  - 원본은 기존 가중치로 스키닝하므로, 경계를 바꾸면 애니메이션 중에 이음매가 벌어진다.
+  - SP7e2의 0.000 mm 일치도 이 규칙으로 지킨다.
+- 경계는 지금 GPU 빌드 경로에서 알 수 없다. SP7e2 판정은 readback 뒤 위치로 짝을 짓는 CPU 진단일 뿐이다. 그래서 LW-2a에서 새로 계산한다.
+  - 후보 (a): `TriangleSources`로 패치 삼각형 집합을 만들고, 원본 IB에서 패치 밖 삼각형도 쓰는 source 정점을 표시한다. UV·법선 seam으로 같은 위치에 인덱스가 다른 정점은 위치 용접으로 보강한다.
+  - 후보 (b): CPU에서 미리 계산해 정점별 플래그 버퍼로 GPU에 넘긴다.
+  - 어느 쪽이든 SP7e2의 경계 짝 수와 비교해 누락이 0인지 확인한다.
+- 알려진 한계: 경계와 그 안쪽 사이에서 가중치가 끊기므로 경계 가까이에 주름이 보일 수 있다. 감쇠 띠는 이 문서 범위 밖이다.
+- 알려진 한계: 이전 절단으로 만든 패치 조각과 맞닿은 이음매는 경계로 보지 않는다. 다중·재절단 순서에서는 새 조각만 재분배되고 먼저 만든 조각은 원래 가중치를 유지해 이음매가 벌어질 수 있다.
+- 구현 메모(LW-2a): 경계 플래그는 CPU에서 계산하며, 옵션이 0이 아니면 절단마다 원본 VB/IB를 한 번 readback한다.
+
+D5. bind 재계산으로 게시 순간 튐 없음
+- 복사 정점의 bind는 원본 VB의 bind이다. 이를 새 가중치에 맞게 바꾼다.
+  - 위치: `bind' = inv(M') · M · bind`. 여기서 M = Σ w·J_k.posXform, M' = Σ w'·J_k.posXform이고, J_k는 `JointsAtCut`이다. M은 affine이라 3x3 부분의 역과 이동으로 역행렬을 구한다.
+  - 법선: `n' = normalize(inv3x3(Σ w'·Nrm_k) · (Σ w·Nrm_k) · n)`. `PreparePoseCS`는 Σw·NrmMatrix를 쓰므로 M'의 역전치가 아니라 이 식을 쓴다. 탄젠트 xyz도 같은 식이고 w는 유지한다. 결과는 기존 형식으로 다시 압축한다.
+  - node 행렬 N은 skin 뒤에 한 번 곱하는 공통 인자라 식에서 상쇄된다. K 슬롯은 복사 정점에 쓰이지 않는다.
+- `PatchSkinBuildCS`에 `JointsAtCut`이 이미 바인딩되어 있다. 추가 입력은 조각별 r 배열(또는 joint별 새 가중치 계산에 필요한 표)뿐이다.
+- 옵션 1의 t_cut 팔레트는 `JointsAtCut`과 같다(AF-2a 완료 조건). 그래서 두 옵션 모두 같은 식을 쓴다.
+- M'가 비가역(행렬식 ≈ 0)이면 그 정점은 원래 가중치와 bind로 되돌리고 수를 보고한다.
+
+D6. rim·cap 끝점 레코드도 같은 규칙
+- ExtInternal 1/2/3 정점의 두 끝점 레코드에서 각각 가중치를 재분배하고 끝점 bind를 다시 계산한다.
+  - 끝점의 t_cut 위치는 `Data`에 없다. 그래서 Source bind를 `JointsAtCut`으로 스키닝해 구한다.
+- master `84a41849`의 cap 법선 설계를 유지한다. `CutTimeNormal`은 원본 표면 법선을 스키닝하지 않고 K cap 법선에 절단 시점 혼합 `NrmMatrix`의 cofactor 역변환을 적용해 끝점 탄젠트 칸에 저장한다. 옵션 0은 master와 같은 원본 비트 복사·행렬 연산·압축을 유지한다. 옵션 1·2는 재분배 후 실제 저장할 joints/정수 weights로 행렬을 만들며, 경계·폴백은 유지된 레코드를 쓴다. 저장 방향 비트는 달라질 수 있으므로 LW3 진단은 각각의 레코드를 절단 시점 팔레트로 스키닝해 방향 성분 차 ≤ 3e-3인지 검사하고 비트 차는 참고값으로 기록한다.
+- 한 끝점이 경계 정점이면 그 끝점은 D4에 따라 원래 레코드를 유지한다.
+
+D7. 범위
+- 재분배는 첫 절단의 `BuildPieceSkin`(A 조각)에서만 한다.
+  - B(래그돌) 조각은 바꾸지 않는다.
+  - 재절단(`BuildRecutPatchSkinVertices`)은 부모 skin 레코드와 snapshot을 복사하므로 결과가 자동으로 승계된다. 재절단 쪽에서 다시 계산하지 않는다.
+- split 정점의 K 강체 레코드와 internal ≠ 0 끝점의 K 폴백(AF-5)은 그대로 둔다.
+- `-rig-bone-cut` 경로(snapshot Side "D5", Frozen 전부 0)는 재분배하지 않는다. 잘려 나간 자손이 팔레트에서 고정되지 않으므로 r의 기준이 없다.
+- `PreparePoseCS`는 수정하지 않는다. 바뀌는 것은 skin VB에 쓰는 가중치와 bind뿐이다.
+
+## 인터페이스 골격
+
+```cpp
+// 옵션 -patch-length-weights 값을 한 번 읽어 돌려준다(0 끔, 1 자손만, 2 자손+P 비율).
+int PatchLengthWeightsMode();
+
+// A 조각 팔레트 joint별 남은 길이 비율과 joint가 속한 P_i 번호(없으면 -1).
+// 크기는 JointsAtCut.size()와 같고, 섹션 중복 항목도 같은 값을 갖는다.
+struct RemainLengthTable
+{
+    std::vector<float> Ratio;
+    std::vector<int> CutRoot;
+};
+RemainLengthTable BuildRemainLengthTable(/* 선택된 P 목록, 교점, 월드 joint 위치, 팔레트 NodeId, NodeGroups */);
+```
+
+- 표는 `PatchSkinSnapshot`에 넣지 않는다. `m_SkinSnapshots`와 같은 수명의 `SkeletalPatchCopy` 멤버에 body별로 두고, `BuildPieceSkin`(호출 지점 세 곳)이 조회해 GPU 버퍼로 넘긴다. 재절단은 결과 VB만 승계하면 되기 때문이다.
+
+## 단계
+
+| 단계 | 내용 | 완료 조건 |
+| --- | --- | --- |
+| LW-1 | D2 옵션, D1 r_k·joint→P_i 표(CPU, 다중 절단·잎·중복 항목), 로그 출력만 | 옵션 0·1·2 모두 렌더 불변. CesiumMan 팔 절단과 다중 본 절단에서 P별 r_P·자손 수, 그루터기 정점의 자손 가중치 합 평균·최대 로그. 회귀 6종 PASS |
+| LW-2a | D4 경계 플래그 계산과 SP7e2 대조 진단 | 경계 플래그 수와 SP7e2 경계 짝 비교에서 누락 0. 렌더 불변 |
+| LW-2b | D3·D5 복사 정점 재분배와 위치 bind 재계산(`PatchSkinBuildCS`), 폴백 집계 | 옵션 1·2에서 게시 순간 위치 차(PS2)의 옵션 0 대비 증가 ≤ 1e-4 mm(case3는 옵션 0부터 0.0002 mm대라 절대값 대신 증가분으로 판정). 경계 정점 레코드 = 원본(SP7e2 PASS). 비경계 정점 중 자손 가중치 > 0인 수 = 0. 폴백 수 보고 |
+| LW-2c | D5 법선·탄젠트 bind 재계산 | 게시 순간 법선 성분 차 ≤ 3e-3(10비트 압축 바닥값 약 1.2e-3에 재압축·진단 decode가 겹침; 재분배 없는 정점도 1.2e-3). 옵션 0 진단 값 불변. 탄젠트는 CesiumMan에 없어 실행 미검증 |
+| LW-3 | D6 끝점 레코드 재분배·끝점 bind, `CutTimeNormal` 불변 진단 | rim·cap 게시 순간 위치 차 ≤ 1e-4 mm, cap 복원 방향 성분 차 ≤ 3e-3(10비트 재압축). 옵션 0 진단 값 불변 |
+| LW-4 | 재절단 승계 확인, 옵션 0/1/2 캡처 비교, 문서 동기화(상태 줄·README·CodeMap·PatchSkinning) | RS-2b 복사 정점 레코드 일치 검사와 `-attached-recut-checks 1`·`2`·`4`를 옵션 1·2로 PASS. CesiumMan 걷기 팔·다리 절단과 `-skeletal-multi-cut 1` 캡처 0/1/2. 기본값은 0 유지 |
+
+- 각 단계는 약 300줄 이하로, 새 구현 실행 → 다른 실행 리뷰(2~5분) → Release 빌드 → 회귀 → 로컬 커밋 순서로 진행한다. 디스크 여유 때문에 Debug 빌드는 생략한다.
+- 회귀 6종: `-skeletal-patch-offset-copy 1 -skeletal-patch-checks 1`(SP6), `-skeletal-patch-break-checks 1`(SP7·SP7e2), `-skeletal-break-checks 1`(BC-12a), `-skeletal-break-xbot 1`(BC-12b), `-attached-recut-checks 1`(AR4), `-rig-bone-cut-checks 1`. LW-2b부터는 옵션 0과 2에서 모두 돌린다. `-rig-bone-cut-checks 1`은 옵션 2에서도 결과가 같아야 한다(D7).
+- 캡처: `-skeletal-break-demo 2 -capture-count 3 -capture-step 60`에 옵션 값만 바꾼다.
+
+## 완료 조건
+
+1. 옵션 0의 렌더·진단 결과가 지금과 같다(회귀 6종 PASS).
+2. 옵션 1·2에서 게시 순간 A 조각 위치가 바뀌지 않는다(복사 정점·끝점, CPU 재계산 대비 ≤ 1e-4 mm).
+3. 경계 정점은 원본과 같은 가중치·bind를 가진다(SP7e2 0.000 mm 유지).
+4. 비경계 A 정점에 잘린 자손 joint 가중치가 남지 않는다. 합 0 폴백과 비가역 폴백 수를 보고한다.
+5. 재절단 결과가 재분배된 가중치를 승계한다(RS-2b 레코드 일치와 AR 회귀를 옵션 1·2로 PASS).
+6. 옵션 0/1/2 캡처로 그루터기 끌림이 줄었는지, 모드 2에서 토막이 휘는지를 사용자가 판단할 수 있다.
+
+## 위험
+
+- 경계 주름(D4 한계). 캡처에서 두드러지면 감쇠 띠를 별도 결정으로 다룬다.
+- 다중 자식 본: r_P는 선택된 선분 하나로만 계산한다. 자손 0은 Frozen 집합을 따르므로 지금 팔레트 고정 범위와 같다. 분기 본 P에서 r_P가 다른 가지 방향 길이를 반영하지 못하는 점은 모드 2 캡처에서 확인한다.
+- 자손에 가중치가 큰 정점이 많으면 P = 1 폴백이 많아져 그루터기 끝이 강체처럼 보인다. 의도한 동작이다.
+
+## master 병합 검증 (2026-11-25, 미커밋)
+
+- `84a41849`의 `CutTimeNormal` cofactor 경로와 `PreparePoseCS::SkinDirection`을 보존하고 LW 끝점 재분배를 결합했다. `PreparePoseCS` 파일은 변경하지 않았다.
+- Release x64: `ModelViewer.slnx /m /p:Configuration=Release /p:Platform=Windows` 성공. 전체 빌드 146.46초, 마지막 셰이더 반영 증분 빌드 11.66초(오류 0, 기존 C4456 경고 1). 실행 파일 잠금은 없었다.
+- `regress.sh Release`와 `regress.sh Release -patch-length-weights 2`: 각각 6종 PASS, 모든 실행 exit=0. SP6 비교 20행 PASS, SP7e2 pass=4 fail=0 n/a=2, BC-12a/b·AR4·Rig bone cut PASS. 각 회귀 실행은 7~11초였다. `-debug 1`로 실행했다.
+- 모드 2 LW3 cap 복원 방향: case 1/2 최대 성분 차 0, case 3은 0.001482로 3e-3 이내 PASS(저장 방향 비트 차 71개). AF6 게시/60프레임 cap 법선·cap-face 검증도 모두 PASS.
+- 상세 로그는 시스템 TEMP의 `lw-merge-regress-default.txt`, `lw-merge-regress-mode2.txt`, `lw-merge-default-SkeletalPatchChecks.log`, `lw-merge-mode2-SkeletalPatchChecks.log`에 보존했다. GPU/드라이버 정보는 권한 제한으로 조회하지 못했다.

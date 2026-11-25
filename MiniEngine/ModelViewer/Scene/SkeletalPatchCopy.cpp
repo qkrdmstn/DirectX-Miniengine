@@ -2079,6 +2079,8 @@ namespace Viewer
         m_Physics = physics;
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
+        m_RemainLengthTables.clear();
+        m_PatchBoundaryFlags.clear();
         m_Attachments.clear();
         m_PieceIds.clear();
         m_BoundaryWait = 0;
@@ -2499,6 +2501,8 @@ namespace Viewer
                 return;
             m_SkinSnapshots.resize(boneCut ? 1 : groups.AttachNodes.size());
             m_SkinPaletteErrors.assign(m_SkinSnapshots.size(), 0);
+            m_RemainLengthTables.assign(m_SkinSnapshots.size(), {});
+            m_PatchBoundaryFlags.clear();
             uint32_t checks = 0;
             CommandLineArgs::GetInteger(L"skeletal-patch-break-checks", checks);
             m_SkinCheckCase = checks ? m_BreakCheck + 1 : 0;
@@ -2549,6 +2553,110 @@ namespace Viewer
                         }
                     }
                 }
+            }
+
+            // 옵션이 켜지면 A 조각(body 0)의 남은 길이 비율 표를 만든다(아직 GPU에 넘기지 않는다).
+            if (!boneCut && PatchLengthWeightsMode() && m_RemainLengthTables.size() == m_SkinSnapshots.size())
+            {
+                // 절단 시점 pose의 월드 joint 위치를 구한다(snapshot의 JointsAtCut과 같은 pose).
+                size_t firstSkin = 0;
+                while (firstSkin < mesh->GetGeometry()->GetSections().size() && !mesh->GetGeometry()->GetMesh(firstSkin).numJoints)
+                    ++firstSkin;
+                const Matrix4 toWorld = Matrix4(mesh->GetWorldTransform(target->GetTransform())) * m_SkinSectionNodes[firstSkin];
+                std::vector<Math::Vector3> positions(parents.size());
+                for (uint32_t node = 0; node < parents.size(); ++node)
+                    positions[node] = Math::Vector3(toWorld * nodes[node] * Math::Vector4(0, 0, 0, 1));
+
+                // P_i별 부모·자식 노드를 모은다(단일은 selected, 다중은 unionCut).
+                std::vector<uint32_t> cutParents, cutChildren;
+                if (m_MultiPrepare)
+                {
+                    cutParents = unionCut.Roots;
+                    cutChildren = unionCut.Children;
+                }
+                else
+                {
+                    cutParents = { selected.NodeId };
+                    cutChildren = { selected.Kind == SegmentJointKind::Segment ? selected.ChildNodeId : UINT32_MAX };
+                }
+
+                // 단일·다중 모두 절단 시점 선분과 평면의 교점으로 r_P를 구한다(a/(a-b), [0,1]). 범위 밖 노드는 선분 없음이다.
+                std::vector<RemainLengthCut> cuts;
+                for (size_t i = 0; i < cutParents.size(); ++i)
+                {
+                    RemainLengthCut cut;
+                    cut.NodeId = cutParents[i];
+                    cut.ChildNodeId = i < cutChildren.size() ? cutChildren[i] : UINT32_MAX;
+                    if (cut.NodeId >= positions.size() || cut.ChildNodeId >= positions.size())
+                        cut.ChildNodeId = UINT32_MAX;
+                    cut.Intersection = cut.NodeId < positions.size() ? positions[cut.NodeId] : Math::Vector3(Math::kZero);
+                    if (cut.ChildNodeId != UINT32_MAX)
+                    {
+                        const auto& from = positions[cut.NodeId];
+                        const auto& to = positions[cut.ChildNodeId];
+                        const float a = Math::Dot(plane.WorldPlane, Math::Vector4(from, 1));
+                        const float b = Math::Dot(plane.WorldPlane, Math::Vector4(to, 1));
+                        const float fraction = a != b ? std::min(std::max(a / (a - b), 0.0f), 1.0f) : 1.0f;
+                        cut.Intersection = from + (to - from) * fraction;
+                    }
+                    cuts.push_back(cut);
+                }
+                m_RemainLengthTables[0] = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups, PatchLengthWeightsMode());
+
+                // 소속 P_i가 있는 joint마다 같은 section 팔레트 범위 안에서 P_i의 NodeId를 찾아 합 0 폴백 인덱스로 정한다(없으면 -1).
+                auto& lengthTable = m_RemainLengthTables[0];
+                for (size_t k = 0; k < jointNodes.size(); ++k)
+                {
+                    if (lengthTable.CutRoot[k] < 0)
+                        continue;
+                    for (size_t s = 0; s < mesh->GetGeometry()->GetSections().size(); ++s)
+                    {
+                        const auto& sectionMesh = mesh->GetGeometry()->GetMesh(s);
+                        if (k < sectionMesh.startJoint || k >= size_t(sectionMesh.startJoint) + sectionMesh.numJoints)
+                            continue;
+                        for (size_t j = sectionMesh.startJoint; j < size_t(sectionMesh.startJoint) + sectionMesh.numJoints && j < jointNodes.size(); ++j)
+                            if (jointNodes[j] == cuts[lengthTable.CutRoot[k]].NodeId)
+                            {
+                                lengthTable.Fallback[k] = int(j);
+                                break;
+                            }
+                        break;
+                    }
+                }
+
+                // P_i마다 r_P와 자손 joint 수를 기록하고, 단일 절단은 선택 시점 교점과의 pose 차이도 남긴다.
+                const auto& table = m_RemainLengthTables[0];
+                for (size_t i = 0; i < cuts.size(); ++i)
+                {
+                    std::set<uint32_t> descendants;
+                    for (size_t k = 0; k < jointNodes.size(); ++k)
+                        if (table.CutRoot[k] == int(i) && table.Descendant[k])
+                            descendants.insert(jointNodes[k]);
+                    float length = 0.0f, ratio = 1.0f;
+                    if (cuts[i].ChildNodeId != UINT32_MAX)
+                    {
+                        length = float(Math::Length(positions[cuts[i].ChildNodeId] - positions[cuts[i].NodeId]));
+                        ratio = length > 1e-9f ? float(Math::Length(cuts[i].Intersection - positions[cuts[i].NodeId])) / length : 1.0f;
+                    }
+                    PatchLog("LW1 mode=%d P=%u child=%u r_P=%.4f segmentLen=%.4f descendantJoints=%zu\n",
+                        PatchLengthWeightsMode(), cuts[i].NodeId, cuts[i].ChildNodeId, ratio, length, descendants.size());
+                    if (!m_MultiPrepare && cuts[i].ChildNodeId != UINT32_MAX)
+                    {
+                        const float planeErr = Math::Dot(plane.WorldPlane, Math::Vector4(selected.Intersection, 1));
+                        const float selectionRatio = length > 1e-9f
+                            ? std::min(float(Math::Length(selected.Intersection - positions[cuts[i].NodeId])) / length, 1.0f) : 1.0f;
+                        PatchLog("LW1 selection planeErr_mm=%.6f selFracDiff=%.6f\n", planeErr * 1000.0f, selectionRatio - ratio);
+                    }
+                }
+
+                // 표의 자손 집합이 Frozen이면서 P_i 자신이 아닌 joint 집합과 같은지 확인한다.
+                bool descendantMatch = table.Descendant.size() == m_SkinSnapshots[0].Frozen.size();
+                for (size_t k = 0; descendantMatch && k < table.Descendant.size(); ++k)
+                {
+                    const bool isRoot = std::find(cutRoots.begin(), cutRoots.end(), jointNodes[k]) != cutRoots.end();
+                    descendantMatch = (table.Descendant[k] != 0) == (m_SkinSnapshots[0].Frozen[k] != 0 && !isRoot);
+                }
+                PatchLog("LW1 table size=%zu descendantMatch=%s\n", table.Ratio.size(), descendantMatch ? "PASS" : "FAIL");
             }
         }
 
@@ -3166,7 +3274,56 @@ namespace Viewer
             diagnosticCase, label, vertices, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
     }
 
-    // 생성 skin VB를 보관하고 진단 옵션에서 Data 비교와 rim/cap 대응 쌍 생성을 수행한다.
+    // A 조각 정점 중 SP7e2 경계 짝(위치 기준)과 경계 플래그를 대조해 누락(짝인데 플래그 없음)과 초과(플래그인데 짝 아님)를 센다.
+    // 짝과 플래그는 모두 A 조각 skin VB 정점 번호로 비교하며, 복사 정점이 아닌 정점은 플래그가 없는 것으로 본다.
+    void SkeletalPatchCopy::CheckBoundaryFlags(const MeshComponent& pieceA)
+    {
+        // 플래그나 A 조각 skin이 없으면 대조하지 않는다.
+        if (m_PatchBoundaryFlags.empty() || !pieceA.PatchSkin || !pieceA.GetGeometry() || !pieceA.GetGeometry()->GetGenerated())
+            return;
+
+        // A 조각의 Provenance를 읽어 정점별 추출 정점 번호를 얻는다.
+        const auto& skin = *pieceA.PatchSkin;
+        auto& provenanceBuffer = const_cast<ByteAddressBuffer&>(pieceA.GetGeometry()->GetGenerated()->Provenance);
+        ReadbackBuffer readback;
+        readback.Create(L"LW2a provenance", uint32_t(provenanceBuffer.GetBufferSize()), 1);
+        auto& context = GraphicsContext::Begin(L"LW2a provenance readback");
+        context.CopyBuffer(readback, provenanceBuffer);
+        context.TransitionResource(provenanceBuffer, D3D12_RESOURCE_STATE_GENERIC_READ);
+        context.Finish(true);
+        const auto* provenance = static_cast<const uint32_t*>(readback.Map());
+
+        // SP7e2가 A 조각(piece 0)에서 경계로 짝지은 skin 정점 집합을 만든다.
+        std::set<uint32_t> paired;
+        for (const auto& pair : m_BoundaryPairs)
+            if (pair.Piece == 0 && pair.PieceSection < skin.Sections.size())
+                paired.insert(skin.Sections[pair.PieceSection].FirstVertex + pair.PieceVertex);
+
+        // 짝이 있는데 플래그가 없는 정점(누락)과 플래그가 있는데 짝이 없는 정점(초과)을 센다.
+        size_t flagged = 0, missed = 0, extra = 0;
+        const auto flagOf = [&](uint32_t vertex)
+        {
+            const uint32_t* origin = provenance + size_t(vertex) * 8;
+            return origin[0] != 0xffffffffu && origin[2] == origin[3] && origin[2] < m_PatchBoundaryFlags.size()
+                && m_PatchBoundaryFlags[origin[2]];
+        };
+        for (const auto& section : skin.Sections)
+            for (uint32_t v = section.FirstVertex; v < section.FirstVertex + section.VertexCount; ++v)
+            {
+                const bool flag = flagOf(v);
+                flagged += flag;
+                extra += flag && !paired.count(v);
+            }
+        for (uint32_t vertex : paired)
+            missed += !flagOf(vertex);
+        readback.Unmap();
+
+        // 결과를 한 줄로 남긴다(누락은 0이어야 한다).
+        PatchLog("LW2a vs SP7e2 flaggedPieceVertices=%zu sp7e2Paired=%zu missed=%zu extra=%zu %s\n",
+            flagged, paired.size(), missed, extra, missed == 0 ? "PASS" : "FAIL");
+    }
+
+    // 생성 skin VB를 보관하고(남은 길이 옵션이 켜진 A 조각은 비경계 복사 정점 weight를 재분배한다) 진단 옵션에서 Data 비교와 rim/cap 대응 쌍 생성을 수행한다.
     void SkeletalPatchCopy::BuildPieceSkin(MeshComponent& piece, const GeometryBuffers& geometry,
         SkeletalPatchBuffers& patch, uint32_t body)
     {
@@ -3177,8 +3334,51 @@ namespace Viewer
         auto skin = std::make_shared<PatchSkinPublication>();
         skin->Snapshot = snapshot;
         skin->Side = m_SkinSnapshots.size() == 1 ? "D5" : (body ? "B" : "A");
+
+        // 옵션이 켜진 A 조각이면 재분배 대상 mesh 번호(A의 section이 쓰는 SourceMesh)를 모은다.
+        const RemainLengthTable* lengthTable = body < m_RemainLengthTables.size() && !m_RemainLengthTables[body].Ratio.empty()
+            ? &m_RemainLengthTables[body] : nullptr;
+        std::vector<uint32_t> lengthMeshes;
+        if (lengthTable)
+        {
+            for (const auto& section : piece.GetGeometry()->GetSections())
+            {
+                lengthMeshes.push_back(section.SourceMesh);
+            }
+        }
+
+        // 빌드가 검증을 통과한 뒤에만 경계 플래그를 계산한다(같은 절단에서 이미 있으면 재사용하고, 끝나면 기존 제거 상태 복사본을 놓는다).
+        const std::function<const std::vector<uint32_t>*()> boundaryProvider = [&]() -> const std::vector<uint32_t>*
+        {
+            if (m_PatchBoundaryFlags.empty())
+            {
+                m_PatchBoundaryFlags = BuildPatchBoundaryFlags(*m_SourceRevision, patch.Triangles, patch.PreviousState, m_SkinSectionNodes);
+                patch.PreviousState = {};
+                const size_t flagged = size_t(std::count(m_PatchBoundaryFlags.begin(), m_PatchBoundaryFlags.end(), 1u));
+                PatchLog("LW2a boundaryFlags patchVertices=%zu flagged=%zu\n", m_PatchBoundaryFlags.size(), flagged);
+            }
+            return &m_PatchBoundaryFlags;
+        };
+
+        // skin VB를 만들고, 재분배가 켜져 있으면 계수를 로그로 남긴다.
         const bool built = BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources,
-            geometry, snapshot, skin->Vertices, patch.Islands.TriangleSideBody);
+            geometry, snapshot, skin->Vertices, patch.Islands.TriangleSideBody,
+            lengthTable, lengthTable ? &lengthMeshes : nullptr, lengthTable ? boundaryProvider : nullptr);
+        if (built && lengthTable)
+        {
+            const auto& counters = skin->Vertices.LengthCounters;
+            if (skin->Vertices.LengthEnabled)
+            {
+                PatchLog("LW2b reweighted=%u unchanged=%u boundaryKept=%u sumZeroFallback=%u fallbackMissingKept=%u singularKept=%u normalSingularKept=%u\n",
+                    counters[0], counters[5], counters[1], counters[2], counters[3], counters[4], counters[6]);
+                PatchLog("LW3 endpoint reweighted=%u unchanged=%u boundaryKept=%u sumZeroFallback=%u fallbackMissingKept=%u singularKept=%u normalSingularKept=%u normalChanged=%u\n",
+                    counters[8], counters[13], counters[9], counters[10], counters[11], counters[12], counters[14], counters[15]);
+            }
+            else
+            {
+                PatchLog("LW2b disabled (flags empty or table size mismatch)\n");
+            }
+        }
         if (built)
         {
             for (const auto& section : piece.GetGeometry()->GetSections())
@@ -3204,6 +3404,26 @@ namespace Viewer
         uint32_t split = 0;
         uint32_t cap = 0;
         skin->Rims2 = skin->Caps3 = skin->FallbackK = 0;
+
+        // 옵션이 켜진 A 조각이면 비경계 정점의 자손 가중치 합(그루터기 끌림의 원인)을 모은다.
+        uint32_t stumpVertices = 0;
+        double stumpSum = 0.0, stumpMax = 0.0;
+        uint32_t copiedNonBoundary = 0, nonBoundaryDescendant = 0, copiedBoundary = 0;
+
+        // 복사 정점의 게시 순간 법선(새 레코드 스키닝)과 절단 시점 Data 법선의 최대 각도(도)와 최대 성분 차를 모은다.
+        uint32_t normalChecked = 0;
+        double normalMaxAngle = 0.0, normalMaxComponent = 0.0;
+
+        // 끝점 보간 정점(1 내부 교점, 2 rim, 3 cap)의 수와 위치 오차 최댓값(mm), 재분배 없는 기준 빌드의 위치 오차와 기준 대비 위치 차 최댓값(mm), cap 끝점 절단 시점 법선 칸의 비교 수와 비트 차 수를 모은다.
+        uint32_t endpointVertices[4] = {};
+        double endpointMaxError[4] = {};
+        double endpointBaselineDelta[4] = {};
+        double endpointBaselineError[4] = {};
+        uint32_t capNormalCount = 0;
+        uint32_t capNormalDiff = 0;
+        double capNormalMaxComponent = 0.0;
+        PatchSkinVertices baseline;
+        bool baselineBuilt = false;
         const bool follow = built && PatchAnimFollowEnabled() && snapshot.AnimFollow;
         double maxError = built ? 0.0 : INFINITY;
         if (built)
@@ -3220,6 +3440,20 @@ namespace Viewer
                 context.TransitionResource(*buffers[i], D3D12_RESOURCE_STATE_GENERIC_READ);
             }
             context.Finish(true);
+            // 재분배 없는 기준 skin VB를 같은 입력으로 한 번 더 만들어 읽는다(옵션이 켜진 A 조각의 끝점 위치와 cap 절단 시점 법선 칸 비교용이다).
+            ReadbackBuffer baselineReadback;
+            const bool hasBaseline = lengthTable
+                && BuildPatchSkinVertices(*m_SourceRevision, patch.TriangleSources, geometry, snapshot, baseline, patch.Islands.TriangleSideBody)
+                && baseline.Stride == skin->Vertices.Stride && baseline.Data.GetBufferSize() == skin->Vertices.Data.GetBufferSize();
+            baselineBuilt = hasBaseline;
+            if (hasBaseline)
+            {
+                auto& baselineContext = GraphicsContext::Begin(L"LW3 baseline readback");
+                baselineReadback.Create(L"LW3 baseline readback", baseline.Data.GetBufferSize(), 1);
+                baselineContext.CopyBuffer(baselineReadback, baseline.Data);
+                baselineContext.TransitionResource(baseline.Data, D3D12_RESOURCE_STATE_GENERIC_READ);
+                baselineContext.Finish(true);
+            }
 
             // 현재 pose 대신 실제 t_cut joint와 부착 node를 전달하여 고정 본과 K를 복원한다.
             std::vector<Math::Matrix4> nodes(size_t(snapshot.AttachNode) + 1, Math::Matrix4(Math::kIdentity));
@@ -3229,6 +3463,29 @@ namespace Viewer
             const auto* bind = static_cast<const uint8_t*>(readbacks[0].Map());
             const auto* data = static_cast<const uint8_t*>(readbacks[1].Map());
             const auto* provenance = static_cast<const uint32_t*>(readbacks[2].Map());
+
+            // 기준 skin VB의 끝점 보간 위치를 같은 방식(두 끝점을 각각 skin한 뒤 t로 보간)으로 구하는 함수이다.
+            const auto* baselineBytes = hasBaseline ? static_cast<const uint8_t*>(baselineReadback.Map()) : nullptr;
+            const auto interpolatedPosition = [&](const uint8_t* record)
+            {
+                float t;
+                std::memcpy(&t, record + skin->Vertices.Stride - kSkinExtT, sizeof(t));
+                Math::Vector4 ends[2];
+                for (uint32_t e = 0; e < 2; ++e)
+                {
+                    float endBind[3];
+                    uint16_t ids[4], ws[4];
+                    const auto* endpoint = record + skin->Vertices.Stride - kSkinExtEndpoint0 + e * kSkinEndpointSize;
+                    std::memcpy(endBind, endpoint, sizeof(endBind));
+                    std::memcpy(ids, endpoint + kSkinEndpointJoints, sizeof(ids));
+                    std::memcpy(ws, endpoint + kSkinEndpointWeights, sizeof(ws));
+                    const float total = float(std::max(1u, uint32_t(ws[0]) + ws[1] + ws[2] + ws[3]));
+                    ends[e] = Math::Vector4(Math::kZero);
+                    for (uint32_t k = 0; k < 4 && ids[k] < palette.size(); ++k)
+                        ends[e] = ends[e] + (palette[ids[k]].posXform * Math::Vector4(endBind[0], endBind[1], endBind[2], 1)) * (float(ws[k]) / total);
+                }
+                return ends[0] * (1 - t) + ends[1] * t;
+            };
             std::vector<uint32_t> rimVertices;
             std::vector<uint32_t> capVertices;
             for (const auto& section : skin->Sections)
@@ -3257,6 +3514,57 @@ namespace Viewer
                             continue;
                         }
                         posed = posed + (palette[joints[k]].posXform * source) * (float(weights[k]) / total);
+                    }
+
+                    // 비율 0인 자손 joint에 걸린 가중치 합을 구해 평균과 최댓값에 반영한다.
+                    if (lengthTable)
+                    {
+                        float descendant = 0.0f;
+                        for (uint32_t k = 0; k < 4; ++k)
+                            if (joints[k] < lengthTable->Descendant.size() && lengthTable->Descendant[joints[k]])
+                                descendant += float(weights[k]) / total;
+                        if (descendant > 0.0f)
+                        {
+                            ++stumpVertices;
+                            stumpSum += descendant;
+                            stumpMax = std::max(stumpMax, double(descendant));
+                        }
+
+                        // 복사 정점 중 경계가 아닌 정점에 자손 가중치가 남았는지 센다(재분배 뒤 0이어야 한다).
+                        const auto* flagOrigin = provenance + size_t(v) * 8;
+                        const bool copiedVertex = flagOrigin[0] != UINT32_MAX && flagOrigin[2] == flagOrigin[3];
+                        const bool boundary = flagOrigin[2] >= m_PatchBoundaryFlags.size() || m_PatchBoundaryFlags[flagOrigin[2]];
+                        if (copiedVertex && !boundary)
+                        {
+                            ++copiedNonBoundary;
+                            nonBoundaryDescendant += descendant > 0.0f;
+                        }
+                        copiedBoundary += copiedVertex && boundary;
+
+                        // 복사 정점은 새 레코드의 법선을 절단 시점 팔레트로 스키닝해 Data 법선과 비교한다(Data는 노드 변환을 포함하므로 역전치를 곱한다).
+                        if (copiedVertex && valid)
+                        {
+                            const auto decode = [](uint32_t packed)
+                            {
+                                return Math::Vector3(float(packed & 1023) / 1023.0f * 2 - 1,
+                                    float((packed >> 10) & 1023) / 1023.0f * 2 - 1, float((packed >> 20) & 1023) / 1023.0f * 2 - 1);
+                            };
+                            uint32_t recordNormal, dataNormal;
+                            std::memcpy(&recordNormal, input + 12, 4);
+                            std::memcpy(&dataNormal, data + size_t(v) * 28 + 12, 4);
+                            Math::Vector3 skinned(Math::kZero);
+                            for (uint32_t k = 0; k < 4; ++k)
+                                skinned = skinned + (palette[joints[k]].nrmXform * decode(recordNormal)) * (float(weights[k]) / total);
+                            const Math::Vector3 actualNormal = Math::Normalize(
+                                Math::InverseTranspose(snapshot.MeshNodeAtCut.Get3x3()) * skinned);
+                            const Math::Vector3 expectedNormal = Math::Normalize(decode(dataNormal));
+                            const double cosine = std::clamp(double(float(Math::Dot(actualNormal, expectedNormal))), -1.0, 1.0);
+                            normalMaxAngle = std::max(normalMaxAngle, std::acos(cosine) * 57.29577951308232);
+                            const Math::Vector3 difference = actualNormal - expectedNormal;
+                            normalMaxComponent = std::max(normalMaxComponent, double(std::max({ std::fabs(float(difference.GetX())),
+                                std::fabs(float(difference.GetY())), std::fabs(float(difference.GetZ())) })));
+                            ++normalChecked;
+                        }
                     }
 
                     // 끝점 보간 종류(1 내부 교점, 2 rim, 3 cap)가 있으면 GPU와 같이 두 원본 끝점을 각각 skin한 뒤 t로 보간한다.
@@ -3295,6 +3603,60 @@ namespace Viewer
                     const double error = double(float(Math::Length(actual
                         - Math::Vector3(expected[0], expected[1], expected[2])))) * 1000.0;
                     maxError = !valid || !std::isfinite(error) ? INFINITY : std::max(maxError, error);
+
+                    // 끝점 보간 정점의 위치 오차와 기준 빌드 대비 위치 차를 모은다.
+                    if (interpolation && interpolation < 4)
+                    {
+                        ++endpointVertices[interpolation];
+                        endpointMaxError[interpolation] = !valid || !std::isfinite(error) ? INFINITY : std::max(endpointMaxError[interpolation], error);
+                    }
+                    if (interpolation && interpolation < 4 && baselineBytes)
+                    {
+                        const auto* baselineRecord = baselineBytes + size_t(v) * skin->Vertices.Stride;
+                        const Math::Vector3 moved(snapshot.MeshNodeAtCut * (posed - interpolatedPosition(baselineRecord)));
+                        const double delta = double(float(Math::Length(moved))) * 1000.0;
+                        endpointBaselineDelta[interpolation] = std::isfinite(delta) ? std::max(endpointBaselineDelta[interpolation], delta) : INFINITY;
+                        const Math::Vector3 baselineActual(snapshot.MeshNodeAtCut * interpolatedPosition(baselineRecord));
+                        const double baselineError = double(float(Math::Length(baselineActual - Math::Vector3(expected[0], expected[1], expected[2])))) * 1000.0;
+                        endpointBaselineError[interpolation] = std::isfinite(baselineError) ? std::max(endpointBaselineError[interpolation], baselineError) : INFINITY;
+                    }
+                    if (interpolation == 3 && baselineBytes)
+                    {
+                        const auto* baselineRecord = baselineBytes + size_t(v) * skin->Vertices.Stride;
+                        for (uint32_t e = 0; e < 2; ++e)
+                        {
+                            const size_t slot = skin->Vertices.Stride - kSkinExtEndpoint0 + e * kSkinEndpointSize + kSkinEndpointTangent;
+                            capNormalDiff += std::memcmp(input + slot, baselineRecord + slot, sizeof(uint32_t)) != 0;
+
+                            // cap 방향은 저장된 끝점 skin으로 복원해 비교한다. 재분배하면 bind 방향 비트는 달라도 절단 시점 방향은 같아야 한다.
+                            const auto cutDirection = [&](const uint8_t* record)
+                            {
+                                const auto* endpoint = record + skin->Vertices.Stride - kSkinExtEndpoint0 + e * kSkinEndpointSize;
+                                uint32_t packed;
+                                uint16_t endpointJoints[4], endpointWeights[4];
+                                std::memcpy(&packed, endpoint + kSkinEndpointTangent, sizeof(packed));
+                                std::memcpy(endpointJoints, endpoint + kSkinEndpointJoints, sizeof(endpointJoints));
+                                std::memcpy(endpointWeights, endpoint + kSkinEndpointWeights, sizeof(endpointWeights));
+                                const Math::Vector3 direction(float(packed & 1023) / 1023.0f * 2 - 1,
+                                    float((packed >> 10) & 1023) / 1023.0f * 2 - 1, float((packed >> 20) & 1023) / 1023.0f * 2 - 1);
+
+                                // 절단 시점 팔레트로 스키닝하고 크기를 제거한다(공통 node 변환 전 모델 공간).
+                                Math::Vector3 skinned(Math::kZero);
+                                for (uint32_t k = 0; k < 4; ++k)
+                                {
+                                    if (endpointJoints[k] >= palette.size())
+                                        return Math::Vector3(INFINITY, INFINITY, INFINITY);
+                                    skinned = skinned + (palette[endpointJoints[k]].nrmXform * direction) * float(endpointWeights[k]);
+                                }
+                                return Math::Normalize(skinned);
+                            };
+                            const Math::Vector3 difference = cutDirection(input) - cutDirection(baselineRecord);
+                            const double component = std::max({ std::fabs(float(difference.GetX())),
+                                std::fabs(float(difference.GetY())), std::fabs(float(difference.GetZ())) });
+                            capNormalMaxComponent = std::isfinite(component) ? std::max(capNormalMaxComponent, component) : INFINITY;
+                            ++capNormalCount;
+                        }
+                    }
                     const auto* origin = provenance + size_t(v) * 8;
                     if (origin[0] == UINT32_MAX)
                     {
@@ -3368,9 +3730,11 @@ namespace Viewer
                     rimVertices.size(), capVertices.size(), unmatched, double(nearestMax) * 1000.0);
             }
 
-            // 동기 진단에서 사용한 세 버퍼의 매핑을 해제한다.
+            // 동기 진단에서 사용한 버퍼(기준 빌드 포함)의 매핑을 해제한다.
             for (auto& readback : readbacks)
                 readback.Unmap();
+            if (baselineBytes)
+                baselineReadback.Unmap();
         }
 
         // 생성 실패와 빈 결과도 오차 한계로 PASS가 되지 않게 같은 형식으로 기록한다.
@@ -3378,6 +3742,46 @@ namespace Viewer
             maxError = INFINITY;
         PatchLog("PS2 case=%u side=%s vertices=%u copied=%u split=%u cap=%u maxError_mm=%.6f result=%s\n",
             m_SkinCheckCase, label, vertices, copied, split, cap, maxError, maxError <= 0.01 ? "PASS" : "FAIL");
+
+        // 자손 가중치가 남은 A 조각 정점 수와 그 합의 평균·최댓값을 기록한다(주 레코드만 집계하며 끝점·경계 구분은 이후 단계).
+        if (lengthTable)
+            PatchLog("LW1 case=%u side=%s mainRecordOnly descendantWeightVertices=%u of %u avg=%.4f max=%.4f\n", m_SkinCheckCase, label,
+                stumpVertices, vertices, stumpVertices ? stumpSum / stumpVertices : 0.0, stumpMax);
+        if (lengthTable)
+        {
+            // 재분배가 꺼졌으면 FAIL, 켜졌으면 비경계 자손 가중치 0과 계수 합 = A 복사 정점 수, 경계 수 = LW-2a 경계 수를 확인한다.
+            const auto& counters = skin->Vertices.LengthCounters;
+            const bool enabled = skin->Vertices.LengthEnabled;
+            const uint32_t accounted = counters[0] + counters[5] + counters[1] + counters[3] + counters[4];
+            const bool countsMatch = enabled && accounted == copied && counters[1] == copiedBoundary;
+            PatchLog("LW2b case=%u side=%s enabled=%d nonBoundaryCopied=%u nonBoundaryDescendantWeight=%u %s\n", m_SkinCheckCase, label,
+                enabled ? 1 : 0, copiedNonBoundary, nonBoundaryDescendant, enabled && nonBoundaryDescendant == 0 ? "PASS" : "FAIL");
+            PatchLog("LW2b case=%u side=%s counterSum=%u copied=%u boundaryKept=%u lw2aBoundary=%u %s\n", m_SkinCheckCase, label,
+                accounted, copied, counters[1], copiedBoundary, countsMatch ? "PASS" : "FAIL");
+
+            // 게시 순간 법선 차는 UNORM 10비트 반올림 두 번(레코드 재압축, Data 압축; 각 약 1e-3)의 합인 3e-3 안이어야 하고, 재분배된 법선이 있으면 일부는 원래 비트와 달라야 한다.
+            const bool normalUpdated = counters[0] == 0 || counters[7] > 0;
+            PatchLog("LW2c case=%u side=%s normalChecked=%u normalChanged=%u maxAngle_deg=%.4f maxComponent=%.6f %s%s\n", m_SkinCheckCase, label,
+                normalChecked, counters[7], normalMaxAngle, normalMaxComponent,
+                normalChecked && normalMaxComponent <= 3e-3 && normalUpdated ? "PASS" : "FAIL", normalUpdated ? "" : " normal not updated");
+
+            // 끝점 레코드 계수의 합은 끝점 보간 정점 수의 두 배와 같아야 한다.
+            const uint32_t endpointAccounted = counters[8] + counters[13] + counters[9] + counters[11] + counters[12];
+            const uint32_t endpointRecords = 2 * (endpointVertices[1] + endpointVertices[2] + endpointVertices[3]);
+            PatchLog("LW3 case=%u side=%s endpointRecords=%u counterSum=%u %s\n", m_SkinCheckCase, label,
+                endpointRecords, endpointAccounted, enabled && endpointAccounted == endpointRecords ? "PASS" : "FAIL");
+
+            // 끝점 위치 오차 증가는 1e-4 mm 이하, cap 복원 방향 차는 10비트 재압축 오차 범위인 3e-3 이하인지 확인한다.
+            const double increaseMax = std::max({ endpointMaxError[1] - endpointBaselineError[1], endpointMaxError[2] - endpointBaselineError[2],
+                endpointMaxError[3] - endpointBaselineError[3] });
+            PatchLog("LW3 case=%u side=%s endpointPos_mm rim=%.6f(base %.6f, n=%u) cap=%.6f(base %.6f, n=%u) internal=%.6f(base %.6f, n=%u) increaseMax=%.6f deltaVsBaseline rim=%.6f cap=%.6f %s\n",
+                m_SkinCheckCase, label, endpointMaxError[2], endpointBaselineError[2], endpointVertices[2],
+                endpointMaxError[3], endpointBaselineError[3], endpointVertices[3], endpointMaxError[1], endpointBaselineError[1], endpointVertices[1],
+                increaseMax, endpointBaselineDelta[2], endpointBaselineDelta[3], enabled && baselineBuilt && increaseMax <= 1e-4 ? "PASS" : "FAIL");
+            PatchLog("LW3 case=%u side=%s capCutTimeNormals=%u bitDiff=%u maxComponent=%.6f %s\n", m_SkinCheckCase, label,
+                capNormalCount, capNormalDiff, capNormalMaxComponent,
+                enabled && baselineBuilt && capNormalMaxComponent <= 3e-3 ? "PASS" : "FAIL");
+        }
 
         // PS3 동기 GPU 진단은 break 검사에서만 수행하며 게시 경로에는 연결하지 않는다.
         uint32_t poseChecks = 0;
@@ -3396,6 +3800,8 @@ namespace Viewer
         m_Name.clear();
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
+        m_RemainLengthTables.clear();
+        m_PatchBoundaryFlags.clear();
         m_Attachments.clear();
         m_PieceIds.clear();
         m_BoundaryWait = 0;
@@ -4997,6 +5403,8 @@ namespace Viewer
 
                     // 짝 누락도 게시·after60 측정에서 FAIL로 집계하도록 대응 결과를 보존한다.
                     PairBoundary(pieces, m_Boundary, m_BoundaryPairs);
+                    if (pieces[0])
+                        CheckBoundaryFlags(*pieces[0]);
                 }
                 LogCutResult(scene, reason, caps, uncapped, result.Error);
                 return;
@@ -5283,6 +5691,8 @@ namespace Viewer
         const auto* triangleMask = source.GetTriangleMask();
         c.HasState = triangleMask != nullptr;
         m_State = triangleMask ? triangleMask->Pending : std::vector<uint32_t>{};
+        if (PatchLengthWeightsMode())
+            m_Output->PreviousState = m_State;
         c.Triangles = uint32_t(triangles); c.Draws = uint32_t(draws.size());
         c.DepthOffset = vertices * 28; c.IndexOffset = vertices * 44;
         geometry.Data.Create(L"Patch packed geometry", vertices * 48, 1);

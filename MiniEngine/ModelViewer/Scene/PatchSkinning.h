@@ -2,6 +2,7 @@
 #include "Model.h"
 #include <vector>
 #include <array>
+#include <functional>
 
 class GeometryRevision;
 struct GeometryBuffers;
@@ -18,6 +19,7 @@ namespace Viewer
     constexpr uint32_t kSkinExtT = 92;
     constexpr uint32_t kSkinExtEndpoint0 = 88;
     constexpr uint32_t kSkinEndpointSize = 36;
+    constexpr uint32_t kSkinEndpointTangent = 16;
     constexpr uint32_t kSkinEndpointJoints = 20;
     constexpr uint32_t kSkinEndpointWeights = 28;
 
@@ -27,6 +29,12 @@ namespace Viewer
         ByteAddressBuffer Data;
         uint32_t Flags = 0, Stride = 0;
         std::vector<Math::BoundingSphere> BindBounds;
+
+        // 남은 길이 재분배(LW-2b) 계수: 0 재분배, 1 경계 유지, 2 합 0 폴백, 3 폴백 본 없음 유지, 4 비가역 유지, 5 변화 없음(재분배 대상 weight 없음), 6 법선 행렬 비가역이라 법선·탄젠트만 유지(LW-2c).
+        // 7은 재분배로 법선 비트가 실제로 바뀐 수(LW-2c)이다. 8..15는 같은 순서의 끝점 레코드 계수이다(LW-3, 끝점 한 개를 한 건으로 센다).
+        // LengthEnabled는 재분배 경로가 실제로 켜졌는지(표·플래그 크기가 맞는지)를 나타낸다.
+        uint32_t LengthCounters[16] = {};
+        bool LengthEnabled = false;
     };
 
     struct PatchSkinSnapshot
@@ -97,6 +105,39 @@ namespace Viewer
     // -patch-anim-follow 옵션(기본 1)을 최초 호출에서 한 번만 읽어 반환한다.
     bool PatchAnimFollowEnabled();
 
+    // -patch-length-weights 옵션을 최초 호출에서 한 번만 읽어 반환한다(0 끔, 1 자손만, 2 자손+P 비율).
+    int PatchLengthWeightsMode();
+
+    // 잘린 본 P_i의 선택 선분 snapshot이다(NodeId는 유효 부모, 교점과 joint 위치는 월드 공간).
+    struct RemainLengthCut
+    {
+        uint32_t NodeId = UINT32_MAX, ChildNodeId = UINT32_MAX;
+        Math::Vector3 Intersection{ Math::kZero };
+    };
+
+    // A 조각 팔레트 joint별 남은 길이 비율, 소속 P_i, 자손 여부다.
+    // 크기는 JointsAtCut.size()와 같고, 섹션 중복 항목도 같은 값을 갖는다.
+    // CutRoot는 cuts 배열의 0 기반 인덱스이며 소속이 없으면 -1이다. Descendant는 P_i의 자손(P_i 제외)이면 1이다.
+    struct RemainLengthTable
+    {
+        std::vector<float> Ratio;
+        std::vector<int> CutRoot;
+        std::vector<uint8_t> Descendant;
+        std::vector<int> Fallback; // 합 0 폴백용 같은 section 범위의 P_i 팔레트 인덱스(없으면 -1)
+    };
+
+    // P_i의 자손은 0, P_i는 모드 1에서 1 / 모드 2에서 r_P, 나머지는 1로 팔레트별 비율 표를 만든다.
+    // jointNodes는 팔레트 순서의 NodeId, nodeGroups는 BuildCutBodyGroups의 노드 소속(0=A, i=B_i)이다.
+    RemainLengthTable BuildRemainLengthTable(const std::vector<RemainLengthCut>& cuts,
+        const std::vector<Math::Vector3>& positions, const std::vector<uint32_t>& jointNodes,
+        const std::vector<uint32_t>& nodeGroups, int mode);
+
+    // 패치 꼭짓점(추출 정점 번호 = 삼각형*3+corner)별로 원본에 남는 삼각형과 위치를 공유하면 1인 경계 플래그 표를 만든다.
+    // patchTriangles는 패치 삼각형의 전역 번호, previousState는 기존 제거 상태(비어 있을 수 있다), sectionNodes는 section별 mesh node 행렬이다.
+    std::vector<uint32_t> BuildPatchBoundaryFlags(const GeometryRevision& source,
+        const std::vector<uint32_t>& patchTriangles, const std::vector<uint32_t>& previousState,
+        const std::vector<Math::Matrix4>& sectionNodes);
+
     // 현재 팔레트의 고정 본을 부착 노드 상대 pose로 바꾸고 강체 슬롯 K를 덧붙인다.
     // animFollow가 켜지고 snapshot.AnimFollow와 애니메이션 입력이 있으면 고정 본은 C(t)·A_k(t)·O_k를 쓴다.
     void BuildPatchPalette(const PatchSkinSnapshot& snapshot, const Joint* currentJoints,
@@ -104,7 +145,11 @@ namespace Viewer
         const Joint* animJoints = nullptr, const Math::Matrix4* animNodes = nullptr, bool animFollow = false);
 
     // 원본 revision과 추출 출처를 이용해 조각의 skin VB를 만들고 GPU 완료 후 반환한다.
+    // lengthTable이 있으면 lengthMeshes(piece.Meshes 번호, A 조각 section의 SourceMesh)에 속한 mesh의 복사 정점만
+    // boundaryProvider가 주는 경계 플래그로 비경계 정점의 weight와 bind 위치를 남은 길이 비율로 재분배한다(검증이 통과한 뒤에만 호출).
     bool BuildPatchSkinVertices(const GeometryRevision& source, ByteAddressBuffer& triangleSources,
         const GeometryBuffers& piece, const PatchSkinSnapshot& snapshot, PatchSkinVertices& out,
-        const std::vector<std::array<uint32_t, 2>>& triangleBodies);
+        const std::vector<std::array<uint32_t, 2>>& triangleBodies,
+        const RemainLengthTable* lengthTable = nullptr, const std::vector<uint32_t>* lengthMeshes = nullptr,
+        const std::function<const std::vector<uint32_t>*()>& boundaryProvider = nullptr);
 }
