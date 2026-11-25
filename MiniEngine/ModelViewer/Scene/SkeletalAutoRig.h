@@ -30,6 +30,8 @@ namespace Viewer
     void WriteRigPreloadLog(const std::string& text) noexcept;
     // 원본 GLB의 이름을 loader와 같은 NodeId 순서로 읽는다.
     std::vector<std::string> ReadRigDiagnosticNodeNames(const std::string& modelPath);
+    // 원본 GLB의 애니메이션 배열 순서대로 클립 이름을 읽는다.
+    std::vector<std::string> ReadRigDiagnosticAnimationNames(const std::string& modelPath);
 
     // 진단 문자열 생성과 출력의 예외를 호출자에게 전파하지 않는다.
     template<typename BuildText>

@@ -161,6 +161,14 @@ namespace Viewer
             m_ModelInstance->PlayAnimation(animationIndex, loop);
     }
 
+    // 클립 전환 시 기존 클립이 새 pose를 덮어쓰지 않도록 멈춘다.
+    void GameObject::PauseAnimation(uint32_t animationIndex)
+    {
+        // 모델 인스턴스가 있는 객체에만 재생 상태를 전달한다.
+        if (m_ModelInstance)
+            m_ModelInstance->PauseAnimation(animationIndex);
+    }
+
     void GameObject::LoopAllAnimations()
     {
         if (m_ModelInstance)

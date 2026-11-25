@@ -48,6 +48,27 @@ namespace Viewer
         return ReadDiagnosticNodeNames(modelPath);
     }
 
+    // 원본 GLB JSON에서 모델 로더와 같은 순서의 클립 이름을 읽는다.
+    std::vector<std::string> ReadRigDiagnosticAnimationNames(const std::string& modelPath)
+    {
+        // GLB 헤더와 JSON 청크를 검증하고 읽는다.
+        std::ifstream source(modelPath, std::ios::binary);
+        uint32_t header[5]{};
+        source.read(reinterpret_cast<char*>(header), sizeof(header));
+        if (!source || header[0] != 0x46546C67 || header[4] != 0x4E4F534A)
+            throw std::runtime_error("demo GLB animation names unavailable");
+        std::string chunk(header[3], '\0');
+        source.read(chunk.data(), chunk.size());
+        const auto document = nlohmann::json::parse(chunk);
+
+        // 이름 없는 클립도 빈 문자열로 남겨 인덱스를 보존한다.
+        std::vector<std::string> names;
+        if (document.count("animations"))
+            for (const auto& animation : document.at("animations"))
+                names.push_back(animation.value("name", std::string()));
+        return names;
+    }
+
     struct RigPreloadBox
     {
         Math::Vector3 Center{ Math::kZero };

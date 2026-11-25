@@ -522,13 +522,15 @@ namespace Viewer
         return true;
     }
 
-    // 애니메이션 추종 옵션을 실행 중 한 번만 읽는다. 기본값은 1이다(0이면 절단 시점 값으로 고정).
+    // 추종 기본값은 1이며 클립 전환 시연은 0으로 재현한다. 명시한 값이 우선한다.
     bool PatchAnimFollowEnabled()
     {
         // 옵션은 최초 호출에서 읽고 이후 변하지 않는다.
         static const bool enabled = []
         {
-            uint32_t value = 1;
+            // 클립 전환 재현만 절단 시점 고정을 기본으로 사용한다.
+            std::wstring next;
+            uint32_t value = CommandLineArgs::GetString(L"skeletal-break-demo-next", next) ? 0u : 1u;
             CommandLineArgs::GetInteger(L"patch-anim-follow", value);
             return value != 0;
         }();

@@ -145,6 +145,13 @@ bool ModelInstance::FinalizePose(const NodePhysicsPose* overrides, uint32_t over
     return true;
 }
 
+// 지정한 클립의 현재 주기 내 재생 시간을 반환한다.
+float ModelInstance::GetAnimationTime(uint32_t animIdx) const
+{
+    // 잘못된 클립 번호는 다른 조회 API처럼 안전한 기본값을 반환한다.
+    return animIdx < m_AnimState.size() ? m_AnimState[animIdx].time : 0.0f;
+}
+
 // 기존 Update 호출은 물리 override 없이 두 CPU pose 단계를 연속 수행한다.
 void ModelInstance::Update(float deltaTime)
 {

@@ -55,6 +55,7 @@
 #include "Scene/tests/AttachedRecutChecks.h"
 #include "Scene/tests/RigBoneCutChecks.h"
 #include <cmath>
+#include <chrono>
 
 using namespace GameCore;
 using namespace Math;
@@ -161,6 +162,14 @@ private:
     bool m_SkeletalPatchBreakDone = false;
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
+    float m_DemoDelay = 0, m_DemoCutTime = -1, m_DemoSwitchDelay = 1;
+    float m_DemoPlayback = 0, m_DemoPreviousTime = 0;
+    uint32_t m_DemoStartClip = 0, m_DemoNextClip = 0, m_DemoStartFrame = 0;
+    bool m_DemoSwitched = false;
+    std::wstring m_DemoAnim, m_DemoCut, m_DemoNext;
+    std::chrono::steady_clock::time_point m_DemoFirstFrame, m_DemoAppliedTime;
+    // 시연 클립을 검증하고 자동 절단 시각을 임시 pose에서 선택한다.
+    void ConfigureDemoAnimation(Viewer::GameObject& object);
     uint32_t m_RecutRepro = 0, m_RecutRequested[2]{}, m_RecutApplied[2]{};
     uint32_t m_RecutResultFrame = 0, m_RecutCaptured = 0, m_AttachedRecutFrame = 0;
     Viewer::ObjectId m_RecutOwner = Viewer::InvalidObjectId;
@@ -409,6 +418,8 @@ void ModelViewer::Startup( void )
     if (m_RecutRepro)
     {
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-bone",
+            L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
+            L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
             L"skeletal-break-demo-unmask", L"attached-recut-checks", L"rig-bone-cut-checks",
             L"skeletal-union-checks", L"skeletal-patch-offset-copy", L"model", L"demo-cut-sec",
             L"skeletal-multi-cut", L"skeletal-multi-stale", L"skeletal-multi-fail", L"skeletal-multi-reject" })
@@ -418,6 +429,32 @@ void ModelViewer::Startup( void )
 
     // 원본 마스크 해제 옵션은 골격 절단 시연과 함께 지정해야 한다.
     CommandLineArgs::GetInteger(L"skeletal-break-demo", m_SkeletalBreakDemo);
+
+    // 녹화 재현 옵션은 실제 시연과 함께 사용하고 시간 값 전체를 검증한다.
+    std::wstring demoValue;
+    for (const wchar_t* option : { L"skeletal-break-demo-delay", L"skeletal-break-demo-anim",
+        L"skeletal-break-demo-cut-time", L"skeletal-break-demo-next", L"skeletal-break-demo-switch" })
+        if (CommandLineArgs::GetString(option, demoValue) && !m_SkeletalBreakDemo)
+            throw std::invalid_argument("skeletal demo animation options require skeletal-break-demo");
+    const auto readSeconds = [](const std::wstring& value)
+    {
+        // 음수, 비유한 값과 숫자 뒤의 불필요한 문자를 거절한다.
+        size_t end = 0;
+        const float seconds = std::stof(value, &end);
+        if (end != value.size() || !std::isfinite(seconds) || seconds < 0)
+            throw std::invalid_argument("skeletal demo seconds must be finite and nonnegative");
+        return seconds;
+    };
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-delay", demoValue)) m_DemoDelay = readSeconds(demoValue);
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-switch", demoValue)) m_DemoSwitchDelay = readSeconds(demoValue);
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-anim", m_DemoAnim) && m_DemoAnim.empty())
+        throw std::invalid_argument("skeletal demo start clip must not be empty");
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-next", m_DemoNext) && m_DemoNext.empty())
+        throw std::invalid_argument("skeletal demo next clip must not be empty");
+    if (CommandLineArgs::GetString(L"skeletal-break-demo-cut-time", m_DemoCut) && m_DemoCut != L"auto")
+        m_DemoCutTime = readSeconds(m_DemoCut);
+
+    // 기존 독립 검사 옵션을 읽는다.
     uint32_t attachedRecut = 0;
     CommandLineArgs::GetInteger(L"attached-recut-checks", attachedRecut);
     m_AttachedRecutChecks.Enabled = attachedRecut != 0;
@@ -458,6 +495,8 @@ void ModelViewer::Startup( void )
     {
         std::wstring value;
         for (const wchar_t* option : { L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"model",
+            L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
+            L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
             L"capture-frame", L"animation-step-ms", L"view", L"collision-draw", L"collision-draw-log",
             L"skeletal-patch-offset-copy", L"physics-query-exit", L"cut-y", L"cut-width", L"cut-repeat-plane",
             L"cut-other", L"cut-angle", L"cut-step-y", L"cut-gap", L"cap-mode", L"cut-count-first",
@@ -601,6 +640,8 @@ void ModelViewer::Startup( void )
         L"physics-sim-checks", L"skeletal-break-checks", L"skeletal-break-xbot", L"xbot-arm-checks",
         L"collision-draw", L"collision-draw-log", L"physics-query-checks", L"physics-query-self-test",
         L"physics-query-exit", L"view", L"skeletal-break-demo", L"skeletal-break-demo-unmask", L"skeletal-break-demo-bone",
+        L"skeletal-break-demo-delay", L"skeletal-break-demo-anim", L"skeletal-break-demo-cut-time",
+        L"skeletal-break-demo-next", L"skeletal-break-demo-switch",
         L"capture", L"capture-frame", L"animation-step-ms",
         L"retired-resource-checks", L"component-checks", L"cut", L"cut-benchmark", L"cut-benchmark-out", L"cap-threads",
         L"cut-y", L"cut-width", L"cut-repeat-plane", L"cut-scene", L"cut-other", L"cut-angle",
@@ -617,13 +658,17 @@ void ModelViewer::Startup( void )
         m_Scene.CreateObject("Cube", Renderer::LoadModel(L"Models/cube.glb", forceRebuild));
         m_Scene.CreateObject("Bunny", Renderer::LoadModel(L"Models/bunny.glb", forceRebuild));
         m_Scene.CreateObject("Dragon", Renderer::LoadModel(L"Models/dragon.glb", forceRebuild));
-        m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild)).PlayAnimation(0);
+        auto& xbot = m_Scene.CreateObject("Xbot", Renderer::LoadModel(L"Models/Xbot.glb", forceRebuild));
+        if (m_SkeletalBreakDemo == 1) ConfigureDemoAnimation(xbot);
+        else xbot.PlayAnimation(0);
 
         // 기존 네 모델 뒤에 연속 피부 검증 모델을 추가하고 첫 클립을 반복한다.
         if (!diagnosticScene || m_SkeletalPatchChecks || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || autoRigChecks)
         {
             const auto model = Renderer::LoadModel(L"Models/CesiumMan.glb", forceRebuild);
-            m_Scene.CreateObject("CesiumMan", model).PlayAnimation(0);
+            auto& cesium = m_Scene.CreateObject("CesiumMan", model);
+            if (m_SkeletalBreakDemo == 2) ConfigureDemoAnimation(cesium);
+            else cesium.PlayAnimation(0);
             Utility::Printf("CesiumMan loaded: meshes=%u animations=%u\n", model->m_NumMeshes, model->m_NumAnimations);
         }
     }
@@ -925,6 +970,68 @@ Viewer::PickHit ModelViewer::PickAtCursor(float x, float y)
     return Viewer::IsCutPlaneDepthVisible(planeDepth, sceneDepth) ? plane : object;
 }
 
+// 시작 클립과 전환 클립을 검증하고 한 주기의 가장 뒤쪽 무릎 pose를 찾는다.
+void ModelViewer::ConfigureDemoAnimation(Viewer::GameObject& object)
+{
+    // 이름과 숫자 인덱스 모두 원본 GLB의 애니메이션 배열에 대응시킨다.
+    const std::string path = "Models/" + object.GetName() + ".glb";
+    const auto model = object.GetModelInstance()->GetModel();
+    if (!m_DemoAnim.empty() || !m_DemoNext.empty())
+    {
+        const auto names = Viewer::ReadRigDiagnosticAnimationNames(path);
+        const auto resolve = [&](const std::wstring& value)
+        {
+            // 이름을 먼저 찾고 순수 숫자만 인덱스로 허용한다.
+            const std::string clip(value.begin(), value.end());
+            const auto found = std::find(names.begin(), names.end(), clip);
+            if (found != names.end()) return uint32_t(found - names.begin());
+            if (!value.empty() && value.find_first_not_of(L"0123456789") == std::wstring::npos)
+            {
+                const auto index = std::stoul(value);
+                if (index < model->m_NumAnimations) return uint32_t(index);
+            }
+            throw std::invalid_argument("skeletal demo clip not found: " + clip);
+        };
+        if (!m_DemoAnim.empty()) m_DemoStartClip = resolve(m_DemoAnim);
+        if (!m_DemoNext.empty()) m_DemoNextClip = resolve(m_DemoNext);
+    }
+    object.PlayAnimation(m_DemoStartClip);
+    if (m_DemoCut != L"auto") return;
+
+    // 절단 본의 DFS 첫 자식과 Hips를 모델 공간에서 비교한다.
+    const auto nodes = Viewer::ReadRigDiagnosticNodeNames(path);
+    std::wstring bone = L"mixamorig:RightUpLeg";
+    CommandLineArgs::GetString(L"skeletal-break-demo-bone", bone);
+    const auto parent = std::find(nodes.begin(), nodes.end(), std::string(bone.begin(), bone.end()));
+    const auto hips = std::find(nodes.begin(), nodes.end(), "mixamorig:Hips");
+    if (parent == nodes.end() || parent + 1 == nodes.end() || hips == nodes.end())
+        throw std::invalid_argument("skeletal demo auto requires a cut bone child and mixamorig:Hips");
+    const uint32_t child = uint32_t(parent - nodes.begin()) + 1;
+    const uint32_t root = uint32_t(hips - nodes.begin());
+    const float duration = model->m_Animations[m_DemoStartClip].duration;
+    if (!std::isfinite(duration) || duration <= 0)
+        throw std::invalid_argument("skeletal demo auto requires a positive clip duration");
+
+    // 모델 +Z를 전방으로 삼고 [0, duration)에서 같은 간격의 60개 pose를 평가한다.
+    ModelInstance sample(model);
+    sample.PlayAnimation(m_DemoStartClip, true);
+    float minimum = FLT_MAX;
+    for (uint32_t i = 0; i < 60; ++i)
+    {
+        // 실제 인스턴스를 건드리지 않고 가장 뒤쪽 자식의 시각을 보존한다.
+        sample.Update(i ? duration / 60.0f : 0.0f);
+        const auto pose = sample.GetNodeTransforms();
+        const float back = float(Dot(Vector3(pose[child].GetW()) - Vector3(pose[root].GetW()), Vector3(kZUnitVector)));
+        if (back < minimum)
+        {
+            minimum = back;
+            m_DemoCutTime = sample.GetAnimationTime(m_DemoStartClip);
+        }
+    }
+    Utility::Printf("Skeletal demo auto cut-time=%.6f clip=%u child=%u forward=+Z samples=60\n",
+        m_DemoCutTime, m_DemoStartClip, child);
+}
+
 // 완료된 절단을 게시하고 최신 pose의 collider를 동기화한 뒤 후보를 제출한다.
 void ModelViewer::Update( float deltaT )
 {
@@ -1114,12 +1221,23 @@ void ModelViewer::Update( float deltaT )
         if (m_CutPlanes.Find(hit.Id)) m_ActiveCutPlane = hit.Id;
     }
 
+    // 첫 프레임부터 wall clock 지연 동안 모든 pose를 시작 클립의 시간 0에 둔다.
+    const auto demoNow = std::chrono::steady_clock::now();
+    if (m_SkeletalBreakDemo && m_QueryFrame == 1) m_DemoFirstFrame = demoNow;
+    const bool demoHolding = m_SkeletalBreakDemo &&
+        std::chrono::duration<float>(demoNow - m_DemoFirstFrame).count() < m_DemoDelay;
+    if (m_SkeletalBreakDemo && !demoHolding && !m_DemoStartFrame)
+    {
+        m_DemoStartFrame = m_QueryFrame;
+        Utility::Printf("Skeletal demo start frame=%u delay=%.2f\n", m_QueryFrame, m_DemoDelay);
+    }
+
     // 공통 프레임 경로에서 고정 step과 GPU pose 준비를 완료한다.
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Update");
     m_SkeletalChecks.BeforeStep(m_Physics);
     const unsigned steps = m_Physics.UpdateFrame(gfxContext,
-        (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
-        (m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
+        demoHolding ? 0.0f : (m_SkeletalChecks.Enabled || m_SkeletalPatchBreakChecks || m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : deltaT,
+        demoHolding ? 0.0f : (m_SkeletalBreakDemo || m_RecutRepro || m_RigBoneCutChecks.Enabled) ? Viewer::PhysicsStepClock::FixedSeconds : (m_AnimationStepMs > 0 ? m_AnimationStepMs * 0.001f : deltaT));
     m_SkeletalChecks.AfterStep(m_Scene, m_Physics, steps);
 
     // 준비된 pose와 실제 프레임 조율 경로를 진단한다.
@@ -1211,8 +1329,23 @@ void ModelViewer::Update( float deltaT )
         if (!foundModel) FailRecut("model_missing", recutIndex + 1);
     }
 
-    // 60프레임의 재생 pose에서 기존 case 평면으로 정상 C를 한 번 요청한다.
-    if (m_SkeletalBreakDemo && !m_SkeletalDemoRequested && m_QueryFrame >= 60 && !m_Cutting.IsBusy())
+    // 주기 내 재생 시간을 누적해 한 주기보다 큰 절단 시각도 지원한다.
+    if (m_SkeletalBreakDemo && !demoHolding && !m_SkeletalDemoRequested && m_DemoCutTime >= 0)
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
+            {
+                const auto instance = object->GetModelInstance();
+                const float time = instance->GetAnimationTime(m_DemoStartClip);
+                float advance = time - m_DemoPreviousTime;
+                if (advance < 0) advance += instance->GetModel()->m_Animations[m_DemoStartClip].duration;
+                m_DemoPlayback += advance;
+                m_DemoPreviousTime = time;
+            }
+
+    // 시간 지정이 없으면 시작 후 60프레임째에 기존 평면 절단을 요청한다.
+    const bool demoCutReady = m_DemoCutTime >= 0 ? m_DemoPlayback >= m_DemoCutTime
+        : m_DemoStartFrame && m_QueryFrame - m_DemoStartFrame >= 59;
+    if (m_SkeletalBreakDemo && !demoHolding && !m_SkeletalDemoRequested && demoCutReady && !m_Cutting.IsBusy())
     {
         // 대상이 없거나 요청이 거절되어도 이번 시도를 완료로 기록해 실패를 감지한다.
         m_SkeletalDemoRequested = true;
@@ -1222,8 +1355,10 @@ void ModelViewer::Update( float deltaT )
                 // -skeletal-break-demo-bone이 있으면 그 이름의 node와 DFS 첫 자식(다음 번호) 사이를 자른다.
                 std::wstring boneValue;
                 MeshCutting::CutPlaneData plane;
-                if (CommandLineArgs::GetString(L"skeletal-break-demo-bone", boneValue))
+                if (CommandLineArgs::GetString(L"skeletal-break-demo-bone", boneValue) || m_DemoCut == L"auto")
                 {
+                    // 자동 시각 선택과 같은 기본 본을 사용한다.
+                    if (boneValue.empty()) boneValue = L"mixamorig:RightUpLeg";
                     const std::string bone(boneValue.begin(), boneValue.end());
                     const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
                     const auto found = std::find(names.begin(), names.end(), bone);
@@ -1475,8 +1610,22 @@ void ModelViewer::RenderScene( void )
     if (breakCapture && m_SkeletalBreakDemo)
     {
         m_DemoAppliedFrame = m_QueryFrame;
+        m_DemoAppliedTime = std::chrono::steady_clock::now();
         Utility::Printf("Skeletal demo Applied frame=%u model=%u\n", m_QueryFrame, m_SkeletalBreakDemo);
     }
+
+    // 게시 완료부터 wall clock 대기 후 시작 클립을 멈추고 다음 클립만 반복한다.
+    if (m_DemoAppliedFrame && !m_DemoNext.empty() && !m_DemoSwitched &&
+        std::chrono::duration<float>(std::chrono::steady_clock::now() - m_DemoAppliedTime).count() >= m_DemoSwitchDelay)
+        for (const auto& object : m_Scene.GetObjects())
+            if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
+            {
+                object->PauseAnimation(m_DemoStartClip);
+                object->PlayAnimation(m_DemoNextClip);
+                m_DemoSwitched = true;
+                const std::string clip(m_DemoNext.begin(), m_DemoNext.end());
+                Utility::Printf("Skeletal demo switch frame=%u clip=%s\n", m_QueryFrame, clip.c_str());
+            }
 
     // 요청 이후 모든 작업이 끝났는데 게시 신호가 없으면 자동 종료 대기를 해제한다.
     if (m_SkeletalDemoRequested && !m_DemoAppliedFrame && !m_SkeletalPatchCopy.IsPending() && !m_SkeletalDemoFailed)

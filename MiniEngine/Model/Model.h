@@ -187,6 +187,8 @@ public:
 
     size_t GetNumAnimations(void) const { return m_AnimState.size(); }
     void PlayAnimation(uint32_t animIdx, bool loop);
+    // 지정한 클립의 현재 주기 내 재생 시간을 초 단위로 읽는다.
+    float GetAnimationTime(uint32_t animIdx) const;
     void PauseAnimation(uint32_t animIdx);
     void ResetAnimation(uint32_t animIdx);
     void StopAnimation(uint32_t animIdx);

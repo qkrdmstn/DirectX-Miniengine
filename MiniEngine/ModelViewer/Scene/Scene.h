@@ -57,6 +57,8 @@ namespace Viewer
         bool SetTransform(const SceneTransform& transform);
         // 지정한 애니메이션 하나를 재생하며 기본값으로 반복한다.
         void PlayAnimation(uint32_t animationIndex, bool loop = true);
+        // 지정한 클립을 현재 시간에서 멈춘다.
+        void PauseAnimation(uint32_t animationIndex);
         void LoopAllAnimations();
 
     private:
