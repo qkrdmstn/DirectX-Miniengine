@@ -155,6 +155,302 @@ uint32_t CountLatticeComponents(const LatticeTopology& topology)
     return components.Count();
 }
 
+// 삼각형 하나당 분할 수 상한이다. 표본 수는 삼각형당 약 n^2/2개로 늘어난다.
+static const uint32_t MaxSubdivision = 128;
+
+// 삼각형 표면을 CellSize/2 이하 간격으로 표집해 점유 셀 그래프를 만든다. 정점 하나당 표본 하나를 먼저 둔다.
+LatticeCellGraph BuildLatticeCellGraph(const LatticeTopology& topology)
+{
+    // 섹션이 없는 빈 위상은 표집할 것이 없어 셀 크기 0도 허용한다. 그 외 0 이하·비유한 셀 크기는 거절한다.
+    if (!topology.RestPositions.empty() && (!(topology.CellSize > 0) || !std::isfinite(topology.CellSize)))
+    {
+        throw std::invalid_argument("lattice cell graph cell size");
+    }
+
+    LatticeCellGraph graph;
+    std::unordered_map<uint64_t, uint32_t> cellIds;
+
+    // 표본 위치를 BuildLatticeTopology와 같은 식으로 셀 id에 배정한다.
+    const auto cellOf = [&](const std::array<float, 3>& position)
+    {
+        // 축마다 셀 좌표를 구하고 격자 밖은 마지막 칸으로 모은다.
+        uint64_t key = 0;
+        std::array<uint32_t, 3> coords = {};
+        for (uint32_t axis = 0; axis < 3; ++axis)
+        {
+            const double offset = double(position[axis]) - topology.Origin[axis];
+            const uint32_t rawCoord = uint32_t(offset / topology.CellSize);
+            coords[axis] = std::min(topology.Dim[axis] - 1, rawCoord);
+            key = key * 65536 + coords[axis];
+        }
+
+        // 처음 보는 셀이면 새 id를 주고 좌표를 기록한다.
+        const auto entry = cellIds.emplace(key, uint32_t(cellIds.size()));
+        if (entry.second)
+        {
+            graph.CellCoords.push_back(coords);
+        }
+        return entry.first->second;
+    };
+
+    // 표본 하나를 모든 배열에 함께 추가한다.
+    const auto addSample = [&](uint32_t section, const std::array<uint32_t, 3>& vertices,
+        const std::array<float, 3>& weights)
+    {
+        std::array<float, 3> position = {};
+        for (uint32_t k = 0; k < 3; ++k)
+        {
+            for (uint32_t axis = 0; axis < 3; ++axis)
+            {
+                position[axis] += weights[k] * topology.RestPositions[section][vertices[k]][axis];
+            }
+        }
+        graph.SampleSection.push_back(section);
+        graph.SampleVertices.push_back(vertices);
+        graph.SampleWeights.push_back(weights);
+        graph.SampleCell.push_back(cellOf(position));
+    };
+
+    // 모든 정점에 자기 표본(가중치 1,0,0)을 하나씩 만든다.
+    for (uint32_t s = 0; s < topology.RestPositions.size(); ++s)
+    {
+        graph.VertexSample.emplace_back();
+        for (uint32_t v = 0; v < topology.RestPositions[s].size(); ++v)
+        {
+            graph.VertexSample.back().push_back(uint32_t(graph.SampleCell.size()));
+            addSample(s, { v, v, v }, { 1, 0, 0 });
+        }
+    }
+
+    // 삼각형마다 가장 긴 변을 CellSize/2로 나눈 n단계 무게중심 격자를 표집한다.
+    for (uint32_t s = 0; s < topology.Indices.size(); ++s)
+    {
+        const auto& positions = topology.RestPositions[s];
+        for (size_t t = 0; t + 2 < topology.Indices[s].size(); t += 3)
+        {
+            // 인덱스 범위를 검사하고 세 변 중 가장 긴 길이를 구한다.
+            const std::array<uint32_t, 3> tri = { topology.Indices[s][t], topology.Indices[s][t + 1],
+                topology.Indices[s][t + 2] };
+            double longest = 0;
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                if (tri[k] >= positions.size())
+                {
+                    throw std::invalid_argument("lattice cell graph index");
+                }
+                double lengthSq = 0;
+                for (uint32_t axis = 0; axis < 3; ++axis)
+                {
+                    const double d = double(positions[tri[k]][axis]) - positions[tri[(k + 1) % 3]][axis];
+                    lengthSq += d * d;
+                }
+                longest = std::max(longest, std::sqrt(lengthSq));
+            }
+            // 거대 삼각형이 표본을 폭증시키지 않도록 분할 수를 상한으로 제한한다.
+            const uint32_t n = std::min(MaxSubdivision,
+                std::max(1u, uint32_t(std::ceil(longest / (topology.CellSize * 0.5)))));
+
+            // 세 꼭짓점을 뺀 격자점(i, j)을 가중치 (n-i-j, i, j)/n으로 추가한다.
+            for (uint32_t i = 0; i <= n; ++i)
+            {
+                for (uint32_t j = 0; i + j <= n; ++j)
+                {
+                    const bool corner = (i == 0 && j == 0) || (i == n && j == 0) || (i == 0 && j == n);
+                    if (corner)
+                    {
+                        continue;
+                    }
+                    addSample(s, tri, { float(n - i - j) / n, float(i) / n, float(j) / n });
+                }
+            }
+        }
+    }
+    return graph;
+}
+
+// 표본 거리를 세 정점 거리의 무게중심 보간으로 구하고 셀 평균의 부호를 side로 쓴다. |평균| <= 1e-5이면 0이다.
+std::vector<int8_t> CellSidesFromVertexDistances(const LatticeCellGraph& graph,
+    const std::vector<std::vector<float>>& vertexDistances)
+{
+    // 거리 배열이 정점 수와 정확히 같은지 검사한다.
+    if (vertexDistances.size() != graph.VertexSample.size())
+    {
+        throw std::invalid_argument("lattice distance sections");
+    }
+    for (size_t s = 0; s < vertexDistances.size(); ++s)
+    {
+        if (vertexDistances[s].size() != graph.VertexSample[s].size())
+        {
+            throw std::invalid_argument("lattice distance vertices");
+        }
+    }
+
+    // 표본별 보간 거리를 셀별 합과 표본 수로 누적한다.
+    std::vector<double> sums(graph.CellCoords.size(), 0.0);
+    std::vector<uint32_t> counts(graph.CellCoords.size(), 0);
+    for (size_t k = 0; k < graph.SampleCell.size(); ++k)
+    {
+        const auto& distances = vertexDistances[graph.SampleSection[k]];
+        double distance = 0;
+        for (uint32_t c = 0; c < 3; ++c)
+        {
+            distance += double(graph.SampleWeights[k][c]) * distances[graph.SampleVertices[k][c]];
+        }
+        sums[graph.SampleCell[k]] += distance;
+        ++counts[graph.SampleCell[k]];
+    }
+
+    // 평균의 부호를 side로 변환한다.
+    std::vector<int8_t> sides(graph.CellCoords.size(), 0);
+    for (size_t cell = 0; cell < sides.size(); ++cell)
+    {
+        const double average = counts[cell] ? sums[cell] / counts[cell] : 0.0;
+        int side = 0;
+        if (std::abs(average) > 1e-5)
+        {
+            side = average > 0 ? 1 : -1;
+        }
+        sides[cell] = static_cast<int8_t>(side);
+    }
+    return sides;
+}
+
+// 점유 셀 사이의 격자 인접 중 같은 side끼리만 이어 연결 성분을 아일랜드로 만든다.
+// side 0(미정)은 +1로 취급한다. neighborhood는 6(면) 또는 26(면+모서리+꼭짓점)이다.
+CellIslandLabels LabelLatticeCellIslands(const LatticeCellGraph& graph, const std::vector<int8_t>& cellSides,
+    uint32_t neighborhood)
+{
+    // 입력 크기와 이웃 종류를 검사한다.
+    if (neighborhood != 6 && neighborhood != 26)
+    {
+        throw std::invalid_argument("lattice neighborhood");
+    }
+    const uint32_t cellCount = uint32_t(graph.CellCoords.size());
+    if (cellSides.size() != cellCount)
+    {
+        throw std::invalid_argument("lattice cell sides");
+    }
+
+    // 격자 좌표에서 셀 id를 찾는 표를 만든다.
+    const auto makeKey = [](int64_t x, int64_t y, int64_t z)
+    {
+        return uint64_t((x * 65536 + y) * 65536 + z);
+    };
+    std::unordered_map<uint64_t, uint32_t> lookup;
+    for (uint32_t cell = 0; cell < cellCount; ++cell)
+    {
+        const auto& c = graph.CellCoords[cell];
+        lookup.emplace(makeKey(c[0], c[1], c[2]), cell);
+    }
+
+    // 이웃 셀이 점유되어 있고 side가 같으면 연결한다. side 0은 +1로 본다.
+    LatticeUnionFind links(cellCount);
+    for (uint32_t cell = 0; cell < cellCount; ++cell)
+    {
+        const auto& c = graph.CellCoords[cell];
+        const bool sideA = cellSides[cell] >= 0;
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                for (int dz = -1; dz <= 1; ++dz)
+                {
+                    // 이웃 종류에 맞는 오프셋만 쓴다.
+                    const int nonZero = (dx != 0) + (dy != 0) + (dz != 0);
+                    if (nonZero == 0 || (neighborhood == 6 && nonZero != 1))
+                    {
+                        continue;
+                    }
+
+                    // 격자 범위를 벗어나는 음수 좌표를 건너뛴다.
+                    const int64_t nx = int64_t(c[0]) + dx;
+                    const int64_t ny = int64_t(c[1]) + dy;
+                    const int64_t nz = int64_t(c[2]) + dz;
+                    if (nx < 0 || ny < 0 || nz < 0)
+                    {
+                        continue;
+                    }
+
+                    // 점유된 이웃 셀을 찾는다.
+                    const auto found = lookup.find(makeKey(nx, ny, nz));
+                    if (found == lookup.end())
+                    {
+                        continue;
+                    }
+
+                    // side가 같을 때만 합친다.
+                    if ((cellSides[found->second] >= 0) == sideA)
+                    {
+                        links.Unite(cell, found->second);
+                    }
+                }
+            }
+        }
+    }
+
+    // 대표별 셀 수와 최소 셀 id를 모으고 셀 수 내림차순(동률은 최소 셀 id 순)으로 정렬한다.
+    std::map<uint32_t, std::array<uint32_t, 2>> roots;
+    for (uint32_t cell = 0; cell < cellCount; ++cell)
+    {
+        auto& entry = roots.emplace(links.Find(cell), std::array<uint32_t, 2>{ 0, cell }).first->second;
+        ++entry[0];
+    }
+    std::vector<std::pair<uint32_t, std::array<uint32_t, 2>>> ordered(roots.begin(), roots.end());
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b)
+    {
+        if (a.second[0] != b.second[0])
+        {
+            return a.second[0] > b.second[0];
+        }
+        return a.second[1] < b.second[1];
+    });
+
+    // 정렬된 순서대로 번호를 부여하고 셀별 아일랜드 번호를 채운다.
+    CellIslandLabels result;
+    result.CellIsland.assign(cellCount, 0);
+    std::unordered_map<uint32_t, uint32_t> rootToIsland;
+    for (const auto& item : ordered)
+    {
+        rootToIsland.emplace(item.first, uint32_t(result.IslandCells.size()));
+        result.IslandCells.push_back(item.second[0]);
+        result.IslandSide.push_back(cellSides[item.second[1]] >= 0 ? 1 : -1);
+    }
+    for (uint32_t cell = 0; cell < cellCount; ++cell)
+    {
+        result.CellIsland[cell] = rootToIsland.at(links.Find(cell));
+    }
+    result.IslandCount = uint32_t(result.IslandCells.size());
+    return result;
+}
+
+// 표본마다 그 표본이 속한 셀의 아일랜드 번호를 반환한다.
+std::vector<uint32_t> SampleIslands(const LatticeCellGraph& graph, const CellIslandLabels& labels)
+{
+    // 표본의 셀 번호로 아일랜드를 조회한다.
+    std::vector<uint32_t> islands;
+    for (uint32_t cell : graph.SampleCell)
+    {
+        islands.push_back(labels.CellIsland.at(cell));
+    }
+    return islands;
+}
+
+// 각 원본 정점의 아일랜드를 정점 자신의 표본(가중치 1,0,0)이 속한 셀에서 구한다.
+std::vector<std::vector<uint32_t>> VertexIslands(const LatticeCellGraph& graph, const CellIslandLabels& labels)
+{
+    // 정점 표본 번호를 따라 아일랜드를 조회한다.
+    std::vector<std::vector<uint32_t>> islands;
+    for (const auto& samples : graph.VertexSample)
+    {
+        islands.emplace_back();
+        for (uint32_t sample : samples)
+        {
+            islands.back().push_back(labels.CellIsland.at(graph.SampleCell[sample]));
+        }
+    }
+    return islands;
+}
+
 // 평면 위 꼭짓점은 양쪽 연결에 쓰며 완전 공면 삼각형은 GPU처럼 side0에만 둔다.
 IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vector<SkinCpuSection>& sections,
     const std::vector<std::array<uint32_t, 2>>& triangles, const std::vector<std::vector<int8_t>>& signs,

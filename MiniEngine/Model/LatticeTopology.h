@@ -62,6 +62,39 @@ struct IslandLabels
     uint32_t IslandCount = 0;
     uint32_t SideDefault[2] = {}; // 해당 side의 삼각형 수 다수결, 동점 A
 };
+// NDC식 셀 그래프다. 삼각형 표면 표본이 놓인 셀만 노드로 삼고 BuildLatticeTopology 결과와는 별개로 만든다.
+struct LatticeCellGraph
+{
+    std::vector<std::array<uint32_t, 3>> CellCoords;    // 셀 id별 정수 격자 좌표
+    std::vector<uint32_t> SampleSection;                // 표본별 section
+    std::vector<std::array<uint32_t, 3>> SampleVertices; // 표본별 삼각형 정점 3개(정점 표본은 v,v,v)
+    std::vector<std::array<float, 3>> SampleWeights;    // 표본별 무게중심 가중치
+    std::vector<uint32_t> SampleCell;                   // 표본별 셀 id
+    std::vector<std::vector<uint32_t>> VertexSample;    // section별 정점 자신의 표본 번호
+};
+
+// NDC식 셀 그래프 아일랜드 결과다. 삼각형은 쓰지 않고 점유 셀만 노드로 삼는다.
+struct CellIslandLabels
+{
+    std::vector<uint32_t> CellIsland;   // 셀 id별 아일랜드 번호(0..IslandCount-1, 셀 수 내림차순)
+    std::vector<uint32_t> IslandCells;  // 아일랜드별 셀 수
+    std::vector<int8_t> IslandSide;     // 아일랜드별 side(-1 또는 +1)
+    uint32_t IslandCount = 0;
+};
+
+// 삼각형 표면을 CellSize/2 이하 간격으로 표집해 점유 셀 그래프를 만든다.
+LatticeCellGraph BuildLatticeCellGraph(const LatticeTopology& topology);
+// 표본 거리를 세 정점 거리의 보간으로 구해 셀 평균 부호를 side로 쓴다. |평균| <= 1e-5이면 0이다.
+std::vector<int8_t> CellSidesFromVertexDistances(const LatticeCellGraph& graph,
+    const std::vector<std::vector<float>>& vertexDistances);
+// 점유 셀의 격자 인접(6 또는 26 이웃) 중 같은 side끼리만 이어 연결 성분을 아일랜드로 만든다. side 0은 +1로 취급한다.
+CellIslandLabels LabelLatticeCellIslands(const LatticeCellGraph& graph, const std::vector<int8_t>& cellSides,
+    uint32_t neighborhood);
+// 표본별 아일랜드 번호를 반환한다.
+std::vector<uint32_t> SampleIslands(const LatticeCellGraph& graph, const CellIslandLabels& labels);
+// 정점 자신의 표본이 속한 셀의 아일랜드를 section별 정점 순서로 반환한다.
+std::vector<std::vector<uint32_t>> VertexIslands(const LatticeCellGraph& graph, const CellIslandLabels& labels);
+
 // 패치 삼각형의 같은 반공간 셀을 연결하고 bind weight 다수결로 몸체를 정한다.
 IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vector<SkinCpuSection>& sections,
     const std::vector<std::array<uint32_t, 2>>& triangles, const std::vector<std::vector<int8_t>>& signs,

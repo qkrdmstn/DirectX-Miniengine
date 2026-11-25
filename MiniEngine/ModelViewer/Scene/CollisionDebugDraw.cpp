@@ -42,7 +42,7 @@ namespace Viewer
 
         // 뷰 공간 선분을 근평면으로 자르고 화면에 투영해 선 하나를 낸다. 그렸으면 true다.
         bool EmitSegment(GizmoDraw& draw, const Math::Camera& camera, CollisionDebug::ViewPoint a,
-            CollisionDebug::ViewPoint b, float width, float height, Color color)
+            CollisionDebug::ViewPoint b, float width, float height, Color color, float thickness = LineThickness)
         {
             // 카메라 뒤쪽 부분을 투영 전에 잘라낸다.
             if (!CollisionDebug::ClipSegmentToNearPlane(a, b, camera.GetNearClip()))
@@ -56,7 +56,7 @@ namespace Viewer
                 return false;
 
             // 가는 overlay 선으로 내고 실제로 정점이 만들어졌는지 돌려준다.
-            return draw.Line(pa, pb, color, LineThickness);
+            return draw.Line(pa, pb, color, thickness);
         }
 
         // 월드 점을 카메라 뷰 공간 점으로 바꾼다.
@@ -66,6 +66,27 @@ namespace Viewer
             const Math::Vector3 v = Math::MakeHomogeneous(view * world);
             return { float(v.GetX()), float(v.GetY()), float(v.GetZ()) };
         }
+    }
+
+    // 월드 선분을 뷰 공간으로 옮겨 기존 EmitSegment 경로로 1px 선으로 한 번에 그린다.
+    void CollisionDebugDraw::DrawWorldLines(GraphicsContext& context, const Math::Camera& camera,
+        float width, float height, const std::vector<WorldLine>& lines)
+    {
+        // 그릴 선이 없으면 정점 버퍼를 만들지 않는다.
+        if (lines.empty())
+            return;
+
+        // 모든 선분을 근평면 자르기와 투영을 거쳐 모은다.
+        const Math::Matrix4& view = camera.GetViewMatrix();
+        GizmoDraw draw;
+        draw.Reserve(lines.size());
+        for (const WorldLine& line : lines)
+        {
+            EmitSegment(draw, camera, ToView(view, line.From), ToView(view, line.To), width, height, line.Tint, 1.0f);
+        }
+
+        // 모은 선을 한 번에 그린다.
+        draw.Render(context, width, height);
     }
 
     // 충돌 hull·바닥 모서리와 Jolt body·관절을 모아 한 번에 overlay 선으로 낸다.

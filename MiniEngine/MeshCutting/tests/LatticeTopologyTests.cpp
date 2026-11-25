@@ -2,9 +2,12 @@
 // cl /nologo /utf-8 /std:c++17 /EHsc /W4 /Fo:$env:TEMP/ /Fe:$env:TEMP/LatticeTopologyTests.exe
 //    MiniEngine/MeshCutting/tests/LatticeTopologyTests.cpp MiniEngine/Model/LatticeTopology.cpp
 #include "../../Model/LatticeTopology.h"
+#include <array>
 #include <cstdio>
+#include <functional>
 #include <set>
 #include <stdexcept>
+#include <vector>
 
 // Release에서도 실패를 실행 결과로 보고한다.
 static void Require(bool condition, const char* message)
@@ -223,6 +226,248 @@ int main()
         Require(conflict[2] == 1 && conflicting.TriangleSideBody[0][0] == fullVote.TriangleSideBody[0][0]
             && conflicting.TriangleSideBody[0][1] == 0 && conflicting.SideDefault[1] == 0,
             "MI3e2 conflicting demands preserve majority and update defaults");
+
+        // 뒤집힌 U(П)자 메시를 quad로 만든다. 윗변 한 줄과 아래로 뻗은 두 다리이며 모든 정점이 joint 0이다.
+        SkinCpuSection arch;
+        for (uint32_t y = 0; y < 4; ++y)
+        {
+            for (uint32_t x = 0; x < 4; ++x)
+            {
+                // 4x4 격자 정점을 정수 좌표에 둔다.
+                SkinCpuVertex vertex = {};
+                vertex.Position[0] = float(x);
+                vertex.Position[1] = float(y);
+                vertex.Weights[0] = 65535;
+                arch.push_back(vertex);
+            }
+        }
+        const std::array<std::array<uint32_t, 2>, 7> archCells = { {
+            {0,0}, {0,1}, {2,0}, {2,1}, {0,2}, {1,2}, {2,2} } };
+        for (const auto& cell : archCells)
+        {
+            // 한 칸을 삼각형 두 개로 나눈다.
+            const uint32_t v00 = cell[1] * 4 + cell[0];
+            const uint32_t v10 = v00 + 1;
+            const uint32_t v01 = v00 + 4;
+            const uint32_t v11 = v01 + 1;
+            for (uint32_t v : { v00, v10, v01, v10, v11, v01 })
+            {
+                arch.Indices.push_back(v);
+            }
+        }
+
+        // quad 위상 맵과 모든 삼각형 목록을 만든다.
+        const auto archTopology = BuildLatticeTopology({ arch });
+        std::vector<std::array<uint32_t, 2>> archTriangles;
+        for (uint32_t t = 0; t < arch.Indices.size() / 3; ++t)
+        {
+            archTriangles.push_back({ 0, t });
+        }
+        const auto archIslands = [&](float planeY)
+        {
+            // 수평 평면 y=planeY에 대한 정점 부호로 아일랜드를 센다.
+            std::vector<int8_t> archSigns;
+            for (const auto& vertex : arch)
+            {
+                archSigns.push_back(vertex.Position[1] > planeY ? 1 : vertex.Position[1] < planeY ? -1 : 0);
+            }
+            return LabelPatchIslands(archTopology, { arch }, archTriangles, { archSigns }, groups);
+        };
+
+        // 다리를 가로지르면 윗변 쪽 하나와 다리 둘이 따로 떨어진 3개이고 윗변 쪽만 side0이다.
+        const auto legsCut = archIslands(1.5f);
+        Require(legsCut.IslandCount == 3, "arch legs cut gives three islands");
+        uint32_t legSides[2] = {};
+        for (const auto& island : legsCut.Islands)
+        {
+            ++legSides[island.Side];
+        }
+        Require(legSides[0] == 1 && legSides[1] == 2, "arch bar is one side and legs are the other");
+
+        // 윗변만 가로지르면 윗변 위쪽 하나와 나머지 한 덩어리인 2개다.
+        Require(archIslands(2.5f).IslandCount == 2, "arch bar cut gives two islands");
+
+        // 셀 그래프용 П 메시를 만든다. 다리 사이 셀 두 칸이 비도록 가로 6, 세로 5 정점 격자에서 쓰는 정점만 담는다.
+        SkinCpuSection cellArch;
+        std::array<int, 30> gridToVertex;
+        gridToVertex.fill(-1);
+        const auto addCellArchQuad = [&](uint32_t x, uint32_t y)
+        {
+            // 격자 좌표의 정점을 처음 쓸 때만 추가하고 한 칸을 삼각형 두 개로 나눈다.
+            uint32_t corners[4] = {};
+            for (uint32_t k = 0; k < 4; ++k)
+            {
+                const uint32_t gx = x + (k & 1);
+                const uint32_t gy = y + (k >> 1);
+                int& slot = gridToVertex[gy * 6 + gx];
+                if (slot < 0)
+                {
+                    SkinCpuVertex vertex = {};
+                    vertex.Position[0] = float(gx);
+                    vertex.Position[1] = float(gy);
+                    slot = int(cellArch.size());
+                    cellArch.push_back(vertex);
+                }
+                corners[k] = uint32_t(slot);
+            }
+            for (uint32_t v : { corners[0], corners[1], corners[2], corners[1], corners[3], corners[2] })
+            {
+                cellArch.Indices.push_back(v);
+            }
+        };
+        for (uint32_t y = 0; y < 2; ++y)
+        {
+            addCellArchQuad(0, y);
+            addCellArchQuad(4, y);
+        }
+        for (uint32_t y = 2; y < 4; ++y)
+        {
+            for (uint32_t x = 0; x < 5; ++x)
+            {
+                addCellArchQuad(x, y);
+            }
+        }
+
+        // 셀 크기 1(최장축 5칸)로 위상과 셀 그래프를 만들고 평면 y=planeY까지의 거리로 셀 아일랜드를 센다.
+        const auto cellArchTopology = BuildLatticeTopology({ cellArch }, 5);
+        const auto cellArchGraph = BuildLatticeCellGraph(cellArchTopology);
+        const auto cellArchSides = [&](float planeY)
+        {
+            std::vector<float> distances;
+            for (const auto& vertex : cellArch)
+            {
+                distances.push_back(vertex.Position[1] - planeY);
+            }
+            return CellSidesFromVertexDistances(cellArchGraph, { distances });
+        };
+        const auto cellArchIslands = [&](float planeY, uint32_t neighborhood)
+        {
+            // 같은 평면의 삼각형 방식 결과를 함께 반환해 비교한다.
+            std::vector<int8_t> triangleSigns;
+            for (const auto& vertex : cellArch)
+            {
+                const float distance = vertex.Position[1] - planeY;
+                triangleSigns.push_back(distance > 0 ? 1 : distance < 0 ? -1 : 0);
+            }
+            std::vector<std::array<uint32_t, 2>> cellArchTriangles;
+            for (uint32_t t = 0; t < cellArch.Indices.size() / 3; ++t)
+            {
+                cellArchTriangles.push_back({ 0, t });
+            }
+            const auto cellLabels = LabelLatticeCellIslands(cellArchGraph, cellArchSides(planeY), neighborhood);
+            const auto triangleLabels = LabelPatchIslands(cellArchTopology, { cellArch }, cellArchTriangles,
+                { triangleSigns }, groups);
+            return std::array<uint32_t, 2>{ cellLabels.IslandCount, triangleLabels.IslandCount };
+        };
+
+        // 다리를 가로지르면 윗변 하나와 다리 둘의 3개, 윗변 안쪽을 가로지르면 2개로 두 방식이 같다. 26 이웃도 같다.
+        // y=1.5 평면은 y=1 행 셀의 표본 평균이 음수라 그 셀들이 아래쪽(다리)에 속한다.
+        Require(cellArchIslands(1.5f, 6) == std::array<uint32_t, 2>{ 3, 3 }, "cell graph arch legs cut gives three");
+        Require(cellArchIslands(1.5f, 26) == std::array<uint32_t, 2>{ 3, 3 }, "cell graph 26 arch legs cut gives three");
+        Require(cellArchIslands(3.0f, 6) == std::array<uint32_t, 2>{ 2, 2 }, "cell graph arch bar cut gives two");
+
+        // 셀 수 내림차순 번호와 side(위쪽 윗변이 +1)를 확인한다.
+        {
+            const auto sortedLabels = LabelLatticeCellIslands(cellArchGraph, cellArchSides(1.5f), 6);
+            Require(sortedLabels.IslandSide[0] == 1 && sortedLabels.IslandCells[0] >= sortedLabels.IslandCells[1]
+                && sortedLabels.IslandCells[1] >= sortedLabels.IslandCells[2], "cell islands sorted by size");
+
+            // 정점과 표본의 아일랜드 조회가 셀 번호와 일치하는지 확인한다.
+            const auto vertexIslands = VertexIslands(cellArchGraph, sortedLabels);
+            const auto sampleIslands = SampleIslands(cellArchGraph, sortedLabels);
+            Require(vertexIslands.size() == 1 && vertexIslands[0].size() == cellArch.size()
+                && sampleIslands.size() == cellArchGraph.SampleCell.size(), "island lookup sizes");
+            Require(vertexIslands[0][gridToVertex[4 * 6 + 2]] == 0 && vertexIslands[0][gridToVertex[0]] != 0,
+                "bar vertex in island 0, leg bottom vertex elsewhere");
+        }
+
+        // 서로 다른 셀에 속한 평행 띠 둘은 인접 셀이라 삼각형 방식은 2개, 셀 그래프는 1개다.
+        {
+            SkinCpuSection stripNear = { { { .1f, .1f, 0 }, {}, {} }, { { .9f, .1f, 0 }, {}, {} },
+                { { .1f, .4f, 0 }, {}, {} } };
+            stripNear.Indices = { 0, 1, 2 };
+            SkinCpuSection stripFar = { { { .1f, 1.1f, 0 }, {}, {} }, { { .9f, 1.1f, 0 }, {}, {} },
+                { { .1f, 1.4f, 0 }, {}, {} } };
+            stripFar.Indices = { 0, 1, 2 };
+            const std::vector<SkinCpuSection> pair = { stripNear, stripFar };
+            const auto pairTopology = BuildLatticeTopology(pair, 2);
+            const auto pairGraph = BuildLatticeCellGraph(pairTopology);
+            const std::vector<std::vector<float>> allPositive = { { 1, 1, 1 }, { 1, 1, 1 } };
+            const auto pairLabels = LabelLatticeCellIslands(pairGraph,
+                CellSidesFromVertexDistances(pairGraph, allPositive), 6);
+            const auto pairTriangles = LabelPatchIslands(pairTopology, pair, { {0,0}, {1,0} },
+                { {1,1,1}, {1,1,1} }, groups);
+            Require(CountLatticeComponents(pairTopology) == 2 && pairTriangles.IslandCount == 2
+                && pairLabels.IslandCount == 1, "adjacent strips: triangles 2, cell graph 1");
+        }
+
+        // 대각선 띠는 셀이 모서리로만 닿아 6 이웃은 쪼개고 26 이웃은 하나로 유지한다.
+        {
+            SkinCpuSection diagonal = { { { 0, 0, 0 }, {}, {} }, { { 1, 1, 0 }, {}, {} },
+                { { 2, 2, 0 }, {}, {} } };
+            diagonal.Indices = { 0, 1, 2 };
+            const auto diagonalGraph = BuildLatticeCellGraph(BuildLatticeTopology({ diagonal }, 3));
+            const auto diagonalSides = CellSidesFromVertexDistances(diagonalGraph, { { 1, 1, 1 } });
+            Require(LabelLatticeCellIslands(diagonalGraph, diagonalSides, 6).IslandCount == 3
+                && LabelLatticeCellIslands(diagonalGraph, diagonalSides, 26).IslandCount == 1,
+                "diagonal strip: 6 splits, 26 stays connected");
+        }
+
+        // 여러 셀에 걸친 긴 삼각형 하나는 정점이 두 셀뿐이어도 표본이 사이 셀을 채워 한 아일랜드가 된다.
+        {
+            SkinCpuSection longTriangle = { { { 0, 0, 0 }, {}, {} }, { { 10, 0, 0 }, {}, {} },
+                { { 0, 1, 0 }, {}, {} } };
+            longTriangle.Indices = { 0, 1, 2 };
+            const auto longTopology = BuildLatticeTopology({ longTriangle }, 5);
+            const auto longGraph = BuildLatticeCellGraph(longTopology);
+            const auto longSides = CellSidesFromVertexDistances(longGraph, { { 1, 1, 1 } });
+            Require(longGraph.CellCoords.size() > longTopology.CellCount
+                && LabelLatticeCellIslands(longGraph, longSides, 6).IslandCount == 1, "long triangle is one island");
+        }
+
+        // 셀 크기에 비해 매우 큰 삼각형도 분할 상한 때문에 표본 수가 제한되고 한 아일랜드로 남는다.
+        {
+            SkinCpuSection huge = { { { 0, 0, 0 }, {}, {} }, { { 1000, 0, 0 }, {}, {} },
+                { { 0, 1000, 0 }, {}, {} } };
+            huge.Indices = { 0, 1, 2 };
+            const auto hugeTopology = BuildLatticeTopology({ huge }, 100);
+            const auto hugeGraph = BuildLatticeCellGraph(hugeTopology);
+            const size_t cap = 3 + (129 * 130) / 2 - 3;
+            const auto hugeSides = CellSidesFromVertexDistances(hugeGraph, { { 1, 1, 1 } });
+            Require(hugeGraph.SampleCell.size() <= cap, "huge triangle sample count is capped");
+            Require(LabelLatticeCellIslands(hugeGraph, hugeSides, 26).IslandCount == 1,
+                "huge triangle stays one island");
+        }
+
+        // 빈 입력은 셀과 아일랜드가 없고, side 0은 +1로 취급하며 잘못된 이웃 수와 크기는 거절한다.
+        {
+            const auto emptyGraph = BuildLatticeCellGraph(BuildLatticeTopology({}));
+            Require(emptyGraph.CellCoords.empty()
+                && LabelLatticeCellIslands(emptyGraph, CellSidesFromVertexDistances(emptyGraph, {}), 6)
+                    .IslandCount == 0, "empty cell graph has no islands");
+            SkinCpuSection single = { { { 0, 0, 0 }, {}, {} } };
+            single.Indices = {};
+            const auto singleGraph = BuildLatticeCellGraph(BuildLatticeTopology({ single }, 1));
+            Require(CellSidesFromVertexDistances(singleGraph, { { 5e-6f } })[0] == 0
+                && LabelLatticeCellIslands(singleGraph, { 0 }, 6).IslandSide[0] == 1, "zero side counts as plus");
+            const auto throws = [](const std::function<void()>& action)
+            {
+                try
+                {
+                    action();
+                }
+                catch (const std::invalid_argument&)
+                {
+                    return true;
+                }
+                return false;
+            };
+            Require(throws([&] { LabelLatticeCellIslands(singleGraph, { 0 }, 18); })
+                && throws([&] { LabelLatticeCellIslands(singleGraph, {}, 6); })
+                && throws([&] { CellSidesFromVertexDistances(singleGraph, {}); })
+                && throws([&] { CellSidesFromVertexDistances(singleGraph, { {} }); }),
+                "invalid neighborhood and sizes rejected");
+        }
 
         // 빈 입력과 점 크기 bounds도 유효한 결과를 낸다.
         Require(CountLatticeComponents(BuildLatticeTopology({})) == 0, "empty");

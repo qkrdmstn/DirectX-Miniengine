@@ -422,7 +422,8 @@ void ModelViewer::Startup( void )
             L"skeletal-break-demo-next", L"skeletal-break-demo-switch", L"skeletal-break-demo-tilt",
             L"skeletal-break-demo-unmask", L"attached-recut-checks", L"rig-bone-cut-checks",
             L"skeletal-union-checks", L"skeletal-patch-offset-copy", L"model", L"demo-cut-sec",
-            L"skeletal-multi-cut", L"skeletal-multi-stale", L"skeletal-multi-fail", L"skeletal-multi-reject" })
+            L"skeletal-multi-cut", L"skeletal-multi-stale", L"skeletal-multi-fail", L"skeletal-multi-reject",
+            L"topology-island-viz" })
             if (CommandLineArgs::GetString(option, recutValue))
                 throw std::invalid_argument("skeletal-recut-repro cannot be combined with other demos or checks");
     }
@@ -476,6 +477,12 @@ void ModelViewer::Startup( void )
     m_RigBoneCutChecks.Enabled = rigBoneCut != 0;
     if (rigBoneCut && attachedRecut)
         throw std::invalid_argument("rig-bone-cut-checks cannot be combined with attached-recut-checks");
+
+    // 위상 아일랜드 시각화는 절단을 하지 않으므로 부착 재절단 검사와 함께 쓰지 않는다.
+    uint32_t topologyViz = 0;
+    CommandLineArgs::GetInteger(L"topology-island-viz", topologyViz);
+    if (topologyViz && attachedRecut)
+        throw std::invalid_argument("topology-island-viz cannot be combined with attached-recut-checks");
 
     // 숨김 해제 옵션은 기존 시연의 실행 여부를 확인한다.
     std::wstring unmaskValue;
@@ -1718,7 +1725,12 @@ void ModelViewer::RenderScene( void )
 		sorter.SetDepthStencilTarget(g_SceneDepthBuffer);
 		sorter.AddRenderTarget(g_SceneColorBuffer);
 
-        m_Scene.Render(sorter);
+        // 위상 아일랜드 시각화 중에는 캐릭터 solid 메시를 그리지 않고 와이어프레임 선만 남긴다.
+        const bool hideSceneMeshes = !m_SkeletalPatchCopy.GetTopologyViz().empty();
+        if (!hideSceneMeshes)
+        {
+            m_Scene.Render(sorter);
+        }
 
         sorter.Sort();
 
@@ -1740,7 +1752,10 @@ void ModelViewer::RenderScene( void )
 				shadowSorter.SetCamera(m_SunShadowCamera);
 				shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
 
-                m_Scene.Render(shadowSorter);
+                if (!hideSceneMeshes)
+                {
+                    m_Scene.Render(shadowSorter);
+                }
 
                 shadowSorter.Sort();
                 shadowSorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
@@ -1750,7 +1765,11 @@ void ModelViewer::RenderScene( void )
             gfxContext.ClearColor(g_SceneColorBuffer);
 
             // 깊이를 쓰지 않는 선·점의 실루엣 가장자리를 배경이 덮지 않도록 먼저 그린다.
-            Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+            // 위상 아일랜드 시각화 중에는 배경을 검정으로 두기 위해 skybox를 건너뛴다.
+            if (!hideSceneMeshes)
+            {
+                Renderer::DrawSkybox(gfxContext, m_Camera, viewport, scissor);
+            }
 
             {
                 ScopedTimer _prof(L"Render Color", gfxContext);
@@ -1868,6 +1887,12 @@ void ModelViewer::RenderScene( void )
         // 연속 캡처는 용량을 줄이려고 HDR 파일을 생략하고 post만 저장한다.
         if (!m_CaptureCount)
             g_SceneColorBuffer.ExportToFile(m_ActiveCapturePath + L"-hdr.raw");
+
+        // 위상 아일랜드 선은 overlay에만 그려지므로 직전 프레임의 overlay를 따로 저장한다.
+        if (!m_SkeletalPatchCopy.GetTopologyViz().empty())
+        {
+            g_OverlayBuffer.ExportToFile(m_ActiveCapturePath + L"-overlay.raw");
+        }
         auto& restore = GraphicsContext::Begin(L"Restore capture state");
         restore.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         restore.Finish(true);
@@ -1897,9 +1922,18 @@ void ModelViewer::RenderUI(GraphicsContext& context)
     m_SkeletalChecks.Draw(context, m_Scene, m_Camera,
         float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
 
+    // 위상 아일랜드 snapshot은 충돌 표시 여부와 무관하게 얇은 선 overlay로 그린다.
+    m_CollisionDraw.DrawWorldLines(context, m_Camera,
+        float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()), m_SkeletalPatchCopy.GetTopologyViz());
     if (g_ShowCollision)
         m_CollisionDraw.Draw(context, m_Scene, m_Physics, m_Camera,
             float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
+
+    // 위상 아일랜드 시각화 중에는 기즈모와 도움말 글자를 그리지 않고 선만 남긴다.
+    if (!m_SkeletalPatchCopy.GetTopologyViz().empty())
+    {
+        return;
+    }
     m_Gizmo.Render(context, m_Scene, m_Target, m_Camera,
         float(g_OverlayBuffer.GetWidth()), float(g_OverlayBuffer.GetHeight()));
     TextContext text(context);
