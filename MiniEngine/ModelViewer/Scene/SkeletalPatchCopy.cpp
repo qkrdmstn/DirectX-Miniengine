@@ -4593,23 +4593,55 @@ namespace Viewer
         return table;
     }
 
+    struct SkeletalPatchCopy::BodyCompactJob
+    {
+        std::shared_ptr<const GeometryBuffers> Inputs[2];
+        Microsoft::WRL::ComPtr<ID3D12Resource> Bodies[2];
+        std::shared_ptr<GeometryBuffers> Output;
+        ByteAddressBuffer Layouts, Bins, Status;
+        ReadbackBuffer Metadata, Flags;
+        ByteAddressBuffer ClassifyCounters[2];
+        ReadbackBuffer ClassifyReadback[2];
+        Microsoft::WRL::ComPtr<ID3D12Resource> ClassifyProvenance[2], ClassifyTables[2];
+        bool Classified[2] = {};
+        std::map<uint32_t, Mesh> Templates;
+        std::vector<uint32_t> LayoutData;
+        uint64_t Fence = 0, Triangles = 0, Bytes = 0, Dropped = 0;
+        uint32_t BodyCount = 0;
+
+        // 일반 회수는 완료 확인 후 수행하고 종료 시에만 미완료 제출을 보호한다.
+        ~BodyCompactJob()
+        {
+            // 소유자 종료 시에도 제출 자원의 수명을 보장한다.
+            if (Fence && !Graphics::g_CommandManager.IsFenceComplete(Fence))
+                Graphics::g_CommandManager.WaitForFence(Fence);
+
+            // 미게시 출력은 전역 대기를 일으키는 소멸자보다 먼저 해제한다.
+            if (Output) Output->ReleaseGpuResourcesAfterCompletion();
+        }
+    };
+
     // cutter 출력의 실제 section 범위를 n+1 몸체로 판정하고 압축용 표를 보관한다.
-    // 분류 표 업로드는 분류 dispatch와 같은 command list에 기록한다.
+    // 분류 자원은 압축 job이 소유하고 진단 카운터는 압축 완료 폴링에서 읽는다.
     void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
         const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount)
     {
         // 합성 압축 검사는 진단 옵션에서만 실행한다.
         CheckBodyCompaction();
-        m_DroppedCaps[side] = 0;
 
         // 몸체 수는 라벨 최댓값이 아닌 요청 그룹 수이며 빈 마지막 몸체도 포함한다.
         if (!bodyCount || bodyCount > (UINT32_MAX / 4 - 10) / 2)
             throw std::length_error("MI4d invalid classification body count");
 
         // 표는 [패치 삼각형][반공간] 순서이며 물리 A/B 순서와 무관하다.
+        if (side == 0) DiscardBodyCompaction();
         if (islands.TriangleSideBody.empty()) return;
         if (side == 0)
         {
+            // 분류부터 압축 완료까지 하나의 job으로 보호한다.
+            m_BodyJob = std::make_shared<BodyCompactJob>();
+            m_BodyJob->BodyCount = bodyCount;
+
             // job 소유 표를 초기 데이터 없이 만들고 제거된 동기 대기 구간은 유지한다.
             m_CapLoopTable.Create(L"Cap loop side bodies", uint32_t(capLoops.size()), sizeof(capLoops[0]));
             m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
@@ -4658,10 +4690,14 @@ namespace Viewer
             end = std::max(end, mesh.vbOffset / 84 + mesh.vbSize / 84);
         }
 
-        // 실제 출력이 있을 때만 판정 버퍼와 동기 회수용 카운터를 먼저 할당한다.
+        // 분류 입력과 출력 참조도 보관해 압축 전 예외와 취소에서 수명을 보장한다.
+        auto& job = *m_BodyJob;
+        job.ClassifyTables[0] = m_IslandTable.GetResource();
+        job.ClassifyTables[1] = m_CapLoopTable.GetResource();
+        job.ClassifyProvenance[side] = const_cast<ByteAddressBuffer&>(geometry.Provenance).GetResource();
         auto& bodies = m_TriangleBodies[side];
-        ByteAddressBuffer counters;
-        ReadbackBuffer readback;
+        auto& counters = job.ClassifyCounters[side];
+        auto& readback = job.ClassifyReadback[side];
         const uint32_t counterCount = 10 + bodyCount * 2;
         if (end)
         {
@@ -4669,113 +4705,88 @@ namespace Viewer
             bodies.Create(L"Output triangle bodies", end, sizeof(uint32_t));
             counters.Create(L"Body classification counters", counterCount, sizeof(uint32_t));
             readback.Create(L"Body classification readback", counterCount, sizeof(uint32_t));
+            job.Bodies[side] = bodies.GetResource();
         }
 
         // 각 section의 실제 출력 삼각형만 dispatch하고 합산 카운터를 초기화한다.
         auto& graphics = GraphicsContext::Begin(L"Classify patch output bodies");
         CutPerf::Gpu cutPerfClassify(graphics, "BodyClassify-whole");
-
-        // side 0의 두 표를 분류 command list에 복사하고 기존 SRV 전이로 이어간다.
-        if (side == 0)
+        try
         {
-            // 원본 바이트를 context 소유 업로드 메모리에 보관해 GPU 완료까지 유지한다.
-            const auto uploadTable = [&graphics](GpuBuffer& destination, const void* data, size_t bytes)
+            // side 0의 두 표를 분류 command list에 복사하고 기존 SRV 전이로 이어간다.
+            if (side == 0)
             {
-                // 복사 목적지 상태로 전이하고 업로드 메모리의 전체 표를 복사한다.
-                DynAlloc upload = graphics.ReserveUploadMemory(bytes);
-                std::memcpy(upload.DataPtr, data, bytes);
-                graphics.TransitionResource(destination, D3D12_RESOURCE_STATE_COPY_DEST);
-                graphics.CopyBufferRegion(destination, 0, upload.Buffer, upload.Offset, bytes);
-            };
-            uploadTable(m_CapLoopTable, capLoops.data(), capLoops.size() * sizeof(capLoops[0]));
-            uploadTable(m_IslandTable, islands.TriangleSideBody.data(),
-                islands.TriangleSideBody.size() * sizeof(islands.TriangleSideBody[0]));
-        }
+                // 원본 바이트를 context 소유 업로드 메모리에 보관해 GPU 완료까지 유지한다.
+                const auto uploadTable = [&graphics](GpuBuffer& destination, const void* data, size_t bytes)
+                {
+                    // 복사 목적지 상태로 전이하고 업로드 메모리의 전체 표를 복사한다.
+                    DynAlloc upload = graphics.ReserveUploadMemory(bytes);
+                    std::memcpy(upload.DataPtr, data, bytes);
+                    graphics.TransitionResource(destination, D3D12_RESOURCE_STATE_COPY_DEST);
+                    graphics.CopyBufferRegion(destination, 0, upload.Buffer, upload.Offset, bytes);
+                };
+                uploadTable(m_CapLoopTable, capLoops.data(), capLoops.size() * sizeof(capLoops[0]));
+                uploadTable(m_IslandTable, islands.TriangleSideBody.data(),
+                    islands.TriangleSideBody.size() * sizeof(islands.TriangleSideBody[0]));
+            }
 
-        // 빈 side 0도 표 복사를 제출해 이후 side 1의 분류 입력을 보존한다.
-        if (!end)
-        {
-            // 업로드 메모리는 제출 fence까지 유지하며 CPU에서 완료를 기다리지 않는다.
+            // 빈 side 0도 표 복사를 제출해 이후 side 1의 분류 입력을 보존한다.
+            if (!end)
+            {
+                // 업로드 메모리는 제출 fence까지 유지하며 CPU에서 완료를 기다리지 않는다.
+                cutPerfClassify.End();
+                job.Fence = graphics.Finish(false);
+                return;
+            }
+
+            // 복사 완료 후 provenance와 표는 SRV, 판정 결과와 카운터는 UAV로 사용한다.
+            auto& compute = graphics.GetComputeContext();
+            auto& provenance = const_cast<ByteAddressBuffer&>(geometry.Provenance);
+            compute.TransitionResource(provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(m_IslandTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(m_CapLoopTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(bodies, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.TransitionResource(counters, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.ClearUAV(counters);
+            compute.InsertUAVBarrier(counters);
+            compute.SetRootSignature(root);
+            compute.SetPipelineState(pso);
+            compute.SetBufferSRV(1, provenance);
+            compute.SetBufferSRV(2, m_IslandTable);
+            compute.SetBufferSRV(5, m_CapLoopTable);
+            compute.SetBufferUAV(3, bodies);
+            compute.SetBufferUAV(4, counters);
+            for (const auto& mesh : geometry.Meshes)
+            {
+                Constants c{ mesh.vbOffset / 84, mesh.vbSize / 84, uint32_t(islands.TriangleSideBody.size()),
+                    side, islands.SideDefault[side], uint32_t(capLoops.size()), bodyCount, 0 };
+                if (!c.TriangleCount) continue;
+                compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+                const uint32_t groups = (c.TriangleCount + 63) / 64;
+                compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            }
+
+            // job 자원에 복사를 예약하고 provenance와 판정 결과를 후속 읽기 상태로 돌린다.
+            graphics.CopyBuffer(readback, counters);
+            graphics.TransitionResource(provenance, D3D12_RESOURCE_STATE_GENERIC_READ);
+            graphics.TransitionResource(bodies, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             cutPerfClassify.End();
-            graphics.Finish();
-            return;
-        }
+            job.Fence = graphics.Finish(false);
+            job.Classified[side] = true;
 
-        // 복사 완료 후 provenance와 표는 SRV, 판정 결과와 카운터는 UAV로 사용한다.
-        auto& compute = graphics.GetComputeContext();
-        auto& provenance = const_cast<ByteAddressBuffer&>(geometry.Provenance);
-        compute.TransitionResource(provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        compute.TransitionResource(m_IslandTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        compute.TransitionResource(m_CapLoopTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        compute.TransitionResource(bodies, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        compute.TransitionResource(counters, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        compute.ClearUAV(counters);
-        compute.InsertUAVBarrier(counters);
-        compute.SetRootSignature(root);
-        compute.SetPipelineState(pso);
-        compute.SetBufferSRV(1, provenance);
-        compute.SetBufferSRV(2, m_IslandTable);
-        compute.SetBufferSRV(5, m_CapLoopTable);
-        compute.SetBufferUAV(3, bodies);
-        compute.SetBufferUAV(4, counters);
-        for (const auto& mesh : geometry.Meshes)
+        }
+        catch (...)
         {
-            Constants c{ mesh.vbOffset / 84, mesh.vbSize / 84, uint32_t(islands.TriangleSideBody.size()),
-                side, islands.SideDefault[side], uint32_t(capLoops.size()), bodyCount, 0 };
-            if (!c.TriangleCount) continue;
-            compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
-            const uint32_t groups = (c.TriangleCount + 63) / 64;
-            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            // 기록 중 예외도 제출 fence를 남겨 부분 복사 자원을 안전하게 회수한다.
+            cutPerfClassify.End();
+            job.Fence = graphics.Finish(false);
+            throw;
         }
 
-        // 임시 자원은 완료까지 유지하고 provenance와 판정 결과를 후속 읽기 상태로 돌린다.
-        graphics.CopyBuffer(readback, counters);
-        graphics.TransitionResource(provenance, D3D12_RESOURCE_STATE_GENERIC_READ);
-        graphics.TransitionResource(bodies, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        cutPerfClassify.End();
-        // counter 제출부터 회수 완료까지의 동기 대기 벽시계를 잰다.
+        // 제출 후 로그 예외는 context 재제출 없이 기존 실패 경로로 전달한다.
         CutPerf::Cpu cutPerfWait("ClassifyCutBodies-counter-wait");
-        graphics.Finish(true);
         cutPerfWait.End();
-        const auto* counts = static_cast<const uint32_t*>(readback.Map());
-        PatchLog("MI3a side=%u tris=%u cap=%u body0=%u body1=%u invalid=%u idMismatch=%u reassigned=%u\n",
-            side, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
-        m_DroppedCaps[side] = counts[7];
-        PatchLog("MI3f side=%u cap=%u dropped=%u kept=%u fallback=%u invalid=%u\n",
-            side, counts[1], counts[7], counts[1] - counts[7], counts[8], counts[9]);
-
-        // 같은 side의 여러 몸체를 별도 카운터로 남겨 후속 loop 귀속을 검증한다.
-        for (uint32_t body = 0; body < bodyCount; ++body)
-        {
-            PatchLog("MI4d classify side=%u body=%u surface=%u cap=%u\n",
-                side, body, counts[10 + body], counts[10 + bodyCount + body]);
-        }
-        readback.Unmap();
     }
-
-    struct SkeletalPatchCopy::BodyCompactJob
-    {
-        std::shared_ptr<const GeometryBuffers> Inputs[2];
-        Microsoft::WRL::ComPtr<ID3D12Resource> Bodies[2];
-        std::shared_ptr<GeometryBuffers> Output;
-        ByteAddressBuffer Layouts, Bins, Status;
-        ReadbackBuffer Metadata, Flags;
-        std::map<uint32_t, Mesh> Templates;
-        std::vector<uint32_t> LayoutData;
-        uint64_t Fence = 0, Triangles = 0, Bytes = 0, Dropped = 0;
-        uint32_t BodyCount = 0;
-
-        // 일반 회수는 완료 확인 후 수행하고 종료 시에만 미완료 제출을 보호한다.
-        ~BodyCompactJob()
-        {
-            // 소유자 종료 시에도 제출 자원의 수명을 보장한다.
-            if (Fence && !Graphics::g_CommandManager.IsFenceComplete(Fence))
-                Graphics::g_CommandManager.WaitForFence(Fence);
-
-            // 미게시 출력은 전역 대기를 일으키는 소멸자보다 먼저 해제한다.
-            if (Output) Output->ReleaseGpuResourcesAfterCompletion();
-        }
-    };
 
     // 현재 결과를 버리고 미완료 작업은 후속 프레임에서 회수한다.
     void SkeletalPatchCopy::DiscardBodyCompaction()
@@ -4793,7 +4804,7 @@ namespace Viewer
         m_BodyJob.reset();
     }
 
-    // 완료된 n+1 몸체 압축을 회수하고 빈 몸체를 포함한 메타데이터를 검증한다.
+    // 같은 DIRECT 큐의 분류와 압축 완료 후 카운터·몸체 메타데이터를 검증한다.
     void SkeletalPatchCopy::PollBodyCompaction()
     {
         // 무효화된 제출은 완료된 것만 비동기로 해제한다.
@@ -4807,6 +4818,29 @@ namespace Viewer
         try
         {
             auto& job = *m_BodyJob;
+
+            // 압축 fence는 앞선 두 분류 제출도 포함하므로 동기 대기 없이 회수한다.
+            for (uint32_t side = 0; side < 2; ++side)
+            {
+                if (!job.Classified[side]) continue;
+                auto& readback = job.ClassifyReadback[side];
+                const auto* counts = static_cast<const uint32_t*>(readback.Map());
+                PatchLog("MI3a side=%u tris=%u cap=%u body0=%u body1=%u invalid=%u idMismatch=%u reassigned=%u\n",
+                    side, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
+                job.Dropped += counts[7];
+                PatchLog("MI3f side=%u cap=%u dropped=%u kept=%u fallback=%u invalid=%u\n",
+                    side, counts[1], counts[7], counts[1] - counts[7], counts[8], counts[9]);
+
+                // 같은 side의 여러 몸체를 기존 순서와 값으로 기록한다.
+                for (uint32_t body = 0; body < job.BodyCount; ++body)
+                {
+                    PatchLog("MI4d classify side=%u body=%u surface=%u cap=%u\n",
+                        side, body, counts[10 + body], counts[10 + job.BodyCount + body]);
+                }
+                readback.Unmap();
+            }
+
+            // 기존 압축 실패 플래그와 출력 합계 검증은 그대로 유지한다.
             const auto& templates = job.Templates;
             const auto& layouts = job.LayoutData;
             auto output = job.Output;
@@ -4891,11 +4925,10 @@ namespace Viewer
         m_BodyJob.reset();
     }
 
-    // 요청 그룹 수의 body×section 압축을 제출하며 빈 몸체의 bin도 보존한다.
+    // 분류 job을 이어받아 body×section 압축과 최종 회수 fence를 제출한다.
     void SkeletalPatchCopy::CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2], uint32_t bodyCount)
     {
         // 누락된 section도 원래 VB 주소로 대응시켜 재질과 cap을 구별한다.
-        DiscardBodyCompaction();
         if (m_SkinPatch->Islands.TriangleSideBody.empty()) return;
         std::map<uint32_t, Mesh> templates;
         uint64_t triangles = 0, bytes = 0;
@@ -4930,7 +4963,6 @@ namespace Viewer
             throw std::length_error("MI3c capacity exceeds RAW addressing");
 
         // 멤버 작업이 제출 입력과 부분 할당 출력의 수명을 소유한다.
-        m_BodyJob = std::make_shared<BodyCompactJob>();
         auto& job = *m_BodyJob;
         for (uint32_t side = 0; side < 2; ++side)
         {
@@ -4940,7 +4972,6 @@ namespace Viewer
         job.Templates = templates;
         job.BodyCount = bodies;
         job.Triangles = triangles;
-        job.Dropped = uint64_t(m_DroppedCaps[0]) + m_DroppedCaps[1];
         job.Bytes = bytes;
         std::vector<uint32_t> layouts;
         for (const auto& entry : templates)

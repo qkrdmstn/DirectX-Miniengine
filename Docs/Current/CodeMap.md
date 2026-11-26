@@ -41,6 +41,8 @@ G0(진행 중, 미커밋, base `d5e94361`, 2026-11-26): `CutPerf::Cpu`가 `Diagn
 
 G1a(진행 중, 미커밋, base `959b1bbc`, 2026-11-26): `ClassifyCutBodies`는 job 소유 `m_IslandTable`·`m_CapLoopTable`을 초기 데이터 없이 생성하고, 분류 context의 `ReserveUploadMemory`·`CopyBufferRegion`으로 복사한 뒤 SRV로 전이한다. 빈 side 0도 복사를 비동기 제출해 side 1 입력을 보존한다. 두 `ClassifyCutBodies-upload-wait` 구간은 남기고 counter 동기 회수는 G1b로 유지한다([측정·검증](../GPU/GpuIslandPipeline.md#g1a-결과)).
 
+G1b(진행 중, 미커밋, base `d6c84d3a`, 2026-11-26): `BodyCompactJob`이 분류 counter/readback과 입력·표·몸체 리소스 참조를 소유한다. `ClassifyCutBodies`는 `Finish(false)`로 제출하며 `PollBodyCompaction`이 같은 DIRECT 큐의 압축 fence 완료 후 로그·Dropped를 회수한다. 취소·예외는 최근 제출 fence까지 retired job으로 보호하고 합계·invalid-body 실패 검증은 유지한다. counter-wait 52개 기록 0.000 ms, D3D12 ERROR 0([측정·검증](../GPU/GpuIslandPipeline.md#g1b-결과)).
+
 MI-2(base `432ff0c5`, 2026-11-13): `SkeletalPatchJob::Poll`이 기존 TriangleSources readback을 재사용한다. `Submit`의 준비 포즈 snapshot과 실제 확대 평면으로 `DiagnoseIslands`가 패치 참조 정점만 중복 없이 스키닝하고 joint→그룹 표를 요청당 한 번 만든다. `LabelPatchIslands`는 출력 없는 side를 제외하고 (셀, side) 연결과 원본 세 꼭짓점 전체의 bind weight 투표를 분리해 몸체 표를 job/패치에 보관한다. GPU 출력에는 적용하지 않는다. CPU 테스트·D/R 빌드·Release 회귀 PASS; CesiumMan 위팔 P7에서 3개 아일랜드 중 허리 90 tris가 A로 재배치되는 라벨을 확인했다([결정·로그](../GPU/MeshIslandMultiBoneCut.md)).
 
 MI-1(base `2a1620cd`, 2026-11-13): `BuildInfluencingJoints`는 skin section에 draw 로컬 삼각형 인덱스를 보존한다. `BuildLatticeTopology`가 bind 최장축 64칸의 점유 셀·삼각형 간선을 생성해 `Model::m_LatticeTopology`에 보관한다. `LatticeUnionFind`·`CountLatticeComponents`는 순수 CPU 연결 성분 계산이며 절단 출력은 변경하지 않는다([결정·검증](../GPU/MeshIslandMultiBoneCut.md)).

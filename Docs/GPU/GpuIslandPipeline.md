@@ -1,4 +1,4 @@
-상태: 진행 중 — G1a (미커밋) — 기준 HEAD `959b1bbc`, 분류 표 업로드 동기 대기 제거, G0 다중 허벅지 실패·DXGI 오류 후속 (2026-11-26)
+상태: G1 완료·G2~G5 보류 — G0 `959b1bbc`, G1a `d6c84d3a`, G1b 이 커밋; 섬 판정 CPU 합 약 0.3 ms라 GPU 이관 보류, 첫 절단 비용 조사로 전환 (2026-11-26)
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -216,6 +216,40 @@ struct GpuIslandJob
 - Release 최종 빌드 성공(24.585초). 수정 구간 밖 기존 코드의 C4267/C4456/C4100/C4756 경고 및 post-build `pwsh.exe` 부재 메시지는 남는다. LatticeTopologyTests PASS(빌드·실행 2.152초). Release Xbot 오른쪽 허벅지 `-debug 1` 실행 종료 0(14.562초): D3D12 ERROR 0, 기존 DXGI GetContainingOutput ERROR 1, 기존 D3D12 WARNING #1008 480행.
 - Debug용 Jolt는 캐시 소스로 빌드 성공(17.520초, 다운로드 없음), Debug 엔진 빌드 성공(156.589초, 수정 범위 밖 C4819 등 경고는 남음). 중간 폴더 재귀 삭제는 자동 승인 검토에서 `blocked by policy`로 거부됐다. 더 제한된 Debug 구성 MSBuild `Clean`은 종료 0으로 완료해 컴파일 산출물을 정리했으며 `Intermediate`에는 추적/로그 9파일 52,023 B가 남았다. Debug 출력도 Clean 대상이며 Release 실행 파일은 보존했다.
 - 근거: `Tools/CutPerf/out/G1a/`의 `G0-comparison.csv`, runner CSV·텍스트·`raw/`, `validation-{cut,debug}.log`. 빈 side 경로 보완 전 첫 측정(208.612초)은 `G1a-first/`에 별도 보존했고 위 표에는 포함하지 않았다. 빌드 상세 로그는 `%TEMP%/g1a-*.log`. 별도 새 세션 리뷰·커밋·푸시는 하지 않았다. G1b counter 대기 제거는 후속이다.
+
+### G1b 결과
+
+2026-11-26, `master` / HEAD `d6c84d3a` + 미커밋. `ClassifyCutBodies`의 side별 counter/readback은 `BodyCompactJob`이 소유한다. 분류는 `Finish(false)`로 제출하고, 같은 DIRECT 큐의 후속 압축 fence가 완료된 `PollBodyCompaction`에서 카운터를 읽어 `job.Dropped`를 합산한다. MI3a·MI3f·MI4d 로그 문자열·값과 `sum + dropped == input` 검사, invalid-body status bit 1 실패 처리는 유지한다.
+
+아래는 G1a→G1b 평균(ms)이다. counter는 요청당 합계(각 2회), 게시는 요청→게시 시간이다. 허벅지 N=3, 위팔·척추 N=1이며 ON/OFF는 GPU 타이머 설정이다.
+
+| 설정 / 장면 | counter wait ms (G1a→G1b) | 게시 ms (G1a→G1b) |
+| --- | --- | --- |
+| OFF / Xbot 1차 | 0.742→0.000 | 489.020→721.400 |
+| OFF / Xbot 2차 | 0.310→0.000 | 65.168→61.238 |
+| ON / Xbot 1차 | 0.621→0.000 | 504.977→841.023 |
+| ON / Xbot 2차 | 0.302→0.000 | 56.905→59.329 |
+| OFF / CesiumMan 1차 | 0.560→0.000 | 459.838→750.884 |
+| OFF / CesiumMan 2차 | 0.292→0.000 | 66.155→70.716 |
+| ON / CesiumMan 1차 | 1.035→0.000 | 624.096→780.630 |
+| ON / CesiumMan 2차 | 0.320→0.000 | 74.339→67.445 |
+| ON / CesiumMan 위팔 | 0.478→0.000 | 519.622→845.432 |
+| ON / CesiumMan 척추 | 0.575→0.000 | 1185.650→759.902 |
+
+- runner: 절대 경로 `OutDir`로 `-G0 -N 3 -NoOpen` 실행, 229.051초, 14/15 실행·26요청 게시. 종료 1은 기존 Xbot-MultiThigh `0xC0000409` 한 건이다. counter-wait 52개 기록 모두 0.000 ms이며, 분류 동기 대기는 요청당 2→0회(G1a까지 포함하면 4→0회)다. 게시 시간은 증가·감소가 섞여 전체 지연 개선·비열화 없음은 입증하지 못했다.
+- 동등성 캡처: 지정된 G1a `working-<name>/command.txt` 인수를 그대로 사용해 최종 Release의 Xbot-Thigh·CesiumMan-Thigh·CesiumMan-UpperArm을 실행, 모두 종료 0(각 8.351/9.387/9.404초). `%TEMP%/g1b-equivalence/<name>/debug.log`에 보존했다. G1a 로그와 결과 15줄(시간 제외)을 비교해 세 장면 모두 내용·순서가 같다. 위팔은 input=712, dropped=54, output=658, 합계 PASS/status=0이다.
+- Release Xbot 허벅지 `-debug 1` 1회: 종료 0, 10.637초, D3D12 ERROR 0, 기존 DXGI GetContainingOutput ERROR 1, 기존 D3D12 WARNING #1008 180행. 전체 validation 무오류로 판정하지 않는다.
+- 빌드·CPU 검증: VS2022 Developer 환경에서 최종 Release 성공(21.826초, 오류 0/기존 경고 11), Debug 성공(151.994초, 오류 0/기존 경고 264, Jolt Debug 캐시 사용). 이후 Debug 구성 MSBuild `Clean` 성공(3.271초), Release exe 보존. 파일 헤더 명령과 같은 옵션으로 TEMP에 빌드한 `LatticeTopologyTests` PASS(빌드·실행 2.020초). 상세 로그는 `%TEMP%/g1b-{release-build,debug-build,debug-clean,lattice-tests}.log`.
+- 수명: job이 counter/readback·분류 입력/표/몸체 리소스 참조를 유지한다. 정상 완료는 압축 fence 뒤 해제, 취소·압축 전 예외는 최근 분류 fence까지 retired job으로 유지한다. 분류 기록 중 예외도 부분 명령을 비동기 제출해 fence를 남긴다. 제출 후 빈 G0 계측은 try/catch 밖에 두어 로그 할당 예외가 완료된 context를 재제출하지 않게 했으며, 종료 시 미완료 job 소멸자는 기존 fence 대기를 유지한다. 취소·할당 실패 강제 주입 및 별도 새 세션 리뷰는 미실행이다.
+- 근거: `Tools/CutPerf/out/G1b/`의 runner CSV·raw·`G1a-comparison.csv`·`validation-{cut,debug}.log`, `%TEMP%/g1b-*.log`. 최초 상대 `OutDir` 실행은 로그 생성 실패(204.255초)로 제외하고 절대 경로로 재실행했다(`runs.txt`는 이전 실행 기록도 포함하며 마지막 15행이 최종 실행). Git 쓰기 명령·커밋·푸시는 수행하지 않았다.
+- Codex 리뷰(구현과 다른 실행): 문제 없음.
+
+### G0·G1 이후 결정 (2026-11-26)
+
+- **G2~G5는 보류한다.** G0 측정에서 GPU로 옮기려던 CPU 연산의 합은 요청당 약 0.3 ms다(재스키닝·부호 0.02~0.07, `LabelPatchIslands` 0.06~0.23, `RelabelCapLoops` 0.01~0.04, `DiagnoseCapLoops` 0.01 이하). 같은 장면의 요청→게시 시간은 실행마다 수백 ms씩 흔들린다. 옮겨도 측정으로 구분할 수 없고, GPU dispatch 추가·verify 경로·fallback 유지 비용만 늘어난다.
+- G1a·G1b로 분류 동기 대기 4회(요청당 약 1~6 ms)는 0이 됐다. 출력은 세 장면에서 HEAD와 같다.
+- 실제 비용은 첫 절단에 몰려 있다: `BuildPatchSkinVertices` 1차 116~128 ms(2차 4~5 ms), `FinishCutResult` 1차 233~259 ms(2차 9~13 ms), `DiagnoseIslands` 1차 Xbot 12 ms 중 재스키닝·부호는 0.05 ms. 첫 사용 초기화(셰이더·PSO·버퍼 생성 등)로 보이며 원인은 미확정이다. 다음 작업은 이 첫 절단 비용의 원인 조사이며 별도 결정 문서로 다룬다.
+- 기존 결함: Xbot 데모 1 + `-skeletal-multi-cut 1`은 G0 이전 `b74abc49`에서도 `0xC0000409`로 종료한다(CesiumMan 다중 허벅지는 정상). 이 작업과 무관하며 별도로 다룬다.
 
 ## 완료 조건
 

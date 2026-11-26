@@ -216,11 +216,10 @@ namespace Viewer
         // 절단 없이 위상 맵만 평면으로 갈라 아일랜드별 색 선분 snapshot과 요약 로그를 만든다.
         void BuildTopologyIslandViz(const GameObject& target, const MeshComponent& mesh,
             const Math::Matrix4& world, const MeshCutting::CutPlaneData& plane);
-        // 출력 반공간의 provenance로 몸체를 판정하고 작은 진단 카운터만 읽는다.
+        // 출력 반공간의 몸체를 판정하고 진단 카운터를 압축 완료 후 회수한다.
         void ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
             const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount);
         ByteAddressBuffer m_IslandTable, m_CapLoopTable;
-        uint32_t m_DroppedCaps[2] = {};
         ByteAddressBuffer m_TriangleBodies[2]; // MI-3b 입력: side별 globalVertex / 3 인덱스, section 사이 빈 capacity 제외
         // 양쪽 실제 출력을 압축하고 완료된 몸체별 메타데이터만 보관한다.
         void CompactCutBodies(const std::shared_ptr<const GeometryBuffers> (&inputs)[2], uint32_t bodyCount);
