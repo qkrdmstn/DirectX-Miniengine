@@ -1,4 +1,4 @@
-상태: G2a 완료 — base `e2aadbe7` + 미커밋; G1 완료, 사용자 결정으로 G2~G4 진행·G5 보류 (2026-11-26)
+상태: G2b 완료 — base `760d1412` + 미커밋; G1·G2a 완료, 사용자 결정으로 G2~G4 진행·G5 보류 (2026-11-26)
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -38,7 +38,7 @@
 4. **topology를 GPU에 올린다 (G2a).** 로드 시 section별 `VertexCell`을 SRV로 한 번 업로드한다. CPU vector는 oracle용으로 유지한다.
 5. **평면 거리는 추출과 같은 제출에서 구한다 (G2b).**
    - PG(`PreparePoseCS` 출력)는 다음 프레임에 덮어쓰므로 나중에 읽지 않는다. 추출 제출 안에서 정점별 `d0 = dot(plane, world·p_PG)`를 계산해 job 소유 버퍼에 남긴다. PG에는 section frame이 이미 적용돼 있으므로 world만 곱한다.
-   - 복사 offset은 Poll에서 정해진다. 그래서 부호는 라벨링 dispatch에서 `d = d0 + plane.x·offset`으로 구하고, `|d| ≤ 1e-5`이면 0으로 둔다.
+   - 복사 offset은 Poll 뒤 게시 준비에서 정해진다. 고정 평면이면 `d = d0 + plane.x·offset`이나, 현재 `SkeletalPatchCopy::Update`는 평면도 같이 이동한다. 실제 보정은 `d = d0 + plane.x·offset + (plane.w - submitPlane.w)`이며 두 이동 항은 수학적으로 상쇄된다. `|d| ≤ 1e-5`이면 0으로 둔다.
    - CPU 재스키닝과 부동소수 순서가 다르다. verify에서 부호 불일치 수를 센다. 부호만 다르고 섬·body 표가 같으면 허용한다. 표가 다르면 그 단계는 완료가 아니다.
 6. **연결 성분은 GPU hook + pointer jumping으로 구한다 (G3a).**
    - 노드는 `2*cell+side`다. 패치 삼각형 t의 **존재하는 side**마다 그 side 꼭짓점(0 정점 포함) 셀의 현재 root를 대상으로 `InterlockedMin` hook을 한다. 패스 사이에는 UAV barrier를 둔다.
@@ -71,7 +71,8 @@ struct GpuLatticeTopology
 // 요청 하나의 GPU 섬 판정 상태(job 소유)
 struct GpuIslandJob
 {
-    StructuredBuffer VertexDistance;     // 추출 제출에서 구한 d0
+    StructuredBuffer CornerDistance;     // 추출 제출에서 구한 삼각형별 float3 d0
+    StructuredBuffer CornerCell;         // 같은 출처의 삼각형별 uint3 셀 id
     StructuredBuffer Parent;             // 2*CellCount UF
     StructuredBuffer TriangleSideIsland; // 패치 삼각형당 uint2
     StructuredBuffer TriangleSideBody;   // G4b부터, 패치 삼각형당 uint2
@@ -269,6 +270,34 @@ struct GpuIslandJob
 - VS2022 Developer 환경은 vswhere의 설치 경로와 DevShell DLL로 초기화했다. Release 빌드 성공(116.069초); `Model.h` 변경으로 관련 소스를 재컴파일했다. 기존 C4819/C4267/C4756 등 경고와 post-build `pwsh.exe` 부재 메시지는 남는다.
 - Debug 빌드 성공(126.595초), 이어서 Debug 구성 MSBuild `Clean` 성공(3.386초). Release exe는 보존됐다. 파일 헤더 옵션으로 TEMP에 빌드한 `LatticeTopologyTests` PASS(빌드·실행 2.580초). 모든 빌드·Clean·테스트 종료 0, `git diff --check` 통과.
 - 근거: `%TEMP%/g2a-validation/{Xbot-verify,CesiumMan-verify,Xbot-validation}.log`, `%TEMP%/g2a-{release-build,debug-build,debug-clean,lattice-tests}.log`. 기존 PowerShell 로그 수집기의 Add-Type 임시 DLL 권한 오류를 피하려고 TEMP의 네이티브 DBWIN 수집기를 빌드해 사용했고 모든 실행의 정상 종료를 기다렸다. 별도 새 세션 리뷰·Git 쓰기·커밋·푸시는 수행하지 않았다.
+
+### G2b 결과
+
+2026-11-26, `master` / HEAD `760d1412` + 미커밋. `SkeletalPatchJob::Submit`은 `-island-gpu 1` 또는 `-island-gpu-verify 1`에서만 추출 직후 UAV barrier를 두고 `IslandDistanceCS`를 같은 DIRECT 제출에 기록한다. 두 옵션 기본값은 0이며 CPU 경로가 계속 출력을 결정한다.
+
+- 리뷰 수정: `InitializeDistance`는 활성 `SkeletalPatchJob::Submit`에서만 거리 root signature·PSO를 만들며 월드 평면도 활성 분기에서만 계산한다. `DiagnoseIslands`는 `Utility::Printf`로 quiet 억제 없이 `Island GPU verify PASS/FAIL`을 출력한다. 부호·셀 불일치 또는 Map 예외는 FAIL이며 예외 내용도 출력한다. 두 Map은 범위 기반 Unmap으로 보호한다.
+- 리뷰 수정 검증(2026-11-26): Release 빌드 성공(148.29초, 오류 0; 최종 증분 확인 3.88초). `Run-CutPerf.ps1`의 TEMP 실행 사본에서 Git 조회를 제외하고 단일 절단·quiet=1·`-island-gpu-verify 1 -debug 1`로 Xbot-Thigh/CesiumMan-Thigh/CesiumMan-UpperArm을 실행했다. 세 장면 모두 거리 verify PASS, 부호·셀 불일치 0, D3D12 ERROR/CORRUPTION 0, 종료 0(7.859/8.281/8.531초); 기존 DXGI #80은 각각 1건이다. NVIDIA GeForce MX450 / driver 591.86. 명령·성능 로그·디버그 출력은 `%TEMP%/g2b-review-verification/final-results/raw/`, 빌드 로그는 `%TEMP%/g2b-review-{release-build,final-release-build}.log`에 보존했다.
+
+- section마다 capacity 전체를 dispatch하고 GPU patch count 밖 및 다른 section 슬롯을 건너뛴다. 기존 draw descriptor를 재사용해 `TriangleSources(section, draw, triangle)` → R16/R32 index + baseVertex → PG를 읽는다. G2a section별 SRV를 그대로 바인딩하기 위해 section별 dispatch를 택했으며 슬롯별 쓰기는 겹치지 않는다.
+- PG에는 이미 section frame이 적용되어 `world`만 곱한다. 제출 component-local 평면을 `transpose(inverse(world))`로 월드 평면으로 되돌려 `d0`를 계산한다. job 소유 `CornerDistance(float3)`·`CornerCell(uint3)`는 다음 프레임 PG 갱신과 무관하다. readback은 verify에서만 추출 fence에 포함한다.
+- `Poll` 완료 후 `DiagnoseIslands`에서 CPU가 쓰는 실제 `plane.WorldPlane`·`worldPosition + (offset,0,0)`와 비교한다. 평면도 X 이동하므로 `w` 변화까지 보정한다. 지정 데모는 모두 offset=0이었다. 부호 기준은 CPU와 같은 `1e-5`이며 CPU 부호·거리·VertexCell을 코너마다 비교한다. G3의 GPU 라벨링 부호 계산은 후속이다.
+
+| Release verify 장면 | corners | signMismatch | maxDistanceDiff | cellMismatch | 실행 초 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Xbot 허벅지 | 6288 | 0 | 4.76837158e-7 | 0 | 10.359 |
+| CesiumMan 허벅지 | 1056 | 0 | 4.17232513e-7 | 0 | 13.188 |
+| CesiumMan 위팔 | 1620 | 0 | 8.34465027e-7 | 0 | 10.750 |
+| CesiumMan 척추 | 1179 | 0 | 7.15255737e-7 | 0 | 10.047 |
+| CesiumMan 다중 허벅지 | 1578 | 0 | 3.57627869e-7 | 0 | 12.000 |
+
+- 모두 `-skeletal-break-demo-delay 2 -physics-query-exit 180 -island-gpu-verify 1`, 다중은 `-skeletal-multi-cut 1 -skeletal-union-checks 1` 추가, 종료 0. 개별 명령·로그는 `%TEMP%/g2b-validation/{장면}-command.txt`, `{장면}.log`. 척추는 기존 CPU 출력 `caps=1 uncapped=17 error=0`, 다중은 union 비교 PASS·5개 컴포넌트 준비를 기록했다.
+- flags-off 동등성 캡처: 기존 `%TEMP%/g1a-equivalence-20261126/working-<name>/command.txt` 인자를 그대로 사용했다. Xbot-Thigh/CesiumMan-Thigh/CesiumMan-UpperArm 모두 종료 0(10.047/10.203/10.812초). 요청된 native `capture.exe`로 `%TEMP%/g2b-equivalence/<name>/debug.log`와 사용 명령을 저장했으며 diff 판정은 사용자에게 남긴다.
+- Release `-debug 1 -island-gpu 1` Xbot 허벅지: 종료 0, 10.203초, **D3D12 ERROR 0**, 기존 DXGI GetContainingOutput ERROR #80 1건, WARNING #1008 180행. GPU NVIDIA GeForce MX450, driver 591.86. 근거 `%TEMP%/g2b-validation/Xbot-validation.log`.
+- Release 빌드 성공(52.284초, 오류 0, 기존 경고 51). 근거 `%TEMP%/g2b-release-build.log`. Debug 빌드 성공(152.781초, 오류 0, 기존 경고 264), 이어서 MSBuild Debug Clean 성공(3.796초). TEMP에 빌드한 LatticeTopologyTests PASS(2.669초). 근거 `%TEMP%/g2b-{debug-build,debug-clean,lattice-tests}.log`. `git diff --check` 통과. Git 쓰기 명령과 커밋은 수행하지 않았다.
+
+- 이동 보정 추가 검증: demo는 offset-copy 옵션을 강제로 끄므로 자동 `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1 -island-gpu-verify 1 -physics-query-exit 180 -debug 0`으로 20개 case를 실행했다. offset=1.402922/1.807833, 모든 case 부호·셀 불일치 0, 최대 거리 차이 1.90734863e-6, 종료 0(6.047초). 근거 `%TEMP%/g2b-validation/OffsetCopy-checks.log`, `OffsetCopy-checks-command.txt`.
+
+- 구현 대화를 상속하지 않은 별도 Codex 읽기 전용 리뷰 완료: 추출→거리 의존성, PG 변환, 출처·baseVertex·셀 인덱싱, job 수명, fence 회수, 평면 이동 보정에서 차단 결함 없음. 빌드·실행을 중복하지 않고 위 근거를 사용했다.
 
 ## 완료 조건
 

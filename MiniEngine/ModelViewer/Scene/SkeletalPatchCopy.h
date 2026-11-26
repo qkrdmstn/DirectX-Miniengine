@@ -85,6 +85,10 @@ namespace Viewer
     private:
         // 같은 제출 명령에서 저장한 입력과 출처를 CPU 기준 함수와 비교한다.
         void Validate(const SkeletalPatchResult& result);
+        StructuredBuffer m_CornerDistance, m_CornerCell;
+        ReadbackBuffer m_DistanceReadback, m_CellReadback; // verify 전용
+        Math::Vector4 m_DistancePlane;
+        bool m_IslandVerify = false;
         ReadbackBuffer m_Readback;
         ReadbackBuffer m_SourceReadback, m_PoseReadback, m_OriginsReadback;
         ReadbackBuffer m_OutputReadback;

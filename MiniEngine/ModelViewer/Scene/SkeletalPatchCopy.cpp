@@ -12,6 +12,7 @@
 #include "RootSignature.h"
 #include "PipelineState.h"
 #include "CompiledShaders/PatchExtractCS.h"
+#include "CompiledShaders/IslandDistanceCS.h"
 #include "CompiledShaders/PatchBodyClassifyCS.h"
 #include "CompiledShaders/PatchBodyCompactCS.h"
 #include "tests/SkeletalPatchReference.h"
@@ -42,6 +43,15 @@ namespace Viewer
     {
         RootSignature PatchRoot;
         ComputePSO PatchPSO(L"Extract skeletal patch");
+        RootSignature DistanceRoot;
+        ComputePSO DistancePSO(L"Island corner distances");
+        struct DistanceParameters
+        {
+            Math::Vector4 Plane;
+            Math::Matrix4 World;
+            uint32_t Section, Draws, Capacity, Padding;
+        };
+        static_assert(sizeof(DistanceParameters) == 96, "Island distance layout");
         struct DrawInput
         {
             uint32_t VbOffset, Stride, IbOffset, Index32;
@@ -849,6 +859,26 @@ namespace Viewer
             PatchPSO.SetRootSignature(PatchRoot);
             PatchPSO.SetComputeShader(g_pPatchExtractCS, sizeof(g_pPatchExtractCS));
             PatchPSO.Finalize();
+
+            initialized = true;
+        }
+
+        // GPU 거리 옵션이 켜진 첫 요청에서만 거리 파이프라인을 준비한다.
+        void InitializeDistance()
+        {
+            // 여러 요청에서 거리 파이프라인을 재사용한다.
+            static bool initialized = false;
+            if (initialized) return;
+
+            // section 격자와 job 소유 코너 출력을 별도로 바인딩한다.
+            DistanceRoot.Reset(9);
+            DistanceRoot[0].InitAsConstantBuffer(0);
+            for (uint32_t i = 0; i < 6; ++i) DistanceRoot[i + 1].InitAsBufferSRV(i);
+            for (uint32_t i = 0; i < 2; ++i) DistanceRoot[i + 7].InitAsBufferUAV(i);
+            DistanceRoot.Finalize(L"Island distances");
+            DistancePSO.SetRootSignature(DistanceRoot);
+            DistancePSO.SetComputeShader(g_pIslandDistanceCS, sizeof(g_pIslandDistanceCS));
+            DistancePSO.Finalize();
             initialized = true;
         }
     }
@@ -5910,6 +5940,27 @@ namespace Viewer
         m_Output->LocalBounds.Create(L"Patch counts and local bounds", 11, 4, metadata);
         m_Output->TriangleSources.Create(L"Patch triangle sources", uint32_t(triangles), 12);
 
+        // 기본 경로는 유지하고 GPU 옵션에서만 거리와 셀 버퍼를 만든다.
+        uint32_t islandGpu = 0, islandVerify = 0;
+        CommandLineArgs::GetInteger(L"island-gpu", islandGpu);
+        CommandLineArgs::GetInteger(L"island-gpu-verify", islandVerify);
+        m_IslandVerify = islandVerify != 0;
+        if (islandGpu || m_IslandVerify)
+        {
+            // 활성 요청에서만 거리 파이프라인과 월드 평면을 준비한다.
+            InitializeDistance();
+            m_DistancePlane = Transpose(Invert(world)) * plane.WorldPlane;
+
+            // GPU 코너 출력과 선택적 검증 회수 버퍼를 만든다.
+            m_CornerDistance.Create(L"Island corner distances", uint32_t(triangles), 12);
+            m_CornerCell.Create(L"Island corner cells", uint32_t(triangles), 12);
+            if (m_IslandVerify)
+            {
+                m_DistanceReadback.Create(L"Island distance verification", uint32_t(triangles), 12);
+                m_CellReadback.Create(L"Island cell verification", uint32_t(triangles), 12);
+            }
+        }
+
         // 삼각형 prefix 뒤에 블록별 합계와 offset을 위한 16바이트 영역을 확보한다.
         const uint32_t blocks = uint32_t((triangles + 63) / 64);
         m_Scan.Create(L"Patch inclusive prefix", uint32_t(triangles + 2 * blocks), 8);
@@ -6011,6 +6062,43 @@ namespace Viewer
                 compute.InsertUAVBarrier(m_Scan);
                 compute.InsertUAVBarrier(m_Output->LocalBounds);
             }
+        }
+
+        // PG가 덮이기 전에 추출 출처와 카운터의 UAV 쓰기를 완료하고 거리를 계산한다.
+        if (islandGpu || m_IslandVerify)
+        {
+            compute.InsertUAVBarrier(m_Output->TriangleSources);
+            compute.InsertUAVBarrier(m_Output->LocalBounds);
+            compute.TransitionResource(m_Output->TriangleSources, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(m_Output->LocalBounds, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(m_CornerDistance, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.TransitionResource(m_CornerCell, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.SetRootSignature(DistanceRoot); compute.SetPipelineState(DistancePSO);
+            compute.SetBufferSRV(1, m_Output->TriangleSources); compute.SetBufferSRV(2, m_Output->LocalBounds);
+            compute.SetBufferSRV(3, m_Descriptors); compute.SetBufferSRV(4, inputData); compute.SetBufferSRV(5, inputPose);
+            compute.SetBufferUAV(7, m_CornerDistance); compute.SetBufferUAV(8, m_CornerCell);
+            DistanceParameters distance{ m_DistancePlane, world, 0, c.Draws, c.Triangles, 0 };
+            for (uint32_t section = 0; section < m_SkinSections.size(); ++section)
+            {
+                // section별 출력 슬롯은 겹치지 않으며 CPU와 같은 skin 번호를 쓴다.
+                const uint32_t skinSection = m_SkinSections[section];
+                if (skinSection == UINT32_MAX) continue;
+                auto& cells = const_cast<StructuredBuffer&>(model.m_GpuLatticeTopology.SectionVertexCell.at(skinSection));
+                compute.TransitionResource(cells, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                compute.SetBufferSRV(6, cells);
+                distance.Section = section;
+                compute.SetDynamicConstantBufferView(0, sizeof(distance), &distance);
+                compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            }
+
+            // 검증 전용 복사도 추출 fence에 포함하고 일반 GPU 옵션에서는 회수하지 않는다.
+            if (m_IslandVerify)
+            {
+                graphics.CopyBuffer(m_DistanceReadback, m_CornerDistance);
+                graphics.CopyBuffer(m_CellReadback, m_CornerCell);
+            }
+            compute.TransitionResource(m_CornerDistance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(m_CornerCell, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
 
         // 추출 카운터와 선택 본을 같은 제출의 readback 버퍼에 복사한다.
@@ -6140,6 +6228,7 @@ namespace Viewer
         CutPerf::Cpu cutPerfSigns("DiagnoseIslands-reskin-sign");
         const auto& model = *m_Input->GetSource();
         std::vector<std::vector<int8_t>> signs(model.m_SkinCpuSections.size());
+        std::vector<std::vector<float>> cpuDistances(m_IslandVerify ? signs.size() : 0);
         std::vector<uint32_t> frames(signs.size(), UINT32_MAX);
         for (size_t s = 0; s < m_SkinSections.size(); ++s)
         {
@@ -6154,6 +6243,7 @@ namespace Viewer
             const uint32_t skin = source[0];
             const auto& section = model.m_SkinCpuSections.at(skin);
             if (signs[skin].empty()) signs[skin].resize(section.size(), 2);
+            if (m_IslandVerify && cpuDistances[skin].empty()) cpuDistances[skin].resize(section.size());
             for (uint32_t k = 0; k < 3; ++k)
             {
                 const uint32_t v = model.m_LatticeTopology.Indices.at(skin).at(source[1] * 3 + k);
@@ -6171,6 +6261,53 @@ namespace Viewer
                 const float distance = Math::Dot(plane.WorldPlane,
                     Math::Vector4(world + Math::Vector3(offset, 0, 0), 1));
                 signs[skin][v] = std::abs(distance) <= 1e-5f ? 0 : distance > 0 ? 1 : -1;
+                if (m_IslandVerify) cpuDistances[skin][v] = distance;
+            }
+        }
+
+        // Poll의 fence 완료 뒤 실제 이동 평면으로 코너별 부호와 셀을 대조한다.
+        if (m_IslandVerify)
+        {
+            // 두 Map과 비교 중 예외가 나도 성공한 매핑을 범위 종료 시 해제한다.
+            try
+            {
+                // 버퍼 소유권을 유지하며 읽기 매핑만 해제한다.
+                const auto unmap = [](ReadbackBuffer* buffer)
+                {
+                    // 범위를 벗어난 회수 버퍼의 매핑을 해제한다.
+                    buffer->Unmap();
+                };
+                const auto* distances = static_cast<const float*>(m_DistanceReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> distanceMap(&m_DistanceReadback, unmap);
+                const auto* cells = static_cast<const uint32_t*>(m_CellReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> cellMap(&m_CellReadback, unmap);
+
+                // 실제 이동 평면의 거리와 셀을 CPU 기준과 비교한다.
+                uint32_t signMismatch = 0, cellMismatch = 0, corners = 0;
+                float maxDifference = 0;
+                const float correction = float(plane.WorldPlane.GetX()) * offset
+                    + float(plane.WorldPlane.GetW()) - float(m_DistancePlane.GetW());
+                for (const auto& source : patch.IslandSources)
+                    for (uint32_t k = 0; k < 3; ++k, ++corners)
+                    {
+                        // 평면도 함께 움직이므로 w 변화가 복사본 X 이동 항을 상쇄한다.
+                        const uint32_t skin = source[0];
+                        const uint32_t v = model.m_LatticeTopology.Indices.at(skin).at(source[1] * 3 + k);
+                        const float d = distances[corners] + correction;
+                        const int8_t sign = std::abs(d) <= 1e-5f ? 0 : d > 0 ? 1 : -1;
+                        signMismatch += sign != signs[skin][v];
+                        cellMismatch += cells[corners] != model.m_LatticeTopology.VertexCell.at(skin).at(v);
+                        maxDifference = std::max(maxDifference, std::abs(d - cpuDistances[skin][v]));
+                    }
+
+                // quiet 옵션과 무관하게 최종 검증 판정을 출력한다.
+                Utility::Printf("Island GPU verify %s: corners=%u signMismatch=%u maxDistanceDiff=%.9g cellMismatch=%u\n",
+                    signMismatch == 0 && cellMismatch == 0 ? "PASS" : "FAIL", corners, signMismatch, maxDifference, cellMismatch);
+            }
+            catch (const std::exception& error)
+            {
+                // 예외 내용도 quiet 억제 없이 남긴다.
+                Utility::Printf("Island GPU verify FAIL: %s\n", error.what());
             }
         }
 

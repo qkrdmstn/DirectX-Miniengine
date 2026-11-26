@@ -119,6 +119,9 @@
     <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>
+    <FxCompile Include="Scene\Shaders\IslandDistanceCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
     <FxCompile Include="Scene\Shaders\PatchBodyClassifyCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>

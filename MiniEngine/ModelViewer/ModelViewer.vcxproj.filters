@@ -325,6 +325,7 @@
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\IslandDistanceCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchBodyClassifyCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchBodyCompactCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl" />
