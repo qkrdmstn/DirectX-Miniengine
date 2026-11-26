@@ -86,10 +86,15 @@ namespace Viewer
         // 같은 제출 명령에서 저장한 입력과 출처를 CPU 기준 함수와 비교한다.
         void Validate(const SkeletalPatchResult& result);
         StructuredBuffer m_CornerDistance, m_CornerCell, m_IslandParent;
+        StructuredBuffer m_IslandRootMin, m_IslandPrefix, m_TriangleSideIsland;
+        ReadbackBuffer m_NumberReadback;
+        uint32_t m_GpuIslandCount = 0;
+        bool m_IslandConverged = false;
         ByteAddressBuffer m_IslandStatus;
         ReadbackBuffer m_StatusReadback, m_ParentReadback;
         uint32_t m_IslandK = 32;
         bool m_IslandGpu = false;
+        bool m_IslandDispatchLimited = false;
         ReadbackBuffer m_DistanceReadback, m_CellReadback; // verify 전용
         Math::Vector4 m_DistancePlane;
         bool m_IslandVerify = false;

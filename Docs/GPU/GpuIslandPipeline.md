@@ -1,4 +1,4 @@
-상태: G3a 구현·Release 검증 완료 (Debug 빌드 미수행, LatticeTopologyTests 해당 없음 — G3a는 CPU 코드 변경 없음) — G1·G2a·G2b 완료, 사용자 결정으로 G2~G4 진행·G5 보류 (2026-11-26)
+상태: G3b 구현·Release 검증 완료 (Debug 빌드 미수행, CPU oracle 변경 없음·LatticeTopologyTests 미수행) — G1·G2a·G2b·G3a 완료, G4 진행 예정·G5 보류 (2026-11-26)
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -92,7 +92,7 @@ struct GpuIslandJob
 | G2a | `VertexCell` GPU 업로드 | 업로드 내용 CPU와 일치 |
 | G2b | `IslandDistanceCS` + 라벨링 부호 + verify 부호 비교 | 부호 불일치 수 기록 |
 | G3a | GPU UF hook·jump·root 검증·K 초과 fallback | 강제 K=1 시험에서 fallback |
-| G3b | 첫 등장 번호 + verify 섬 표 비교 | `TriangleSideIsland` 일치 |
+| G3b | 첫 등장 번호 + verify 섬 표 비교 | 완료: Release `TriangleSideIsland`·섬 개수 일치, K=1 번호 생략 |
 | G4a | CPU 정수 점수 함수 + LatticeTopologyTests(근접 판정·overflow·동점·빈 패치·없는 side) | oracle과 대조 |
 | G4b | `IslandVoteCS` + 근접 fallback + CPU mirror readback | `TriangleSideBody`·`SideDefault` 일치 |
 | G4c | `ClassifyCutBodies`가 GPU 표를 직접 사용 | body별 삼각형 수 일치 |
@@ -320,6 +320,29 @@ G3a 구현·Release 검증 완료 (Debug 빌드 미수행, LatticeTopologyTests 
 | Xbot-Thigh debug=1 | converged iterations=32 | PASS mismatch=0 | PASS | 9.884 |
 
 - 최종 Map 보호·include 등록 후 Release 재빌드 성공(32.96초, 오류 0). 최종 실행 파일의 `Xbot-validation-final.log`도 종료 0(10.641초), UF converged iterations=32·거리/partition PASS. `Xbot-validation.log`와 최종 로그 모두 D3D12 ERROR 0, CORRUPTION 0. K=1도 기존 CPU 출력으로 게시·정상 종료했으며 강제 성공 처리하지 않았다. Geometry 변경은 없다.
+
+## G3b 결과
+
+- 디스패치 최대 그룹 수가 D3D12 한계(65,535)를 넘으면 해당 요청의 모든 island GPU 패스를 생략하고 Poll에서 `Island GPU UF fallback reason=dispatch-limit`를 quiet와 무관하게 기록하며 CPU 경로를 유지한다.
+
+- `InitializeDistance`는 GPU 옵션에서만 `IslandNumberCS` 파이프라인을 준비한다. `SkeletalPatchJob::Submit`은 job 소유 RootMin·Prefix·TriangleSideIsland를 만들고 G3a 검증 뒤 같은 제출에 초기화 → root별 최소 키 원자적 누적 → head scan → 블록 합계 scan → 번호 기록의 5개 패스를 기록한다. 패스 사이에는 UAV barrier를 둔다.
+- `IslandNumberCS::main`은 Status 첫 uint가 실패이면 즉시 종료한다. 따라서 미수렴에서는 번호를 만들지 않고 G3a CPU fallback을 유지한다. Status 둘째 uint는 수렴한 요청의 섬 개수다. `SideRoot`는 기존 `SideNodes`의 side 존재·영점 규칙을 재사용한다.
+- 키는 원본 triangle ID가 아닌 패치 배열 인덱스 `t*2+side`다. root마다 최소 키를 구하고 해당 키만 head로 표시한다. 256키 그룹별 공유 메모리 포함 scan과 블록 합계의 단일 스레드 배타적 scan을 합친다. 10만 삼각형에서 블록은 782개여서 상위 scan이 작고, 전체 키를 단일 스레드로 순회하지 않으면서 결정적인 첫 등장 순서를 보장한다. 최종 번호는 head의 포함 prefix + 블록 offset - 1이며 없는 side는 UINT32_MAX다. uint2는 삼각형별 한 스레드가 기록한다.
+- `SkeletalPatchJob::Poll`은 기존 추출 fence 완료 후 보호된 Map으로 Status·개수를 읽는다. verify에서만 표를 같은 fence로 회수하고 `DiagnoseIslands`가 보정 전 `LabelPatchIslands`와 양쪽 side·개수를 정확히 비교한다. 번호 표 Map은 RAII로 보호하며 로그는 quiet를 우회한다. 새 동기 대기는 없다. GPU 표는 아직 소비하지 않으며 CPU 출력 경로는 유지한다. 플래그가 모두 꺼지면 추가 버퍼 생성·dispatch·readback·비교가 없다.
+- **Release만 검증했다.** 요청된 MSBuild 명령으로 최초 빌드 44.29초(오류 0), 최종 재빌드 25.72초(오류 0, 기존 코드 위치 경고 11개). Debug 빌드는 하지 않았고 아래 debug=1은 Release 실행 파일의 D3D12 validation 옵션이다. CPU oracle·Geometry 변경이 없어 CPU 테스트는 실행하지 않았다. flags-off 출력 동등성은 사용자 검증 범위다.
+- NVIDIA GeForce MX450, 드라이버는 기존 G3a 기록 591.86. 지정 capture 도구·ModelViewer 작업 디렉터리 사용. 명령·로그·runner·빌드 근거는 `%TEMP%/g3b-verify/`에 보존했다.
+
+| Release 실행 | UF | partition | number | 실행 초 |
+| --- | --- | --- | --- | ---: |
+| Xbot-Thigh | converged K=32 | PASS mismatch=0 | PASS mismatch=0 islands=3/3 | 9.916 |
+| CesiumMan-Thigh | converged K=32 | PASS mismatch=0 | PASS mismatch=0 islands=2/2 | 9.471 |
+| CesiumMan-UpperArm | converged K=32 | PASS mismatch=0 | PASS mismatch=0 islands=3/3 | 8.935 |
+| Xbot-Thigh K=1 | fallback not-converged/verify-failed | FAIL mismatch=5925 (예상) | 생략 | 10.050 |
+| Xbot-Thigh debug=1 | converged K=32 | PASS mismatch=0 | PASS mismatch=0 islands=3/3 | 10.483 |
+| CesiumMan 연속 좌우 허벅지 (runner 설정) | 두 요청 모두 converged K=32 | 두 요청 모두 PASS mismatch=0 | 두 요청 모두 PASS mismatch=0 islands=2/2, 3/3 | 13.520 |
+
+- 위 6회 모두 종료 0, 거리·셀 verify PASS이며 D3D12 ERROR 0이다. K=1도 기존 CPU 출력으로 정상 종료했다.
+- runner에는 CesiumMan 동시 multi-thigh 프리셋은 없고 `CesiumMan`의 `Second=leg_joint_L_1` 연속 절단 설정이 있다. 같은 `-cut-perf-second-bone leg_joint_L_1`·480프레임·성능 로그 활성화로 추가 실행했으며 두 요청 모두 번호·개수 일치, 종료 0·D3D12 ERROR 0이다. 성능 로그 없이 같은 옵션을 실행한 예비 실행은 한 요청만 관측되어 두 요청 검증으로 세지 않았다.
 
 ## 완료 조건
 

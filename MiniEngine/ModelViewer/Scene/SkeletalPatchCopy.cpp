@@ -16,6 +16,7 @@
 #include "CompiledShaders/IslandHookCS.h"
 #include "CompiledShaders/IslandJumpCS.h"
 #include "CompiledShaders/IslandVerifyCS.h"
+#include "CompiledShaders/IslandNumberCS.h"
 #include "CompiledShaders/PatchBodyClassifyCS.h"
 #include "CompiledShaders/PatchBodyCompactCS.h"
 #include "tests/SkeletalPatchReference.h"
@@ -48,6 +49,7 @@ namespace Viewer
         ComputePSO PatchPSO(L"Extract skeletal patch");
         RootSignature UnionRoot;
         ComputePSO HookPSO(L"Island hook"), JumpPSO(L"Island jump"), VerifyPSO(L"Island verify");
+        ComputePSO NumberPSO(L"Island number");
         RootSignature DistanceRoot;
         ComputePSO DistancePSO(L"Island corner distances");
         struct DistanceParameters
@@ -868,7 +870,7 @@ namespace Viewer
             initialized = true;
         }
 
-        // GPU 거리 옵션이 켜진 첫 요청에서만 거리 파이프라인을 준비한다.
+        // GPU 거리 옵션이 켜진 첫 요청에서만 거리·UF·번호 파이프라인을 준비한다.
         void InitializeDistance()
         {
             // 여러 요청에서 거리 파이프라인을 재사용한다.
@@ -886,16 +888,17 @@ namespace Viewer
             DistancePSO.Finalize();
 
             // 거리 옵션과 같은 지연 초기화로 UF 파이프라인을 만든다.
-            UnionRoot.Reset(6);
+            UnionRoot.Reset(9);
             UnionRoot[0].InitAsConstants(0, 4);
             for (uint32_t i = 0; i < 3; ++i) UnionRoot[i + 1].InitAsBufferSRV(i);
-            for (uint32_t i = 0; i < 2; ++i) UnionRoot[i + 4].InitAsBufferUAV(i);
+            for (uint32_t i = 0; i < 5; ++i) UnionRoot[i + 4].InitAsBufferUAV(i);
             UnionRoot.Finalize(L"Island union find");
-            ComputePSO* psos[] = { &HookPSO, &JumpPSO, &VerifyPSO };
-            const void* shaders[] = { g_pIslandHookCS, g_pIslandJumpCS, g_pIslandVerifyCS };
-            const size_t sizes[] = { sizeof(g_pIslandHookCS), sizeof(g_pIslandJumpCS), sizeof(g_pIslandVerifyCS) };
-            for (uint32_t i = 0; i < 3; ++i)
+            ComputePSO* psos[] = { &HookPSO, &JumpPSO, &VerifyPSO, &NumberPSO };
+            const void* shaders[] = { g_pIslandHookCS, g_pIslandJumpCS, g_pIslandVerifyCS, g_pIslandNumberCS };
+            const size_t sizes[] = { sizeof(g_pIslandHookCS), sizeof(g_pIslandJumpCS), sizeof(g_pIslandVerifyCS), sizeof(g_pIslandNumberCS) };
+            for (uint32_t i = 0; i < 4; ++i)
             {
+                // 각 UF·번호 셰이더를 공통 루트에 연결한다.
                 psos[i]->SetRootSignature(UnionRoot);
                 psos[i]->SetComputeShader(shaders[i], sizes[i]);
                 psos[i]->Finalize();
@@ -5822,7 +5825,7 @@ namespace Viewer
         m_IslandLabels = {};
     }
 
-    // 컴포넌트 제거 상태를 반영해 GPU 선택·병렬 prefix·추출을 제출한다.
+    // 컴포넌트 제거 상태를 반영해 GPU 선택·추출과 선택적 섬 번호 부여를 제출한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
         uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child,
@@ -5967,7 +5970,18 @@ namespace Viewer
         CommandLineArgs::GetInteger(L"island-gpu-verify", islandVerify);
         m_IslandVerify = islandVerify != 0;
         m_IslandGpu = islandGpu || m_IslandVerify;
-        if (islandGpu || m_IslandVerify)
+
+        // 64스레드 거리·UF와 256스레드 번호 부여의 최대 그룹 수를 함께 검사한다.
+        const uint64_t largestCapacity = std::max(triangles, uint64_t(model.m_LatticeTopology.CellCount) * 2);
+        m_IslandDispatchLimited = m_IslandGpu
+            && (largestCapacity + 63) / 64 > D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION;
+        if (m_IslandDispatchLimited)
+        {
+            m_IslandGpu = false;
+            m_IslandVerify = false;
+        }
+
+        if (m_IslandGpu)
         {
             // 활성 요청에서만 거리 파이프라인과 월드 평면을 준비한다.
             InitializeDistance();
@@ -5975,8 +5989,18 @@ namespace Viewer
             CommandLineArgs::GetInteger(L"island-gpu-k", m_IslandK);
             const uint32_t nodes = model.m_LatticeTopology.CellCount * 2;
             m_IslandParent.Create(L"Island parents", nodes, 4);
-            m_IslandStatus.Create(L"Island status", 1, 4);
-            m_StatusReadback.Create(L"Island status readback", 1, 4);
+            m_IslandStatus.Create(L"Island status", 2, 4);
+            m_StatusReadback.Create(L"Island status readback", 2, 4);
+
+            // 번호 부여 임시 배열과 최종 표는 요청이 소유한다.
+            m_IslandRootMin.Create(L"Island minimum keys", nodes, 4);
+            const uint32_t keys = uint32_t(triangles) * 2;
+            m_IslandPrefix.Create(L"Island head prefix", keys + (keys + 255) / 256, 4);
+            m_TriangleSideIsland.Create(L"Triangle side islands", uint32_t(triangles), 8);
+            if (m_IslandVerify)
+            {
+                m_NumberReadback.Create(L"Island number verification", uint32_t(triangles), 8);
+            }
             if (m_IslandVerify) m_ParentReadback.Create(L"Island parent readback", nodes, 4);
             m_DistancePlane = Transpose(Invert(world)) * plane.WorldPlane;
 
@@ -6094,7 +6118,7 @@ namespace Viewer
         }
 
         // PG가 덮이기 전에 추출 출처와 카운터의 UAV 쓰기를 완료하고 거리를 계산한다.
-        if (islandGpu || m_IslandVerify)
+        if (m_IslandGpu)
         {
             compute.InsertUAVBarrier(m_Output->TriangleSources);
             compute.InsertUAVBarrier(m_Output->LocalBounds);
@@ -6155,6 +6179,31 @@ namespace Viewer
             // 검증 상태와 선택적 부모 회수를 기존 추출 fence에 포함한다.
             compute.SetPipelineState(VerifyPSO);
             compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            compute.InsertUAVBarrier(m_IslandStatus);
+
+            // 수렴 상태에서만 최소 키·두 단계 scan·최종 번호 기록을 실행한다.
+            compute.TransitionResource(m_IslandRootMin, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.TransitionResource(m_IslandPrefix, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.TransitionResource(m_TriangleSideIsland, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.SetBufferUAV(6, m_IslandRootMin);
+            compute.SetBufferUAV(7, m_IslandPrefix);
+            compute.SetBufferUAV(8, m_TriangleSideIsland);
+            compute.SetPipelineState(NumberPSO);
+            for (uint32_t pass = 0; pass < 5; ++pass)
+            {
+                // 초기화는 노드 범위, scan은 키 범위, 최종 기록은 삼각형 범위를 쓴다.
+                const uint32_t count = pass == 0 ? nodes : pass == 3 ? 1 : pass == 4 ? c.Triangles : c.Triangles * 2;
+                compute.SetConstants(0, c.Triangles, nodes, pass, 0u);
+                compute.Dispatch((count + 255) / 256);
+                compute.InsertUAVBarrier(m_IslandRootMin);
+                compute.InsertUAVBarrier(m_IslandPrefix);
+                compute.InsertUAVBarrier(m_TriangleSideIsland);
+                compute.InsertUAVBarrier(m_IslandStatus);
+            }
+            if (m_IslandVerify)
+            {
+                graphics.CopyBuffer(m_NumberReadback, m_TriangleSideIsland);
+            }
             graphics.CopyBuffer(m_StatusReadback, m_IslandStatus);
             if (m_IslandVerify) graphics.CopyBuffer(m_ParentReadback, m_IslandParent);
         }
@@ -6189,16 +6238,22 @@ namespace Viewer
         return true;
     }
 
-    // fence 완료 뒤 카운터·경계와 GPU 출력을 수집한다.
+    // fence 완료 뒤 카운터·경계와 GPU 섬 수렴 상태·개수를 수집한다.
     bool SkeletalPatchJob::Poll(SkeletalPatchResult& result, std::shared_ptr<SkeletalPatchBuffers>& patch)
     {
         // GPU가 아직 쓰는 readback은 매핑하지 않는다.
         if (!m_Fence || !Graphics::g_CommandManager.IsFenceComplete(m_Fence))
             return false;
 
+        // 디스패치 한계로 생략한 요청도 quiet와 무관하게 CPU fallback 사유를 남긴다.
+        if (m_IslandDispatchLimited)
+            Utility::Printf("Island GPU UF fallback reason=dispatch-limit\n");
+
         // 기존 fence 완료 뒤 UF 상태를 읽고 출력은 계속 CPU 경로로 계산한다.
         if (m_IslandGpu)
         {
+            // 회수 실패 때 이전 요청의 수렴 상태를 재사용하지 않는다.
+            m_IslandConverged = false;
             try
             {
                 // 성공한 매핑은 범위를 벗어날 때 해제한다.
@@ -6209,7 +6264,9 @@ namespace Viewer
                 };
                 const auto* status = static_cast<const uint32_t*>(m_StatusReadback.Map());
                 const std::unique_ptr<ReadbackBuffer, decltype(unmap)> statusMap(&m_StatusReadback, unmap);
-                const uint32_t error = *status;
+                m_IslandConverged = status[0] == 0;
+                m_GpuIslandCount = m_IslandConverged ? status[1] : 0;
+                const uint32_t error = status[0];
                 if (error) Utility::Printf("Island GPU UF fallback reason=not-converged/verify-failed iterations=%u\n", m_IslandK);
                 else Utility::Printf("Island GPU UF converged iterations=%u\n", m_IslandK);
             }
@@ -6514,6 +6571,40 @@ namespace Viewer
             {
                 // 회수 실패도 quiet 옵션과 무관하게 검증 실패로 남긴다.
                 Utility::Printf("Island GPU partition FAIL: %s\n", error.what());
+            }
+        }
+
+        // 수렴한 GPU 번호 표를 보정 전 CPU 첫 등장 번호와 정확히 비교한다.
+        if (m_IslandVerify && m_IslandConverged)
+        {
+            try
+            {
+                // 비교 중 예외에도 성공한 읽기 매핑을 해제한다.
+                const auto unmap = [](ReadbackBuffer* buffer)
+                {
+                    // 번호 표 회수 버퍼의 매핑을 해제한다.
+                    buffer->Unmap();
+                };
+                const auto* numbers = static_cast<const uint32_t*>(m_NumberReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> numberMap(&m_NumberReadback, unmap);
+
+                // 없는 side의 무효값까지 삼각형 양쪽을 각각 비교한다.
+                uint32_t mismatch = 0;
+                for (size_t t = 0; t < patch.IslandSources.size(); ++t)
+                {
+                    for (uint32_t side = 0; side < 2; ++side)
+                    {
+                        mismatch += numbers[t * 2 + side] != patch.Islands.TriangleSideIsland[t][side];
+                    }
+                }
+                Utility::Printf("Island GPU number %s: mismatch=%u islands=%u/%u\n",
+                    mismatch || m_GpuIslandCount != patch.Islands.IslandCount ? "FAIL" : "PASS",
+                    mismatch, m_GpuIslandCount, patch.Islands.IslandCount);
+            }
+            catch (const std::exception& error)
+            {
+                // 회수 실패도 quiet 옵션과 무관하게 검증 실패로 남긴다.
+                Utility::Printf("Island GPU number FAIL: map=%s\n", error.what());
             }
         }
 
