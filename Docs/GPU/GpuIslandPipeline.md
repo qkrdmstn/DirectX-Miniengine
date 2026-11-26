@@ -1,4 +1,4 @@
-상태: G3b 구현·Release 검증 완료 (Debug 빌드 미수행, CPU oracle 변경 없음·LatticeTopologyTests 미수행) — G1·G2a·G2b·G3a 완료, G4 진행 예정·G5 보류 (2026-11-26)
+상태: G4a 구현·CPU 테스트 완료, Debug 빌드·validation 실행 미수행 (런타임 미연결) (미커밋, 2026-11-26); G4b·G4c 후속, G5 보류
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -93,7 +93,7 @@ struct GpuIslandJob
 | G2b | `IslandDistanceCS` + 라벨링 부호 + verify 부호 비교 | 부호 불일치 수 기록 |
 | G3a | GPU UF hook·jump·root 검증·K 초과 fallback | 강제 K=1 시험에서 fallback |
 | G3b | 첫 등장 번호 + verify 섬 표 비교 | 완료: Release `TriangleSideIsland`·섬 개수 일치, K=1 번호 생략 |
-| G4a | CPU 정수 점수 함수 + LatticeTopologyTests(근접 판정·overflow·동점·빈 패치·없는 side) | oracle과 대조 |
+| G4a | CPU 정수 점수 함수 + LatticeTopologyTests(근접 판정·overflow·동점·빈 패치·없는 side) | 구현·CPU 테스트 완료, Debug 빌드·validation 실행 미수행 (런타임 미연결): 2011 사례 PASS, 비근접 섬 4941개 oracle 일치 |
 | G4b | `IslandVoteCS` + 근접 fallback + CPU mirror readback | `TriangleSideBody`·`SideDefault` 일치 |
 | G4c | `ClassifyCutBodies`가 GPU 표를 직접 사용 | body별 삼각형 수 일치 |
 | G5a~c | (조건부) loop 선택 / 섬 재라벨 / cap 투표 | cap 표 일치 |
@@ -361,3 +361,15 @@ G3a 구현·Release 검증 완료 (Debug 빌드 미수행, LatticeTopologyTests 
 - 생성 조각과 다음 패치를 병합하는 반복 절단에서의 섬 판정, 잘린 조각 재절단 경로의 섬 구분.
 - 6/26 이웃 셀 그래프(`BuildLatticeCellGraph`) 방식 채택.
 - 로드 시 topology 생성의 GPU화.
+
+## G4a 결과
+
+- G4a: 구현·CPU 테스트 완료, Debug 빌드·validation 실행 미수행 (런타임 미연결).
+- `VotePatchIslandsInteger`는 기존 `TriangleSideIsland` 번호를 받아 모든 활성 `(t, side)`의 세 정점 전체를 재투표한다. 런타임 호출은 추가하지 않았다.
+- weight 표현은 `SkinCpuVertex::Weights`의 원시 `uint16_t[4]`다. `uint32_t(w) * 4096u / sum`으로 정수 내림 나눗셈하며, 합 65535를 가정하지 않는다. 최대 분자는 268431360, 최대 분모는 262140으로 uint32 범위다. 합 0이면 모든 기여를 건너뛴다.
+- 섬·몸체별 uint32 합에서 1·2위 차이 `Margin`을 구하고 `Margin <= 12 * 활성 쌍 수`이면 `Near`다. 공동 1위는 A이며, A가 공동 1위에 없어도 oracle과 같이 A를 반환한다.
+- 요청 전체 활성 쌍 수가 340000 이상이면 누적 전에 모든 섬에 `Fallback`을 표시한다. 339999개에서 최대 누적은 4177907712로 uint32 범위다. `Near`는 근접 double 재판정, `Fallback`은 overflow에 의한 요청 전체 CPU 재판정으로 구분한다.
+- `ResolvePatchIslandVotes`는 `Near || Fallback`이면 기존 double oracle 몸체, 아니면 정수 몸체를 선택한다. 삼각형 몸체 표·SideDefault를 재구성하며 기본값 동점은 작은 몸체, 없는 side는 UINT32_MAX를 유지한다. oracle 함수·출력은 수정하지 않았다.
+- `CheckIntegerVotes`: 2011 사례 PASS / FAIL 0. 고정 seed `0x474461` 무작위 2000 패치, 비근접 섬 4941개의 정수 승자와 최종 섬·삼각형 표·SideDefault가 oracle과 일치했다. 근접 임계값 포함·강제 oracle 선택, `{32767,16383,16385,0}` → `{0,1,1,0}`의 실제 양자화 동점(A)·double 승자(몸체 1) 불일치 해소, A 동점·비A 공동 1위, 양수 SideDefault 동점, 빈 패치·없는 side, overflow 직전·경계를 포함한다.
+- 테스트 헤더 명령(`/utf-8 /std:c++17 /EHsc /W4`)으로 TEMP에 빌드·실행 PASS, 컴파일 경고 없음. 기존 LatticeTopologyTests도 PASS. 환경 초기화의 vswhere 탐색 메시지는 있었으나 cl은 정상 실행했다. 빌드·실행 합계 약 5.5초.
+- ModelViewer Release `msbuild MiniEngine/ModelViewer/ModelViewer.slnx /m /p:Configuration=Release /p:Platform=Windows` PASS(종료 0, exe 생성). 수정 범위 밖 파일에서 C4819·C4456·C4756·C4100 경고, 환경에서 pwsh.exe 탐색 메시지가 출력됐다. Debug·GPU 런타임/validation·별도 새 세션 리뷰는 미수행. Geometry를 수정하지 않아 PlaneSlicerTests는 미수행. G4b GPU 코드·런타임 연결은 후속이다.

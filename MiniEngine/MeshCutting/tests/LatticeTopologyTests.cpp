@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdio>
 #include <functional>
+#include <random>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -16,7 +17,150 @@ static void Require(bool condition, const char* message)
     if (!condition) throw std::runtime_error(message);
 }
 
-// 분리된 띠·section 이음새·반공간별 연결을 CPU만으로 검증한다.
+// 고정 seed 합성 패치와 경계 사례로 정수 투표 및 최종 결과를 oracle과 대조한다.
+static void CheckIntegerVotes()
+{
+    // 팔레트 오프셋과 여러 본의 같은 몸체 기여를 포함한 독립 삼각형 둘을 준비한다.
+    SkinCpuSection section(6);
+    section.StartJoint = 4;
+    section.Indices = { 0, 1, 2, 3, 4, 5 };
+    for (uint32_t v = 0; v < 6; ++v)
+    {
+        section[v].Position[0] = float(v);
+        section[v].Weights[0] = 32767;
+        section[v].Weights[1] = 32768;
+        section[v].Joints[1] = 1;
+    }
+    const auto topology = BuildLatticeTopology({section});
+    // section 시작 오프셋을 제거하고 본 둘이 같은 몸체에 기여하도록 매핑한다.
+    const std::function<uint32_t(uint32_t)> groups = [](uint32_t joint) { return (joint - 4) % 3; };
+    std::vector<std::array<uint32_t, 2>> patch = {{0,0}};
+    std::vector<std::vector<int8_t>> signs = {{1,-1,-1,1,1,1}};
+
+    // 실제 oracle 번호를 입력하고 섬 몸체·삼각형 표·side 기본값을 모두 검증한다.
+    uint32_t cases = 0;
+    uint32_t safe = 0;
+    // 한 사례의 정수 안전 승자와 fallback 선택 결과를 비교한다.
+    const auto check = [&]()
+    {
+        // 매번 기존 double 함수로 독립적인 기준 결과를 만든다.
+        const auto oracle = LabelPatchIslands(topology, {section}, patch, signs, groups);
+        const auto votes = VotePatchIslandsInteger(topology, {section}, patch, oracle, groups);
+        const auto final = ResolvePatchIslandVotes(oracle, votes);
+        for (size_t i = 0; i < votes.size(); ++i)
+        {
+            Require(final.Islands[i].Body == oracle.Islands[i].Body, "G4a final island = oracle");
+            if (!votes[i].Near && !votes[i].Fallback)
+            {
+                ++safe;
+                Require(votes[i].Body == oracle.Islands[i].Body, "G4a safe integer = oracle");
+            }
+        }
+        Require(final.TriangleSideBody == oracle.TriangleSideBody
+            && final.SideDefault[0] == oracle.SideDefault[0]
+            && final.SideDefault[1] == oracle.SideDefault[1], "G4a final tables = oracle");
+        ++cases;
+        return votes;
+    };
+
+    // 근접 표시는 CPU 재판정을 요구하며 최종 함수가 정수 몸체를 사용하지 않는지 확인한다.
+    auto near = check();
+    Require(near[0].Near && near[0].Margin == 3 && !near[0].Fallback, "G4a near margin");
+    const auto oracle = LabelPatchIslands(topology, {section}, patch, signs, groups);
+    near[0].Body = 0;
+    Require(ResolvePatchIslandVotes(oracle, near).Islands[0].Body == 1, "G4a near forces oracle");
+
+    // 합 65535에서 A=2047, 몸체 1=1023+1024로 정수 동점이나 double은 32768 > 32767이다.
+    for (auto& vertex : section)
+    {
+        vertex.Weights[0] = 32767;
+        vertex.Weights[1] = 16383;
+        vertex.Weights[2] = 16385;
+        vertex.Weights[3] = 0;
+        vertex.Joints[0] = 0;
+        vertex.Joints[1] = 1;
+        vertex.Joints[2] = 1;
+        vertex.Joints[3] = 0;
+    }
+    const auto disagreement = check();
+    const auto disagreementOracle = LabelPatchIslands(topology, {section}, patch, signs, groups);
+    const auto resolved = ResolvePatchIslandVotes(disagreementOracle, disagreement);
+
+    // 실제 양자화 불일치의 두 side 모두 정수 A 대신 근접 oracle 몸체 1을 사용한다.
+    for (size_t i = 0; i < disagreement.size(); ++i)
+    {
+        Require(disagreement[i].Body == 0 && disagreement[i].Margin == 0
+            && disagreement[i].Near && !disagreement[i].Fallback, "G4a quantization tie chooses A near");
+        Require(disagreementOracle.Islands[i].Body == 1
+            && resolved.Islands[i].Body == 1, "G4a quantization disagreement resolves to oracle body 1");
+    }
+
+    // 근접 판정은 임계값 12를 포함하고 그보다 큰 점수 차이는 정수로 확정한다.
+    for (auto& vertex : section)
+    {
+        vertex.Weights[0] = 2046;
+        vertex.Weights[1] = 2050;
+        vertex.Weights[2] = 0;
+    }
+    Require(check()[0].Near && check()[0].Margin == 12, "G4a inclusive near threshold");
+
+    // A가 없는 공동 1위도 A를 선택하며 없는 side는 sentinel을 유지한다.
+    for (auto& vertex : section)
+    {
+        vertex.Weights[0] = 100;
+        vertex.Weights[1] = 100;
+        vertex.Joints[0] = 1;
+        vertex.Joints[1] = 2;
+    }
+    Require(check()[0].Body == 0, "G4a non-A tie chooses A");
+    for (auto& vertex : section) vertex.Joints[0] = 0;
+    for (auto& vertex : section) vertex.Joints[1] = 1;
+    Require(check()[0].Body == 0, "G4a A tie chooses A");
+    signs[0].assign(6, 1);
+    Require(check().size() == 1, "G4a missing side excluded");
+
+    // 서로 다른 몸체의 삼각형 수가 같으면 SideDefault는 작은 양수 몸체다.
+    patch.push_back({0,1});
+    for (uint32_t v = 0; v < 6; ++v)
+    {
+        section[v].Weights[1] = 0;
+        section[v].Joints[0] = v < 3 ? 2 : 1;
+    }
+    check();
+    const auto defaults = LabelPatchIslands(topology, {section}, patch, signs, groups);
+    Require(defaults.SideDefault[0] == 1, "G4a SideDefault tie smaller body");
+
+    // 빈 패치와 누적 상한 바로 아래·경계를 실제 반복 삼각형 입력으로 확인한다.
+    patch.clear();
+    Require(check().empty(), "G4a empty patch");
+    patch.assign(339999, {0,0});
+    Require(!check()[0].Fallback, "G4a below overflow guard");
+    patch.push_back({0,0});
+    Require(check()[0].Fallback, "G4a overflow guard");
+
+    // 2000개 작은 패치에서 0 weight·최대 weight·공유 정점·없는 side·다중 몸체를 섞는다.
+    std::mt19937 random(0x474461u);
+    for (uint32_t trial = 0; trial < 2000; ++trial)
+    {
+        patch.assign(1 + random() % 12, {0,0});
+        for (auto& triangle : patch) triangle[1] = random() % 2;
+        for (uint32_t v = 0; v < 6; ++v)
+        {
+            // 합이 65535라는 가정을 두지 않고 네 uint16 성분을 직접 생성한다.
+            signs[0][v] = int8_t(int(random() % 3) - 1);
+            for (uint32_t j = 0; j < 4; ++j)
+            {
+                section[v].Weights[j] = trial % 17 == 0 ? 0 : uint16_t(random());
+                section[v].Joints[j] = uint16_t(random() % 6);
+            }
+        }
+        check();
+    }
+    Require(safe > 0, "G4a randomized safe winners exercised");
+    std::printf("G4a: PASS cases=%u randomized=2000 safe_islands=%u FAIL=0\n", cases, safe);
+}
+
+// 분리된 띠·section 이음새·반공간별 연결과 정수 투표를 CPU만으로 검증한다.
 int main()
 {
     // 두 삼각형으로 된 띠를 서로 떨어뜨리면 독립 성분이 둘이다.
@@ -468,6 +612,9 @@ int main()
                 && throws([&] { CellSidesFromVertexDistances(singleGraph, { {} }); }),
                 "invalid neighborhood and sizes rejected");
         }
+
+        // 새 정수 투표는 런타임 연결 없이 기존 double oracle과 대조한다.
+        CheckIntegerVotes();
 
         // 빈 입력과 점 크기 bounds도 유효한 결과를 낸다.
         Require(CountLatticeComponents(BuildLatticeTopology({})) == 0, "empty");

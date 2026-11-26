@@ -100,6 +100,20 @@ IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vecto
     const std::vector<std::array<uint32_t, 2>>& triangles, const std::vector<std::vector<int8_t>>& signs,
     const std::function<uint32_t(uint32_t)>& jointGroup);
 
+struct PatchIslandVote
+{
+    uint32_t Body = 0;
+    uint32_t Margin = 0;
+    bool Near = false;
+    bool Fallback = false;
+};
+// 기존 섬 번호로 uint16 원시 weight를 정수 정규화한다. 런타임에서는 아직 호출하지 않는다.
+std::vector<PatchIslandVote> VotePatchIslandsInteger(const LatticeTopology& topology,
+    const std::vector<SkinCpuSection>& sections, const std::vector<std::array<uint32_t, 2>>& triangles,
+    const IslandLabels& oracle, const std::function<uint32_t(uint32_t)>& jointGroup);
+// 근접 또는 overflow 섬만 double oracle을 선택하고 몸체 표와 side 기본값을 재구성한다.
+IslandLabels ResolvePatchIslandVotes(const IslandLabels& oracle, const std::vector<PatchIslandVote>& votes);
+
 // 순서와 무관한 폐곡선 선분의 홀짝 교차로 내부와 경계 포함을 판정한다.
 bool ContainsLatticeLoop(const std::vector<std::array<float, 4>>& edges, const std::array<float, 2>& point);
 // 교차점을 감싼 유효 폐곡선 중 최소 면적 loop를 반환한다.

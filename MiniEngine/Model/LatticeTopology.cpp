@@ -542,6 +542,115 @@ IslandLabels LabelPatchIslands(const LatticeTopology& topology, const std::vecto
     return result;
 }
 
+// 기존 (삼각형, side)마다 세 꼭짓점 전체를 정수 투표하고 안전한 점수 차이를 판정한다.
+std::vector<PatchIslandVote> VotePatchIslandsInteger(const LatticeTopology& topology,
+    const std::vector<SkinCpuSection>& sections, const std::vector<std::array<uint32_t, 2>>& triangles,
+    const IslandLabels& oracle, const std::function<uint32_t(uint32_t)>& jointGroup)
+{
+    // 전체 활성 쌍이 340000개 이상이면 누적 전에 요청 전체를 CPU fallback으로 돌린다.
+    std::vector<PatchIslandVote> result(oracle.IslandCount);
+    std::vector<uint32_t> counts(result.size());
+    size_t active = 0;
+    for (const auto& pair : oracle.TriangleSideIsland)
+    {
+        for (uint32_t island : pair)
+        {
+            if (island == UINT32_MAX) continue;
+            ++counts.at(island);
+            ++active;
+        }
+    }
+    if (active >= 340000)
+    {
+        for (auto& vote : result) vote.Fallback = true;
+        return result;
+    }
+
+    // 원본 uint16 weight를 uint32로 승격해 곱셈과 나눗셈을 모두 정수로 계산한다.
+    std::vector<std::vector<uint32_t>> scores(result.size(), std::vector<uint32_t>(1));
+    for (size_t t = 0; t < triangles.size(); ++t)
+    {
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            const uint32_t island = oracle.TriangleSideIsland.at(t)[side];
+            if (island == UINT32_MAX) continue;
+            const uint32_t section = triangles[t][0];
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                // 반대 부호 정점과 공유 정점도 각 활성 쌍마다 다시 투표한다.
+                const auto& vertex = sections.at(section).at(topology.Indices.at(section).at(triangles[t][1] * 3 + k));
+                uint32_t sum = 0;
+                for (uint32_t weight : vertex.Weights) sum += weight;
+                for (uint32_t j = 0; j < 4; ++j)
+                {
+                    if (!vertex.Weights[j]) continue;
+                    const uint32_t group = jointGroup(sections[section].StartJoint + vertex.Joints[j]);
+                    auto& score = scores.at(island);
+                    if (score.size() <= group) score.resize(size_t(group) + 1);
+                    score[group] += uint32_t(vertex.Weights[j]) * 4096u / sum;
+                }
+            }
+        }
+    }
+
+    // 공동 1위는 A이며 1·2위 점수 차이는 동점 처리 전의 실제 최댓값으로 구한다.
+    for (size_t i = 0; i < result.size(); ++i)
+    {
+        auto& vote = result[i];
+        const auto& score = scores[i];
+        uint32_t best = 0;
+        uint32_t runner = 0;
+        for (uint32_t group = 0; group < score.size(); ++group)
+        {
+            if (score[group] > best)
+            {
+                runner = best;
+                best = score[group];
+                vote.Body = group;
+            }
+            else if (score[group] > runner) runner = score[group];
+        }
+        if (std::count(score.begin(), score.end(), best) > 1) vote.Body = 0;
+        vote.Margin = best - runner;
+        vote.Near = vote.Margin <= 12u * counts[i];
+    }
+    return result;
+}
+
+// 정수 승자가 안전한 섬만 채택하고 근접·overflow에서는 기존 oracle 몸체를 보존한다.
+IslandLabels ResolvePatchIslandVotes(const IslandLabels& oracle, const std::vector<PatchIslandVote>& votes)
+{
+    // 선택한 몸체별 삼각형 수를 side별로 모은다.
+    IslandLabels result = oracle;
+    std::map<uint32_t, uint32_t> counts[2];
+    for (size_t i = 0; i < result.Islands.size(); ++i)
+    {
+        auto& island = result.Islands[i];
+        const auto& vote = votes.at(i);
+        if (!vote.Near && !vote.Fallback) island.Body = vote.Body;
+        counts[island.Side][island.Body] += island.Triangles;
+    }
+
+    // 오름차순 순회에서 엄격한 다수만 갱신해 동점이면 작은 몸체를 유지한다.
+    for (uint32_t side = 0; side < 2; ++side)
+    {
+        result.SideDefault[side] = 0;
+        for (const auto& count : counts[side])
+        {
+            if (count.second > counts[side][result.SideDefault[side]]) result.SideDefault[side] = count.first;
+        }
+    }
+    result.TriangleSideBody = result.TriangleSideIsland;
+    for (auto& pair : result.TriangleSideBody)
+    {
+        for (auto& body : pair)
+        {
+            if (body != UINT32_MAX) body = result.Islands.at(body).Body;
+        }
+    }
+    return result;
+}
+
 // 경계는 포함하고 수평 변과 꼭짓점의 중복 교차는 반개구간으로 처리한다.
 bool ContainsLatticeLoop(const std::vector<std::array<float, 4>>& edges, const std::array<float, 2>& point)
 {
