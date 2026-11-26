@@ -2,6 +2,11 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
+CutPerf 배포(2026-11-26, base `ba8299ce`, 미커밋): `Tools/CutPerf/Pack-CutPerf.ps1`은 Release 실행 파일·런타임과 기본 장면 에셋을 다른 Windows PC용 zip으로 묶는다.
+기본 출력은 `%TEMP%\CutPerfPackage-<시각>.zip`이며 `-OutZip`으로 바꾼다. 패키지의 한국어 README에 실행과 결과 회수 방법이 있다.
+`Run-CutPerf.ps1 -ExtraArgs "-island-gpu 1"`은 모든 실행에 옵션을 추가하고, `-WorkDir`은 에셋 폴더를 지정한다(배포본 기본값 `work`).
+기존 결과 형식을 유지하며 `machine.txt`와 `commands.txt`에 장비·실행 파일·실제 명령행을 남긴다. git 없는 PC에서는 저장소 정보를 `n/a`로 기록한다.
+
 RS-1~RS-4(base `a4b9ea23`, 브랜치 `patch-recut-keep-skin`, 미커밋): 부착 스키닝 패치 재절단에서 node 쪽 결과가 스키닝을 유지한다(`-patch-recut-skin 0`이면 기존 bake·정적). `MeshComponent::Update`가 마지막 N을 보관하고 후보·ActiveCut이 부모 `PatchSkin`과 `N·D`(RecutKFrame)를 들고 있다. `PatchSkinRecutCS`가 부모 skin 레코드를 복사 정점은 통째로, split·cap 정점은 슬롯 K weight 1로 만들고 `BuildRecutPatchSkinVertices`가 section·BindBounds를 재계산한다. `MeshComponent::BuildSkinnedPose`(준비 단계 helper)와 `PreparedGeometryReplacement::PatchSkin`이 게시 때 skin을 noexcept로 승계한다. 진단은 `AttachedRecutChecks::SkinnedFollowError`(K 정점 추종, AR4 #2·RigBoneCut 공용)와 `-attached-recut-checks 2`의 연속 재절단 `RS4` 판정이다([결정·검증](../GPU/PatchRecutSkinning.md)).
 
 MI-5(시험·기록 완료, 미커밋, MI-4 완료 `e123cad1`): 기존 외부 Release exe로 위팔491/167, 기본 c 팔161/170, 양 허벅지300/187/175·constraint18→16·mask1회, 실제 척추182/337을 확인했다. `Skeleton_torso_joint_2`의 P3→4는 단일 게시이며 옵션 on도 P=1로 결과가 같다. 기존 Torso 몸통 카메라 기록을 실제 척추 절단으로 대체했다. 위팔·기본 c·척추 옵션 비교 및 추가 실제 허벅지 단일243/169까지18 PNG를 직접 확인하고 회귀6건 PASS·D3D12 ERROR0을 기록했다. 몸통 복부 접힘, 척추 절단 양팔 틈(uncapped17·loop fallback34), 기본 c 작은 보라 파편을 수정 없이 남겼다. 다중 경계 측정·Applied 이후 복구·기본값 on 결정은 후속이다. 단일 constraint 감소1·patch ID 값1은 추론이며 타 세션 ModelViewer.cpp 변경은 보존했다([시험 표·재현·PNG·남은 일](../GPU/MeshIslandMultiBoneCut.md)).

@@ -5,7 +5,7 @@
 .DESCRIPTION
   Runs the Release ModelViewer.exe repeatedly with the -cut-perf-* options, writes raw logs, per-run CSV,
   a summary CSV and ONE self-contained text file (CutPerfResult.txt) and opens it in Notepad.
-  Needs only this repo and a Release build (MiniEngine\Build\x64\Release\Output\ModelViewer\ModelViewer.exe).
+  Supports a repo Release build or the bin/work layout produced by Pack-CutPerf.ps1.
 
 .PARAMETER N
   Number of launches per cut configuration and model (default 10).
@@ -15,6 +15,10 @@
   Output folder (default: Tools\CutPerf\out\<timestamp> under the repo).
 .PARAMETER ExePath
   Override the ModelViewer.exe path.
+.PARAMETER ExtraArgs
+  Raw additional arguments appended to every launch, preserving quoting.
+.PARAMETER WorkDir
+  Runtime assets (default: repo MiniEngine\ModelViewer or package work).
 .PARAMETER Models
   Xbot, CesiumMan, CesiumMan-UpperArm, Xbot-MultiThigh, CesiumMan-Spine.
 .PARAMETER G0
@@ -29,22 +33,57 @@ param(
     [int]$RenderRuns = 3,
     [string]$OutDir = "",
     [string]$ExePath = "",
+    [string]$ExtraArgs = "",
+    [string]$WorkDir = "",
     [string[]]$Models = @('Xbot', 'CesiumMan'),
     [switch]$G0,
     [switch]$SkipRender,
     [switch]$NoOpen
 )
 
+# 저장소와 배포 폴더의 상대 경로 기본값을 선택한다.
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-if (-not $ExePath) { $ExePath = Join-Path $repo 'MiniEngine\Build\x64\Release\Output\ModelViewer\ModelViewer.exe' }
-if (-not (Test-Path $ExePath)) { throw "ModelViewer.exe not found: $ExePath (build Release|x64 first)" }
-$workDir = Join-Path $repo 'MiniEngine\ModelViewer'
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$packaged = Test-Path -LiteralPath (Join-Path $PSScriptRoot 'bin\ModelViewer.exe')
+if (-not $ExePath) {
+    $ExePath = if ($packaged) { Join-Path $PSScriptRoot 'bin\ModelViewer.exe' } else { Join-Path $repo 'MiniEngine\Build\x64\Release\Output\ModelViewer\ModelViewer.exe' }
+}
+if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+    throw "ModelViewer.exe not found: $ExePath (build Release|x64 first)"
+}
+$ExePath = (Resolve-Path -LiteralPath $ExePath).Path
+if (-not $WorkDir) {
+    $WorkDir = if ($packaged) { Join-Path $PSScriptRoot 'work' } else { Join-Path $repo 'MiniEngine\ModelViewer' }
+}
+$WorkDir = (Resolve-Path -LiteralPath $WorkDir).Path
+
+# 출력 경로를 절대 경로로 고정하여 자식 프로세스에서도 같은 위치에 기록한다.
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot "out\$stamp" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$OutDir = (Resolve-Path -LiteralPath $OutDir).Path
 $rawDir = Join-Path $OutDir 'raw'
 New-Item -ItemType Directory -Force -Path $rawDir | Out-Null
+$commandLines = New-Object System.Collections.Generic.List[string]
+
+# git이 없거나 저장소 밖이면 실패 없이 n/a를 기록한다.
+$head = 'n/a'
+$dirty = 'n/a'
+if (-not $packaged -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    try {
+        $gitHead = & git --no-optional-locks -C $repo rev-parse HEAD 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $head = $gitHead
+            $gitStatus = @(& git --no-optional-locks -C $repo status --porcelain 2>$null)
+            if ($LASTEXITCODE -eq 0) {
+                $dirty = $gitStatus.Count
+            }
+        }
+    } catch {
+        $head = 'n/a'
+        $dirty = 'n/a'
+    }
+}
 
 # ---------------------------------------------------------------- model definitions
 $modelInfo = @{
@@ -79,26 +118,55 @@ if ($G0) {
 # ---------------------------------------------------------------- run helper (kills only its own process)
 # 선택한 장면을 실행하고 종료 상태와 로그를 확인한다.
 function Invoke-Run([string]$Tag, [string]$Model, [string]$ConfigOpt, [bool]$Render) {
-    # 장면별 본과 기존 데모 옵션을 명령행으로 구성한다.
+    # 이번 실행의 로그 경로를 준비하고 이전 로그를 지운다.
     $mi = $modelInfo[$Model]
     $log = Join-Path $rawDir "$Tag.log"
-    if (Test-Path $log) { Remove-Item $log -Force }
+    if (Test-Path -LiteralPath $log) {
+        Remove-Item -LiteralPath $log -Force
+    }
+
+    # 장면별 본과 렌더 여부에 맞는 데모 옵션을 구성한다.
     $a = @('-debug', '0', '-skeletal-break-demo', "$($mi.Demo)", '-skeletal-break-demo-bone', $mi.Bone)
     if ($Render) {
         $a += @('-skeletal-break-demo-delay', '7', '-skeletal-break-demo-cut-time', $mi.CutTime, '-physics-query-exit', '1550')
     } else {
         $a += @('-skeletal-break-demo-delay', '2', '-physics-query-exit', '480')
-        if ($mi.Second) { $a += @('-cut-perf-second-bone', $mi.Second) }
+        if ($mi.Second) {
+            $a += @('-cut-perf-second-bone', $mi.Second)
+        }
     }
-    if ($mi.Opt) { $a += $mi.Opt.Split(' ') }
+
+    # 장면과 측정 구성의 추가 옵션 및 로그 경로를 연결한다.
+    if ($mi.Opt) {
+        $a += $mi.Opt.Split(' ')
+    }
     $a += $ConfigOpt.Split(' ')
     $a += @('-cut-perf-log', "`"$log`"")
 
+    # 추가 옵션의 따옴표를 보존하고 실제 실행 경로와 명령행을 남긴다.
+    $arguments = $a -join ' '
+    if ($ExtraArgs) {
+        $arguments += " $ExtraArgs"
+    }
+    $command = "$Tag workDir=`"$WorkDir`" command=`"$ExePath`" $arguments"
+    $commandLines.Add($command)
+    $command | Add-Content -LiteralPath (Join-Path $OutDir 'commands.txt') -Encoding UTF8
+
     # 실행 창을 숨기고 이 프로세스의 제한 시간과 종료 코드를 확인한다.
-    $p = Start-Process -FilePath $ExePath -ArgumentList $a -WorkingDirectory $workDir -WindowStyle Hidden -PassThru
+    $p = Start-Process -FilePath $ExePath -ArgumentList $arguments -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
     $null = $p.Handle
     $limit = if ($Render) { 180 } else { 90 }
-    if (-not $p.WaitForExit($limit * 1000)) { try { $p.Kill() } catch {}; "$Tag TIMEOUT" | Add-Content (Join-Path $OutDir 'runs.txt'); return $false }
+    if (-not $p.WaitForExit($limit * 1000)) {
+        try {
+            $p.Kill()
+        } catch {
+            Write-Warning $_.Exception.Message
+        }
+        "$Tag TIMEOUT" | Add-Content (Join-Path $OutDir 'runs.txt')
+        return $false
+    }
+
+    # 정상 종료 코드와 로그 생성 여부로 실행 성공을 판정한다.
     "$Tag exit=$($p.ExitCode)" | Add-Content (Join-Path $OutDir 'runs.txt')
     return ($p.ExitCode -eq 0 -and (Test-Path $log))
 }
@@ -287,7 +355,11 @@ $summaryCsv | Export-Csv (Join-Path $OutDir 'CutPerfSummary.csv') -NoTypeInforma
 
 # ---------------------------------------------------------------- text report
 $sb = New-Object System.Text.StringBuilder
-function Add-Line([string]$s = '') { [void]$sb.AppendLine($s) }
+# 결과 보고서와 장비 정보에 사용할 한 줄을 누적한다.
+function Add-Line([string]$s = '') {
+    # 기존 보고서의 줄 형식을 유지한다.
+    [void]$sb.AppendLine($s)
+}
 
 Add-Line '=== CutPerfResult (single-bone cut performance) ==='
 Add-Line "generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')   script: Tools\CutPerf\Run-CutPerf.ps1   N=$N RenderRuns=$RenderRuns"
@@ -297,7 +369,8 @@ try {
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
     Add-Line "CPU: $($cpu.Name.Trim())  cores=$($cpu.NumberOfCores) logical=$($cpu.NumberOfLogicalProcessors) maxMHz=$($cpu.MaxClockSpeed)"
     $os = Get-CimInstance Win32_OperatingSystem
-    Add-Line "OS: $($os.Caption) $($os.Version) build $($os.BuildNumber)   RAM: $([math]::Round($os.TotalVisibleMemorySize / 1MB, 1)) GiB"
+    $computer = Get-CimInstance Win32_ComputerSystem
+    Add-Line "OS: $($os.Caption) $($os.Version) build $($os.BuildNumber)   RAM: $([math]::Round($computer.TotalPhysicalMemory / 1GB, 1)) GiB"
     foreach ($v in (Get-CimInstance Win32_VideoController)) {
         Add-Line "GPU(WMI): $($v.Name)  driver=$($v.DriverVersion)  adapterRAM=$([math]::Round($v.AdapterRAM / 1MB)) MiB(32-bit field)"
     }
@@ -305,17 +378,78 @@ try {
     if ($bat) { Add-Line "Battery present: status=$($bat.BatteryStatus) (1=discharging, 2=AC) charge=$($bat.EstimatedChargeRemaining)%" } else { Add-Line 'Battery: none detected' }
     $plan = (powercfg /getactivescheme) 2>$null
     if ($plan) { Add-Line "Power plan: $plan" }
-} catch { Add-Line "PC info error: $($_.Exception.Message)" }
+} catch {
+    # 제한된 환경에서 CIM이 거절되어도 로컬 장비 정보를 기록한다.
+    Add-Line "PC info CIM unavailable: $($_.Exception.Message)"
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    if (-not ('CutPerfProcessorInfo' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CutPerfProcessorInfo
+{
+    // Windows가 제공하는 논리 프로세서 관계 표를 읽는다.
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetLogicalProcessorInformation([Out] byte[] data, ref uint bytes);
+
+    // 관계 표의 물리 코어 레코드 수를 반환한다.
+    public static int CoreCount()
+    {
+        // 관계 표를 담을 버퍼의 크기를 조회한다.
+        uint bytes = 0;
+        GetLogicalProcessorInformation(null, ref bytes);
+
+        // 조회한 크기의 버퍼에 관계 표를 가져온다.
+        byte[] data = new byte[bytes];
+        if (!GetLogicalProcessorInformation(data, ref bytes))
+            return 0;
+
+        // 각 레코드의 관계 값 0은 하나의 물리 코어를 뜻한다.
+        int cores = 0;
+        for (int offset = 0; offset < bytes; offset += IntPtr.Size == 8 ? 32 : 24)
+            if (BitConverter.ToInt32(data, offset + IntPtr.Size) == 0)
+                ++cores;
+
+        // 집계한 물리 코어 수를 반환한다.
+        return cores;
+    }
+}
+'@
+    }
+
+    # CPU와 OS는 레지스트리, RAM과 코어 수는 로컬 Windows API로 보완한다.
+    $cpu = Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
+    $os = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $ram = [Microsoft.VisualBasic.Devices.ComputerInfo]::new().TotalPhysicalMemory
+    Add-Line "CPU: $($cpu.ProcessorNameString.Trim())  cores=$([CutPerfProcessorInfo]::CoreCount()) logical=$([Environment]::ProcessorCount) (fallback)"
+
+    # 레지스트리 제품명 대신 빌드 번호로 Windows 세대를 판별한다.
+    $build = [int]$os.CurrentBuildNumber
+    $windowsName = if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }
+    Add-Line "OS: $windowsName 10.0.$build.$($os.UBR)   RAM: $([math]::Round($ram / 1GB, 1)) GiB (fallback)"
+
+    # 레지스트리의 GPU 정보도 대체 경로에서 얻었음을 표시한다.
+    $videoKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
+    foreach ($v in (Get-ChildItem $videoKey -ErrorAction SilentlyContinue | Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object DriverDesc)) {
+        Add-Line "GPU(registry): $($v.DriverDesc)  driver=$($v.DriverVersion) (fallback)"
+    }
+}
 Add-Line 'GPU used by engine (from log ENV):'
 foreach ($e in ($envLines.Keys | Sort-Object)) { Add-Line "  $e" }
 Add-Line ''
 Add-Line '--- Build / repo ---'
-try {
-    $head = (& git -C $repo rev-parse HEAD 2>$null)
-    $dirty = (& git -C $repo status --porcelain 2>$null | Measure-Object).Count
-    Add-Line "git HEAD: $head   uncommitted files: $dirty"
-} catch { Add-Line 'git: not available' }
-Add-Line "exe: $ExePath   ($((Get-Item $ExePath).LastWriteTime))"
+Add-Line "git HEAD: $head   uncommitted files: $dirty"
+$exe = Get-Item -LiteralPath $ExePath
+Add-Line "exe: $ExePath   ($($exe.LastWriteTime)) size=$($exe.Length) bytes timestampUTC=$($exe.LastWriteTimeUtc.ToString('o'))"
+Add-Line "WorkDir: $WorkDir"
+Add-Line "ExtraArgs: $ExtraArgs"
+Add-Line "Runner command line: $([Environment]::CommandLine)"
+Add-Line '--- Launch commands ---'
+foreach ($command in $commandLines) {
+    Add-Line $command
+}
+$machinePath = Join-Path $OutDir 'machine.txt'
+[IO.File]::WriteAllText($machinePath, $sb.ToString(), (New-Object System.Text.UTF8Encoding($true)))
 Add-Line 'All runs: -debug 0 (D3D12 debug layer off), no debugger, V-Sync default (ON, frame interval pinned to monitor refresh).'
 Add-Line ''
 Add-Line '--- Configurations (options appended to: -debug 0 -skeletal-break-demo <1|2> -skeletal-break-demo-bone <bone>) ---'
