@@ -56,7 +56,7 @@ namespace Viewer
         ComputePSO VotePSO(L"Island vote");
         RootSignature DistanceRoot;
         ComputePSO DistancePSO(L"Island corner distances");
-        struct DistanceParameters
+        struct alignas(16) DistanceParameters
         {
             Math::Vector4 Plane;
             Math::Matrix4 World;
@@ -70,7 +70,7 @@ namespace Viewer
             uint32_t FirstTriangle, MaskOffset, Flags, SectionId;
             uint32_t DrawId, JointCount, VertexCount, WordOffset;
         };
-        struct Parameters
+        struct alignas(16) Parameters
         {
             Math::Vector4 Plane;
             Math::Matrix4 LocalToRectangle;
@@ -150,7 +150,7 @@ namespace Viewer
             checks |= unionChecks;
             if (!checks || checked) return;
             checked = true;
-            struct Constants
+            struct alignas(16) Constants
             {
                 uint32_t Mode, BodyCount, Sections, Section;
                 uint32_t FirstTriangle, Triangles, VbOffset, DepthOffset;
@@ -4769,7 +4769,7 @@ namespace Viewer
             CutPerf::Cpu cutPerfIslandUpload("ClassifyCutBodies-upload-wait");
             cutPerfIslandUpload.End();
         }
-        struct Constants
+        struct alignas(16) Constants
         {
             uint32_t FirstTriangle, TriangleCount, PatchTriangles, Side;
             uint32_t DefaultBody, CapLoopCount, BodyCount, UseGpu;
@@ -5188,7 +5188,7 @@ namespace Viewer
         job.Status.Create(L"Body compact status", 1, 4);
         job.Metadata.Create(L"Body compact metadata", uint32_t(bins * 12), 4);
         job.Flags.Create(L"Body compact flags", 1, 4);
-        struct Constants
+        struct alignas(16) Constants
         {
             uint32_t Mode, Bodies, Sections, Section, FirstTriangle, Triangles, Vb, Depth;
             uint32_t Ib, Stride, DepthStride, CapacityBytes, CapacityTriangles, Bounds, Padding[2];
