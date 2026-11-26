@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "Scene.h"
 #include "SegmentJointSelection.h"
 #include "SkeletalPhysicsSystem.h"
@@ -87,6 +87,10 @@ namespace Viewer
         void Validate(const SkeletalPatchResult& result);
         StructuredBuffer m_CornerDistance, m_CornerCell, m_IslandParent;
         StructuredBuffer m_IslandRootMin, m_IslandPrefix, m_TriangleSideIsland;
+        StructuredBuffer m_VoteWeights, m_IslandVote;
+        ReadbackBuffer m_VoteReadback;
+        uint32_t m_VoteGroups = 0, m_VoteCapacity = 0;
+        bool m_ConsumeGpu = false, m_VoteSupported = false;
         ReadbackBuffer m_NumberReadback;
         uint32_t m_GpuIslandCount = 0;
         bool m_IslandConverged = false;

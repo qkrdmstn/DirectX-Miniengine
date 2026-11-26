@@ -1,4 +1,4 @@
-#include "SkeletalPatchCopy.h"
+﻿#include "SkeletalPatchCopy.h"
 #include "CutPerfLog.h"
 #include "CommandListManager.h"
 #include "GraphicsCore.h"
@@ -17,6 +17,7 @@
 #include "CompiledShaders/IslandJumpCS.h"
 #include "CompiledShaders/IslandVerifyCS.h"
 #include "CompiledShaders/IslandNumberCS.h"
+#include "CompiledShaders/IslandVoteCS.h"
 #include "CompiledShaders/PatchBodyClassifyCS.h"
 #include "CompiledShaders/PatchBodyCompactCS.h"
 #include "tests/SkeletalPatchReference.h"
@@ -50,6 +51,8 @@ namespace Viewer
         RootSignature UnionRoot;
         ComputePSO HookPSO(L"Island hook"), JumpPSO(L"Island jump"), VerifyPSO(L"Island verify");
         ComputePSO NumberPSO(L"Island number");
+        RootSignature VoteRoot;
+        ComputePSO VotePSO(L"Island vote");
         RootSignature DistanceRoot;
         ComputePSO DistancePSO(L"Island corner distances");
         struct DistanceParameters
@@ -870,18 +873,21 @@ namespace Viewer
             initialized = true;
         }
 
-        // GPU 거리 옵션이 켜진 첫 요청에서만 거리·UF·번호 파이프라인을 준비한다.
+        // GPU 옵션이 켜진 첫 요청에서만 거리·UF·번호·투표 파이프라인을 준비한다.
         void InitializeDistance()
         {
             // 여러 요청에서 거리 파이프라인을 재사용한다.
             static bool initialized = false;
-            if (initialized) return;
+            if (initialized)
+                return;
 
             // section 격자와 job 소유 코너 출력을 별도로 바인딩한다.
             DistanceRoot.Reset(9);
             DistanceRoot[0].InitAsConstantBuffer(0);
-            for (uint32_t i = 0; i < 6; ++i) DistanceRoot[i + 1].InitAsBufferSRV(i);
-            for (uint32_t i = 0; i < 2; ++i) DistanceRoot[i + 7].InitAsBufferUAV(i);
+            for (uint32_t i = 0; i < 6; ++i)
+                DistanceRoot[i + 1].InitAsBufferSRV(i);
+            for (uint32_t i = 0; i < 2; ++i)
+                DistanceRoot[i + 7].InitAsBufferUAV(i);
             DistanceRoot.Finalize(L"Island distances");
             DistancePSO.SetRootSignature(DistanceRoot);
             DistancePSO.SetComputeShader(g_pIslandDistanceCS, sizeof(g_pIslandDistanceCS));
@@ -890,8 +896,10 @@ namespace Viewer
             // 거리 옵션과 같은 지연 초기화로 UF 파이프라인을 만든다.
             UnionRoot.Reset(9);
             UnionRoot[0].InitAsConstants(0, 4);
-            for (uint32_t i = 0; i < 3; ++i) UnionRoot[i + 1].InitAsBufferSRV(i);
-            for (uint32_t i = 0; i < 5; ++i) UnionRoot[i + 4].InitAsBufferUAV(i);
+            for (uint32_t i = 0; i < 3; ++i)
+                UnionRoot[i + 1].InitAsBufferSRV(i);
+            for (uint32_t i = 0; i < 5; ++i)
+                UnionRoot[i + 4].InitAsBufferUAV(i);
             UnionRoot.Finalize(L"Island union find");
             ComputePSO* psos[] = { &HookPSO, &JumpPSO, &VerifyPSO, &NumberPSO };
             const void* shaders[] = { g_pIslandHookCS, g_pIslandJumpCS, g_pIslandVerifyCS, g_pIslandNumberCS };
@@ -903,6 +911,17 @@ namespace Viewer
                 psos[i]->SetComputeShader(shaders[i], sizes[i]);
                 psos[i]->Finalize();
             }
+            // 투표 입력과 결과를 별도의 루트로 연결한다.
+            VoteRoot.Reset(8);
+            VoteRoot[0].InitAsConstants(0, 4);
+            for (uint32_t i = 0; i < 5; ++i)
+                VoteRoot[i + 1].InitAsBufferSRV(i);
+            for (uint32_t i = 0; i < 2; ++i)
+                VoteRoot[i + 6].InitAsBufferUAV(i);
+            VoteRoot.Finalize(L"Island votes");
+            VotePSO.SetRootSignature(VoteRoot);
+            VotePSO.SetComputeShader(g_pIslandVoteCS, sizeof(g_pIslandVoteCS));
+            VotePSO.Finalize();
             initialized = true;
         }
     }
@@ -5825,7 +5844,7 @@ namespace Viewer
         m_IslandLabels = {};
     }
 
-    // 컴포넌트 제거 상태를 반영해 GPU 선택·추출과 선택적 섬 번호 부여를 제출한다.
+    // 컴포넌트 제거 상태를 반영해 추출과 GPU 섬 번호·투표를 같은 제출에 기록한다.
     bool SkeletalPatchJob::Submit(const MeshComponent& source, const MeshCutting::CutPlaneData& plane,
         const std::vector<std::vector<uint32_t>>& mask, const Math::Matrix4& world,
         uint32_t node, bool diagnostic, bool influence, const std::vector<NodeId>& parents, uint32_t child,
@@ -5860,11 +5879,13 @@ namespace Viewer
         // 정점 선택 비트 버퍼에 필요한 총 word 수를 section별로 누적한다.
         uint64_t bitWords = 0;
         // skin section별 첫 draw 번호와 정점 수를 모아 Mode 8 dispatch 입력으로 쓴다.
-        std::vector<std::pair<uint32_t, uint32_t>> bitSections; // skin section의 첫 draw 번호와 정점 수
+        std::vector<std::pair<uint32_t, uint32_t>> bitSections;
+        // skin section의 첫 draw 번호와 정점 수
         for (uint32_t s = 0; s < input.GetSections().size(); ++s)
         {
             const auto& mesh = input.GetMesh(s);
-            if (!influence && m_SelectionMasks[s].size() != mesh.numJoints) return false;
+            if (!influence && m_SelectionMasks[s].size() != mesh.numJoints)
+                return false;
             const uint32_t maskOffset = uint32_t(masks.size());
             if (influence)
                 masks.insert(masks.end(), input.GetSource()->m_JointIndices.get() + mesh.startJoint,
@@ -5878,7 +5899,8 @@ namespace Viewer
             for (uint32_t d = 0; d < mesh.numDraws; ++d)
             {
                 const auto& draw = mesh.draw[d];
-                if (!draw.primCount) continue;
+                if (!draw.primCount)
+                    continue;
                 draws.push_back({ mesh.vbOffset, mesh.vbStride, mesh.ibOffset, mesh.ibFormat == DXGI_FORMAT_R32_UINT,
                     draw.startIndex, draw.baseVertex, draw.primCount / 3, m_PoseOffsets.back(),
                     uint32_t(triangles), maskOffset, mesh.psoFlags, s, d, mesh.numJoints, mesh.vbSize / mesh.vbStride, wordOffset });
@@ -5897,7 +5919,9 @@ namespace Viewer
 
         // 대상 전체 삼각형 수를 상한으로 잡아 compaction 출력 overflow를 없앤다.
         m_Input = source.GetGeometry();
-        m_Plane = plane; m_Node = node; m_Diagnostic = diagnostic;
+        m_Plane = plane;
+        m_Node = node;
+        m_Diagnostic = diagnostic;
         m_Influence = influence;
         m_SourceWorld = world;
         // GPU가 사용한 준비 팔레트와 node/source/world 합성을 제출 시점에 고정한다.
@@ -5922,7 +5946,8 @@ namespace Viewer
         for (uint32_t s = 0; s < model.m_NumMeshes; ++s)
         {
             const auto& mesh = *reinterpret_cast<const Mesh*>(meshData);
-            if (mesh.numJoints) skinSections[s] = skin++;
+            if (mesh.numJoints)
+                skinSections[s] = skin++;
             meshData += sizeof(Mesh) + (mesh.numDraws - 1) * sizeof(Mesh::Draw);
         }
         for (uint32_t s = 0; s < input.GetSections().size(); ++s)
@@ -5937,9 +5962,12 @@ namespace Viewer
         geometry.Source = input.GetSource();
         const uint32_t vertices = uint32_t(triangles) * 3;
         Parameters c{};
-        c.Plane = plane.WorldPlane; c.LocalToRectangle = plane.WorldToPlane;
+        c.Plane = plane.WorldPlane;
+        c.LocalToRectangle = plane.WorldToPlane;
         c.LocalToWorld = world;
-        c.Epsilon = 1e-5f; c.HalfWidth = plane.HalfWidth; c.HalfHeight = plane.HalfHeight;
+        c.Epsilon = 1e-5f;
+        c.HalfWidth = plane.HalfWidth;
+        c.HalfHeight = plane.HalfHeight;
         c.NodeCount = input.GetSource()->m_NumNodes;
         c.Influence = influence;
         const auto* triangleMask = source.GetTriangleMask();
@@ -5947,15 +5975,25 @@ namespace Viewer
         m_State = triangleMask ? triangleMask->Pending : std::vector<uint32_t>{};
         if (PatchLengthWeightsMode())
             m_Output->PreviousState = m_State;
-        c.Triangles = uint32_t(triangles); c.Draws = uint32_t(draws.size());
-        c.DepthOffset = vertices * 28; c.IndexOffset = vertices * 44;
+        c.Triangles = uint32_t(triangles);
+        c.Draws = uint32_t(draws.size());
+        c.DepthOffset = vertices * 28;
+        c.IndexOffset = vertices * 44;
         geometry.Data.Create(L"Patch packed geometry", vertices * 48, 1);
         geometry.LineageBytes = uint64_t(vertices) * 48;
         Mesh mesh = input.GetMesh(draws.front().SectionId);
-        mesh.vbOffset = 0; mesh.vbStride = 28; mesh.vbSize = vertices * 28;
-        mesh.vbDepthOffset = c.DepthOffset; mesh.vbDepthSize = vertices * ((mesh.psoFlags & 64) ? 16 : 12);
-        mesh.ibOffset = c.IndexOffset; mesh.ibSize = vertices * 4; mesh.ibFormat = DXGI_FORMAT_R32_UINT;
-        mesh.meshCBV = 0; mesh.numJoints = 0; mesh.startJoint = 0; mesh.numDraws = 1;
+        mesh.vbOffset = 0;
+        mesh.vbStride = 28;
+        mesh.vbSize = vertices * 28;
+        mesh.vbDepthOffset = c.DepthOffset;
+        mesh.vbDepthSize = vertices * ((mesh.psoFlags & 64) ? 16 : 12);
+        mesh.ibOffset = c.IndexOffset;
+        mesh.ibSize = vertices * 4;
+        mesh.ibFormat = DXGI_FORMAT_R32_UINT;
+        mesh.meshCBV = 0;
+        mesh.numJoints = 0;
+        mesh.startJoint = 0;
+        mesh.numDraws = 1;
         mesh.psoFlags = (mesh.psoFlags & ~PSOFlags::kHasSkin) | 31;
         mesh.pso = Renderer::GetPSO(mesh.psoFlags);
         mesh.draw[0] = { 0, 0, 0 };
@@ -5968,8 +6006,11 @@ namespace Viewer
         uint32_t islandGpu = 0, islandVerify = 0;
         CommandLineArgs::GetInteger(L"island-gpu", islandGpu);
         CommandLineArgs::GetInteger(L"island-gpu-verify", islandVerify);
-        m_IslandVerify = islandVerify != 0;
+        m_IslandVerify = islandGpu != 0 || islandVerify != 0;
         m_IslandGpu = islandGpu || m_IslandVerify;
+        m_ConsumeGpu = islandGpu != 0;
+        m_IslandConverged = false;
+        m_VoteSupported = node != UINT32_MAX && !influence;
 
         // 64스레드 거리·UF와 256스레드 번호 부여의 최대 그룹 수를 함께 검사한다.
         const uint64_t largestCapacity = std::max(triangles, uint64_t(model.m_LatticeTopology.CellCount) * 2);
@@ -5981,37 +6022,112 @@ namespace Viewer
             m_IslandVerify = false;
         }
 
-        if (m_IslandGpu)
+        // 셰이더 word·바이트 주소를 64비트로 검사하고 버퍼당 256 MiB로 제한한다.
+        const uint64_t keys64 = triangles * 2;
+        const uint64_t groups64 = uint64_t(m_CutRoots.size()) + 1;
+        const uint64_t words64 = keys64 * (groups64 + 5) + keys64 + 3;
+        const uint64_t weightWords = triangles * 24;
+        if (m_IslandGpu && (words64 > UINT32_MAX / 4 || words64 * 4 > 256ull * 1024 * 1024
+            || weightWords > UINT32_MAX / 4 || weightWords * 4 > 256ull * 1024 * 1024))
         {
-            // 활성 요청에서만 거리 파이프라인과 월드 평면을 준비한다.
-            InitializeDistance();
-            m_IslandK = 32;
-            CommandLineArgs::GetInteger(L"island-gpu-k", m_IslandK);
-            const uint32_t nodes = model.m_LatticeTopology.CellCount * 2;
-            m_IslandParent.Create(L"Island parents", nodes, 4);
-            m_IslandStatus.Create(L"Island status", 2, 4);
-            m_StatusReadback.Create(L"Island status readback", 2, 4);
+            m_IslandGpu = false;
+            m_IslandVerify = false;
+            Utility::Printf("Island GPU UF fallback reason=vote-size\n");
+        }
 
-            // 번호 부여 임시 배열과 최종 표는 요청이 소유한다.
-            m_IslandRootMin.Create(L"Island minimum keys", nodes, 4);
-            const uint32_t keys = uint32_t(triangles) * 2;
-            m_IslandPrefix.Create(L"Island head prefix", keys + (keys + 255) / 256, 4);
-            m_TriangleSideIsland.Create(L"Triangle side islands", uint32_t(triangles), 8);
-            if (m_IslandVerify)
+        // 선택적 준비 중 던져진 예외는 추출과 CPU 라벨링을 중단하지 않는다.
+        std::vector<uint32_t> weights;
+        try
+        {
+            if (m_IslandGpu)
             {
-                m_NumberReadback.Create(L"Island number verification", uint32_t(triangles), 8);
-            }
-            if (m_IslandVerify) m_ParentReadback.Create(L"Island parent readback", nodes, 4);
-            m_DistancePlane = Transpose(Invert(world)) * plane.WorldPlane;
+                // 활성 요청에서만 거리 파이프라인과 월드 평면을 준비한다.
+                InitializeDistance();
+                m_IslandK = 32;
+                CommandLineArgs::GetInteger(L"island-gpu-k", m_IslandK);
+                const uint32_t nodes = model.m_LatticeTopology.CellCount * 2;
+                m_IslandParent.Create(L"Island parents", nodes, 4);
+                m_IslandStatus.Create(L"Island status", 2, 4);
+                m_StatusReadback.Create(L"Island status readback", 2, 4);
 
-            // GPU 코너 출력과 선택적 검증 회수 버퍼를 만든다.
-            m_CornerDistance.Create(L"Island corner distances", uint32_t(triangles), 12);
-            m_CornerCell.Create(L"Island corner cells", uint32_t(triangles), 12);
-            if (m_IslandVerify)
-            {
-                m_DistanceReadback.Create(L"Island distance verification", uint32_t(triangles), 12);
-                m_CellReadback.Create(L"Island cell verification", uint32_t(triangles), 12);
+                // 번호 부여 임시 배열과 최종 표는 요청이 소유한다.
+                m_IslandRootMin.Create(L"Island minimum keys", nodes, 4);
+                const uint32_t keys = uint32_t(triangles) * 2;
+                m_IslandPrefix.Create(L"Island head prefix", keys + (keys + 255) / 256, 4);
+                m_TriangleSideIsland.Create(L"Triangle side islands", uint32_t(triangles), 8);
+                m_NumberReadback.Create(L"Island number mirror", uint32_t(triangles), 8);
+
+                // oracle과 동일한 bind weight와 그룹을 원본 draw 순서로 올린다.
+                const std::vector<uint32_t> jointNodes(model.m_JointIndices.get(), model.m_JointIndices.get() + model.m_NumJoints);
+                const auto bodyGroups = BuildCutBodyGroups(parents, jointNodes, m_CutRoots);
+                weights.assign(size_t(weightWords), 0);
+                for (const auto& draw : draws)
+                {
+                    const uint32_t skin = m_SkinSections[draw.SectionId];
+                    if (skin == UINT32_MAX)
+                        continue;
+                    const auto& section = model.m_SkinCpuSections[skin];
+                    uint32_t local = 0;
+                    for (uint32_t d = 0; d < draw.DrawId; ++d)
+                        local += input.GetMesh(draw.SectionId).draw[d].primCount / 3;
+                    for (uint32_t t = 0; t < draw.Triangles; ++t)
+                    {
+                        for (uint32_t k = 0; k < 3; ++k)
+                        {
+                            const auto& vertex = section.at(model.m_LatticeTopology.Indices[skin].at((local + t) * 3 + k));
+                            const size_t at = (size_t(draw.FirstTriangle + t) * 3 + k) * 8;
+                            for (uint32_t j = 0; j < 4; ++j)
+                            {
+                                weights[at + j] = vertex.Weights[j];
+                                weights[at + 4 + j] = !vertex.Weights[j] || bodyGroups.NodeGroups.empty() ? 0 : bodyGroups.NodeGroups.at(jointNodes.at(section.StartJoint + vertex.Joints[j]));
+                            }
+                        }
+                    }
+                }
+                m_VoteGroups = uint32_t(m_CutRoots.size()) + 1;
+                m_VoteCapacity = uint32_t(triangles);
+                const uint32_t words = uint32_t(words64);
+                m_VoteWeights.Create(L"Island bind weights and groups", uint32_t(weights.size()), 4);
+                m_IslandVote.Create(L"Island vote output", words, 4);
+                m_VoteReadback.Create(L"Island vote mirror", words, 4);
+                if (m_IslandVerify)
+                    m_ParentReadback.Create(L"Island parent readback", nodes, 4);
+                m_DistancePlane = Transpose(Invert(world)) * plane.WorldPlane;
+
+                // GPU 코너 출력과 선택적 검증 회수 버퍼를 만든다.
+                m_CornerDistance.Create(L"Island corner distances", uint32_t(triangles), 12);
+                m_CornerCell.Create(L"Island corner cells", uint32_t(triangles), 12);
+                if (m_IslandVerify)
+                {
+                    m_DistanceReadback.Create(L"Island distance verification", uint32_t(triangles), 12);
+                    m_CellReadback.Create(L"Island cell verification", uint32_t(triangles), 12);
+                }
             }
+
+        }
+        catch (const std::exception& error)
+        {
+            // 부분 생성된 선택적 버퍼를 해제해 필수 추출 할당에 메모리를 돌려준다.
+            m_CornerDistance.Destroy();
+            m_CornerCell.Destroy();
+            m_IslandParent.Destroy();
+            m_IslandStatus.Destroy();
+            m_StatusReadback.Destroy();
+            m_IslandRootMin.Destroy();
+            m_IslandPrefix.Destroy();
+            m_TriangleSideIsland.Destroy();
+            m_NumberReadback.Destroy();
+            m_VoteWeights.Destroy();
+            m_IslandVote.Destroy();
+            m_VoteReadback.Destroy();
+            m_ParentReadback.Destroy();
+            m_DistanceReadback.Destroy();
+            m_CellReadback.Destroy();
+
+            // 이번 요청의 모든 섬 패스를 생략하고 CPU 라벨링을 유지한다.
+            m_IslandGpu = false;
+            m_IslandVerify = false;
+            Utility::Printf("Island GPU UF fallback reason=gpu-prepare %s\n", error.what());
         }
 
         // 삼각형 prefix 뒤에 블록별 합계와 offset을 위한 16바이트 영역을 확보한다.
@@ -6020,7 +6136,8 @@ namespace Viewer
 
         // draw와 팔레트 입력 및 선택 결과 버퍼를 준비한다.
         m_Descriptors.Create(L"Patch draw inputs", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
-        if (masks.empty()) masks.push_back(0);
+        if (masks.empty())
+            masks.push_back(0);
         m_Masks.Create(L"Patch palette mask", uint32_t(masks.size()), 4, masks.data());
         m_Readback.Create(L"Patch counts and bounds readback", 12, 4);
         const std::vector<uint32_t> votes(size_t(c.NodeCount) * 2, 0);
@@ -6031,7 +6148,8 @@ namespace Viewer
         // 정점 선택 비트 버퍼는 job이 재사용하고 모자랄 때만 이전 자원을 fence까지 보존한 뒤 다시 만든다.
         if (!m_Bits.GetResource() || bitWords > m_BitCapacity)
         {
-            if (m_Bits.GetResource()) Graphics::g_CommandManager.RetireResource(m_Bits.GetResource());
+            if (m_Bits.GetResource())
+                Graphics::g_CommandManager.RetireResource(m_Bits.GetResource());
             m_BitCapacity = uint32_t(std::max<uint64_t>(bitWords, 1));
             m_Bits.Create(L"Patch vertex selection bits", m_BitCapacity, 4);
         }
@@ -6044,16 +6162,60 @@ namespace Viewer
         auto& graphics = GraphicsContext::Begin(L"Extract skeletal patch");
         CutPerf::Gpu cutPerfExtract(graphics, "Extract-whole");
         auto& compute = graphics.GetComputeContext();
-        if (triangleMask) const_cast<MeshComponent&>(source).UpdateTriangleMask(graphics);
-        compute.SetRootSignature(PatchRoot); compute.SetPipelineState(PatchPSO);
+
+        // G1a와 같이 제출 context의 업로드 메모리로 weight를 비동기 복사한다.
+        if (m_IslandGpu)
+        {
+            try
+            {
+                // 업로드 페이지 할당 실패는 엔진 공통 ASSERT_SUCCEEDED 규약을 따른다.
+                // 이 catch는 선택적 업로드 준비 중 던져진 예외만 처리한다.
+                DynAlloc upload = graphics.ReserveUploadMemory(weights.size() * sizeof(uint32_t));
+                std::memcpy(upload.DataPtr, weights.data(), weights.size() * sizeof(uint32_t));
+                graphics.TransitionResource(m_VoteWeights, D3D12_RESOURCE_STATE_COPY_DEST);
+                graphics.CopyBufferRegion(m_VoteWeights, 0, upload.Buffer, upload.Offset, weights.size() * sizeof(uint32_t));
+                graphics.TransitionResource(m_VoteWeights, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            catch (const std::exception& error)
+            {
+                // 아직 섬 패스를 기록하지 않은 선택적 버퍼를 해제한다.
+                m_CornerDistance.Destroy();
+                m_CornerCell.Destroy();
+                m_IslandParent.Destroy();
+                m_IslandStatus.Destroy();
+                m_StatusReadback.Destroy();
+                m_IslandRootMin.Destroy();
+                m_IslandPrefix.Destroy();
+                m_TriangleSideIsland.Destroy();
+                m_NumberReadback.Destroy();
+                m_VoteWeights.Destroy();
+                m_IslandVote.Destroy();
+                m_VoteReadback.Destroy();
+                m_ParentReadback.Destroy();
+                m_DistanceReadback.Destroy();
+                m_CellReadback.Destroy();
+
+                // 추출 command list는 계속 사용하고 CPU 라벨링으로 처리한다.
+                m_IslandGpu = false;
+                m_IslandVerify = false;
+                Utility::Printf("Island GPU UF fallback reason=gpu-prepare %s\n", error.what());
+            }
+        }
+
+        if (triangleMask)
+            const_cast<MeshComponent&>(source).UpdateTriangleMask(graphics);
+        compute.SetRootSignature(PatchRoot);
+        compute.SetPipelineState(PatchPSO);
         auto& inputData = const_cast<ByteAddressBuffer&>(input.GetDataBuffer());
         auto& inputPose = const_cast<ByteAddressBuffer&>(posed.GetBuffer());
         compute.TransitionResource(inputData, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.TransitionResource(inputPose, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.TransitionResource(m_Descriptors, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.TransitionResource(m_Masks, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        compute.SetBufferSRV(1, input.GetDataBuffer()); compute.SetBufferSRV(2, posed.GetBuffer());
-        compute.SetBufferSRV(3, m_Descriptors); compute.SetBufferSRV(4, m_Masks);
+        compute.SetBufferSRV(1, input.GetDataBuffer());
+        compute.SetBufferSRV(2, posed.GetBuffer());
+        compute.SetBufferSRV(3, m_Descriptors);
+        compute.SetBufferSRV(4, m_Masks);
         auto& state = triangleMask ? const_cast<StructuredBuffer&>(triangleMask->State) : m_EmptyState;
         compute.TransitionResource(state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         compute.SetBufferSRV(11, state);
@@ -6105,7 +6267,8 @@ namespace Viewer
                 // 모드별 dispatch 시간을 따로 잰다. 이름은 Mode 번호를 따른다.
                 const char* modeNames[] = { "Extract-mode0", "Extract-mode1", "Extract-mode2", "", "", "", "Extract-mode6" };
                 CutPerf::Gpu cutPerfMode(compute, modeNames[c.Mode]);
-                if (c.Mode == 6) compute.Dispatch(1);
+                if (c.Mode == 6)
+                    compute.Dispatch(1);
                 else compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
             }
 
@@ -6126,16 +6289,22 @@ namespace Viewer
             compute.TransitionResource(m_Output->LocalBounds, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             compute.TransitionResource(m_CornerDistance, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.TransitionResource(m_CornerCell, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            compute.SetRootSignature(DistanceRoot); compute.SetPipelineState(DistancePSO);
-            compute.SetBufferSRV(1, m_Output->TriangleSources); compute.SetBufferSRV(2, m_Output->LocalBounds);
-            compute.SetBufferSRV(3, m_Descriptors); compute.SetBufferSRV(4, inputData); compute.SetBufferSRV(5, inputPose);
-            compute.SetBufferUAV(7, m_CornerDistance); compute.SetBufferUAV(8, m_CornerCell);
+            compute.SetRootSignature(DistanceRoot);
+            compute.SetPipelineState(DistancePSO);
+            compute.SetBufferSRV(1, m_Output->TriangleSources);
+            compute.SetBufferSRV(2, m_Output->LocalBounds);
+            compute.SetBufferSRV(3, m_Descriptors);
+            compute.SetBufferSRV(4, inputData);
+            compute.SetBufferSRV(5, inputPose);
+            compute.SetBufferUAV(7, m_CornerDistance);
+            compute.SetBufferUAV(8, m_CornerCell);
             DistanceParameters distance{ m_DistancePlane, world, 0, c.Draws, c.Triangles, 0 };
             for (uint32_t section = 0; section < m_SkinSections.size(); ++section)
             {
                 // section별 출력 슬롯은 겹치지 않으며 CPU와 같은 skin 번호를 쓴다.
                 const uint32_t skinSection = m_SkinSections[section];
-                if (skinSection == UINT32_MAX) continue;
+                if (skinSection == UINT32_MAX)
+                    continue;
                 auto& cells = const_cast<StructuredBuffer&>(model.m_GpuLatticeTopology.SectionVertexCell.at(skinSection));
                 compute.TransitionResource(cells, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 compute.SetBufferSRV(6, cells);
@@ -6158,13 +6327,16 @@ namespace Viewer
             compute.TransitionResource(m_IslandStatus, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.SetRootSignature(UnionRoot);
             compute.SetBufferSRV(1, m_Output->LocalBounds);
-            compute.SetBufferSRV(2, m_CornerDistance); compute.SetBufferSRV(3, m_CornerCell);
-            compute.SetBufferUAV(4, m_IslandParent); compute.SetBufferUAV(5, m_IslandStatus);
+            compute.SetBufferSRV(2, m_CornerDistance);
+            compute.SetBufferSRV(3, m_CornerCell);
+            compute.SetBufferUAV(4, m_IslandParent);
+            compute.SetBufferUAV(5, m_IslandStatus);
             const uint32_t nodes = model.m_LatticeTopology.CellCount * 2, nodeGroups = (nodes + 63) / 64;
             compute.SetConstants(0, c.Triangles, nodes, 1u, 0u);
             compute.SetPipelineState(JumpPSO);
             compute.Dispatch(std::min(nodeGroups, 65535u), (nodeGroups + 65534) / 65535);
-            compute.InsertUAVBarrier(m_IslandParent); compute.InsertUAVBarrier(m_IslandStatus);
+            compute.InsertUAVBarrier(m_IslandParent);
+            compute.InsertUAVBarrier(m_IslandStatus);
             compute.SetConstants(0, c.Triangles, nodes, 0u, 0u);
             for (uint32_t iteration = 0; iteration < m_IslandK; ++iteration)
             {
@@ -6200,12 +6372,30 @@ namespace Viewer
                 compute.InsertUAVBarrier(m_TriangleSideIsland);
                 compute.InsertUAVBarrier(m_IslandStatus);
             }
-            if (m_IslandVerify)
+            // 수렴한 번호로 정수 투표와 최종 표를 같은 fence에 기록한다.
+            graphics.CopyBuffer(m_NumberReadback, m_TriangleSideIsland);
+            compute.TransitionResource(m_TriangleSideIsland, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(m_VoteWeights, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            compute.TransitionResource(m_IslandVote, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.SetRootSignature(VoteRoot);
+            compute.SetPipelineState(VotePSO);
+            compute.SetBufferSRV(1, m_Output->LocalBounds);
+            compute.SetBufferSRV(2, m_Output->TriangleSources);
+            compute.SetBufferSRV(3, m_Descriptors);
+            compute.SetBufferSRV(4, m_VoteWeights);
+            compute.SetBufferSRV(5, m_TriangleSideIsland);
+            compute.SetBufferUAV(6, m_IslandStatus);
+            compute.SetBufferUAV(7, m_IslandVote);
+            for (uint32_t pass = 0; pass < 3; ++pass)
             {
-                graphics.CopyBuffer(m_NumberReadback, m_TriangleSideIsland);
+                compute.SetConstants(0, c.Triangles, m_VoteGroups, pass, c.Draws);
+                compute.Dispatch(pass == 1 ? (c.Triangles + 63) / 64 : 1);
+                compute.InsertUAVBarrier(m_IslandVote);
             }
+            graphics.CopyBuffer(m_VoteReadback, m_IslandVote);
             graphics.CopyBuffer(m_StatusReadback, m_IslandStatus);
-            if (m_IslandVerify) graphics.CopyBuffer(m_ParentReadback, m_IslandParent);
+            if (m_IslandVerify)
+                graphics.CopyBuffer(m_ParentReadback, m_IslandParent);
         }
 
         // 추출 카운터와 선택 본을 같은 제출의 readback 버퍼에 복사한다.
@@ -6267,7 +6457,8 @@ namespace Viewer
                 m_IslandConverged = status[0] == 0;
                 m_GpuIslandCount = m_IslandConverged ? status[1] : 0;
                 const uint32_t error = status[0];
-                if (error) Utility::Printf("Island GPU UF fallback reason=not-converged/verify-failed iterations=%u\n", m_IslandK);
+                if (error)
+                    Utility::Printf("Island GPU UF fallback reason=not-converged/verify-failed iterations=%u\n", m_IslandK);
                 else Utility::Printf("Island GPU UF converged iterations=%u\n", m_IslandK);
             }
             catch (const std::exception& error)
@@ -6302,7 +6493,8 @@ namespace Viewer
             uint32_t first = 0;
             for (uint32_t s = 0; s <= origins[t * 3]; ++s)
                 for (uint32_t d = 0; d < m_Input->GetMesh(s).numDraws; ++d)
-                    if (s < origins[t * 3] || d < origins[t * 3 + 1]) first += m_Input->GetMesh(s).draw[d].primCount / 3;
+                    if (s < origins[t * 3] || d < origins[t * 3 + 1])
+                        first += m_Input->GetMesh(s).draw[d].primCount / 3;
             m_Output->Triangles.push_back(first + origins[t * 3 + 2]);
             // draw별 번호를 MI-1이 보존한 skin section 연속 삼각형 번호로 바꾼다.
             uint32_t local = origins[t * 3 + 2];
@@ -6311,7 +6503,8 @@ namespace Viewer
             m_Output->IslandSources.push_back({ m_SkinSections.at(origins[t * 3]), local });
         }
         m_OriginsReadback.Unmap();
-        if (m_Diagnostic) Validate(result);
+        if (m_Diagnostic)
+            Validate(result);
         auto& mesh = m_Output->Geometry->Meshes[0];
 
         // bind pose의 원본 구 대신 현재 추출 정점의 로컬 경계 구를 설정한다.
@@ -6328,7 +6521,8 @@ namespace Viewer
 
         // 압축된 실제 개수로 정적 draw의 유효 구간을 줄인다.
         const uint32_t vertices = result.PatchTriangles * 3;
-        mesh.vbSize = vertices * 28; mesh.ibSize = vertices * 4;
+        mesh.vbSize = vertices * 28;
+        mesh.ibSize = vertices * 4;
         mesh.vbDepthSize = vertices * ((mesh.psoFlags & PSOFlags::kAlphaTest) ? 16 : 12);
         mesh.draw[0].primCount = vertices;
 
@@ -6354,7 +6548,7 @@ namespace Viewer
         return true;
     }
 
-    // 제출 포즈를 CPU 스키닝해 실제 절단 평면의 부호와 아일랜드 다수결 근거를 남긴다.
+    // CPU oracle과 GPU mirror를 비교하고 선택한 섬 표를 cap 보정에 전달한다.
     void SkeletalPatchJob::DiagnoseIslands(SkeletalPatchBuffers& patch, const MeshCutting::CutPlaneData& plane,
         float offset, bool positiveA, const std::string& modelName)
     {
@@ -6371,7 +6565,8 @@ namespace Viewer
         for (size_t s = 0; s < m_SkinSections.size(); ++s)
         {
             const uint32_t skin = m_SkinSections[s];
-            if (skin == UINT32_MAX) continue;
+            if (skin == UINT32_MAX)
+                continue;
             frames.at(skin) = uint32_t(s);
         }
 
@@ -6380,28 +6575,39 @@ namespace Viewer
         {
             const uint32_t skin = source[0];
             const auto& section = model.m_SkinCpuSections.at(skin);
-            if (signs[skin].empty()) signs[skin].resize(section.size(), 2);
-            if (m_IslandVerify && cpuDistances[skin].empty()) cpuDistances[skin].resize(section.size());
+            if (signs[skin].empty())
+                signs[skin].resize(section.size(), 2);
+            if (m_IslandVerify && cpuDistances[skin].empty())
+                cpuDistances[skin].resize(section.size());
             for (uint32_t k = 0; k < 3; ++k)
             {
                 const uint32_t v = model.m_LatticeTopology.Indices.at(skin).at(source[1] * 3 + k);
-                if (signs[skin][v] != 2) continue;
+                if (signs[skin][v] != 2)
+                    continue;
                 const auto& vertex = section.at(v);
                 Math::Vector4 skinned(Math::kZero);
                 uint32_t sum = 0;
-                for (uint32_t weight : vertex.Weights) sum += weight;
+                for (uint32_t weight : vertex.Weights)
+                    sum += weight;
                 for (uint32_t j = 0; j < 4; ++j)
-                    if (vertex.Weights[j]) skinned = skinned + (m_IslandJoints.at(section.StartJoint + vertex.Joints[j]).posXform
-                        * Math::Vector4(vertex.Position[0], vertex.Position[1], vertex.Position[2], 1))
-                        * (float(vertex.Weights[j]) / std::max(sum, 1u));
+                    if (vertex.Weights[j])
+                        skinned = skinned + (m_IslandJoints.at(section.StartJoint + vertex.Joints[j]).posXform
+                            * Math::Vector4(vertex.Position[0], vertex.Position[1], vertex.Position[2], 1))
+                            * (float(vertex.Weights[j]) / std::max(sum, 1u));
                 const Math::Vector3 local(m_IslandFrames.at(frames.at(skin)) * skinned);
                 const Math::Vector3 world(m_SourceWorld * Math::Vector4(local, 1));
                 const float distance = Math::Dot(plane.WorldPlane,
                     Math::Vector4(world + Math::Vector3(offset, 0, 0), 1));
                 signs[skin][v] = std::abs(distance) <= 1e-5f ? 0 : distance > 0 ? 1 : -1;
-                if (m_IslandVerify) cpuDistances[skin][v] = distance;
+                if (m_IslandVerify)
+                    cpuDistances[skin][v] = distance;
             }
         }
+
+        // 모든 비교가 성공해야 동일 번호의 CPU 점수와 GPU 표를 함께 소비한다.
+        bool distanceMatch = false;
+        bool partitionMatch = false;
+        bool numberMatch = false;
 
         // Poll의 fence 완료 뒤 실제 이동 평면으로 코너별 부호와 셀을 대조한다.
         if (m_IslandVerify)
@@ -6437,6 +6643,8 @@ namespace Viewer
                         cellMismatch += cells[corners] != model.m_LatticeTopology.VertexCell.at(skin).at(v);
                         maxDifference = std::max(maxDifference, std::abs(d - cpuDistances[skin][v]));
                     }
+
+                distanceMatch = signMismatch == 0 && cellMismatch == 0;
 
                 // quiet 옵션과 무관하게 최종 검증 판정을 출력한다.
                 Utility::Printf("Island GPU verify %s: corners=%u signMismatch=%u maxDistanceDiff=%.9g cellMismatch=%u\n",
@@ -6486,17 +6694,20 @@ namespace Viewer
             for (uint32_t child = 0; child < m_Parents.size(); ++child)
             {
                 // 보존한 선택 선분을 사용하고 snapshot이 없을 때만 직접 자식으로 제한한다.
-                if (!IsSelectedSegmentChild(snapshot.Root, child, m_Parents[child], m_CutChildren[i])) continue;
+                if (!IsSelectedSegmentChild(snapshot.Root, child, m_Parents[child], m_CutChildren[i]))
+                    continue;
 
                 // 제출 포즈의 선택 선분과 평면 사이의 교점을 계산한다.
                 const Math::Vector3 position(frame * m_IslandNodes[child].GetW());
                 const float b = Dot(plane.WorldPlane, Math::Vector4(position + Math::Vector3(offset, 0, 0), 1));
                 float fraction = 0;
                 uint32_t side = 0;
-                if (!IntersectLatticeSegment(a, b, fraction, side)) continue;
+                if (!IntersectLatticeSegment(a, b, fraction, side))
+                    continue;
                 const Math::Vector3 crossing = parent + (position - parent) * fraction + Math::Vector3(offset, 0, 0);
                 const float distance = LengthSquare(crossing - center);
-                if (distance >= closest) continue;
+                if (distance >= closest)
+                    continue;
 
                 // 자식 snapshot이 없으면 평면 중심에 가장 가까운 직접 자식 교차를 보존한다.
                 closest = distance;
@@ -6520,8 +6731,8 @@ namespace Viewer
             patch.IslandSources, signs, group);
         cutPerfLabel.End();
 
-        // GPU root와 CPU 섬 번호의 양방향 대응으로 모든 쌍의 분할을 비교한다.
-        if (m_IslandVerify)
+        // 검증된 셀만 역참조하고 GPU root와 CPU 섬 번호의 양방향 대응을 비교한다.
+        if (m_IslandVerify && distanceMatch && m_IslandConverged)
         {
             try
             {
@@ -6554,17 +6765,20 @@ namespace Viewer
                         const uint32_t cpu = patch.Islands.TriangleSideIsland[t][side];
                         const bool exists = side == 0 ? positive || !negative : negative;
                         mismatch += exists != (cpu != UINT32_MAX);
-                        if (!exists || cpu == UINT32_MAX) continue;
+                        if (!exists || cpu == UINT32_MAX)
+                            continue;
                         for (uint32_t k = 0; k < 3; ++k)
                         {
                             const float d = distances[t * 3 + k];
-                            if (side == 0 ? d < -1e-5f : d > 1e-5f) continue;
+                            if (side == 0 ? d < -1e-5f : d > 1e-5f)
+                                continue;
                             const uint32_t root = parents[cells[t * 3 + k] * 2 + side];
                             mismatch += gpuToCpu.emplace(root, cpu).first->second != cpu;
                             mismatch += cpuToGpu.emplace(cpu, root).first->second != root;
                         }
                     }
                 }
+                partitionMatch = mismatch == 0;
                 Utility::Printf("Island GPU partition %s: mismatch=%u\n", mismatch ? "FAIL" : "PASS", mismatch);
             }
             catch (const std::exception& error)
@@ -6597,6 +6811,7 @@ namespace Viewer
                         mismatch += numbers[t * 2 + side] != patch.Islands.TriangleSideIsland[t][side];
                     }
                 }
+                numberMatch = mismatch == 0 && m_GpuIslandCount == patch.Islands.IslandCount;
                 Utility::Printf("Island GPU number %s: mismatch=%u islands=%u/%u\n",
                     mismatch || m_GpuIslandCount != patch.Islands.IslandCount ? "FAIL" : "PASS",
                     mismatch, m_GpuIslandCount, patch.Islands.IslandCount);
@@ -6608,13 +6823,93 @@ namespace Viewer
             }
         }
 
+        // 근접·overflow·GPU 실패는 요청 전체의 double oracle 결과를 보존한다.
+        if (m_IslandGpu && m_IslandConverged && !m_IslandDispatchLimited
+            && distanceMatch && partitionMatch && numberMatch && m_VoteSupported)
+        {
+            try
+            {
+                // 비교 중 예외에도 성공한 회수 매핑을 해제한다.
+                const auto unmap = [](ReadbackBuffer* buffer)
+                {
+                    // mirror의 읽기 매핑을 해제한다.
+                    buffer->Unmap();
+                };
+                const auto* data = static_cast<const uint32_t*>(m_VoteReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> voteMap(&m_VoteReadback, unmap);
+                const auto* numbers = static_cast<const std::array<uint32_t, 2>*>(m_NumberReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> numberMap(&m_NumberReadback, unmap);
+                const uint32_t stride = m_VoteGroups + 5;
+                const uint32_t table = m_VoteCapacity * 2 * stride;
+                uint32_t nearCount = 0;
+                for (uint32_t i = 0; i < m_GpuIslandCount; ++i)
+                    nearCount += data[i * stride + m_VoteGroups + 4] != 0;
+                const bool overflow = data[table + m_VoteCapacity * 2 + 2] != 0;
+                const bool fallback = nearCount != 0 || overflow;
+                bool metadataMatch = true;
+                IslandLabels mirror = patch.Islands;
+                if (!fallback)
+                {
+                    // GPU 번호·섬 메타데이터·몸체·기본값을 mirror로 교체한다.
+                    mirror.IslandCount = m_GpuIslandCount;
+                    // 동일 번호의 Scores·JointScores는 CPU oracle 값을 보존한다.
+                    mirror.TriangleSideIsland.assign(numbers, numbers + patch.IslandSources.size());
+                    std::memcpy(mirror.TriangleSideBody.data(), data + table, patch.IslandSources.size() * 8);
+                    for (uint32_t i = 0; i < m_GpuIslandCount; ++i)
+                    {
+                        metadataMatch &= mirror.Islands[i].Triangles == data[i * stride + m_VoteGroups]
+                            && mirror.Islands[i].Side == data[i * stride + m_VoteGroups + 1]
+                            && mirror.Islands[i].Body == data[i * stride + m_VoteGroups + 2];
+                        mirror.Islands[i].Triangles = data[i * stride + m_VoteGroups];
+                        mirror.Islands[i].Side = data[i * stride + m_VoteGroups + 1];
+                        mirror.Islands[i].Body = data[i * stride + m_VoteGroups + 2];
+                    }
+                    std::memcpy(mirror.SideDefault, data + table + m_VoteCapacity * 2, 8);
+                }
+
+                // 근접 해결 뒤 모든 삼각형 side와 두 기본값을 정확히 비교한다.
+                uint32_t mismatch = mirror.SideDefault[0] != patch.Islands.SideDefault[0];
+                mismatch += mirror.SideDefault[1] != patch.Islands.SideDefault[1];
+                for (size_t t = 0; t < patch.IslandSources.size(); ++t)
+                    for (uint32_t side = 0; side < 2; ++side)
+                        mismatch += mirror.TriangleSideBody[t][side] != patch.Islands.TriangleSideBody[t][side];
+                if (m_IslandVerify)
+                    Utility::Printf("Island GPU vote %s: mismatch=%u near=%u islands=%u\n", mismatch ? "FAIL" : "PASS", mismatch, nearCount, m_GpuIslandCount);
+                const char* reason = overflow ? "overflow" : nearCount ? "near"
+                    : !metadataMatch ? "metadata" : mismatch ? "vote" : nullptr;
+                if (reason)
+                    Utility::Printf("Island GPU UF fallback reason=%s\n", reason);
+                else if (m_ConsumeGpu)
+                {
+                    // 후속 cap 재라벨과 분류에 동일 번호의 점수와 소비 표를 전달한다.
+                    patch.Islands = m_IslandLabels = std::move(mirror);
+                    Utility::Printf("Island GPU vote consumed: near=%u islands=%u\n", nearCount, m_GpuIslandCount);
+                }
+            }
+            catch (const std::exception& error)
+            {
+                // 회수 실패는 CPU oracle을 보존하고 quiet와 무관하게 출력한다.
+                Utility::Printf("Island GPU UF fallback reason=vote-map %s\n", error.what());
+                if (m_IslandVerify)
+                    Utility::Printf("Island GPU vote FAIL: mismatch=1 near=0 islands=%u\n", m_GpuIslandCount);
+            }
+        }
+        else if (m_IslandGpu)
+        {
+            // 첫 실패 검사를 quiet와 무관하게 남기고 oracle 출력을 보존한다.
+            const char* reason = !m_IslandConverged ? "not-converged" : !distanceMatch ? "distance-sign/cell"
+                : !partitionMatch ? "partition" : !numberMatch ? "number/count" : "dynamic-root";
+            Utility::Printf("Island GPU UF fallback reason=%s\n", reason);
+        }
+
+        // 선택한 최종 섬 표의 기존 진단을 이어간다.
         uint32_t reassigned = 0;
         for (const auto& island : patch.Islands.Islands)
             reassigned += island.Body != uint32_t(island.Side == 0 ? !positiveA : positiveA);
         PatchLog("MI2 islands=%u reassigned=%u side0Default=%u side1Default=%u\n", patch.Islands.IslandCount,
             reassigned, patch.Islands.SideDefault[0], patch.Islands.SideDefault[1]);
 
-        // 최대 기여 joint 이름과 점수로 허리 등 떨어진 아일랜드의 소속 근거를 보인다.
+        // 최대 기여 joint 이름과 점수로 떨어진 아일랜드의 소속 근거를 보인다.
         for (const auto& island : patch.Islands.Islands)
         {
             uint32_t joint = UINT32_MAX;
