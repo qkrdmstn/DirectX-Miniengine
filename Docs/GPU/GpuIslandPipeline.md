@@ -1,4 +1,4 @@
-상태: G2b 완료 — base `760d1412` + 미커밋; G1·G2a 완료, 사용자 결정으로 G2~G4 진행·G5 보류 (2026-11-26)
+상태: G3a 구현·Release 검증 완료 (Debug 빌드 미수행, LatticeTopologyTests 해당 없음 — G3a는 CPU 코드 변경 없음) — G1·G2a·G2b 완료, 사용자 결정으로 G2~G4 진행·G5 보류 (2026-11-26)
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -298,6 +298,28 @@ struct GpuIslandJob
 - 이동 보정 추가 검증: demo는 offset-copy 옵션을 강제로 끄므로 자동 `-skeletal-patch-checks 1 -skeletal-patch-offset-copy 1 -island-gpu-verify 1 -physics-query-exit 180 -debug 0`으로 20개 case를 실행했다. offset=1.402922/1.807833, 모든 case 부호·셀 불일치 0, 최대 거리 차이 1.90734863e-6, 종료 0(6.047초). 근거 `%TEMP%/g2b-validation/OffsetCopy-checks.log`, `OffsetCopy-checks-command.txt`.
 
 - 구현 대화를 상속하지 않은 별도 Codex 읽기 전용 리뷰 완료: 추출→거리 의존성, PG 변환, 출처·baseVertex·셀 인덱싱, job 수명, fence 회수, 평면 이동 보정에서 차단 결함 없음. 빌드·실행을 중복하지 않고 위 근거를 사용했다.
+
+### G3a 결과
+
+G3a 구현·Release 검증 완료 (Debug 빌드 미수행, LatticeTopologyTests 해당 없음 — G3a는 CPU 코드 변경 없음).
+
+2026-11-26, 미커밋. `SkeletalPatchJob::Submit`은 GPU 옵션이 켜진 요청에서만 job 소유 `Parent(2*CellCount)`·`Status`를 만들고, `InitializeDistance`에서 UF PSO도 지연 생성한다. `IslandJumpCS` 초기화 모드로 `Parent[i]=i`·Status=0을 기록한 뒤 `IslandDistanceCS`와 같은 제출에서 hook+jump를 `-island-gpu-k N`번(기본 32) 기록한다. 패스 사이 Parent UAV barrier를 둔다.
+
+- `IslandUnion.hlsli`의 `SideNodes`는 CPU `LabelPatchIslands`와 같은 side 존재·영점 코너 규칙과 `1e-5` 임계값을 사용한다. 결정 5의 복사 offset·평면 이동 항이 상쇄되므로 d0를 직접 분류한다.
+- `IslandHookCS`는 현재 root에 `InterlockedMin`을 적용하고 `IslandJumpCS`는 원자적으로 부모의 부모로 압축한다. `IslandVerifyCS`는 모든 존재하는 `(t,side)`의 코너 부모가 동일한 최종 root인지 확인한다. 압축 미완료도 보수적으로 미수렴 처리한다.
+- `SkeletalPatchJob::Poll`은 기존 추출 fence 완료 뒤 작은 Status를 회수한다. 새 동기 대기는 없으며 `Utility::Printf`로 quiet와 무관하게 수렴 또는 fallback 사유를 출력한다. G3a에서는 성공·실패 모두 기존 CPU 경로가 출력을 결정하며 GPU 라벨은 소비하지 않는다.
+- verify에서만 Parent도 회수한다. `DiagnoseIslands`는 존재 여부와 모든 활성 코너의 GPU root↔CPU island ID 양방향 대응을 검사한다. Map은 범위 기반 Unmap으로 보호하며 실패도 로그에 남긴다. 독립 읽기 전용 Codex 리뷰에서 차단 결함 없음.
+- Release 빌드 성공(58.01초, 오류 0). 지정 capture 도구·작업 디렉터리로 실행한 아래 5회와 최종 validation 재실행 모두 종료 0. NVIDIA GeForce MX450, 드라이버는 기존 G2b 기록 591.86. 명령·로그·runner·빌드 근거는 `%TEMP%/g3a-verify/`에 보존했다. Debug 빌드·flags-off 비교는 이번 요청 범위에서 제외했다.
+
+| Release 실행 | UF 결과 | partition | 거리·셀 | 실행 초 |
+| --- | --- | --- | --- | ---: |
+| Xbot-Thigh | converged iterations=32 | PASS mismatch=0 | PASS | 9.153 |
+| CesiumMan-Thigh | converged iterations=32 | PASS mismatch=0 | PASS | 9.189 |
+| CesiumMan-UpperArm | converged iterations=32 | PASS mismatch=0 | PASS | 10.526 |
+| Xbot-Thigh K=1 | fallback reason=not-converged/verify-failed | FAIL mismatch=6118 (미수렴 예상) | PASS | 10.759 |
+| Xbot-Thigh debug=1 | converged iterations=32 | PASS mismatch=0 | PASS | 9.884 |
+
+- 최종 Map 보호·include 등록 후 Release 재빌드 성공(32.96초, 오류 0). 최종 실행 파일의 `Xbot-validation-final.log`도 종료 0(10.641초), UF converged iterations=32·거리/partition PASS. `Xbot-validation.log`와 최종 로그 모두 D3D12 ERROR 0, CORRUPTION 0. K=1도 기존 CPU 출력으로 게시·정상 종료했으며 강제 성공 처리하지 않았다. Geometry 변경은 없다.
 
 ## 완료 조건
 

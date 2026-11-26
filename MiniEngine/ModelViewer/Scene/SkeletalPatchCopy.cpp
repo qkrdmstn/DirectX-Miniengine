@@ -13,6 +13,9 @@
 #include "PipelineState.h"
 #include "CompiledShaders/PatchExtractCS.h"
 #include "CompiledShaders/IslandDistanceCS.h"
+#include "CompiledShaders/IslandHookCS.h"
+#include "CompiledShaders/IslandJumpCS.h"
+#include "CompiledShaders/IslandVerifyCS.h"
 #include "CompiledShaders/PatchBodyClassifyCS.h"
 #include "CompiledShaders/PatchBodyCompactCS.h"
 #include "tests/SkeletalPatchReference.h"
@@ -43,6 +46,8 @@ namespace Viewer
     {
         RootSignature PatchRoot;
         ComputePSO PatchPSO(L"Extract skeletal patch");
+        RootSignature UnionRoot;
+        ComputePSO HookPSO(L"Island hook"), JumpPSO(L"Island jump"), VerifyPSO(L"Island verify");
         RootSignature DistanceRoot;
         ComputePSO DistancePSO(L"Island corner distances");
         struct DistanceParameters
@@ -879,6 +884,22 @@ namespace Viewer
             DistancePSO.SetRootSignature(DistanceRoot);
             DistancePSO.SetComputeShader(g_pIslandDistanceCS, sizeof(g_pIslandDistanceCS));
             DistancePSO.Finalize();
+
+            // 거리 옵션과 같은 지연 초기화로 UF 파이프라인을 만든다.
+            UnionRoot.Reset(6);
+            UnionRoot[0].InitAsConstants(0, 4);
+            for (uint32_t i = 0; i < 3; ++i) UnionRoot[i + 1].InitAsBufferSRV(i);
+            for (uint32_t i = 0; i < 2; ++i) UnionRoot[i + 4].InitAsBufferUAV(i);
+            UnionRoot.Finalize(L"Island union find");
+            ComputePSO* psos[] = { &HookPSO, &JumpPSO, &VerifyPSO };
+            const void* shaders[] = { g_pIslandHookCS, g_pIslandJumpCS, g_pIslandVerifyCS };
+            const size_t sizes[] = { sizeof(g_pIslandHookCS), sizeof(g_pIslandJumpCS), sizeof(g_pIslandVerifyCS) };
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                psos[i]->SetRootSignature(UnionRoot);
+                psos[i]->SetComputeShader(shaders[i], sizes[i]);
+                psos[i]->Finalize();
+            }
             initialized = true;
         }
     }
@@ -5945,10 +5966,18 @@ namespace Viewer
         CommandLineArgs::GetInteger(L"island-gpu", islandGpu);
         CommandLineArgs::GetInteger(L"island-gpu-verify", islandVerify);
         m_IslandVerify = islandVerify != 0;
+        m_IslandGpu = islandGpu || m_IslandVerify;
         if (islandGpu || m_IslandVerify)
         {
             // 활성 요청에서만 거리 파이프라인과 월드 평면을 준비한다.
             InitializeDistance();
+            m_IslandK = 32;
+            CommandLineArgs::GetInteger(L"island-gpu-k", m_IslandK);
+            const uint32_t nodes = model.m_LatticeTopology.CellCount * 2;
+            m_IslandParent.Create(L"Island parents", nodes, 4);
+            m_IslandStatus.Create(L"Island status", 1, 4);
+            m_StatusReadback.Create(L"Island status readback", 1, 4);
+            if (m_IslandVerify) m_ParentReadback.Create(L"Island parent readback", nodes, 4);
             m_DistancePlane = Transpose(Invert(world)) * plane.WorldPlane;
 
             // GPU 코너 출력과 선택적 검증 회수 버퍼를 만든다.
@@ -6099,6 +6128,35 @@ namespace Viewer
             }
             compute.TransitionResource(m_CornerDistance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             compute.TransitionResource(m_CornerCell, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+            // 같은 제출에서 초기화 뒤 K번 hook과 jump를 기록한다.
+            compute.TransitionResource(m_IslandParent, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.TransitionResource(m_IslandStatus, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            compute.SetRootSignature(UnionRoot);
+            compute.SetBufferSRV(1, m_Output->LocalBounds);
+            compute.SetBufferSRV(2, m_CornerDistance); compute.SetBufferSRV(3, m_CornerCell);
+            compute.SetBufferUAV(4, m_IslandParent); compute.SetBufferUAV(5, m_IslandStatus);
+            const uint32_t nodes = model.m_LatticeTopology.CellCount * 2, nodeGroups = (nodes + 63) / 64;
+            compute.SetConstants(0, c.Triangles, nodes, 1u, 0u);
+            compute.SetPipelineState(JumpPSO);
+            compute.Dispatch(std::min(nodeGroups, 65535u), (nodeGroups + 65534) / 65535);
+            compute.InsertUAVBarrier(m_IslandParent); compute.InsertUAVBarrier(m_IslandStatus);
+            compute.SetConstants(0, c.Triangles, nodes, 0u, 0u);
+            for (uint32_t iteration = 0; iteration < m_IslandK; ++iteration)
+            {
+                compute.SetPipelineState(HookPSO);
+                compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+                compute.InsertUAVBarrier(m_IslandParent);
+                compute.SetPipelineState(JumpPSO);
+                compute.Dispatch(std::min(nodeGroups, 65535u), (nodeGroups + 65534) / 65535);
+                compute.InsertUAVBarrier(m_IslandParent);
+            }
+
+            // 검증 상태와 선택적 부모 회수를 기존 추출 fence에 포함한다.
+            compute.SetPipelineState(VerifyPSO);
+            compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
+            graphics.CopyBuffer(m_StatusReadback, m_IslandStatus);
+            if (m_IslandVerify) graphics.CopyBuffer(m_ParentReadback, m_IslandParent);
         }
 
         // 추출 카운터와 선택 본을 같은 제출의 readback 버퍼에 복사한다.
@@ -6137,6 +6195,29 @@ namespace Viewer
         // GPU가 아직 쓰는 readback은 매핑하지 않는다.
         if (!m_Fence || !Graphics::g_CommandManager.IsFenceComplete(m_Fence))
             return false;
+
+        // 기존 fence 완료 뒤 UF 상태를 읽고 출력은 계속 CPU 경로로 계산한다.
+        if (m_IslandGpu)
+        {
+            try
+            {
+                // 성공한 매핑은 범위를 벗어날 때 해제한다.
+                const auto unmap = [](ReadbackBuffer* buffer)
+                {
+                    // 상태 회수 버퍼의 읽기 매핑을 해제한다.
+                    buffer->Unmap();
+                };
+                const auto* status = static_cast<const uint32_t*>(m_StatusReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> statusMap(&m_StatusReadback, unmap);
+                const uint32_t error = *status;
+                if (error) Utility::Printf("Island GPU UF fallback reason=not-converged/verify-failed iterations=%u\n", m_IslandK);
+                else Utility::Printf("Island GPU UF converged iterations=%u\n", m_IslandK);
+            }
+            catch (const std::exception& error)
+            {
+                Utility::Printf("Island GPU UF fallback reason=status-map %s\n", error.what());
+            }
+        }
 
         // 기본 경로는 정점 대신 선택 수와 로컬 경계·원본 월드 X 경계만 읽는다.
         uint32_t metadata[12];
@@ -6381,6 +6462,60 @@ namespace Viewer
         patch.Islands = m_IslandLabels = LabelPatchIslands(model.m_LatticeTopology, model.m_SkinCpuSections,
             patch.IslandSources, signs, group);
         cutPerfLabel.End();
+
+        // GPU root와 CPU 섬 번호의 양방향 대응으로 모든 쌍의 분할을 비교한다.
+        if (m_IslandVerify)
+        {
+            try
+            {
+                // 성공한 Map은 비교 중 예외가 나도 범위 종료 시 해제한다.
+                const auto unmap = [](ReadbackBuffer* buffer)
+                {
+                    // 회수 버퍼의 읽기 매핑을 해제한다.
+                    buffer->Unmap();
+                };
+                const auto* parents = static_cast<const uint32_t*>(m_ParentReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> parentMap(&m_ParentReadback, unmap);
+                const auto* distances = static_cast<const float*>(m_DistanceReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> distanceMap(&m_DistanceReadback, unmap);
+                const auto* cells = static_cast<const uint32_t*>(m_CellReadback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> cellMap(&m_CellReadback, unmap);
+
+                // 없는 side까지 비교하고 활성 코너는 모두 같은 CPU 섬에 대응시킨다.
+                std::map<uint32_t, uint32_t> gpuToCpu, cpuToGpu;
+                uint32_t mismatch = 0;
+                for (size_t t = 0; t < patch.IslandSources.size(); ++t)
+                {
+                    bool positive = false, negative = false;
+                    for (uint32_t k = 0; k < 3; ++k)
+                    {
+                        positive |= distances[t * 3 + k] > 1e-5f;
+                        negative |= distances[t * 3 + k] < -1e-5f;
+                    }
+                    for (uint32_t side = 0; side < 2; ++side)
+                    {
+                        const uint32_t cpu = patch.Islands.TriangleSideIsland[t][side];
+                        const bool exists = side == 0 ? positive || !negative : negative;
+                        mismatch += exists != (cpu != UINT32_MAX);
+                        if (!exists || cpu == UINT32_MAX) continue;
+                        for (uint32_t k = 0; k < 3; ++k)
+                        {
+                            const float d = distances[t * 3 + k];
+                            if (side == 0 ? d < -1e-5f : d > 1e-5f) continue;
+                            const uint32_t root = parents[cells[t * 3 + k] * 2 + side];
+                            mismatch += gpuToCpu.emplace(root, cpu).first->second != cpu;
+                            mismatch += cpuToGpu.emplace(cpu, root).first->second != root;
+                        }
+                    }
+                }
+                Utility::Printf("Island GPU partition %s: mismatch=%u\n", mismatch ? "FAIL" : "PASS", mismatch);
+            }
+            catch (const std::exception& error)
+            {
+                // 회수 실패도 quiet 옵션과 무관하게 검증 실패로 남긴다.
+                Utility::Printf("Island GPU partition FAIL: %s\n", error.what());
+            }
+        }
 
         uint32_t reassigned = 0;
         for (const auto& island : patch.Islands.Islands)

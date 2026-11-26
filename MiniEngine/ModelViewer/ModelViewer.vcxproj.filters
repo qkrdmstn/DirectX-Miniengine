@@ -326,6 +326,9 @@
   <ItemGroup>
     <FxCompile Include="Scene\Shaders\PatchExtractCS.hlsl" />
     <FxCompile Include="Scene\Shaders\IslandDistanceCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\IslandHookCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\IslandJumpCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\IslandVerifyCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchBodyClassifyCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchBodyCompactCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl" />
@@ -341,5 +344,8 @@
   <ItemGroup>
     <ClInclude Include="Scene\tests\AttachedRecutChecks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Scene\tests\RigBoneCutChecks.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Scene\Shaders\IslandUnion.hlsli" />
   </ItemGroup>
 </Project>

@@ -122,6 +122,15 @@
     <FxCompile Include="Scene\Shaders\IslandDistanceCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>
+    <FxCompile Include="Scene\Shaders\IslandHookCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Scene\Shaders\IslandJumpCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Scene\Shaders\IslandVerifyCS.hlsl">
+      <ShaderType>Compute</ShaderType>
+    </FxCompile>
     <FxCompile Include="Scene\Shaders\PatchBodyClassifyCS.hlsl">
       <ShaderType>Compute</ShaderType>
     </FxCompile>
@@ -513,5 +522,8 @@
   <ItemGroup>
     <ClInclude Include="Scene\tests\AttachedRecutChecks.h" />
     <ClInclude Include="Scene\tests\RigBoneCutChecks.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Scene\Shaders\IslandUnion.hlsli" />
   </ItemGroup>
 </Project>
