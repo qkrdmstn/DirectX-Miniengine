@@ -4594,6 +4594,7 @@ namespace Viewer
     }
 
     // cutter 출력의 실제 section 범위를 n+1 몸체로 판정하고 압축용 표를 보관한다.
+    // 분류 표 업로드는 분류 dispatch와 같은 command list에 기록한다.
     void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
         const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount)
     {
@@ -4609,13 +4610,15 @@ namespace Viewer
         if (islands.TriangleSideBody.empty()) return;
         if (side == 0)
         {
-            // 초기 데이터 Create의 할당·업로드·내부 동기 대기를 각각 잰다.
+            // job 소유 표를 초기 데이터 없이 만들고 제거된 동기 대기 구간은 유지한다.
+            m_CapLoopTable.Create(L"Cap loop side bodies", uint32_t(capLoops.size()), sizeof(capLoops[0]));
+            m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
+                sizeof(islands.TriangleSideBody[0]));
+
+            // 기존 두 업로드 대기가 없어졌음을 같은 이름과 횟수로 기록한다.
             CutPerf::Cpu cutPerfUpload("ClassifyCutBodies-upload-wait");
-            m_CapLoopTable.Create(L"Cap loop side bodies", uint32_t(capLoops.size()), sizeof(capLoops[0]), capLoops.data());
             cutPerfUpload.End();
             CutPerf::Cpu cutPerfIslandUpload("ClassifyCutBodies-upload-wait");
-            m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
-                sizeof(islands.TriangleSideBody[0]), islands.TriangleSideBody.data());
             cutPerfIslandUpload.End();
         }
         struct Constants
@@ -4654,18 +4657,51 @@ namespace Viewer
                 throw std::runtime_error("Invalid body classification provenance range");
             end = std::max(end, mesh.vbOffset / 84 + mesh.vbSize / 84);
         }
-        if (!end) return;
+
+        // 실제 출력이 있을 때만 판정 버퍼와 동기 회수용 카운터를 먼저 할당한다.
         auto& bodies = m_TriangleBodies[side];
-        bodies.Create(L"Output triangle bodies", end, sizeof(uint32_t));
         ByteAddressBuffer counters;
         ReadbackBuffer readback;
         const uint32_t counterCount = 10 + bodyCount * 2;
-        counters.Create(L"Body classification counters", counterCount, sizeof(uint32_t));
-        readback.Create(L"Body classification readback", counterCount, sizeof(uint32_t));
+        if (end)
+        {
+            // 할당 실패가 분류 command context를 열기 전에 기존 예외 경로로 전달되게 한다.
+            bodies.Create(L"Output triangle bodies", end, sizeof(uint32_t));
+            counters.Create(L"Body classification counters", counterCount, sizeof(uint32_t));
+            readback.Create(L"Body classification readback", counterCount, sizeof(uint32_t));
+        }
 
         // 각 section의 실제 출력 삼각형만 dispatch하고 합산 카운터를 초기화한다.
         auto& graphics = GraphicsContext::Begin(L"Classify patch output bodies");
         CutPerf::Gpu cutPerfClassify(graphics, "BodyClassify-whole");
+
+        // side 0의 두 표를 분류 command list에 복사하고 기존 SRV 전이로 이어간다.
+        if (side == 0)
+        {
+            // 원본 바이트를 context 소유 업로드 메모리에 보관해 GPU 완료까지 유지한다.
+            const auto uploadTable = [&graphics](GpuBuffer& destination, const void* data, size_t bytes)
+            {
+                // 복사 목적지 상태로 전이하고 업로드 메모리의 전체 표를 복사한다.
+                DynAlloc upload = graphics.ReserveUploadMemory(bytes);
+                std::memcpy(upload.DataPtr, data, bytes);
+                graphics.TransitionResource(destination, D3D12_RESOURCE_STATE_COPY_DEST);
+                graphics.CopyBufferRegion(destination, 0, upload.Buffer, upload.Offset, bytes);
+            };
+            uploadTable(m_CapLoopTable, capLoops.data(), capLoops.size() * sizeof(capLoops[0]));
+            uploadTable(m_IslandTable, islands.TriangleSideBody.data(),
+                islands.TriangleSideBody.size() * sizeof(islands.TriangleSideBody[0]));
+        }
+
+        // 빈 side 0도 표 복사를 제출해 이후 side 1의 분류 입력을 보존한다.
+        if (!end)
+        {
+            // 업로드 메모리는 제출 fence까지 유지하며 CPU에서 완료를 기다리지 않는다.
+            cutPerfClassify.End();
+            graphics.Finish();
+            return;
+        }
+
+        // 복사 완료 후 provenance와 표는 SRV, 판정 결과와 카운터는 UAV로 사용한다.
         auto& compute = graphics.GetComputeContext();
         auto& provenance = const_cast<ByteAddressBuffer&>(geometry.Provenance);
         compute.TransitionResource(provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

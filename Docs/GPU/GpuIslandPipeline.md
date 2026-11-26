@@ -1,4 +1,4 @@
-상태: 진행 중 — G0 (미커밋) — 기준 HEAD `d5e94361`, Release 빌드·14/15 실행 측정, 다중 허벅지 실패·DXGI 오류 후속 (2026-11-26)
+상태: 진행 중 — G1a (미커밋) — 기준 HEAD `959b1bbc`, 분류 표 업로드 동기 대기 제거, G0 다중 허벅지 실패·DXGI 오류 후속 (2026-11-26)
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -188,6 +188,34 @@ struct GpuIslandJob
 - 재현 근거: `Tools/CutPerf/out/G0-20261126-measured/`의 `CutPerfRuns.csv`, `CutPerfSummary.csv`, `CutPerfResult.txt`, `runs.txt`, `raw/`, `validation-cut.log`, `validation-debug.log`, `multi-retry-debug.log`. runner가 보고한 실패를 그대로 보존했다. 이 디렉터리는 git ignore 대상이다.
 - 후속: 다중 허벅지 런타임 실패와 DXGI 오류를 별도 작업에서 해결한 뒤 해당 기준값을 재측정한다. `-island-gpu` 옵션은 아직 엔진에 없으므로 OFF/ON은 GPU 타이머 비교이며 섬 알고리즘 비교가 아니다. G0는 미커밋 진행 중이며 완료 판정은 보류한다.
 - Release 빌드 산출물은 보존했다. 이번 TEMP 빌드 상세 로그(`%TEMP%/g0-release-build-20261126.log`)와 임시 수집기 산출물 삭제는 도구 자동 승인 검토에서 `blocked by policy`로 거부되어 남았다. 삭제를 완료했다고 간주하지 않는다. 커밋·푸시는 하지 않았다.
+
+### G1a 결과
+
+2026-11-26, `master` / HEAD `959b1bbc` + 미커밋. `ClassifyCutBodies`의 두 표는 초기 데이터 없이 생성하고, 분류 context의 `ReserveUploadMemory`에 원본과 같은 바이트 수를 복사한다. `COPY_DEST` 복사 뒤 기존 `NON_PIXEL_SHADER_RESOURCE` 전이를 거쳐 `PatchBodyClassifyCS`가 읽는다. 표의 job 소유권·counter 동기 회수는 유지한다. 빈 side 0도 표 복사만 비동기 제출한다. 기존 upload-wait 구간은 대기 없는 두 구간으로 유지한다.
+
+아래는 G0→G1a 평균 비교다. upload는 요청당 합계 ms(각 2회), 게시 시간은 요청→게시 ms, 프레임도 요청→게시 값이다. 허벅지는 각 N=3, 위팔·척추는 각 N=1이며 ON/OFF는 GPU 타이머 설정이다.
+
+| 설정 / 장면 | upload wait ms | 게시 ms | 게시 frames |
+| --- | --- | --- | --- |
+| ON / Xbot 1차 | 0.919→0.000 | 457.863→504.977 | 4.000→4.000 |
+| ON / Xbot 2차 | 2.798→0.000 | 65.683→56.905 | 4.000→4.000 |
+| ON / CesiumMan 1차 | 4.587→0.000 | 476.060→624.096 | 4.000→4.000 |
+| ON / CesiumMan 2차 | 0.697→0.000 | 61.572→74.339 | 3.667→4.000 |
+| ON / CesiumMan 위팔 | 5.146→0.000 | 476.720→519.622 | 4.000→4.000 |
+| ON / CesiumMan 척추 | 5.060→0.000 | 463.299→1185.650 | 4.000→4.000 |
+| OFF / Xbot 1차 | 0.957→0.000 | 472.447→489.020 | 4.000→4.333 |
+| OFF / Xbot 2차 | 1.016→0.000 | 55.119→65.168 | 4.000→4.000 |
+| OFF / CesiumMan 1차 | 5.062→0.000 | 479.724→459.838 | 4.000→4.000 |
+| OFF / CesiumMan 2차 | 0.766→0.000 | 62.679→66.155 | 3.667→3.667 |
+
+- 최종 runner `-G0 -N 3 -NoOpen -OutDir Tools/CutPerf/out/G1a`: 206.009초, 14/15 실행·26요청 게시, upload-wait 52개 행 모두 0.000 ms. 종료 1은 기존 Xbot-MultiThigh `0xC0000409` 한 건이며 비교에서 제외했다. 업로드 동기 대기는 제거됐으나 전체 게시 시간은 여러 표본에서 증가했으므로 전체 지연 개선·비열화 없음은 입증하지 못했다.
+- 출력 동등성: HEAD `959b1bbc` 빌드와 G1a 빌드에서 Xbot 허벅지·CesiumMan 허벅지·CesiumMan 위팔을 `-cut-perf-quiet 0`으로 실행해 `MI3a`·`MI3f`·`MI4d`·`MI3c`·`MI3d`·cut result 15줄씩(시간 제외)을 비교했다. 세 장면 모두 동일하다(Xbot body0/body1 1453/869, invalid·idMismatch·fallback 0). 로그는 `%TEMP%/g1a-equivalence-20261126/`.
+- Codex 리뷰(구현과 다른 실행): 사소 1건(아래 알려진 한계) 외 문제 없음.
+
+- 알려진 한계: 업로드 메모리 확보 중 예외(할당 실패) 시 classify context가 제출되지 않는다. 기존 InitializeBuffer 경로와 같은 수준이며 할당 실패는 엔진 계속 실행이 어려운 상황이라 수정하지 않았다.
+- Release 최종 빌드 성공(24.585초). 수정 구간 밖 기존 코드의 C4267/C4456/C4100/C4756 경고 및 post-build `pwsh.exe` 부재 메시지는 남는다. LatticeTopologyTests PASS(빌드·실행 2.152초). Release Xbot 오른쪽 허벅지 `-debug 1` 실행 종료 0(14.562초): D3D12 ERROR 0, 기존 DXGI GetContainingOutput ERROR 1, 기존 D3D12 WARNING #1008 480행.
+- Debug용 Jolt는 캐시 소스로 빌드 성공(17.520초, 다운로드 없음), Debug 엔진 빌드 성공(156.589초, 수정 범위 밖 C4819 등 경고는 남음). 중간 폴더 재귀 삭제는 자동 승인 검토에서 `blocked by policy`로 거부됐다. 더 제한된 Debug 구성 MSBuild `Clean`은 종료 0으로 완료해 컴파일 산출물을 정리했으며 `Intermediate`에는 추적/로그 9파일 52,023 B가 남았다. Debug 출력도 Clean 대상이며 Release 실행 파일은 보존했다.
+- 근거: `Tools/CutPerf/out/G1a/`의 `G0-comparison.csv`, runner CSV·텍스트·`raw/`, `validation-{cut,debug}.log`. 빈 side 경로 보완 전 첫 측정(208.612초)은 `G1a-first/`에 별도 보존했고 위 표에는 포함하지 않았다. 빌드 상세 로그는 `%TEMP%/g1a-*.log`. 별도 새 세션 리뷰·커밋·푸시는 하지 않았다. G1b counter 대기 제거는 후속이다.
 
 ## 완료 조건
 
