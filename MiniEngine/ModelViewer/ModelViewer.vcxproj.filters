@@ -332,6 +332,7 @@
     <FxCompile Include="Scene\Shaders\IslandNumberCS.hlsl" />
     <FxCompile Include="Scene\Shaders\IslandVoteCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchBodyClassifyCS.hlsl" />
+    <FxCompile Include="Scene\Shaders\PatchBodyClassifyGpuCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchBodyCompactCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBuildCS.hlsl" />
     <FxCompile Include="Scene\Shaders\PatchSkinBakeCS.hlsl" />

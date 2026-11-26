@@ -19,6 +19,7 @@
 #include "CompiledShaders/IslandNumberCS.h"
 #include "CompiledShaders/IslandVoteCS.h"
 #include "CompiledShaders/PatchBodyClassifyCS.h"
+#include "CompiledShaders/PatchBodyClassifyGpuCS.h"
 #include "CompiledShaders/PatchBodyCompactCS.h"
 #include "tests/SkeletalPatchReference.h"
 #include <cstdio>
@@ -4675,7 +4676,10 @@ namespace Viewer
         ReadbackBuffer Metadata, Flags;
         ByteAddressBuffer ClassifyCounters[2];
         ReadbackBuffer ClassifyReadback[2];
-        Microsoft::WRL::ComPtr<ID3D12Resource> ClassifyProvenance[2], ClassifyTables[2];
+        Microsoft::WRL::ComPtr<ID3D12Resource> ClassifyProvenance[2], ClassifyTables[4];
+        ByteAddressBuffer Overrides;
+        std::vector<std::array<uint32_t, 2>> OverrideData;
+        bool GpuClassify = false, VerifyClassify = false;
         bool Classified[2] = {};
         std::map<uint32_t, Mesh> Templates;
         std::vector<uint32_t> LayoutData;
@@ -4695,7 +4699,7 @@ namespace Viewer
     };
 
     // cutter 출력의 실제 section 범위를 n+1 몸체로 판정하고 압축용 표를 보관한다.
-    // 분류 자원은 압축 job이 소유하고 진단 카운터는 압축 완료 폴링에서 읽는다.
+    // 승인된 GPU 표에 섬별 cap 보정을 적용하고 검증 카운터는 압축 완료 후 읽는다.
     void SkeletalPatchCopy::ClassifyCutBodies(const GeometryBuffers& geometry, const IslandLabels& islands,
         const std::vector<std::array<uint32_t, 2>>& capLoops, uint32_t side, uint32_t bodyCount)
     {
@@ -4707,18 +4711,57 @@ namespace Viewer
             throw std::length_error("MI4d invalid classification body count");
 
         // 표는 [패치 삼각형][반공간] 순서이며 물리 A/B 순서와 무관하다.
-        if (side == 0) DiscardBodyCompaction();
-        if (islands.TriangleSideBody.empty()) return;
+        if (side == 0)
+            DiscardBodyCompaction();
+        if (islands.TriangleSideBody.empty())
+            return;
         if (side == 0)
         {
             // 분류부터 압축 완료까지 하나의 job으로 보호한다.
             m_BodyJob = std::make_shared<BodyCompactJob>();
             m_BodyJob->BodyCount = bodyCount;
 
+            // 보정은 섬 전체의 몸체 변경만 허용하고 작은 요청 표로 제한한다.
+            auto& job = *m_BodyJob;
+            job.GpuClassify = m_Job.m_ClassifyGpuReady;
+            if (job.GpuClassify)
+            {
+                const auto& before = m_Job.m_IslandLabels;
+                bool compact = islands.Islands.size() == before.Islands.size()
+                    && islands.TriangleSideIsland == before.TriangleSideIsland
+                    && islands.TriangleSideBody.size() == before.TriangleSideBody.size();
+                for (uint32_t i = 0; compact && i < islands.Islands.size(); ++i)
+                    if (islands.Islands[i].Body != before.Islands[i].Body)
+                        job.OverrideData.push_back({ i, islands.Islands[i].Body });
+                for (size_t t = 0; compact && t < islands.TriangleSideBody.size(); ++t)
+                    for (uint32_t s = 0; s < 2; ++s)
+                    {
+                        const uint32_t id = islands.TriangleSideIsland[t][s];
+                        const uint32_t expected = id < islands.Islands.size()
+                            ? islands.Islands[id].Body : before.TriangleSideBody[t][s];
+                        compact &= expected == islands.TriangleSideBody[t][s];
+                    }
+                job.GpuClassify = compact && job.OverrideData.size() <= 64;
+                if (!job.GpuClassify)
+                    Utility::Printf("Island GPU classify fallback reason=%s overrides=%zu\n",
+                        compact ? "override-limit" : "non-island-correction", job.OverrideData.size());
+                else
+                {
+                    // verify 전용 CPU 표 외에는 전체 삼각형 표를 다시 올리지 않는다.
+                    uint32_t verify = 0;
+                    CommandLineArgs::GetInteger(L"island-gpu-verify", verify);
+                    job.VerifyClassify = verify != 0;
+                    job.Overrides.Create(L"Island body overrides", uint32_t(std::max(size_t(1), job.OverrideData.size())), 8);
+                    Utility::Printf("Island GPU classify consumed: overrides=%zu bytes=%zu\n",
+                        job.OverrideData.size(), job.OverrideData.size() * 8);
+                }
+            }
+
             // job 소유 표를 초기 데이터 없이 만들고 제거된 동기 대기 구간은 유지한다.
             m_CapLoopTable.Create(L"Cap loop side bodies", uint32_t(capLoops.size()), sizeof(capLoops[0]));
-            m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
-                sizeof(islands.TriangleSideBody[0]));
+            if (!job.GpuClassify || job.VerifyClassify)
+                m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
+                    sizeof(islands.TriangleSideBody[0]));
 
             // 기존 두 업로드 대기가 없어졌음을 같은 이름과 횟수로 기록한다.
             CutPerf::Cpu cutPerfUpload("ClassifyCutBodies-upload-wait");
@@ -4729,26 +4772,41 @@ namespace Viewer
         struct Constants
         {
             uint32_t FirstTriangle, TriangleCount, PatchTriangles, Side;
-            uint32_t DefaultBody, CapLoopCount, BodyCount, Padding;
+            uint32_t DefaultBody, CapLoopCount, BodyCount, UseGpu;
+            uint32_t OverrideCount, Verify, Padding[2];
         };
-        static_assert(sizeof(Constants) == 32, "Body classification constants");
+        static_assert(sizeof(Constants) == 48, "Body classification constants");
 
         // 읽기 전용 provenance·표와 판정 결과·카운터만 compute에 바인딩한다.
-        static RootSignature root;
-        static ComputePSO pso(L"Classify patch output bodies");
-        static bool initialized = false;
+        const bool gpuClassify = m_BodyJob->GpuClassify;
+        static RootSignature roots[2];
+        static ComputePSO cpuPso(L"Classify patch output bodies"), gpuPso(L"Classify GPU island bodies");
+        auto& root = roots[gpuClassify];
+        auto& pso = gpuClassify ? gpuPso : cpuPso;
+        static bool ready[2] = {};
+        auto& initialized = ready[gpuClassify];
         if (!initialized)
         {
-            root.Reset(6);
+            root.Reset(gpuClassify ? 9 : 6);
             root[0].InitAsConstantBuffer(0);
             root[1].InitAsBufferSRV(0);
             root[2].InitAsBufferSRV(1);
             root[3].InitAsBufferUAV(0);
             root[4].InitAsBufferUAV(1);
             root[5].InitAsBufferSRV(2);
+            if (gpuClassify)
+            {
+                // CPU 변형에는 추가 루트 바인딩과 GPU 보정 분기를 넣지 않는다.
+                root[6].InitAsBufferSRV(3);
+                root[7].InitAsBufferSRV(4);
+                root[8].InitAsBufferSRV(5);
+            }
             root.Finalize(L"Patch body classification");
             pso.SetRootSignature(root);
-            pso.SetComputeShader(g_pPatchBodyClassifyCS, sizeof(g_pPatchBodyClassifyCS));
+            if (gpuClassify)
+                pso.SetComputeShader(g_pPatchBodyClassifyGpuCS, sizeof(g_pPatchBodyClassifyGpuCS));
+            else
+                pso.SetComputeShader(g_pPatchBodyClassifyCS, sizeof(g_pPatchBodyClassifyCS));
             pso.Finalize();
             initialized = true;
         }
@@ -4765,13 +4823,20 @@ namespace Viewer
 
         // 분류 입력과 출력 참조도 보관해 압축 전 예외와 취소에서 수명을 보장한다.
         auto& job = *m_BodyJob;
-        job.ClassifyTables[0] = m_IslandTable.GetResource();
+        job.ClassifyTables[0] = job.GpuClassify ? m_Job.m_IslandVote.GetResource() : m_IslandTable.GetResource();
+        if (job.GpuClassify)
+        {
+            // 압축 fence까지 원본 GPU 표의 COM 참조를 유지해 취소·다음 요청도 보호한다.
+            job.ClassifyTables[2] = m_Job.m_TriangleSideIsland.GetResource();
+            if (job.VerifyClassify)
+                job.ClassifyTables[3] = m_IslandTable.GetResource();
+        }
         job.ClassifyTables[1] = m_CapLoopTable.GetResource();
         job.ClassifyProvenance[side] = const_cast<ByteAddressBuffer&>(geometry.Provenance).GetResource();
         auto& bodies = m_TriangleBodies[side];
         auto& counters = job.ClassifyCounters[side];
         auto& readback = job.ClassifyReadback[side];
-        const uint32_t counterCount = 10 + bodyCount * 2;
+        const uint32_t counterCount = 10 + bodyCount * 2 + (job.VerifyClassify ? bodyCount + 1 : 0);
         if (end)
         {
             // 할당 실패가 분류 command context를 열기 전에 기존 예외 경로로 전달되게 한다.
@@ -4799,8 +4864,11 @@ namespace Viewer
                     graphics.CopyBufferRegion(destination, 0, upload.Buffer, upload.Offset, bytes);
                 };
                 uploadTable(m_CapLoopTable, capLoops.data(), capLoops.size() * sizeof(capLoops[0]));
-                uploadTable(m_IslandTable, islands.TriangleSideBody.data(),
-                    islands.TriangleSideBody.size() * sizeof(islands.TriangleSideBody[0]));
+                if (!job.GpuClassify || job.VerifyClassify)
+                    uploadTable(m_IslandTable, islands.TriangleSideBody.data(),
+                        islands.TriangleSideBody.size() * sizeof(islands.TriangleSideBody[0]));
+                if (job.GpuClassify && !job.OverrideData.empty())
+                    uploadTable(job.Overrides, job.OverrideData.data(), job.OverrideData.size() * 8);
             }
 
             // 빈 side 0도 표 복사를 제출해 이후 side 1의 분류 입력을 보존한다.
@@ -4816,7 +4884,16 @@ namespace Viewer
             auto& compute = graphics.GetComputeContext();
             auto& provenance = const_cast<ByteAddressBuffer&>(geometry.Provenance);
             compute.TransitionResource(provenance, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            compute.TransitionResource(m_IslandTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            auto& bodyTable = job.GpuClassify ? static_cast<GpuBuffer&>(m_Job.m_IslandVote) : m_IslandTable;
+            compute.TransitionResource(bodyTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            if (job.GpuClassify)
+            {
+                // 추출·cutter·분류는 DIRECT 큐 순서이며 원본 표는 이 시점부터 읽기 전용이다.
+                compute.TransitionResource(m_Job.m_TriangleSideIsland, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                compute.TransitionResource(job.Overrides, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                if (job.VerifyClassify)
+                    compute.TransitionResource(m_IslandTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             compute.TransitionResource(m_CapLoopTable, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             compute.TransitionResource(bodies, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             compute.TransitionResource(counters, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -4825,16 +4902,28 @@ namespace Viewer
             compute.SetRootSignature(root);
             compute.SetPipelineState(pso);
             compute.SetBufferSRV(1, provenance);
-            compute.SetBufferSRV(2, m_IslandTable);
+            const uint64_t tableOffset = job.GpuClassify
+                ? uint64_t(m_Job.m_VoteCapacity) * 2 * (m_Job.m_VoteGroups + 5) * 4 : 0;
+            compute.SetBufferSRV(2, bodyTable, tableOffset);
+            if (job.GpuClassify)
+            {
+                // 섬 번호와 보정 목록을 별도 SRV로 읽고 verify에서만 CPU 기준 표를 묶는다.
+                compute.SetBufferSRV(6, m_Job.m_TriangleSideIsland);
+                compute.SetBufferSRV(7, job.Overrides);
+                compute.SetBufferSRV(8, job.VerifyClassify ? static_cast<GpuBuffer&>(m_IslandTable) : bodyTable,
+                    job.VerifyClassify ? 0 : tableOffset);
+            }
             compute.SetBufferSRV(5, m_CapLoopTable);
             compute.SetBufferUAV(3, bodies);
             compute.SetBufferUAV(4, counters);
             for (const auto& mesh : geometry.Meshes)
             {
                 Constants c{ mesh.vbOffset / 84, mesh.vbSize / 84, uint32_t(islands.TriangleSideBody.size()),
-                    side, islands.SideDefault[side], uint32_t(capLoops.size()), bodyCount, 0 };
-                if (!c.TriangleCount) continue;
-                compute.SetDynamicConstantBufferView(0, sizeof(c), &c);
+                    side, islands.SideDefault[side], uint32_t(capLoops.size()), bodyCount, uint32_t(job.GpuClassify),
+                    uint32_t(job.OverrideData.size()), uint32_t(job.VerifyClassify), {} };
+                if (!c.TriangleCount)
+                    continue;
+                compute.SetDynamicConstantBufferView(0, gpuClassify ? sizeof(c) : 32, &c);
                 const uint32_t groups = (c.TriangleCount + 63) / 64;
                 compute.Dispatch(std::min(groups, 65535u), (groups + 65534) / 65535);
             }
@@ -4895,9 +4984,35 @@ namespace Viewer
             // 압축 fence는 앞선 두 분류 제출도 포함하므로 동기 대기 없이 회수한다.
             for (uint32_t side = 0; side < 2; ++side)
             {
-                if (!job.Classified[side]) continue;
+                if (!job.Classified[side])
+                    continue;
                 auto& readback = job.ClassifyReadback[side];
+
+                // 성공한 매핑은 로그·문자열 할당 예외가 나도 해제한다.
+                const auto unmap = [](ReadbackBuffer* buffer)
+                {
+                    // 완료된 분류 카운터의 읽기 매핑을 해제한다.
+                    buffer->Unmap();
+                };
                 const auto* counts = static_cast<const uint32_t*>(readback.Map());
+                const std::unique_ptr<ReadbackBuffer, decltype(unmap)> mapped(&readback, unmap);
+                if (job.VerifyClassify)
+                {
+                    // cap은 공통 표를 쓰며 표면만 이중 판정하고 최종 몸체별 합계를 비교한다.
+                    uint32_t mismatch = counts[10 + job.BodyCount * 3];
+                    std::string totals;
+                    for (uint32_t body = 0; body < job.BodyCount; ++body)
+                    {
+                        const uint32_t gpu = counts[10 + body];
+                        const uint32_t cpu = counts[10 + job.BodyCount * 2 + body];
+                        const uint32_t cap = counts[10 + job.BodyCount + body];
+                        mismatch += gpu != cpu;
+                        totals += " body" + std::to_string(body) + "=" + std::to_string(gpu + cap)
+                            + "/" + std::to_string(cpu + cap);
+                    }
+                    Utility::Printf("Island GPU classify %s: side=%u triangleMismatch=%u%s\n",
+                        mismatch ? "FAIL" : "PASS", side, counts[10 + job.BodyCount * 3], totals.c_str());
+                }
                 PatchLog("MI3a side=%u tris=%u cap=%u body0=%u body1=%u invalid=%u idMismatch=%u reassigned=%u\n",
                     side, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
                 job.Dropped += counts[7];
@@ -4910,7 +5025,6 @@ namespace Viewer
                     PatchLog("MI4d classify side=%u body=%u surface=%u cap=%u\n",
                         side, body, counts[10 + body], counts[10 + job.BodyCount + body]);
                 }
-                readback.Unmap();
             }
 
             // 기존 압축 실패 플래그와 출력 합계 검증은 그대로 유지한다.
@@ -4943,9 +5057,12 @@ namespace Viewer
                     const uint32_t* m = metadata + bin * 6;
                     if (!m[0]) continue;
                     Mesh mesh = entry.second;
-                    mesh.vbOffset = m[2]; mesh.vbSize = m[0] * 84;
-                    mesh.vbDepthOffset = m[3]; mesh.vbDepthSize = m[0] * 3 * layouts[(section - 1) * 2 + 1];
-                    mesh.ibOffset = m[4]; mesh.ibSize = m[0] * 12;
+                    mesh.vbOffset = m[2];
+                    mesh.vbSize = m[0] * 84;
+                    mesh.vbDepthOffset = m[3];
+                    mesh.vbDepthSize = m[0] * 3 * layouts[(section - 1) * 2 + 1];
+                    mesh.ibOffset = m[4];
+                    mesh.ibSize = m[0] * 12;
                     mesh.draw[0] = { m[0] * 3, 0, 0 };
                     const auto* bounds = metadata + (bins + bin) * 6;
                     Math::Vector3 minimum(BoundsCoordinate(bounds[0]), BoundsCoordinate(bounds[1]), BoundsCoordinate(bounds[2]));
@@ -4953,7 +5070,8 @@ namespace Viewer
                     for (uint32_t axis = 0; axis < 3; ++axis)
                         valid &= std::isfinite(BoundsCoordinate(bounds[axis])) && std::isfinite(BoundsCoordinate(bounds[axis + 3]))
                             && BoundsCoordinate(bounds[axis]) <= BoundsCoordinate(bounds[axis + 3]);
-                    low = Min(low, minimum); high = Max(high, maximum);
+                    low = Min(low, minimum);
+                    high = Max(high, maximum);
                     const Math::Vector3 center = (minimum + maximum) * 0.5f;
                     XMStoreFloat4(reinterpret_cast<DirectX::XMFLOAT4*>(mesh.bounds), Math::Vector4(center, Length(maximum - center)));
                     valid &= m[0] == m[5] && m[2] % 28 == 0 && m[2] / 28 == m[1] * 3
@@ -4988,6 +5106,8 @@ namespace Viewer
         catch (const std::exception& error)
         {
             // 완료된 실패 출력만 버리고 호출자에게 실패 상태를 제공한다.
+            if (m_BodyJob->VerifyClassify)
+                Utility::Printf("Island GPU classify FAIL: readback=%s\n", error.what());
             m_BodyState = PatchBodyState::Failed;
             WritePatchLogSafely([&error]()
             {
@@ -5842,6 +5962,7 @@ namespace Viewer
         m_IslandFrames.clear();
         m_SkinSections.clear();
         m_IslandLabels = {};
+        m_ClassifyGpuReady = false;
     }
 
     // 컴포넌트 제거 상태를 반영해 추출과 GPU 섬 번호·투표를 같은 제출에 기록한다.
@@ -6009,6 +6130,7 @@ namespace Viewer
         m_IslandVerify = islandGpu != 0 || islandVerify != 0;
         m_IslandGpu = islandGpu || m_IslandVerify;
         m_ConsumeGpu = islandGpu != 0;
+        m_ClassifyGpuReady = false;
         m_IslandConverged = false;
         m_VoteSupported = node != UINT32_MAX && !influence;
 
@@ -6883,6 +7005,7 @@ namespace Viewer
                 {
                     // 후속 cap 재라벨과 분류에 동일 번호의 점수와 소비 표를 전달한다.
                     patch.Islands = m_IslandLabels = std::move(mirror);
+                    m_ClassifyGpuReady = true;
                     Utility::Printf("Island GPU vote consumed: near=%u islands=%u\n", nearCount, m_GpuIslandCount);
                 }
             }

@@ -83,6 +83,8 @@ namespace Viewer
         // 자동 진단이 완료 전에 다음 지역을 제출하지 않도록 상태를 읽는다.
         bool IsPending() const { return m_Fence != 0; }
     private:
+        friend class SkeletalPatchCopy; // 분류는 소비 승인된 job 표만 참조한다.
+        bool m_ClassifyGpuReady = false;
         // 같은 제출 명령에서 저장한 입력과 출처를 CPU 기준 함수와 비교한다.
         void Validate(const SkeletalPatchResult& result);
         StructuredBuffer m_CornerDistance, m_CornerCell, m_IslandParent;

@@ -1,4 +1,4 @@
-상태: G4b 예외 범위 명시·부분 버퍼 해제 수정·Release 재검증 완료 (미커밋, 2026-11-26); G4c 후속, G5 보류
+상태: G4c GPU 표 직접 분류 구현·Release 검증 완료 (base `4fd04f42`, 미커밋, 2026-11-26); G5 보류
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -95,7 +95,7 @@ struct GpuIslandJob
 | G3b | 첫 등장 번호 + verify 섬 표 비교 | 완료: Release `TriangleSideIsland`·섬 개수 일치, K=1 번호 생략 |
 | G4a | CPU 정수 점수 함수 + LatticeTopologyTests(근접 판정·overflow·동점·빈 패치·없는 side) | 구현·CPU 테스트 완료, Debug 빌드·validation 실행 미수행 (런타임 미연결): 2011 사례 PASS, 비근접 섬 4941개 oracle 일치 |
 | G4b | `IslandVoteCS` + 근접 fallback + CPU mirror readback | 완료: Release `TriangleSideBody`·`SideDefault` 불일치 0, GPU 소비·K=1 fallback·validation 검증 |
-| G4c | `ClassifyCutBodies`가 GPU 표를 직접 사용 | body별 삼각형 수 일치 |
+| G4c | `ClassifyCutBodies`가 GPU 표를 직접 사용 | 완료: Release body별 삼각형 수·표면 삼각형별 body 일치, K=1 CPU fallback |
 | G5a~c | (조건부) loop 선택 / 섬 재라벨 / cap 투표 | cap 표 일치 |
 
 - 각 단계: Codex 구현 → 구현과 다른 새 Codex 리뷰(이 문서 완료 조건 기준) → CPU 테스트 → Debug·Release 빌드와 실행(validation) → 로컬 커밋 → 사용자가 커밋 단위로 읽는다.
@@ -385,3 +385,15 @@ G3a 구현·Release 검증 완료 (Debug 빌드 미수행, LatticeTopologyTests 
 - 리뷰 수정 후 지정된 Release 빌드 PASS: 종료 0, 오류 0, 경고 263, 벽시계 309.000초(MSBuild 308.52초, 의존 프로젝트 재컴파일 포함). 지정한 8회 모두 종료 0·D3D12 ERROR 0이다. Xbot-Thigh/CesiumMan-Thigh/CesiumMan-UpperArm의 GPU 소비·verify는 각각 부호·셀·partition·번호·vote 불일치 0, near=0, 섬 수 3/2/3이며 소비 옵션에서만 consumed를 출력했다. 최대 거리 오차는 각각 4.76837158e-7/4.17232513e-7/8.34465027e-7이다.
 - Xbot K=1은 `UF fallback reason=not-converged/verify-failed iterations=1` 및 `reason=not-converged`, 거리 PASS, consumed 없음이다. Xbot Release `-debug 1`도 같은 검사 PASS·GPU 소비·정상 종료이며 기존 DXGI GetContainingOutput ERROR #80 1건이 남는다. 실행 시간은 GPU/verify 순으로 Xbot 10.359/11.906초, CesiumMan 허벅지 14.531/10.703초, 위팔 12.422/9.547초, K=1 14.359초, validation 16.265초다. `commands.json`·`runs.txt`·각 `<Scene>-gpu.log`/`<Scene>-verify.log`·`Xbot-Thigh-k1.log`·`Xbot-Thigh-validation.log`가 재현 근거다.
 - 예외 범위·부분 버퍼 해제·문장 분리 최종 수정 후 지정 Release 빌드 PASS(종료 0, 오류 0, 경고 263, 벽시계 180.880초/MSBuild 179.78초). 지정 Xbot 오른쪽 허벅지 GPU 실행 1회도 종료 0이며, `Xbot-Thigh-gpu-final.log`에서 `Island GPU vote consumed: near=0 islands=3` 및 `Skeletal patch cut result: published A/B components=2 caps=1 uncapped=0 error=0`을 확인했다. 작업 디렉터리는 `MiniEngine/ModelViewer`, 명령 옵션은 `-debug 0 -skeletal-break-demo 1 -skeletal-break-demo-bone mixamorig:RightUpLeg -skeletal-break-demo-delay 2 -physics-query-exit 180 -cut-perf-quiet 0 -cut-perf-gpu 0 -island-gpu 1`이다. 실행기는 `%TEMP%/g2a-validation/capture.exe`, 로그와 `Release-final-build.log`는 `%TEMP%/g4b-fix/`에 보존한다. 예외 주입은 미수행이다.
+
+## G4c 결과
+
+- base `4fd04f42` + 미커밋, 2026-11-26. `DiagnoseIslands`가 G4b의 모든 소비 검사를 통과한 요청만 승인한다. `ClassifyCutBodies`는 그 승인과 `-island-gpu 1`에서만 job 소유 `m_IslandVote`의 `TriangleSideBody` 영역과 `m_TriangleSideIsland`를 직접 SRV로 읽는다. GPU 변형 `PatchBodyClassifyGpuCS`만 추가 입력을 컴파일하므로 flags off·verify-only·gate 실패는 기존 CPU 업로드·6개 루트·32B 상수·dispatch/회수 경로를 유지한다.
+- `RelabelCapLoops`/`RelabelPatchIslands` 뒤 원본과 비교해 변경된 섬마다 `{uint island, uint body}` 8B 목록을 만든다. 삼각형 섬 번호와 섬별 몸체로 최종 CPU 표를 재현할 수 있는지 검사하며, 불가능하거나 64개(512B)를 넘으면 `Island GPU classify fallback reason=non-island-correction/override-limit`을 quiet와 무관하게 기록하고 요청 전체를 CPU 표로 분류한다. `SideDefault`는 보정 후 상수, cap leader 표는 기존 업로드를 사용한다.
+- 작은 목록은 분류 context의 `ReserveUploadMemory`/`CopyBufferRegion`으로 side 0에 올린다. 빈 side 0도 제출한다. 추출→cutter→분류→압축은 같은 DIRECT 큐 순서이며 원본 GPU 표를 `NON_PIXEL_SHADER_RESOURCE`로 전이한다. `BodyCompactJob`이 원본 표의 COM 참조·보정 버퍼를 압축 fence까지 보관하므로 취소·예외·다음 요청에서도 수명을 보호한다. 새 동기 대기는 없다.
+- `-island-gpu 1 -island-gpu-verify 1`에서만 CPU 표도 업로드한다. `PatchBodyClassifyCS::main`은 같은 출력 표면 삼각형에서 CPU 표 기준 body를 함께 계산해 삼각형별 불일치와 body별 표면 수를 집계한다. `PollBodyCompaction`은 fence 완료 후 보호된 `Map`으로 읽고 공통 cap 수를 더한 body별 GPU/CPU 합계와 `Island GPU classify PASS/FAIL`을 quiet와 무관하게 기록한다. cap은 공통 leader 표·기본값을 쓰므로 독립적인 cap 판정 비교는 아니다. Map 예외도 FAIL로 기록한다.
+- **Release 전용 검증**: 지정 MSBuild 명령 PASS, 오류 0/경고 12, 벽시계 23.880초(MSBuild 21.76초). Debug 빌드·CPU 테스트·별도 실행의 독립 리뷰는 수행하지 않았다. Geometry/CPU oracle 변경 없음. 환경은 NVIDIA GeForce MX450(1906 MiB), driver 591.86이다.
+- 지정 9회 모두 exit=0, D3D12 ERROR 0. Xbot-Thigh/CesiumMan-Thigh/CesiumMan-UpperArm의 GPU·verify 실행 모두 거리/셀·partition·번호·vote PASS(near=0), 소비 승인. override는 각각 1/0/0개(8/0/0B)다. verify의 양쪽 side 모두 classify PASS·triangleMismatch=0: Xbot `side0=0/869, side1=1453/0`, CesiumMan 허벅지 `0/169, 243/0`, 위팔 `104/167, 387/0`(각 body0/body1, CPU와 동일).
+- `%TEMP%/g3b-verify/CesiumMan-MultiThigh-command.txt`에 GPU 소비를 추가한 실행도 classify 양쪽 PASS·삼각형 불일치 0이다. **이 명령에서는 실제 한 요청만 관측**되었으며 두 번째 절단 또는 동시 다중 P 검증으로 간주하지 않는다. 관측 수치는 CesiumMan 단일 허벅지와 같다.
+- Xbot K=1은 `UF fallback reason=not-converged/verify-failed iterations=1` 및 `reason=not-converged`, 거리 PASS, GPU 분류 소비/검증 없음으로 CPU 경로를 유지한다. Xbot Release `-debug 1`은 GPU 분류 소비(overrides=1), D3D12 ERROR 0, 기존 DXGI GetContainingOutput ERROR #80 1건이다. verify를 켜지 않은 실행은 classify PASS/FAIL 검사를 수행하지 않는다.
+- 근거는 `%TEMP%/g4c-verify/`의 `Release-build.log`, `commands.json`, `run.ps1`, `runs.txt`, `summary.json`, 지정 `<Scene>-gpu.log`/`<Scene>-verify.log`, `CesiumMan-MultiThigh-verify.log`, `Xbot-Thigh-k1.log`, `Xbot-Thigh-validation.log`다. 작업 디렉터리는 `MiniEngine/ModelViewer`, 실행기는 `%TEMP%/g2a-validation/capture.exe`다. compact fallback·Map 실패의 강제 주입은 미수행이며 성능 개선·baseline 동등성 전체를 주장하지 않는다.
