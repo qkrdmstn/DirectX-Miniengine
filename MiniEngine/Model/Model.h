@@ -104,6 +104,13 @@ struct Joint
     Math::Matrix3 nrmXform;
 };
 
+// 로드 시 한 번 업로드하며 CPU 격자는 별도 oracle로 유지한다.
+struct GpuLatticeTopology
+{
+    std::vector<StructuredBuffer> SectionVertexCell;
+    uint32_t CellCount = 0;
+};
+
 class Model
 {
 public:
@@ -128,6 +135,7 @@ public:
     std::unique_ptr<uint16_t[]> m_JointIndices;
     std::vector<SkinCpuSection> m_SkinCpuSections; // skin 메시 순서이며 정적 메시에는 정점 복사본이 없다.
     LatticeTopology m_LatticeTopology; // skin bind 공간의 희소 셀 연결 맵
+    GpuLatticeTopology m_GpuLatticeTopology;
     std::unique_ptr<Math::Matrix4[]> m_JointIBMs;
     std::vector<MiniCollision::AggregateGeom> m_MeshCollision;   // m_MeshData 순서의 model-local 충돌(생성되지 않은 메시는 비어 있음)
     std::vector<MeshCollisionStatus> m_MeshCollisionStatus;      // m_MeshData 순서의 충돌 생성 상태

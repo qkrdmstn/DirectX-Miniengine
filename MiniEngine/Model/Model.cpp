@@ -18,8 +18,14 @@
 using namespace Math;
 using namespace Renderer;
 
+// 모델의 원본 GPU 버퍼와 로드 시 만든 격자 버퍼를 해제한다.
 void Model::Destroy()
 {
+    // 격자 버퍼와 셀 수를 함께 비워 명시적 재호출도 허용한다.
+    m_GpuLatticeTopology.SectionVertexCell.clear();
+    m_GpuLatticeTopology.CellCount = 0;
+
+    // 기존 모델 데이터와 그래프를 초기화한다.
     m_BoundingSphere = BoundingSphere(kZero);
     m_DataBuffer.Destroy();
     m_MaterialConstants.Destroy();

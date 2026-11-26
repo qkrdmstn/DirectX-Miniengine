@@ -1,4 +1,4 @@
-상태: G1 완료·G2~G5 보류 — G0 `959b1bbc`, G1a `d6c84d3a`, G1b 이 커밋; 섬 판정 CPU 합 약 0.3 ms라 GPU 이관 보류, 첫 절단 비용 조사로 전환 (2026-11-26)
+상태: G2a 완료 — base `e2aadbe7` + 미커밋; G1 완료, 사용자 결정으로 G2~G4 진행·G5 보류 (2026-11-26)
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -246,10 +246,29 @@ struct GpuIslandJob
 
 ### G0·G1 이후 결정 (2026-11-26)
 
-- **G2~G5는 보류한다.** G0 측정에서 GPU로 옮기려던 CPU 연산의 합은 요청당 약 0.3 ms다(재스키닝·부호 0.02~0.07, `LabelPatchIslands` 0.06~0.23, `RelabelCapLoops` 0.01~0.04, `DiagnoseCapLoops` 0.01 이하). 같은 장면의 요청→게시 시간은 실행마다 수백 ms씩 흔들린다. 옮겨도 측정으로 구분할 수 없고, GPU dispatch 추가·verify 경로·fallback 유지 비용만 늘어난다.
+- 사용자 결정(2026-11-26): G2~G4는 진행한다. G5는 보류. G0 측정에서 GPU로 옮기려던 CPU 연산의 합은 요청당 약 0.3 ms다(재스키닝·부호 0.02~0.07, `LabelPatchIslands` 0.06~0.23, `RelabelCapLoops` 0.01~0.04, `DiagnoseCapLoops` 0.01 이하). 같은 장면의 요청→게시 시간은 실행마다 수백 ms씩 흔들린다. 옮겨도 측정으로 구분할 수 없고, GPU dispatch 추가·verify 경로·fallback 유지 비용만 늘어난다.
 - G1a·G1b로 분류 동기 대기 4회(요청당 약 1~6 ms)는 0이 됐다. 출력은 세 장면에서 HEAD와 같다.
-- 실제 비용은 첫 절단에 몰려 있다: `BuildPatchSkinVertices` 1차 116~128 ms(2차 4~5 ms), `FinishCutResult` 1차 233~259 ms(2차 9~13 ms), `DiagnoseIslands` 1차 Xbot 12 ms 중 재스키닝·부호는 0.05 ms. 첫 사용 초기화(셰이더·PSO·버퍼 생성 등)로 보이며 원인은 미확정이다. 다음 작업은 이 첫 절단 비용의 원인 조사이며 별도 결정 문서로 다룬다.
+- 실제 비용은 첫 절단에 몰려 있다: `BuildPatchSkinVertices` 1차 116~128 ms(2차 4~5 ms), `FinishCutResult` 1차 233~259 ms(2차 9~13 ms), `DiagnoseIslands` 1차 Xbot 12 ms 중 재스키닝·부호는 0.05 ms. 첫 사용 초기화(셰이더·PSO·버퍼 생성 등)로 보이며 원인은 미확정이다. 첫 절단 비용의 원인 조사는 나중의 별도 후속 작업으로 다룬다. 이 파이프라인의 다음 단계는 G2b다.
 - 기존 결함: Xbot 데모 1 + `-skeletal-multi-cut 1`은 G0 이전 `b74abc49`에서도 `0xC0000409`로 종료한다(CesiumMan 다중 허벅지는 정상). 이 작업과 무관하며 별도로 다룬다.
+
+### G2a 결과
+
+- 리뷰 수정: 업로드 임시 원본을 16바이트 배수로 패딩하고 실제 정점 수는 유지했으며, Map 예외의 원인을 FAIL 로그에 기록하고 해당 section 전체를 불일치로 집계한다. 다음 단계는 G2b로 명확히 했다. Release 재빌드 성공(10.175초), 위 개별 모델 옵션으로 Xbot/CesiumMan 재검증 모두 PASS·불일치 0·종료 0(10.046/8.078초); 근거는 `%TEMP%/g2a-review-release-build.log`, `%TEMP%/g2a-validation/review-{Xbot,CesiumMan}-verify.log`다.
+
+2026-11-26, `master` / HEAD `e2aadbe7` + 미커밋. `Model::m_GpuLatticeTopology`가 section별 `StructuredBuffer`(정점당 uint)와 `CellCount`를 소유한다. `LoadModel`은 skin CPU topology 생성 직후 `UploadLatticeTopology`로 한 번 업로드한다. CPU vector는 oracle로 유지하며 정적 모델·빈 topology는 제외하고 빈 section은 빈 슬롯을 보존한다. `Model::Destroy`에서 GPU 격자를 정리한다. 새 파일은 없다.
+
+- `-island-gpu-verify 1`(기본 0)은 로드당 한 번 section별 readback을 동기 완료하고 모든 정점 값을 CPU와 비교한다. Map 실패도 FAIL로 계산하며 section별·전체 정점/바이트 수와 CellCount, 불일치 수를 로그에 남긴다. 검증 후 버퍼는 compute SRV 상태다. 아직 실제 소비자는 없으며 `-island-gpu 0|1` 플러밍은 G2b로 미룬다.
+- Release 개별 모델 실행: `-debug 0 -model Models/<Xbot|CesiumMan>.glb -island-gpu-verify 1 -physics-query-exit 180`. 각각 종료 0, 7.750초, 불일치 0/PASS다.
+
+| 모델 | section별 정점 수 | section별 버퍼 bytes | 합계 bytes | CellCount |
+| --- | --- | --- | --- | --- |
+| Xbot | 12,473 / 15,901 | 49,892 / 63,604 | 113,496 | 3,350 |
+| CesiumMan | 3,273 | 13,092 | 13,092 | 1,360 |
+
+- Release validation: `-debug 1 -skeletal-break-demo 1 -skeletal-break-demo-bone mixamorig:RightUpLeg -skeletal-break-demo-delay 2 -physics-query-exit 480 -island-gpu-verify 1`. 오른쪽 허벅지 절단 1회 A/B 게시·caps=1·uncapped=0·error=0, MI3a invalid/idMismatch=0, 종료 0(14.906초). D3D12 ERROR 0, 기존 DXGI GetContainingOutput ERROR #80 1건, 기존 WARNING #1008 480행이다. 전체 validation 무오류로 판정하지 않는다. NVIDIA GeForce MX450, 드라이버 `32.0.15.9186`(레지스트리 확인).
+- VS2022 Developer 환경은 vswhere의 설치 경로와 DevShell DLL로 초기화했다. Release 빌드 성공(116.069초); `Model.h` 변경으로 관련 소스를 재컴파일했다. 기존 C4819/C4267/C4756 등 경고와 post-build `pwsh.exe` 부재 메시지는 남는다.
+- Debug 빌드 성공(126.595초), 이어서 Debug 구성 MSBuild `Clean` 성공(3.386초). Release exe는 보존됐다. 파일 헤더 옵션으로 TEMP에 빌드한 `LatticeTopologyTests` PASS(빌드·실행 2.580초). 모든 빌드·Clean·테스트 종료 0, `git diff --check` 통과.
+- 근거: `%TEMP%/g2a-validation/{Xbot-verify,CesiumMan-verify,Xbot-validation}.log`, `%TEMP%/g2a-{release-build,debug-build,debug-clean,lattice-tests}.log`. 기존 PowerShell 로그 수집기의 Add-Type 임시 DLL 권한 오류를 피하려고 TEMP의 네이티브 DBWIN 수집기를 빌드해 사용했고 모든 실행의 정상 종료를 기다렸다. 별도 새 세션 리뷰·Git 쓰기·커밋·푸시는 수행하지 않았다.
 
 ## 완료 조건
 

@@ -22,6 +22,7 @@
 #include "TextureManager.h"
 #include "TextureConvert.h"
 #include "GraphicsCommon.h"
+#include "ReadbackBuffer.h"
 #include <string>
 #include <cstdint>
 #include "Util/CommandLineArg.h"
@@ -351,9 +352,86 @@ static void BuildInfluencingJoints(Model& model, const std::vector<uint8_t>& geo
     }
 }
 
+// skin 격자의 section별 셀 번호를 한 번 업로드하고 요청한 경우 CPU oracle과 대조한다.
+static void UploadLatticeTopology(Model& model)
+{
+    // 정적 모델이나 빈 격자는 GPU 자료를 만들지 않는다.
+    const auto& cpu = model.m_LatticeTopology;
+    if (model.m_SkinCpuSections.empty() || cpu.CellCount == 0)
+        return;
+
+    // section 인덱스를 보존하고 초기 데이터 복사는 로드 시 동기 완료한다.
+    auto& gpu = model.m_GpuLatticeTopology;
+    gpu.SectionVertexCell.resize(cpu.VertexCell.size());
+    gpu.CellCount = cpu.CellCount;
+    for (size_t section = 0; section < cpu.VertexCell.size(); ++section)
+    {
+        // 빈 section은 슬롯만 남겨 0바이트 리소스 생성을 피한다.
+        const auto& cells = cpu.VertexCell[section];
+        if (cells.empty())
+            continue;
+
+        // SIMD 복사가 올림하는 16바이트 범위까지 임시 원본을 확보한다.
+        auto uploadCells = cells;
+        uploadCells.resize((cells.size() + 3) & ~size_t(3), 0);
+        gpu.SectionVertexCell[section].Create(L"Lattice VertexCell " + std::to_wstring(section),
+            uint32_t(cells.size()), sizeof(uint32_t), uploadCells.data());
+    }
+
+    // 진단 옵션을 켠 로드에서만 section별 회수와 전체 일치 수를 기록한다.
+    uint32_t verify = 0;
+    CommandLineArgs::GetInteger(L"island-gpu-verify", verify);
+    if (verify == 0)
+        return;
+    uint64_t vertices = 0, mismatches = 0, bytes = 0;
+    for (size_t section = 0; section < cpu.VertexCell.size(); ++section)
+    {
+        // 업로드 버퍼를 회수한 뒤 향후 compute SRV 상태로 복원한다.
+        const auto& cells = cpu.VertexCell[section];
+        if (cells.empty())
+            continue;
+        auto& buffer = gpu.SectionVertexCell[section];
+        ReadbackBuffer readback;
+        readback.Create(L"Lattice VertexCell verify", uint32_t(cells.size()), sizeof(uint32_t));
+        auto& context = CommandContext::Begin(L"Verify lattice upload");
+        context.CopyBuffer(readback, buffer);
+        context.TransitionResource(buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        context.Finish(true);
+
+        // Map 실패도 불일치로 세고 성공한 Map은 비교 직후 해제한다.
+        const uint32_t* actual = nullptr;
+        try
+        {
+            actual = static_cast<const uint32_t*>(readback.Map());
+        }
+        catch (const std::exception& error)
+        {
+            Utility::Printf("GpuLatticeTopology verify FAIL section=%u Map: %s\n",
+                uint32_t(section), error.what());
+        }
+
+        // Map 실패는 해당 section의 모든 정점을 불일치로 집계한다.
+        uint64_t different = 0;
+        for (size_t vertex = 0; vertex < cells.size(); ++vertex)
+            different += !actual || actual[vertex] != cells[vertex];
+        if (actual)
+            readback.Unmap();
+        vertices += cells.size();
+        bytes += buffer.GetBufferSize();
+        mismatches += different;
+        Utility::Printf("GpuLatticeTopology section=%u vertices=%u bytes=%llu mismatches=%llu\n",
+            uint32_t(section), uint32_t(cells.size()), uint64_t(buffer.GetBufferSize()), different);
+    }
+
+    // 모델 식별 로그와 함께 읽을 수 있도록 로드당 최종 판정을 남긴다.
+    Utility::Printf("GpuLatticeTopology verify %s sections=%u vertices=%llu bytes=%llu CellCount=%u mismatches=%llu\n",
+        mismatches == 0 ? "PASS" : "FAIL", uint32_t(cpu.VertexCell.size()), vertices, bytes, gpu.CellCount, mismatches);
+}
+
 // .mini를 읽고 로드 시 충돌과 영향 joint 캐시를 만든 뒤 GPU에 업로드한다.
 std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool forceRebuild)
 {
+    // 입력 모델 이름과 캐시 경로를 정한다.
     const std::wstring miniFileName = Utility::RemoveExtension(filePath) + L".mini";
     const std::wstring fileName = Utility::RemoveBasePath(filePath);
 
@@ -535,6 +613,7 @@ std::shared_ptr<Model> Renderer::LoadModel(const std::wstring& filePath, bool fo
 
         // 원본 mesh-local 위치는 유지하고 공통 모델 공간 rest 위치만 격자에 쓴다.
         model->m_LatticeTopology = BuildLatticeTopology(model->m_SkinCpuSections, 64, restTransforms);
+        UploadLatticeTopology(*model);
         const auto& lattice = model->m_LatticeTopology;
         Utility::Printf("LatticeTopology: Dim=%ux%ux%u cells=%u edges=%u components=%u\n",
             lattice.Dim[0], lattice.Dim[1], lattice.Dim[2], lattice.CellCount,
