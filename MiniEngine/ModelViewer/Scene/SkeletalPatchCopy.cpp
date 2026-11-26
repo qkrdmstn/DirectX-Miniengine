@@ -4399,6 +4399,9 @@ namespace Viewer
     static std::set<uint32_t> RelabelCapLoops(const CutResultEntry& result, SkeletalPatchBuffers& patch,
         const MeshCutting::CutPlaneData& plane)
     {
+        // 함수 전체 CPU 시간을 기존 성능 로그 옵션에서만 기록한다.
+        CutPerf::Cpu cutPerfCpu("RelabelCapLoops");
+
         // cutter와 같은 월드 평면 축으로 snapshot 선분과 교차점을 비교한다.
         const Math::Vector3 normal(plane.WorldPlane);
         const auto u = Normalize(Cross(normal, Abs(normal.GetY()) < 0.9f
@@ -4461,7 +4464,12 @@ namespace Viewer
             }
         }
         IslandLabels relabeled = patch.Islands;
+
+        // 아일랜드 재라벨링 호출의 CPU 시간을 측정한다.
+        CutPerf::Cpu cutPerfRelabel("RelabelPatchIslands");
         const auto counts = RelabelPatchIslands(relabeled, requests);
+        cutPerfRelabel.End();
+
         PatchLog("MI3e2 realLoops=%zu relabeled islands=%u tris=%u conflicts=%u\n",
             real.size(), counts[0], counts[1], counts[2]);
         if (patch.Crossings.size() > 1 && counts[2])
@@ -4477,6 +4485,9 @@ namespace Viewer
     static std::vector<std::array<uint32_t, 2>> DiagnoseCapLoops(const CutResultEntry& result, const IslandLabels& islands,
         const std::set<uint32_t>& real, uint32_t bodyCount)
     {
+        // 함수 전체 CPU 시간을 기존 성능 로그 옵션에서만 기록한다.
+        CutPerf::Cpu cutPerfCpu("DiagnoseCapLoops");
+
         // 유효한 loop의 각 선분에서 양쪽 몸체 투표와 미해결 수를 집계한다.
         struct Votes
         {
@@ -4598,9 +4609,14 @@ namespace Viewer
         if (islands.TriangleSideBody.empty()) return;
         if (side == 0)
         {
+            // 초기 데이터 Create의 할당·업로드·내부 동기 대기를 각각 잰다.
+            CutPerf::Cpu cutPerfUpload("ClassifyCutBodies-upload-wait");
             m_CapLoopTable.Create(L"Cap loop side bodies", uint32_t(capLoops.size()), sizeof(capLoops[0]), capLoops.data());
+            cutPerfUpload.End();
+            CutPerf::Cpu cutPerfIslandUpload("ClassifyCutBodies-upload-wait");
             m_IslandTable.Create(L"Island triangle sides", uint32_t(islands.TriangleSideBody.size()),
                 sizeof(islands.TriangleSideBody[0]), islands.TriangleSideBody.data());
+            cutPerfIslandUpload.End();
         }
         struct Constants
         {
@@ -4681,7 +4697,10 @@ namespace Viewer
         graphics.TransitionResource(provenance, D3D12_RESOURCE_STATE_GENERIC_READ);
         graphics.TransitionResource(bodies, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         cutPerfClassify.End();
+        // counter 제출부터 회수 완료까지의 동기 대기 벽시계를 잰다.
+        CutPerf::Cpu cutPerfWait("ClassifyCutBodies-counter-wait");
         graphics.Finish(true);
+        cutPerfWait.End();
         const auto* counts = static_cast<const uint32_t*>(readback.Map());
         PatchLog("MI3a side=%u tris=%u cap=%u body0=%u body1=%u invalid=%u idMismatch=%u reassigned=%u\n",
             side, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
@@ -5159,6 +5178,7 @@ namespace Viewer
         {
             return false;
         }
+        CutPerf::Mark("break-result");
         m_RequestId = 0;
         const bool applied = statuses.size() == m_MultiBreaks.size()
             && std::all_of(statuses.begin(), statuses.end(), [](BreakStatus status)
@@ -5209,6 +5229,7 @@ namespace Viewer
         auto& context = GraphicsContext::Begin(L"Publish multi skeletal pieces");
         scene.PrepareMeshes(context);
         context.Finish();
+        CutPerf::Mark("published");
 
         // 다중 경계 대응과 PS4 측정은 아직 지원하지 않음을 명시한다.
         PatchLog("MI4h2 boundary/PS4 measure N/A (multi)\n");
@@ -6044,7 +6065,12 @@ namespace Viewer
     void SkeletalPatchJob::DiagnoseIslands(SkeletalPatchBuffers& patch, const MeshCutting::CutPlaneData& plane,
         float offset, bool positiveA, const std::string& modelName)
     {
+        // 함수 전체 CPU 시간을 기존 성능 로그 옵션에서만 기록한다.
+        CutPerf::Cpu cutPerfCpu("DiagnoseIslands");
+
         // skin section별 제출 프레임을 찾고 아직 계산하지 않은 부호를 표시한다.
+        // 정점 재스키닝과 평면 부호 계산 시간을 따로 잰다.
+        CutPerf::Cpu cutPerfSigns("DiagnoseIslands-reskin-sign");
         const auto& model = *m_Input->GetSource();
         std::vector<std::vector<int8_t>> signs(model.m_SkinCpuSections.size());
         std::vector<uint32_t> frames(signs.size(), UINT32_MAX);
@@ -6082,6 +6108,7 @@ namespace Viewer
         }
 
         // 요청당 한 번 공통 분류기로 팔레트 joint의 몸체 그룹을 읽는다.
+        cutPerfSigns.End();
         const std::vector<uint32_t> jointNodes(model.m_JointIndices.get(), model.m_JointIndices.get() + model.m_NumJoints);
         const auto groups = BuildCutBodyGroups(m_Parents, jointNodes, m_CutRoots);
         std::vector<uint32_t> jointGroups(model.m_NumJoints, 0);
@@ -6144,8 +6171,13 @@ namespace Viewer
             // 팔레트 인덱스에 대응하는 사전 계산 그룹을 반환한다.
             return jointGroups.at(joint);
         };
+
+        // 아일랜드 라벨링 호출의 CPU 시간을 측정한다.
+        CutPerf::Cpu cutPerfLabel("LabelPatchIslands");
         patch.Islands = m_IslandLabels = LabelPatchIslands(model.m_LatticeTopology, model.m_SkinCpuSections,
             patch.IslandSources, signs, group);
+        cutPerfLabel.End();
+
         uint32_t reassigned = 0;
         for (const auto& island : patch.Islands.Islands)
             reassigned += island.Body != uint32_t(island.Side == 0 ? !positiveA : positiveA);

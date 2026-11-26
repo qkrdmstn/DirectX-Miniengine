@@ -145,10 +145,23 @@ namespace Viewer
             const char* Name;
             double Start = Enabled() ? NowMs() : 0.0;
             explicit Cpu(const char* name) : Name(name) {}
+            bool Active = Enabled();
+
+            // 지역 변수의 수명은 유지하면서 세부 측정 구간만 한 번 종료한다.
+            void End()
+            {
+                // 비활성 구간은 시계를 읽거나 로그를 남기지 않는다.
+                if (!Active) return;
+                Active = false;
+                const double end = NowMs();
+                Log("CPU id=%u name=%s ms=%.3f t_end_ms=%.3f\n", RequestId(), Name, end - Start, end - RequestMs());
+            }
+
+            // 조기 반환이나 예외에서도 아직 열린 측정 구간을 기록한다.
             ~Cpu()
             {
-                if (Enabled())
-                    Log("CPU id=%u name=%s ms=%.3f t_end_ms=%.3f\n", RequestId(), Name, NowMs() - Start, NowMs() - RequestMs());
+                // 명시적으로 종료한 구간은 다시 기록하지 않는다.
+                End();
             }
         };
 

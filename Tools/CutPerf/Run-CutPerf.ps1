@@ -16,7 +16,9 @@
 .PARAMETER ExePath
   Override the ModelViewer.exe path.
 .PARAMETER Models
-  Subset of 'Xbot','CesiumMan'.
+  Xbot, CesiumMan, CesiumMan-UpperArm, Xbot-MultiThigh, CesiumMan-Spine.
+.PARAMETER G0
+  Quiet GPU timers OFF/ON thigh cuts plus one launch per upper-arm, multi-thigh and spine scene.
 .PARAMETER SkipRender
   Skip the render before/after runs.
 .PARAMETER NoOpen
@@ -28,6 +30,7 @@ param(
     [string]$OutDir = "",
     [string]$ExePath = "",
     [string[]]$Models = @('Xbot', 'CesiumMan'),
+    [switch]$G0,
     [switch]$SkipRender,
     [switch]$NoOpen
 )
@@ -46,6 +49,9 @@ New-Item -ItemType Directory -Force -Path $rawDir | Out-Null
 # ---------------------------------------------------------------- model definitions
 $modelInfo = @{
     'Xbot'      = @{ Demo = 1; Bone = 'mixamorig:RightUpLeg'; Second = 'mixamorig:LeftUpLeg'; CutTime = '8.3' }
+    'CesiumMan-UpperArm' = @{ Demo = 2; Bone = 'Skeleton_arm_joint_L__4_'; Second = ''; CutTime = '0'; Asset = 'CesiumMan' }
+    'Xbot-MultiThigh' = @{ Demo = 1; Bone = 'mixamorig:RightUpLeg'; Second = ''; CutTime = '0'; Asset = 'Xbot'; Opt = '-skeletal-multi-cut 1' }
+    'CesiumMan-Spine' = @{ Demo = 2; Bone = 'Skeleton_torso_joint_2'; Second = ''; CutTime = '0'; Asset = 'CesiumMan' }
     'CesiumMan' = @{ Demo = 2; Bone = 'leg_joint_R_1';        Second = 'leg_joint_L_1';        CutTime = '8.98' }
 }
 
@@ -63,8 +69,17 @@ $renderConfigs = @(
     @{ Name = 'render_only'; Desc = 'gpuTimers=ON quiet=1 scene=only-target, camera focused on target'; Opt = '-cut-perf-quiet 1 -cut-perf-gpu 1 -cut-perf-focus 1 -cut-perf-only-target 1' }
 )
 
+# G0는 허벅지 quiet 두 설정과 추가 장면 세 개를 측정한다.
+if ($G0) {
+    $cutConfigs = @($cutConfigs | Select-Object -First 2)
+    $Models = @(@($Models) + @('CesiumMan-UpperArm', 'Xbot-MultiThigh', 'CesiumMan-Spine') | Select-Object -Unique)
+    $SkipRender = $true
+}
+
 # ---------------------------------------------------------------- run helper (kills only its own process)
+# 선택한 장면을 실행하고 종료 상태와 로그를 확인한다.
 function Invoke-Run([string]$Tag, [string]$Model, [string]$ConfigOpt, [bool]$Render) {
+    # 장면별 본과 기존 데모 옵션을 명령행으로 구성한다.
     $mi = $modelInfo[$Model]
     $log = Join-Path $rawDir "$Tag.log"
     if (Test-Path $log) { Remove-Item $log -Force }
@@ -72,22 +87,36 @@ function Invoke-Run([string]$Tag, [string]$Model, [string]$ConfigOpt, [bool]$Ren
     if ($Render) {
         $a += @('-skeletal-break-demo-delay', '7', '-skeletal-break-demo-cut-time', $mi.CutTime, '-physics-query-exit', '1550')
     } else {
-        $a += @('-skeletal-break-demo-delay', '2', '-physics-query-exit', '480', '-cut-perf-second-bone', $mi.Second)
+        $a += @('-skeletal-break-demo-delay', '2', '-physics-query-exit', '480')
+        if ($mi.Second) { $a += @('-cut-perf-second-bone', $mi.Second) }
     }
+    if ($mi.Opt) { $a += $mi.Opt.Split(' ') }
     $a += $ConfigOpt.Split(' ')
     $a += @('-cut-perf-log', "`"$log`"")
-    $p = Start-Process -FilePath $ExePath -ArgumentList $a -WorkingDirectory $workDir -PassThru
+
+    # 실행 창을 숨기고 이 프로세스의 제한 시간과 종료 코드를 확인한다.
+    $p = Start-Process -FilePath $ExePath -ArgumentList $a -WorkingDirectory $workDir -WindowStyle Hidden -PassThru
+    $null = $p.Handle
     $limit = if ($Render) { 180 } else { 90 }
     if (-not $p.WaitForExit($limit * 1000)) { try { $p.Kill() } catch {}; "$Tag TIMEOUT" | Add-Content (Join-Path $OutDir 'runs.txt'); return $false }
     "$Tag exit=$($p.ExitCode)" | Add-Content (Join-Path $OutDir 'runs.txt')
-    return (Test-Path $log)
+    return ($p.ExitCode -eq 0 -and (Test-Path $log))
 }
 
 # ---------------------------------------------------------------- parsing
+# 요청별 CPU 반복 구간의 합계·횟수와 GPU 합계를 읽는다.
 function Read-CutLog([string]$Path) {
-    # returns hashtable id -> metrics, plus env lines and frame rows
+    # 프레임·요청·구간 로그를 요청 번호에 연결한다.
     $res = @{ Cuts = @{}; Env = @(); Frames = New-Object System.Collections.ArrayList; Start = $null; Rig = @() }
-    function Get-Cut($id) { if (-not $res.Cuts.ContainsKey($id)) { $res.Cuts[$id] = @{ M = @{}; C = @{}; G = @{}; Cut = $null; Req = 0 } }; return $res.Cuts[$id] }
+
+    # 처음 나타난 요청의 빈 집계 표를 만든다.
+    function Get-Cut($id) {
+        # 기존 요청은 누적 집계 표를 그대로 반환한다.
+        if (-not $res.Cuts.ContainsKey($id)) { $res.Cuts[$id] = @{ M = @{}; C = @{}; G = @{}; Cut = $null; Req = 0 } }
+        return $res.Cuts[$id]
+    }
+
+    # 로그 행의 종류에 따라 프레임·단계·반복 구간을 누적한다.
     foreach ($l in [IO.File]::ReadLines($Path)) {
         if ($l.StartsWith('FRAME ')) {
             $o = @{}
@@ -98,7 +127,11 @@ function Read-CutLog([string]$Path) {
             $c = Get-Cut ([int]$Matches[1]); $c.M[$Matches[2]] = @{ t = [double]$Matches[3]; f = [int]$Matches[4] }
         }
         elseif ($l -match '^CPU id=(\d+) name=(\S+) ms=([\d\.]+) t_end_ms=([\d\.]+)') {
-            $c = Get-Cut ([int]$Matches[1]); $c.C[$Matches[2]] = @{ ms = [double]$Matches[3]; end = [double]$Matches[4] }
+            $c = Get-Cut ([int]$Matches[1]); $name = $Matches[2]
+            if (-not $c.C.ContainsKey($name)) { $c.C[$name] = @{ ms = 0.0; count = 0; end = 0.0 } }
+            $c.C[$name].ms += [double]$Matches[3]
+            $c.C[$name].count++
+            $c.C[$name].end = [double]$Matches[4]
         }
         elseif ($l -match '^GPU id=(\d+) name=(\S+) us=([\d\.]+)') {
             $c = Get-Cut ([int]$Matches[1]); $n = $Matches[2]
@@ -116,9 +149,12 @@ function Read-CutLog([string]$Path) {
     return $res
 }
 
+# 게시된 요청의 단계 시간과 세부 CPU 합계·횟수·평균을 반환한다.
 function Get-StageMetrics($c) {
-    # stage durations (ms) of one cut; returns $null when the cut did not publish
+    # 미게시 요청은 성공 표에서 제외한다.
     if (-not $c.M.ContainsKey('published')) { return $null }
+
+    # 기존 요청 단계와 새 함수별 구간을 같은 요청에서 계산한다.
     $m = $c.M; $cp = $c.C
     $r = [ordered]@{}
     $r['select_cpu'] = $m['select-done'].t
@@ -138,6 +174,21 @@ function Get-StageMetrics($c) {
     if ($c.Cut) {
         $r['cutter_gpu_ms'] = $c.Cut.gpu; $r['cutter_ready_ms'] = $c.Cut.ready
         $r['cutter_clip_ms'] = $c.Cut.clip; $r['cutter_boundary_ms'] = $c.Cut.boundary; $r['cutter_cap_ms'] = $c.Cut.cap; $r['cutter_final_ms'] = $c.Cut.fin
+    }
+
+    # 같은 이름은 마지막 값으로 덮어쓰지 않고 합계와 횟수를 보존한다.
+    foreach ($name in $cp.Keys) {
+        $r["cpu_ms_sum_$name"] = $cp[$name].ms
+        $r["cpu_count_$name"] = $cp[$name].count
+        $r["cpu_ms_mean_$name"] = $cp[$name].ms / $cp[$name].count
+    }
+
+    # GPU 합은 중첩 Extract-mode를 제외하고 전체 패스와 cutter만 더한다.
+    if ($c.G.Count) {
+        $gpuSum = 0.0
+        foreach ($name in $c.G.Keys) { if ($name.EndsWith('-whole')) { $gpuSum += $c.G[$name] / 1000.0 } }
+        if ($c.Cut) { $gpuSum += $c.Cut.gpu }
+        $r['gpu_sum_ms'] = $gpuSum
     }
     foreach ($g in 'Extract-whole', 'Extract-mode0', 'Extract-mode1', 'Extract-mode2', 'Extract-mode6', 'BodyClassify-whole', 'BodyCompact-whole', 'PatchSkinBuild-whole', 'SourceMaskCompactIB-whole') {
         if ($c.G.ContainsKey($g)) { $r["gpu_us_$g"] = $c.G[$g] }
@@ -173,15 +224,19 @@ $failed = New-Object System.Collections.ArrayList
 
 foreach ($model in $Models) {
     foreach ($cfg in $cutConfigs) {
-        for ($i = 1; $i -le $N; $i++) {
+        $extraScene = $modelInfo[$model].ContainsKey('Asset')
+        if ($extraScene -and $cfg.Name -ne 'cut_quiet_gpuOn_full') { continue }
+        $launches = if ($extraScene) { 1 } else { $N }
+        for ($i = 1; $i -le $launches; $i++) {
             $tag = "{0}-{1}-{2:D2}" -f $cfg.Name, $model, $i
             Write-Host "[cut] $tag"
             if (-not (Invoke-Run $tag $model $cfg.Opt $false)) { [void]$failed.Add($tag); continue }
             $log = Read-CutLog (Join-Path $rawDir "$tag.log")
             foreach ($e in $log.Env) { $envLines[$e] = $true }
             foreach ($rg in $log.Rig) { [void]$rigLines.Add("$model $tag $rg") }
-            foreach ($id in 1, 2) {
-                if (-not $log.Cuts.ContainsKey($id)) { continue }
+            $expected = if ($modelInfo[$model].Second) { @(1, 2) } else { @(1) }
+            foreach ($id in $expected) {
+                if (-not $log.Cuts.ContainsKey($id)) { [void]$failed.Add("$tag(cut$id missing)"); continue }
                 $r = Get-StageMetrics $log.Cuts[$id]
                 if (-not $r) { [void]$failed.Add("$tag(cut$id no publish)"); continue }
                 $label = if ($id -eq 1) { 'cold(1st cut)' } else { 'warm(2nd cut)' }
@@ -189,7 +244,7 @@ foreach ($model in $Models) {
             }
         }
     }
-    if (-not $SkipRender) {
+    if (-not $SkipRender -and -not $modelInfo[$model].ContainsKey('Asset')) {
         foreach ($cfg in $renderConfigs) {
             for ($i = 1; $i -le $RenderRuns; $i++) {
                 $tag = "{0}-{1}-{2:D2}" -f $cfg.Name, $model, $i
@@ -264,14 +319,15 @@ Add-Line "exe: $ExePath   ($((Get-Item $ExePath).LastWriteTime))"
 Add-Line 'All runs: -debug 0 (D3D12 debug layer off), no debugger, V-Sync default (ON, frame interval pinned to monitor refresh).'
 Add-Line ''
 Add-Line '--- Configurations (options appended to: -debug 0 -skeletal-break-demo <1|2> -skeletal-break-demo-bone <bone>) ---'
-foreach ($m in $Models) { $mi = $modelInfo[$m]; Add-Line "$m : demo=$($mi.Demo) bone=$($mi.Bone) secondBone(warm cut)=$($mi.Second)  renderCutTime=$($mi.CutTime)s" }
+foreach ($m in $Models) { $mi = $modelInfo[$m]; Add-Line "$m : demo=$($mi.Demo) bone=$($mi.Bone) secondBone(warm cut)=$($mi.Second) extraOptions=$($mi.Opt) renderCutTime=$($mi.CutTime)s" }
 foreach ($cfg in $cutConfigs) { Add-Line "$($cfg.Name): $($cfg.Desc)`r`n    cut runs: -skeletal-break-demo-delay 2 -physics-query-exit 480 -cut-perf-second-bone <second> $($cfg.Opt)" }
 foreach ($cfg in $renderConfigs) { Add-Line "$($cfg.Name): $($cfg.Desc)`r`n    render runs: -skeletal-break-demo-delay 7 -skeletal-break-demo-cut-time <renderCutTime> -physics-query-exit 1550 $($cfg.Opt)" }
 Add-Line ''
 Add-Line '--- Model stats (from Models\*.glb JSON) ---'
 foreach ($m in $Models) {
     try {
-        $b = [IO.File]::ReadAllBytes((Join-Path $workDir "Models\$m.glb"))
+        $asset = if ($modelInfo[$m].Asset) { $modelInfo[$m].Asset } else { $m }
+        $b = [IO.File]::ReadAllBytes((Join-Path $workDir "Models\$asset.glb"))
         $len = [BitConverter]::ToUInt32($b, 12)
         $j = [Text.Encoding]::UTF8.GetString($b, 20, $len) | ConvertFrom-Json
         $verts = 0; $idx = 0; $prims = 0
@@ -359,8 +415,9 @@ if (-not $SkipRender) {
 }
 
 Add-Line '--- Not measured / limitations ---'
-Add-Line '* Each launch is the first cut of its process (cold) plus one warm cut; no truly cold OS/driver cache start is forced. The first launch of a config may be slower for that reason.'
-Add-Line '* Cut stage times are wall clock inside functions and include synchronous GPU waits. Internals of the large CPU stages are not broken down.'
+Add-Line '* Thigh launches contain cold+warm cuts; additional scenes contain only one cold cut; no truly cold OS/driver cache start is forced. The first launch of a config may be slower for that reason.'
+Add-Line '* cpu_ms_sum/count/mean rows aggregate repeated names per request. Upload-wait includes allocation and command submission, not just fence sleep; parent CPU ranges include child ranges.'
+Add-Line '* gpu_sum_ms adds cutter and whole passes only (excludes nested Extract-mode rows); absent with GPU timers OFF.'
 Add-Line '* The warm cut cuts the mirrored leg of an already cut source mesh (has a triangle mask), so its workload is not identical to the first cut.'
 Add-Line '* Physics internals (BreakConstraint), transient extract buffers and process-wide VRAM are not measured. Only resident piece buffers are logged (MEM lines in raw logs).'
 Add-Line '* Background load, power plan/AC state and GPU clocks are not controlled; close other applications before running.'
@@ -373,3 +430,6 @@ $result = Join-Path $OutDir 'CutPerfResult.txt'
 [IO.File]::WriteAllText($result, $sb.ToString(), (New-Object System.Text.UTF8Encoding($true)))
 Write-Host "Result: $result"
 if (-not $NoOpen) { Start-Process notepad.exe -ArgumentList "`"$result`"" }
+
+# 실패한 캠페인은 자동화 호출자에게도 실패로 알린다.
+if ($failed.Count) { throw "CutPerf incomplete: $($failed -join ', ')" }

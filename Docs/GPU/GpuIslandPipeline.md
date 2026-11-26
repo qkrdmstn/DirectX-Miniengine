@@ -1,4 +1,4 @@
-상태: 설계안 — 기준 HEAD `b74abc49`, Codex 리뷰 반영 (2026-11-26)
+상태: 진행 중 — G0 (미커밋) — 기준 HEAD `d5e94361`, Release 빌드·14/15 실행 측정, 다중 허벅지 실패·DXGI 오류 후속 (2026-11-26)
 
 # 스켈레탈 절단 섬 판정·cap 보정의 GPU 이관 결정
 
@@ -99,7 +99,95 @@ struct GpuIslandJob
 
 - 각 단계: Codex 구현 → 구현과 다른 새 Codex 리뷰(이 문서 완료 조건 기준) → CPU 테스트 → Debug·Release 빌드와 실행(validation) → 로컬 커밋 → 사용자가 커밋 단위로 읽는다.
 - 공간이 부족하므로 Debug와 Release를 차례로 하나씩 빌드하고, 빌드 사이에 산출물을 정리한다.
-- 예상 시간: Codex 리뷰 2~5분(이번 세션 측정). 빌드·회귀 실행 시간은 G0에서 재고 이 표에 적는다.
+- 예상 시간: Codex 별도 리뷰 2~5분(기존 기록). G0 실측: Release 전체 빌드 24.171초(VS 환경 초기화 포함, MSBuild 20.69초), runner `-G0 -N 3` 198.427초(15회, 1회 실패), validation 13.141초, 다중 허벅지 재실행 8.025초. 별도 리뷰는 이번 실행에 포함하지 않았다.
+
+## G0 측정
+
+2026-11-26, `master` / HEAD `d5e94361` + 미커밋 계측. **계측 구현·일부 기준값 측정 완료, G0 전체 완료는 보류**다. 다중 허벅지 실행 실패와 DXGI validation 오류가 남았다.
+
+### 계측 정의
+
+- 기존 `-cut-perf-log <경로>`에서만 기록하며 기본은 꺼짐이다. `CutPerf::Cpu::End`는 자원·변수 수명을 바꾸지 않고 구간을 한 번 닫는다.
+- `DiagnoseIslands`: 함수 전체; `DiagnoseIslands-reskin-sign`: section 프레임 표 준비·중복 제거·CPU 재스키닝·평면 부호 계산. 재스키닝과 부호는 한 구간이다.
+- `LabelPatchIslands`, `RelabelPatchIslands`: `SkeletalPatchCopy.cpp` 호출부에서 해당 호출만 측정한다. `LatticeTopology.cpp`에 엔진 의존성을 추가하지 않았다.
+- `RelabelCapLoops`: loop 선택·재라벨 전체(내부 `RelabelPatchIslands` 포함). `DiagnoseCapLoops`: cap loop 투표·GPU 귀속 표 생성 전체.
+- `ClassifyCutBodies-upload-wait`: side 0의 초기 데이터 `Create` 두 번; `ClassifyCutBodies-counter-wait`: side별 `Finish(true)` 두 번.
+- `BuildPatchSkinVertices`: 조각별 함수 전체. `BuildPatchSkinVertices-upload-wait`: descriptors·joints·length·boundary·counters의 초기 데이터 `Create` 다섯 번/호출. `BuildPatchSkinVertices-final-wait`: 최종 VB·counter readback의 `Finish(true)` 한 번/호출.
+- upload-wait는 순수 fence sleep이 아니라 할당·복사 명령 제출·내부 완료 대기를 포함한 벽시계다. 부모 CPU 구간은 자식 구간을 포함하므로 서로 더하지 않는다.
+- runner는 요청별 `cpu_ms_sum_*`, `cpu_count_*`, `cpu_ms_mean_*`을 CSV·Summary·텍스트에 출력한다. mean은 합계/호출 횟수이며 Summary는 실행 간 통계다.
+- `gpu_sum_ms`: cutter GPU ms + `*-whole` 패스들의 합. 중첩 `Extract-mode*`와 프레임 렌더는 제외한다. GPU 타이머 OFF에서는 이 합을 출력하지 않는다(cutter 자체 값은 유지).
+
+### 기준표
+
+단위는 ms. CPU 함수 행은 요청별 sum/count의 실행 간 평균이며, 대기 행은 요청당 합계/횟수의 실행 간 평균이다. 1·2차는 같은 프로세스의 양쪽 허벅지이며 작업량은 같지 않다. `실패`는 0이 아니며, 타이머 OFF의 GPU 합은 측정하지 않는다.
+
+#### GPU 타이머 ON — 허벅지 (각 N=3)
+
+| CPU 함수/구간 mean 또는 지표 | Xbot 1차 | Xbot 2차 | CesiumMan 1차 | CesiumMan 2차 |
+| --- | --- | --- | --- | --- |
+| DiagnoseIslands / reskin-sign | 12.478 / 0.054 | 1.040 / 0.068 | 1.956 / 0.020 | 0.871 / 0.014 |
+| LabelPatchIslands | 0.181 | 0.227 | 0.084 | 0.058 |
+| RelabelCapLoops / RelabelPatchIslands | 0.039 / 0.010 | 0.042 / 0.011 | 0.024 / 0.003 | 0.012 / 0.002 |
+| DiagnoseCapLoops | 0.004 | 0.003 | 0.003 | 0.001 |
+| BuildPatchSkinVertices | 116.563 | 5.490 | 123.219 | 4.104 |
+| FinishCutResult / OnCutResult-classify-compact-submit | 235.237 / 62.496 | 13.280 / 8.502 | 248.440 / 69.214 | 9.395 / 3.862 |
+| 분류 upload wait (ms sum/count) | 0.919 / 2.000 | 2.798 / 2.000 | 4.587 / 2.000 | 0.697 / 2.000 |
+| 분류 counter wait (ms sum/count) | 0.481 / 2.000 | 0.435 / 2.000 | 0.531 / 2.000 | 0.217 / 2.000 |
+| skin upload wait (ms sum/count) | 7.722 / 10.000 | 5.594 / 10.000 | 7.334 / 10.000 | 4.255 / 10.000 |
+| skin final wait (ms sum/count) | 1.341 / 2.000 | 0.911 / 2.000 | 0.675 / 2.000 | 0.323 / 2.000 |
+| 요청→게시 ms / frames | 457.863 / 4.000 | 65.683 / 4.000 | 476.060 / 4.000 | 61.572 / 3.667 |
+| GPU sum ms | 1.579 | 1.514 | 0.429 | 0.350 |
+
+#### GPU 타이머 ON — 추가 장면 (각 N=1)
+
+| CPU 함수/구간 mean 또는 지표 | CesiumMan 위팔 | Xbot 다중 허벅지 | CesiumMan 척추 |
+| --- | --- | --- | --- |
+| DiagnoseIslands / reskin-sign | 2.368 / 0.035 | 실패 | 2.534 / 0.022 |
+| LabelPatchIslands | 0.130 | 실패 | 0.144 |
+| RelabelCapLoops / RelabelPatchIslands | 0.035 / 0.011 | 실패 | 0.033 / 0.004 |
+| DiagnoseCapLoops | 0.004 | 실패 | 0.006 |
+| BuildPatchSkinVertices | 128.298 | 실패 | 115.373 |
+| FinishCutResult / OnCutResult-classify-compact-submit | 258.678 / 70.405 | 실패 | 232.884 / 67.514 |
+| 분류 upload wait (ms sum/count) | 5.146 / 2.000 | 실패 | 5.060 / 2.000 |
+| 분류 counter wait (ms sum/count) | 0.626 / 2.000 | 실패 | 0.554 / 2.000 |
+| skin upload wait (ms sum/count) | 6.718 / 10.000 | 실패 | 6.543 / 10.000 |
+| skin final wait (ms sum/count) | 0.898 / 2.000 | 실패 | 0.724 / 2.000 |
+| 요청→게시 ms / frames | 476.720 / 4.000 | 실패 | 463.299 / 4.000 |
+| GPU sum ms | 0.551 | 실패 | 0.503 |
+
+#### GPU 타이머 OFF — 허벅지 (각 N=3)
+
+| CPU 함수/구간 mean 또는 지표 | Xbot 1차 | Xbot 2차 | CesiumMan 1차 | CesiumMan 2차 |
+| --- | --- | --- | --- | --- |
+| DiagnoseIslands / reskin-sign | 12.383 / 0.055 | 0.805 / 0.052 | 1.961 / 0.020 | 1.260 / 0.023 |
+| LabelPatchIslands | 0.187 | 0.176 | 0.084 | 0.083 |
+| RelabelCapLoops / RelabelPatchIslands | 0.034 / 0.009 | 0.028 / 0.009 | 0.023 / 0.003 | 0.019 / 0.003 |
+| DiagnoseCapLoops | 0.006 | 0.002 | 0.003 | 0.001 |
+| BuildPatchSkinVertices | 118.903 | 5.174 | 127.081 | 4.420 |
+| FinishCutResult / OnCutResult-classify-compact-submit | 240.178 / 65.192 | 11.540 / 3.968 | 256.379 / 65.938 | 10.269 / 3.667 |
+| 분류 upload wait (ms sum/count) | 0.957 / 2.000 | 1.016 / 2.000 | 5.062 / 2.000 | 0.766 / 2.000 |
+| 분류 counter wait (ms sum/count) | 0.726 / 2.000 | 0.251 / 2.000 | 0.839 / 2.000 | 0.216 / 2.000 |
+| skin upload wait (ms sum/count) | 6.893 / 10.000 | 5.604 / 10.000 | 6.719 / 10.000 | 4.735 / 10.000 |
+| skin final wait (ms sum/count) | 1.274 / 2.000 | 1.029 / 2.000 | 0.829 / 2.000 | 0.419 / 2.000 |
+| 요청→게시 ms / frames | 472.447 / 4.000 | 55.119 / 4.000 | 479.724 / 4.000 | 62.679 / 3.667 |
+| GPU sum ms | — | — | — | — |
+
+타이머 ON 성공 요청 14개에서 CPU 구간 mean 상위 3개는 `FinishCutResult` 143.616 ms, `BuildPatchSkinVertices` 70.843 ms/호출, `OnCutResult-classify-compact-submit` 40.724 ms다. 앞 두 구간은 포함 관계이므로 합산하지 않는다. 1차의 초기화 비용이 크며 2차와 분리해 해석한다.
+
+타이머 ON 표의 요청당 대기 합계 평균 범위: 분류 upload 0.697~5.146 ms/2회, counter 0.217~0.626 ms/2회, skin upload 4.255~7.722 ms/10회, final 0.323~1.341 ms/2회. upload는 할당·제출을 포함한다.
+
+환경: NVIDIA GeForce MX450, 전용 메모리 1906 MiB(엔진 ENV), NVIDIA 드라이버 591.86(`nvidia-smi`). Release, `-debug 0`, 전체 장면, quiet=1, V-Sync 기본 ON. WMI 조회는 접근 거부되어 CPU·OS 상세는 수집하지 못했다.
+
+### 실행·검증 및 남은 항목
+
+- VS2022 Developer 환경에서 `msbuild MiniEngine/ModelViewer/ModelViewer.slnx /restore /m /p:Configuration=Release /p:Platform=Windows` 성공: 오류 0, 경고 0. 벽시계 24.171초(VS 환경 초기화 포함), MSBuild 20.69초. Jolt Release 캐시를 사용했고 재다운로드하지 않았다. 코드·계측 설계 수정은 없다.
+- runner: `powershell -NoProfile -ExecutionPolicy Bypass -File Tools/CutPerf/Run-CutPerf.ps1 -G0 -N 3 -NoOpen -OutDir C:/Users/Pes/Desktop/DirectX-Miniengine/Tools/CutPerf/out/G0-20261126-measured`. 벽시계 198.427초, 종료 코드 1. 15개 실행 중 14개 정상 종료·26개 요청 게시(허벅지 24 + 위팔·척추 각 1), 다중 허벅지 1개 실패.
+- Xbot 다중 허벅지는 `-skeletal-multi-cut 1`에서 종료 코드 `0xC0000409`(-1073740791), 성능 로그 0 B다. 같은 옵션 재실행도 8.025초에 같은 코드로 실패했다. 디버그 출력은 cutter 결과 수신·cap 진단까지 확인되나 이후 원인은 미확정이다. 실패 로그를 0이나 정상 표본으로 대체하지 않았다. 요청 범위가 빌드 오류 수정뿐이므로 런타임 코드는 변경하지 않았다.
+- Release Xbot 오른쪽 허벅지 `-debug 1` 1회: 13.141초, 종료 0, 게시 499.087 ms/4 frames. DBWIN 캡처 기준 **D3D12 ERROR 0, DXGI ERROR 1**: `IDXGISwapChain::GetContainingOutput`의 어댑터·출력 불일치(#80). D3D12 경고 #1008(중복 subresource barrier)도 있어 전체 validation 무오류 PASS로 판정하지 않는다. 초기 NVIDIA ShadowPlay 로그 접근 오류 2건은 위 ERROR 집계에서 별도다.
+- 기존 `%TEMP%/ndc-debug-capture.ps1`은 Add-Type DLL 접근 거부로 실패하여 임시 native DBWIN 수집기를 사용했다. 엔진 코드는 변경하지 않았다. 임시 수집기 소스·바이너리 삭제는 도구 자동 승인 검토에서 `blocked by policy`로 거부되어 out의 capture-temp에 남았다. Debug 빌드는 이번 요청 범위에서 생략, Geometry 변경이 없어 PlaneSlicer CPU 테스트는 대상이 아니다. 별도 새 세션 리뷰는 미수행이다.
+- 재현 근거: `Tools/CutPerf/out/G0-20261126-measured/`의 `CutPerfRuns.csv`, `CutPerfSummary.csv`, `CutPerfResult.txt`, `runs.txt`, `raw/`, `validation-cut.log`, `validation-debug.log`, `multi-retry-debug.log`. runner가 보고한 실패를 그대로 보존했다. 이 디렉터리는 git ignore 대상이다.
+- 후속: 다중 허벅지 런타임 실패와 DXGI 오류를 별도 작업에서 해결한 뒤 해당 기준값을 재측정한다. `-island-gpu` 옵션은 아직 엔진에 없으므로 OFF/ON은 GPU 타이머 비교이며 섬 알고리즘 비교가 아니다. G0는 미커밋 진행 중이며 완료 판정은 보류한다.
+- Release 빌드 산출물은 보존했다. 이번 TEMP 빌드 상세 로그(`%TEMP%/g0-release-build-20261126.log`)와 임시 수집기 산출물 삭제는 도구 자동 승인 검토에서 `blocked by policy`로 거부되어 남았다. 삭제를 완료했다고 간주하지 않는다. 커밋·푸시는 하지 않았다.
 
 ## 완료 조건
 

@@ -25,6 +25,9 @@ namespace Viewer
         const RemainLengthTable* lengthTable, const std::vector<uint32_t>* lengthMeshes,
         const std::function<const std::vector<uint32_t>*()>& boundaryProvider)
     {
+        // 조각별 함수 시간을 기록하고 내부 동기 구간은 따로 잰다.
+        CutPerf::Cpu cutPerfCpu("BuildPatchSkinVertices");
+
         // u16 강체 슬롯과 최초 원본 revision을 요구한다.
         if (!snapshot.SkinningAllowed || source.IsGenerated() || snapshot.JointsAtCut.empty()
             || snapshot.JointsAtCut.size() > 65535 || !triangleSources.GetBufferSize())
@@ -109,9 +112,17 @@ namespace Viewer
 
         // section flags의 합집합을 단일 출력 레이아웃으로 보관한다.
         StructuredBuffer descriptors;
-        descriptors.Create(L"Patch skin draws", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
+        {
+            // 초기 데이터 업로드의 할당과 내부 동기 대기를 포함한다.
+            CutPerf::Cpu cutPerfUpload("BuildPatchSkinVertices-upload-wait");
+            descriptors.Create(L"Patch skin draws", uint32_t(draws.size()), sizeof(DrawInput), draws.data());
+        }
         StructuredBuffer cutJoints;
-        cutJoints.Create(L"Patch skin joints at cut", uint32_t(snapshot.JointsAtCut.size()), sizeof(Joint), snapshot.JointsAtCut.data());
+        {
+            // 초기 데이터 업로드의 할당과 내부 동기 대기를 포함한다.
+            CutPerf::Cpu cutPerfUpload("BuildPatchSkinVertices-upload-wait");
+            cutJoints.Create(L"Patch skin joints at cut", uint32_t(snapshot.JointsAtCut.size()), sizeof(Joint), snapshot.JointsAtCut.data());
+        }
         // 재분배 대상이면 검증이 끝난 지금 경계 플래그를 얻고, 표와 플래그 크기가 맞을 때만 경로를 켠다.
         const std::vector<uint32_t>* boundaryFlags = lengthTable && boundaryProvider ? boundaryProvider() : nullptr;
         struct LengthEntry
@@ -130,18 +141,30 @@ namespace Viewer
 
         // 팔레트별 비율 표 버퍼를 만든다.
         StructuredBuffer lengthBuffer;
-        lengthBuffer.Create(L"Patch skin length table", uint32_t(entries.size()), sizeof(LengthEntry), entries.data());
+        {
+            // 초기 데이터 업로드의 할당과 내부 동기 대기를 포함한다.
+            CutPerf::Cpu cutPerfUpload("BuildPatchSkinVertices-upload-wait");
+            lengthBuffer.Create(L"Patch skin length table", uint32_t(entries.size()), sizeof(LengthEntry), entries.data());
+        }
 
         // 경계 플래그 버퍼를 만든다(꺼져 있으면 1칸 더미).
         const uint32_t dummyFlag = 1;
         StructuredBuffer boundaryBuffer;
-        boundaryBuffer.Create(L"Patch skin boundary flags", lengthEnabled ? uint32_t(boundaryFlags->size()) : 1, sizeof(uint32_t),
-            lengthEnabled ? boundaryFlags->data() : &dummyFlag);
+        {
+            // 초기 데이터 업로드의 할당과 내부 동기 대기를 포함한다.
+            CutPerf::Cpu cutPerfUpload("BuildPatchSkinVertices-upload-wait");
+            boundaryBuffer.Create(L"Patch skin boundary flags", lengthEnabled ? uint32_t(boundaryFlags->size()) : 1, sizeof(uint32_t),
+                lengthEnabled ? boundaryFlags->data() : &dummyFlag);
+        }
 
         // 계수 버퍼를 0으로 초기화해 만든다.
         const uint32_t zeros[16] = {};
         ByteAddressBuffer counters;
-        counters.Create(L"Patch skin length counters", 16, sizeof(uint32_t), zeros);
+        {
+            // 초기 데이터 업로드의 할당과 내부 동기 대기를 포함한다.
+            CutPerf::Cpu cutPerfUpload("BuildPatchSkinVertices-upload-wait");
+            counters.Create(L"Patch skin length counters", 16, sizeof(uint32_t), zeros);
+        }
 
         out.Data.Create(L"Patch skin vertices", end, stride);
         out.Flags = flags;
@@ -204,7 +227,10 @@ namespace Viewer
 
         // 호출자가 보관한 원본·출처·조각과 임시 descriptor는 완료 뒤에만 해제할 수 있다.
         cutPerfSkinBuild.End();
+        // 최종 skin VB와 계수 readback의 제출·완료 대기를 잰다.
+        CutPerf::Cpu cutPerfWait("BuildPatchSkinVertices-final-wait");
         graphics.Finish(true);
+        cutPerfWait.End();
 
         // 원본 경계 방식처럼 section 전체 구를 모든 joint에 공통 사용하며 K 위치도 그대로 포함한다.
         const auto* bytes = static_cast<const uint8_t*>(readback.Map());
