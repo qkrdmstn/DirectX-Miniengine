@@ -2742,8 +2742,9 @@ namespace Viewer
                 return;
 
             // A 패치와 같은 요청 시점의 물리·애니메이션 입력을 성공 게시까지 보관한다.
-            if (!boneCut && !m_MultiPrepare)
+            if (!boneCut)
             {
+                m_PendingDetachRoots = cutRoots;
                 m_PendingDetach.Owner = target->GetId();
                 m_PendingDetach.SourceModel = instance.GetModel();
                 m_PendingDetach.RootNode = cutRoots.front();
@@ -2816,7 +2817,7 @@ namespace Viewer
             // 비교 데모는 모드 0도 같은 LW 계산으로 비율을 기록하고, 재분배는 기존 옵션을 따른다.
             uint32_t lengthDemo = 0;
             CommandLineArgs::GetInteger(L"skeletal-break-demo", lengthDemo);
-            if (!boneCut && (PatchLengthWeightsMode() || PatchLengthBlendEnabled() || lengthDemo || !m_MultiPrepare)
+            if (!boneCut && (PatchLengthWeightsMode() || PatchLengthBlendEnabled() || lengthDemo || m_PendingDetach.RootNode != UINT32_MAX)
                 && m_RemainLengthTables.size() == m_SkinSnapshots.size())
             {
                 // 절단 시점 pose의 월드 joint 위치를 구한다(snapshot의 JointsAtCut과 같은 pose).
@@ -2865,8 +2866,7 @@ namespace Viewer
                 auto lengthTable = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups);
 
                 // 옵션과 무관하게 이번 root의 원래 길이 비율을 이력 입력에 남긴다.
-                if (!m_MultiPrepare)
-                    m_PendingDetach.LengthRatio = lengthTable.Ratio;
+                m_PendingDetach.LengthRatio = lengthTable.Ratio;
 
                 // LB는 원래 비율 표를 snapshot에 보관하고 LW 모드 0·1의 P=1 처리는 별도로 유지한다.
                 if (PatchLengthBlendEnabled())
@@ -4162,7 +4162,7 @@ namespace Viewer
             }), m_DetachHistory.end());
     }
 
-    // 성공한 단일 절단의 요청 snapshot을 이력에 추가하고 기존 패치의 신규 분리 슬롯만 고정한다.
+    // 성공한 단일·다중 게시에서 이전 이력을 새 조각에 적용하고 이번 root별 이력을 추가한다.
     void SkeletalPatchCopy::PublishDetachRecord(const Scene& scene, GameObject& owner, const MeshComponent& source,
         const MeshComponent* newA, const std::vector<ComponentId>& newPieces, uint64_t request)
     {
@@ -4174,9 +4174,57 @@ namespace Viewer
         if (m_PendingDetach.Owner != owner.GetId() || m_PendingDetach.SourceModel.lock() != model
             || m_PendingDetach.RootNode == UINT32_MAX)
             return;
-        m_DetachHistory.push_back(std::move(m_PendingDetach));
+
+        // 새 A/B는 이번 절단 이전 이력만 따라잡고 기존 Frozen 값은 보존한다.
+        for (const auto& record : m_DetachHistory)
+            ApplyDetachRecord(owner, source, nullptr, record, request, &newPieces);
+
+        // 모든 root는 같은 요청 시점 입력을 쓰며 성공 게시 뒤에만 이력에 들어간다.
+        for (uint32_t root : m_PendingDetachRoots)
+        {
+            auto record = m_PendingDetach;
+            record.RootNode = root;
+            m_DetachHistory.push_back(std::move(record));
+            if (!CutPerf::Quiet())
+                PatchLog("SKINSTALE record owner=%llu cut=%llu root=%u\n", owner.GetId(), request, root);
+            ApplyDetachRecord(owner, source, newA, m_DetachHistory.back(), request);
+        }
+
+        // 소비한 요청 입력을 비워 중복 게시에서 기록을 다시 추가하지 않는다.
         m_PendingDetach = {};
-        const auto& record = m_DetachHistory.back();
+        m_PendingDetachRoots.clear();
+    }
+
+    // RS 설치 때 요청 당시 부모 snapshot에 owner의 최신 이력을 복사 후 교체한다.
+    void SkeletalPatchCopy::ApplyRecutDetachHistory(Scene& scene, GameObject& owner, MeshComponent& child,
+        const SkeletalRigState& rig)
+    {
+        // 해당 자식에만 전체 이력을 적용하며 다른 owner와 원본 publication은 보존한다.
+        const std::vector<ComponentId> targets{ child.GetId() };
+        for (const auto& record : m_DetachHistory)
+            ApplyDetachRecord(owner, child, nullptr, record, 0, &targets);
+
+        // 자식 CPU 사본과 현재 팔레트 유한성을 기존 진단으로 확인한다.
+        if (!CutPerf::Quiet())
+        {
+            // 설치 직후 팔레트를 준비한 뒤 단일·다중 게시와 같은 시점에서 검사한다.
+            auto& context = GraphicsContext::Begin(L"Diagnose recut detach history");
+            scene.PrepareMeshes(context);
+            context.Finish();
+            PatchLog("SKINSTALE boundary=RS child=%llu owner=%llu\n", child.GetId(), owner.GetId());
+        }
+        LogStaleSkin(owner, rig, 0);
+    }
+
+    // 한 분리 기록을 대상 패치에 멱등 적용하고 기존 정점 경계 진단을 재사용한다.
+    void SkeletalPatchCopy::ApplyDetachRecord(GameObject& owner, const MeshComponent& source,
+        const MeshComponent* newA, const DetachRecord& record, uint64_t request,
+        const std::vector<ComponentId>* targets)
+    {
+        // owner와 원본 모델이 같은 이력만 적용한다.
+        const auto model = owner.GetModelInstance()->GetModel();
+        if (record.Owner != owner.GetId() || record.SourceModel.lock() != model)
+            return;
         const auto& parents = owner.GetModelInstance()->GetPoseParents();
 
         // NodeId의 부모 체인으로 이번 분리 subtree 소속을 판정한다.
@@ -4198,10 +4246,10 @@ namespace Viewer
             BuildPatchPalette(newA->PatchSkin->Snapshot, source.GetPreparedJoints(), source.GetPreparedNodes(), aPalette,
                 source.GetPreparedAnimJoints(), source.GetPreparedAnimNodes(), PatchAnimFollowEnabled());
 
-        // 활성 기존 publication만 복사하여 RS가 참조 중인 이전 snapshot을 보존한다.
+        // 활성 publication만 복사하여 RS가 참조 중인 이전 snapshot을 보존한다.
         for (const auto& component : owner.GetMeshComponents())
         {
-            if (std::find(newPieces.begin(), newPieces.end(), component->GetId()) != newPieces.end()
+            if ((targets && std::find(targets->begin(), targets->end(), component->GetId()) == targets->end())
                 || !component->HasSkinnedPatch() || component->GetGeometry()->GetSource() != model
                 || component->PatchSkin->Snapshot.SourceFrozen || inside(component->PatchSkin->Snapshot.AttachNode))
                 continue;
@@ -4236,8 +4284,13 @@ namespace Viewer
             publication->Snapshot = std::move(snapshot);
             component->PatchSkin = std::move(publication);
 
-            // 실제 위치 팔레트로 신규 고정 슬롯만 교체했을 때의 정점 위치 차이를 기록한다.
+            // 이전 이력과 RS 적용은 root·슬롯 수를 남기고 기준 A가 있을 때만 경계를 비교한다.
             if (!CutPerf::Quiet())
+                PatchLog("SKINSTALE apply patch=%llu cut=%llu root=%u newFrozen=%zu boundary=%s\n",
+                    component->GetId(), request, record.RootNode, added.size(), newA ? "compare" : "history");
+
+            // 실제 위치 팔레트로 신규 고정 슬롯만 교체했을 때의 정점 위치 차이를 기록한다.
+            if (!CutPerf::Quiet() && newA)
             {
                 const auto& skin = *component->PatchSkin;
                 const auto& cpu = skin.Vertices.DiagnosticSkin;
@@ -4583,7 +4636,7 @@ namespace Viewer
                     if (!m_DemoUnmask && !source->SetTriangleMask(m_Removal))
                         throw std::runtime_error("SP7e invalid removal mask");
 
-                    // 기존 패치만 갱신하도록 이번 A/B의 ID를 보관한다.
+                    // 이전 이력을 새 A/B에도 적용하도록 게시 ID를 보관한다.
                     std::vector<ComponentId> newPieces;
                     for (const auto& piece : pieces)
                         newPieces.push_back(piece->GetId());
@@ -5799,6 +5852,7 @@ namespace Viewer
             return false;
         }
         CutPerf::Mark("break-result");
+        const uint64_t publishedRequest = m_RequestId;
         m_RequestId = 0;
         const bool applied = statuses.size() == m_MultiBreaks.size()
             && std::all_of(statuses.begin(), statuses.end(), [](BreakStatus status)
@@ -5846,6 +5900,9 @@ namespace Viewer
         {
             owner->CommitMeshComponent(std::move(piece));
         }
+
+        // 성공한 batch의 root별 이력을 기존 패치와 새 조각에 같은 규칙으로 적용한다.
+        PublishDetachRecord(scene, *owner, *source, owner->FindMeshComponent(m_PieceIds.front()), m_PieceIds, publishedRequest);
         auto& context = GraphicsContext::Begin(L"Publish multi skeletal pieces");
         scene.PrepareMeshes(context);
         context.Finish();
@@ -5858,6 +5915,7 @@ namespace Viewer
         SkeletalRigState state;
         auto& skeletal = m_Physics->GetSkeletalPhysics();
         skeletal.ReadDiagnosticState(m_Break.Owner, state);
+        LogStaleSkin(*owner, state, publishedRequest);
         size_t constraints = 0;
         for (uint32_t joint = 0; joint < state.Joints.size(); ++joint)
         {

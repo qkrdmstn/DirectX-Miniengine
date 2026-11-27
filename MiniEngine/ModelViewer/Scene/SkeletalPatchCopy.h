@@ -160,6 +160,8 @@ namespace Viewer
     class SkeletalPatchCopy
     {
     public:
+        // RS 자식 설치 때 부모 요청 이후의 분리 이력을 반영하고 진단한다.
+        void ApplyRecutDetachHistory(Scene& scene, GameObject& owner, MeshComponent& child, const SkeletalRigState& rig);
         // 새 C의 Static 후보 조회 전에 이전 작업과 owner를 공통 삭제 경로로 정리한다.
         void Reset(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting);
         // 현재 skin 대상과 본을 선택하고 GPU 추출 및 배치 snapshot을 저장한다.
@@ -287,12 +289,16 @@ namespace Viewer
             std::vector<float> LengthRatio;
         };
         DetachRecord m_PendingDetach;
+        std::vector<uint32_t> m_PendingDetachRoots;
         std::vector<DetachRecord> m_DetachHistory;
         // 삭제된 owner와 만료된 모델의 게시 이력만 회수한다.
         void PruneDetachHistory(const Scene& scene);
-        // 성공한 단일 게시의 이력을 저장하고 이번 A/B를 제외한 기존 패치에 적용한다.
+        // 성공한 단일·다중 게시의 root별 이력과 이전 이력을 모든 대상 패치에 적용한다.
         void PublishDetachRecord(const Scene& scene, GameObject& owner, const MeshComponent& source,
             const MeshComponent* newA, const std::vector<ComponentId>& newPieces, uint64_t request);
+        // 한 기록을 선택한 패치 또는 owner의 모든 활성 패치에 멱등 적용한다.
+        void ApplyDetachRecord(GameObject& owner, const MeshComponent& source, const MeshComponent* newA,
+            const DetachRecord& record, uint64_t request, const std::vector<ComponentId>* targets = nullptr);
         std::vector<PatchSkinSnapshot> m_SkinSnapshots;
         std::vector<CollisionDebugDraw::WorldLine> m_TopologyViz; // -topology-island-viz가 만든 색 선분 snapshot이다.
         std::vector<RemainLengthTable> m_RemainLengthTables; // body별 남은 길이 비율 표(LW-1). 옵션 0·boneCut·B 조각은 빈 표다.

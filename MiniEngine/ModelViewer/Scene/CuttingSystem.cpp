@@ -1,5 +1,6 @@
 ﻿#include "CuttingSystem.h"
 #include "Utility.h"
+#include "SkeletalPatchCopy.h"
 #include "../../Core/GraphicsCore.h"
 #include "../../Core/CommandContext.h"
 #include <stdexcept>
@@ -716,7 +717,7 @@ namespace Viewer
         return false;
     }
 
-    // GPU DOP으로 충돌을 재맞춘 뒤 simulate 대상은 body 교체 transaction 검증을 통과할 때만 게시한다.
+    // 충돌 transaction을 검증해 게시하고 RS 자식 snapshot에 최신 분리 이력을 반영한다.
     bool CuttingSystem::UpdateOne()
     {
         // front의 GPU 완료를 기다리지 않고 확인한다.
@@ -921,6 +922,15 @@ namespace Viewer
                             MeshComponent& other = object->CommitMeshComponent(std::move(preparedB));
                             if (physical)
                                 transaction.Commit(*mesh, other);
+
+                            // 설치된 RS 자식만 최신 이력으로 교체하고 부모의 공유 snapshot은 보존한다.
+                            if (childSkin && m_Patches)
+                            {
+                                auto& child = active.NodeSide == 0 ? *mesh : other;
+                                SkeletalRigState rig;
+                                m_Physics.GetSkeletalPhysics().ReadDiagnosticState(object->GetId(), rig);
+                                m_Patches->ApplyRecutDetachHistory(m_Scene, *object, child, rig);
+                            }
                             LogInheritance(parentStatus, parentVolume, parentConvex, *mesh, other);
                             LastOther = id;
                             m_StatusText = "Cut complete";

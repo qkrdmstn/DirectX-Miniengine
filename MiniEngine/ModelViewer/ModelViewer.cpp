@@ -206,7 +206,7 @@ private:
 
     Viewer::Scene m_Scene;
     Viewer::PhysicsSystem m_Physics{m_Scene};
-    Viewer::CuttingSystem m_Cutting{m_Scene,m_Physics};
+    Viewer::CuttingSystem m_Cutting{m_Scene,m_Physics,&m_SkeletalPatchCopy};
     uint32_t m_UsePhysicsQuery = 1, m_PhysicsCapacity = 4096, m_QuerySelfTest = 0;
     uint32_t m_UsePhysicsSim = 1, m_PhysicsSimChecks = 0;
     uint32_t m_QueryExitFrame = 0, m_QueryFrame = 0;

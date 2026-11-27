@@ -1,4 +1,4 @@
-상태: 진행 중 — ST-1·ST-2 완료·이력 수명/정점 경계 진단 보완(미커밋), ST-3·ST-4 대기, 기준 master `d00194ea` (2026-11-27)
+상태: 진행 중 — ST-1·ST-2 완료(`007c9306`), ST-3 구현·부분 검증 완료(기존 패치가 있는 다중 batch 미검증: Xbot·CesiumMan 연속 다중은 게시 전 MI4d2 loop 실패, 기존 결함 판정), ST-4 대기, 기준 master `007c9306` (2026-11-27)
 
 # 연속 절단 뒤 기존 패치의 고정 joint 갱신
 
@@ -71,8 +71,8 @@ void ReplacePatchSnapshot(const PatchSkinSnapshot& updated);
 | 단계 | 내용 | 규모 |
 | --- | --- | --- |
 | ST-1 | 진단 구현·Release 재현 확인(미커밋): `LogStaleSkin` 자기 몸 subtree 전체 제외·skip 건수·현재 위치/법선 팔레트 유한성·RS CPU 사본·stride 및 section 범위의 레이아웃 검증. 경계 거리 제외 | 기존 진단 포함 약 200줄 |
-| ST-2 | 완료(미커밋): `Request`의 동일 t_s 입력을 성공한 단일 `Update` 게시에서 이력에 추가하고 기존 패치 신규 슬롯만 고정. publication 복사 후 교체·VB 공유. 만료 owner/모델 이력 회수, CPU skin의 정점별 위치 경계 진단 완료 | 리뷰 보완 추가 약 120줄 이내 |
-| ST-3 | 다중 절단·RS 게시와 새 패치 자신에 적용(D2·D5) | 약 200줄 |
+| ST-2 | 완료(`007c9306`): `Request`의 동일 t_s 입력을 성공한 단일 `Update` 게시에서 이력에 추가하고 기존 패치 신규 슬롯만 고정. publication 복사 후 교체·VB 공유. 만료 owner/모델 이력 회수, CPU skin의 정점별 위치 경계 진단 완료 | 리뷰 보완 추가 약 120줄 이내 |
+| ST-3 | 구현·부분 검증 완료(미커밋): 다중 root별 기록·RS 자식 전체 이력·새 A/B 이전 이력 적용(D2·D5). 정순/역순·AF 0·LB 1·CesiumMan batch·RS/AR4 PASS. Xbot 다중 게시 및 기존 패치가 있는 batch 검증은 loop 실패로 미완료 | 코드 약 110줄 변경 |
 | ST-4 | 검증, 문서 상태 줄·README·CodeMap 갱신 | 문서 |
 
 ## 완료 조건
@@ -98,4 +98,29 @@ void ReplacePatchSnapshot(const PatchSkinSnapshot& updated);
 - 단일 절단도 정상 종료(exit 0, 약 15.5초), `patch=2 cut=1` 0건·`paletteFinite=1`. 기존 `%TEMP%/SKINSTALE-control-patch.log`와 MI 행 차이 0건. AF 0 실행은 약 16.6초에 정상 종료했다.
 - 리뷰 보완의 요청한 480프레임 AF 1/0 로그는 `%TEMP%/st2-review-{af1,af0}-patch.log` 및 대응 `-perf.log`에 보관한다. 이전 단일 절단 로그는 `%TEMP%/st2-single-{patch,perf}.log`이다.
 - debug 출력 수집기는 임시 DLL 생성 권한 오류로 사용할 수 없었다. 요청 인수 `-debug 0`에서 D3D12 validation ERROR 0은 확정하지 않는다.
-- ST-3의 다중·RS 게시 및 새 A/B에 대한 이전 이력 적용, ST-4 전체 회귀와 사용자 육안 확인은 남아 있다.
+- 당시 남은 ST-3 구현·검증은 아래에 기록한다. ST-4 전체 회귀와 사용자 육안 확인은 남아 있다.
+
+## ST-3 구현·검증 (2026-11-27, 미커밋)
+
+- `Request`는 다중 절단에도 A와 동일한 요청 시점 입력·전체 root 목록·남은 길이 비율을 보관한다. `PublishDetachRecord`는 성공한 단일/batch 게시에서 새 A/B에 이전 이력을 적용한 뒤 root마다 기록 하나를 추가한다. `ConsumeMultiBreak`의 거절·stale 반환 경로에서는 호출하지 않는다.
+- `ApplyDetachRecord`는 ST-2 계산·경계 진단을 재사용한다. owner/모델·활성 skin·SourceFrozen·AttachNode subtree를 검사하고 기존 Frozen·K·AF 자격·기존 offset/비율을 보존한다. publication만 복사 후 교체하며 geometry·skin VB는 공유한다.
+- `CuttingSystem::UpdateOne`은 RS 자식 설치 때 `ApplyRecutDetachHistory`로 그 owner의 전체 이력을 적용한다. quiet=0에서는 팔레트를 준비한 뒤 `SKINSTALE boundary=RS child=...`와 기존 CPU/유한성 진단을 남긴다. 요청 당시 부모 publication은 수정하지 않는다.
+- Release/Windows: `%TEMP%/st3-release.log` exit 0, 48.44초, 경고 62·오류 0. 최종 주석/빈 줄 정리 빌드 `%TEMP%/st3-release-final.log`도 exit 0, 49.84초, 경고 16·오류 0이다. GPU는 실행 ENV의 NVIDIA GeForce MX450; 드라이버는 이번에 조회하지 않았다.
+- 공통 실행: 작업 디렉터리 `MiniEngine/ModelViewer`, `-debug 0 -skeletal-break-demo 1 -skeletal-break-demo-delay 2 -physics-query-exit 480 -cut-perf-log <TEMP 절대 경로> -cut-perf-quiet 0 -cut-perf-gpu 0`. 각 실행 전 `SP6-SkeletalPatchChecks.log`의 바이트 offset을 기록해 이후 부분만 수집했다. 로그·인수·offset·종료 코드는 `%TEMP%/st3-<사례>-{patch,perf}.log`, `st3-<사례>-result.json`에 보관한다.
+
+| 사례 | SKINSTALE 행 / 정점 집계 | boundaryMaxMm | exit |
+| --- | --- | --- | --- |
+| forward: RightUpLeg→LeftUpLeg | 11 / 6개 패치 검사 모두 0 | 0 | 0 |
+| reverse: LeftUpLeg→RightUpLeg | 11 / 6개 모두 0 | 0 | 0 |
+| af0: forward + `-patch-anim-follow 0` | 11 / 6개 모두 0 | 0.000251367 | 0 |
+| lb1: forward + `-patch-length-blend 1` | 11 / 6개 모두 0 | 0.000240736 | 0 |
+| multi: forward + `-skeletal-multi-cut 1` | 0 / 게시 전 `MI4d2 missing multi-P loop` | 미측정 | -1073740791 |
+| multi-cesium: demo 2, `leg_joint_R_1`, multi/union-checks 1 | 5 / 3개 모두 0, root 13/17 기록 각 1개 | 신규 고정 슬롯 없어 미측정 | 0 |
+| multi-sequence: demo 2, `Skeleton_arm_joint_L__4_`→`leg_joint_R_1`, multi 1 | 첫 단일 게시 3 / 2개 모두 0; 두 번째 게시 전 같은 loop 실패 | 미측정 | -1073740791 |
+| multi-reject / multi-stale: multi-cesium + 각 주입 옵션 1 | 각 0 / 이력 추가 없음, 원본·마스크·constraint 무변경 PASS | 해당 없음 | 각 0 |
+| single: forward에서 second-bone 제외 | 3 / 2개 모두 0; ST-2 control MI 14행 차이 0 | 신규 고정 슬롯 없어 미측정 | 0 |
+| rs-final: `-attached-recut-checks 2` 전용 실행 | 9 / 최초·두 RS 설치 합계 6개 검사 모두 0, 자식 id 2 | ST-2 지표 없음; RS3 게시/+60·두 번째 게시/+60 모두 0 mm | 0 |
+
+- 성공 실행의 모든 검사에서 `cpu=exact paletteFinite=1`, `cpu=unavailable` 0건이다. forward/reverse 새 몸통 패치에 이전 root의 5개 슬롯이 고정된 `boundary=history` 로그를 확인했다. 이 로그 자체에는 수치 경계 비교가 없으며 위 ST-2 지표는 기존 패치의 신규 고정 슬롯 비교다.
+- RS 전용 검사는 demo·delay·physics-query-exit 병용을 거절한다. 초기 `rs`/`rs-valid` 시도는 옵션 충돌로 각각 exit -1073740791·SKINSTALE 0행이었다. 최종 실행은 이 옵션들을 제외했다. RS2b 전부 PASS, AR4 다섯 판정·RS4 연속 skinned 자식 게시/+60·전체 `Attached recut checks` PASS다. 과거 snapshot을 보관한 RS 도중 다른 break가 게시되는 동시 상황은 기존 옵션으로 재현하지 않았다.
+- 기존 옵션은 `cut-perf-second-bone` 한 번만 지원하므로 3회 절단은 실행하지 않았다. 다른 owner의 기존 snapshot 불변·취소·진행 중 RS의 늦은 이력 반영은 코드 경로로만 확인했고 별도 런타임 검증은 하지 않았다. debug 0 실행이므로 D3D12 validation ERROR 0 및 육안 결과는 확정하지 않는다. 완료 조건 2~5 전체 충족을 주장하지 않는다.

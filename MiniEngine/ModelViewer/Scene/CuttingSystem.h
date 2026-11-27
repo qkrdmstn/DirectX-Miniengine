@@ -32,12 +32,17 @@ namespace Viewer
         uint32_t Loops = 0, CapMaxLoop = 0, CapMappedLoops = 0, CapRounds = 0;  // cap 루프 크기와 Mapped 경로 진단
     };
 
+    class SkeletalPatchCopy;
     // Scene 변경은 완료된 GPU 작업을 프레임 입력 경계에서 게시할 때만 수행한다.
     class CuttingSystem
     {
     public:
-        // 절단 작업이 사용할 장면을 연결한다.
-        explicit CuttingSystem(Scene& scene, PhysicsSystem& physics) : m_Scene(scene), m_Physics(physics) {}
+        // 절단 장면·물리와 선택적인 RS 게시 이력 관리자를 연결한다.
+        explicit CuttingSystem(Scene& scene, PhysicsSystem& physics, SkeletalPatchCopy* patches = nullptr)
+            : m_Scene(scene), m_Physics(physics), m_Patches(patches)
+        {
+            // 이력 관리자는 호출자가 소유하며 절단 시스템보다 오래 유지한다.
+        }
         // section 행렬이 준비된 Static 컴포넌트와 평면을 고정해 작업을 시작한다.
         bool Request(ObjectId owner, ComponentId mesh, const MeshCutting::CutPlaneData& plane, bool publish = true, float worldEpsilon = 1.0e-5f, uint32_t capMode = 0, bool captureLoops = false);
         // 현재 절단 영역의 Static 후보를 고정하고 이후 프레임에서 제한된 수만큼 제출한다.
@@ -107,6 +112,7 @@ namespace Viewer
         void FinishBatch();
         Scene& m_Scene;
         PhysicsSystem& m_Physics;
+        SkeletalPatchCopy* m_Patches = nullptr;
         std::deque<ActiveCut> m_Active;
         CutBudget m_Budget;
         // 결과 목록에 한 칸을 확보한다. 가득 차 있으면 가장 오래된 결과를 버리며 게시 전에 호출해 이후 push가 할당하지 않게 한다.
