@@ -26,6 +26,7 @@ namespace Viewer
     struct PatchSkinVertices
     {
         // Flags kSkinExtFlag: 말미 skin 앞 kSkinExtSize 바이트는 내부 표시/t와 원본 끝점 두 개다.
+        std::vector<uint8_t> DiagnosticSkin; // 게시 진단용 최종 skin readback 사본이다.
         ByteAddressBuffer Data;
         uint32_t Flags = 0, Stride = 0;
         std::vector<Math::BoundingSphere> BindBounds;

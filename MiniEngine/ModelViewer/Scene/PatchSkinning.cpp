@@ -232,8 +232,14 @@ namespace Viewer
         graphics.Finish(true);
         cutPerfWait.End();
 
-        // 원본 경계 방식처럼 section 전체 구를 모든 joint에 공통 사용하며 K 위치도 그대로 포함한다.
+        // 최종 GPU readback을 CPU 진단과 경계 계산이 함께 읽는다.
         const auto* bytes = static_cast<const uint8_t*>(readback.Map());
+
+        // quiet가 꺼진 실행에서만 기존 readback 사본을 보관한다.
+        if (!CutPerf::Quiet())
+            out.DiagnosticSkin.assign(bytes, bytes + size_t(end) * stride);
+
+        // 원본 경계 방식처럼 section 전체 구를 모든 joint에 공통 사용하며 K 위치도 그대로 포함한다.
         out.BindBounds.clear();
         for (const auto& mesh : piece.Meshes)
         {
@@ -500,6 +506,12 @@ namespace Viewer
         const auto* provenance = static_cast<const uint8_t*>(provenanceReadback.Map());
         const auto* parentSkin = verify ? static_cast<const uint8_t*>(parentReadback.Map()) : nullptr;
         const auto* data = verify ? static_cast<const uint8_t*>(dataReadback.Map()) : nullptr;
+
+        // RS 자식도 quiet가 꺼졌을 때만 최종 skin의 CPU 사본을 보관한다.
+        if (!CutPerf::Quiet())
+            out.Vertices.DiagnosticSkin.assign(skin, skin + size_t(end) * stride);
+
+        // 재절단 통계는 CPU 사본 보관 여부와 독립적으로 집계한다.
         RecutSkinStats local;
         local.Checked = verify;
 

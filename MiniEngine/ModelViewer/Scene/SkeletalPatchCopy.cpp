@@ -503,6 +503,160 @@ namespace Viewer
             return std::to_string(node);
         }
 
+        // 자기 몸인 분리 subtree는 제외하고 기존 패치의 live weight와 현재 팔레트를 진단한다.
+        void LogStaleSkin(const GameObject& owner, const SkeletalRigState& rig, uint64_t request)
+        {
+            // quiet 실행에서는 CPU 사본이나 팔레트를 읽지 않고 로그도 남기지 않는다.
+            if (CutPerf::Quiet())
+                return;
+
+            // 패치가 공유하는 모델과 본 계층을 조회한다.
+            const auto& pose = *owner.GetModelInstance();
+            const auto& model = *pose.GetModel();
+            const auto& parents = pose.GetPoseParents();
+
+            // 부모 체인을 따라 특정 분리 root의 subtree 소속을 판정한다.
+            const auto inside = [&parents](uint32_t node, uint32_t root)
+            {
+                // 잘못된 부착 노드와 root는 소속 없음으로 처리한다.
+                for (; node < parents.size(); node = parents[node])
+                    if (node == root)
+                        return true;
+                return false;
+            };
+
+            // 가장 가까운 부모 body가 Dynamic이 아닌 body만 분리 root로 모은다.
+            std::map<uint32_t, MiniPhysics::BodyMotion> bodyMotions;
+            for (const auto& body : rig.Bodies)
+                bodyMotions.emplace(body.Node, body.Motion);
+            std::vector<uint32_t> detachedRoots;
+            for (const auto& body : rig.Bodies)
+            {
+                // body가 없는 중간 본을 지나 실제 부모 body의 운동 상태를 찾는다.
+                if (body.Motion != MiniPhysics::BodyMotion::Dynamic || body.Node >= parents.size())
+                    continue;
+                uint32_t parent = parents[body.Node];
+                while (parent < parents.size() && !bodyMotions.count(parent))
+                    parent = parents[parent];
+                const auto found = bodyMotions.find(parent);
+                if (found == bodyMotions.end() || found->second != MiniPhysics::BodyMotion::Dynamic)
+                    detachedRoots.push_back(body.Node);
+            }
+
+            // 활성 패치의 참조 정점을 세며 보간 끝점도 GPU와 같은 weight로 검사한다.
+            for (const auto& component : owner.GetMeshComponents())
+            {
+                if (!component->PatchSkin)
+                    continue;
+                const auto& skin = *component->PatchSkin;
+                const auto& cpu = skin.Vertices.DiagnosticSkin;
+
+                // 레코드를 읽기 전에 stride와 모든 section의 하한·상한을 검증한다.
+                const size_t stride = skin.Vertices.Stride;
+                bool valid = stride >= ((skin.Vertices.Flags & kSkinExtFlag) ? kSkinExtInternal : 16u);
+                valid = valid && cpu.size() % stride == 0 && !skin.Sections.empty();
+                for (const auto& section : skin.Sections)
+                {
+                    // 나눗셈과 뺄셈으로 정점 끝 범위의 정수 넘침을 피한다.
+                    const size_t available = valid ? cpu.size() / stride : 0;
+                    valid = valid && section.FirstVertex <= available
+                        && section.VertexCount <= available - section.FirstVertex;
+                }
+                const char* cpuStatus = cpu.empty() ? "unavailable" : valid ? "exact" : "invalid";
+
+                // 비활성/Stale 및 원본 고정 패치는 패치별 제외 건수만 남긴다.
+                const uint32_t inactive = !component->HasSkinnedPatch();
+                const uint32_t sourceFrozen = skin.Snapshot.SourceFrozen;
+                if (inactive || sourceFrozen)
+                {
+                    PatchLog("SKINSTALE patch=%llu cut=%llu skippedInactive=%u skippedSourceFrozen=%u cpu=%s\n",
+                        component->GetId(), request, inactive, sourceFrozen, cpuStatus);
+                    continue;
+                }
+
+                // CPU 사본이 불완전하거나 배치가 잘못되면 이 패치의 집계를 건너뛴다.
+                if (cpu.empty() || !valid)
+                {
+                    PatchLog("SKINSTALE patch=%llu cut=%llu cpu=%s skippedInactive=0 skippedSourceFrozen=0\n",
+                        component->GetId(), request, cpuStatus);
+                    continue;
+                }
+
+                // 자기 몸을 따르는 subtree만 제외하고 나머지 분리 subtree는 계속 검사한다.
+                std::vector<uint8_t> detached(parents.size(), 0);
+                bool excluded = false;
+                for (uint32_t root : detachedRoots)
+                {
+                    if (inside(skin.Snapshot.AttachNode, root))
+                    {
+                        excluded = true;
+                        continue;
+                    }
+                    for (uint32_t node = 0; node < parents.size(); ++node)
+                        detached[node] |= inside(node, root);
+                }
+
+                // 같은 프레임에 준비된 실제 위치·법선 팔레트 전체의 유한성을 검사한다.
+                RecutCheckInput palette;
+                bool paletteFinite = component->TryGetRecutCheckInput(palette);
+                for (size_t k = 0; k < palette.Palette.size(); ++k)
+                    for (const Math::Matrix4& matrix : { palette.Palette[k], Math::Matrix4(palette.NormalPalette[k]) })
+                    {
+                        DirectX::XMFLOAT4X4 values;
+                        DirectX::XMStoreFloat4x4(&values, matrix);
+                        for (const auto& row : values.m)
+                            for (float value : row)
+                                paletteFinite &= std::isfinite(value);
+                    }
+
+                // 참조 정점의 비고정 weight를 정점당 한 번 집계한다.
+                uint32_t count = 0;
+                float maximum = 0;
+                std::set<uint32_t> bones;
+                for (const auto& section : skin.Sections)
+                    for (size_t vertex = section.FirstVertex; vertex < size_t(section.FirstVertex) + section.VertexCount; ++vertex)
+                    {
+                        // 일반 레코드 또는 확장 끝점 두 개를 읽고 정점당 한 번만 집계한다.
+                        const size_t end = (vertex + 1) * stride;
+                        uint32_t interpolation = 0;
+                        float t = 0;
+                        if (skin.Vertices.Flags & kSkinExtFlag)
+                            std::memcpy(&interpolation, cpu.data() + end - kSkinExtInternal, 4);
+                        if (interpolation)
+                            std::memcpy(&t, cpu.data() + end - kSkinExtT, 4);
+                        bool stale = false;
+                        for (uint32_t endpoint = 0; endpoint < (interpolation ? 2u : 1u); ++endpoint)
+                        {
+                            // u16 weight를 정규화하고 보간 계수를 곱하며 강체 슬롯 K는 제외한다.
+                            uint16_t record[8];
+                            std::memcpy(record, cpu.data() + end - (interpolation ? 68 - 36 * endpoint : 16), sizeof(record));
+                            const float sum = std::max(1u, uint32_t(record[4]) + record[5] + record[6] + record[7]);
+                            for (uint32_t slot = 0; slot < 4; ++slot)
+                            {
+                                const uint32_t joint = record[slot];
+                                const float weight = record[slot + 4] / sum * (interpolation ? (endpoint ? t : 1 - t) : 1);
+                                if (weight <= 0 || joint >= skin.Snapshot.Frozen.size() || skin.Snapshot.Frozen[joint]
+                                    || joint >= model.m_NumJoints || model.m_JointIndices[joint] >= detached.size()
+                                    || !detached[model.m_JointIndices[joint]])
+                                    continue;
+                                stale = true;
+                                maximum = std::max(maximum, weight);
+                                bones.insert(model.m_JointIndices[joint]);
+                            }
+                        }
+                        count += stale;
+                    }
+
+                // 검증된 CPU 사본의 집계 결과에서 본을 NodeId로 식별한다.
+                std::string names;
+                for (uint32_t bone : bones)
+                    names += std::to_string(bone) + ",";
+                PatchLog("SKINSTALE patch=%llu cut=%llu vertsWithDetachedLiveWeight=%u maxWeight=%g bones=%s cpu=%s excluded=%u skippedInactive=0 skippedSourceFrozen=0 paletteFinite=%u\n",
+                    component->GetId(), request, count, maximum, names.empty() ? "none" : names.c_str(),
+                    cpuStatus, unsigned(excluded), unsigned(paletteFinite));
+            }
+        }
+
         // -topology-island-viz 옵션을 한 번만 읽어 켜짐 여부를 돌려준다.
         bool TopologyIslandVizEnabled()
         {
@@ -4187,6 +4341,9 @@ namespace Viewer
             PatchLog("SP7b RequestId=%llu BreakStatus=%u JointId=%u ParentNode=%u Dynamic=%u\n",
                 m_RequestId, unsigned(status), m_Break.JointId, m_Incoming.ParentNode,
                 dynamic >= m_DynamicBefore ? dynamic - m_DynamicBefore : 0);
+
+            // 요청 ID를 초기화하기 전에 게시 진단에 사용할 값을 보존한다.
+            const uint64_t publishedRequest = m_RequestId;
             m_LastBreakStatus = status;
             m_RequestId = 0;
 
@@ -4241,6 +4398,7 @@ namespace Viewer
                     auto& context = GraphicsContext::Begin(L"Publish attached skeletal pieces");
                     scene.PrepareMeshes(context);
                     context.Finish();
+                    LogStaleSkin(*owner, state, publishedRequest);
                     CutPerf::Mark("published");
 
                     // 게시된 조각이 상주시키는 버퍼의 논리·할당 크기를 성능 로그에만 남긴다.
@@ -4256,6 +4414,9 @@ namespace Viewer
                             CutPerf::Memory("piece", "CapMaterial", generated->CapMaterial);
                             CutPerf::Memory("piece", "SkinVB", published->PatchSkin->Vertices.Data);
                             CutPerf::Memory("piece", "PosedGeometry", published->GetPosedGeometry().GetBuffer());
+
+                            // quiet 실행도 성능 로그에서 CPU 사본이 비어 있는지 확인할 수 있게 한다.
+                            CutPerf::Log("SKINCPU patch=%llu bytes=%zu\n", published->GetId(), published->PatchSkin->Vertices.DiagnosticSkin.size());
                         }
                         if (const auto* mask = source->GetTriangleMask())
                         {
