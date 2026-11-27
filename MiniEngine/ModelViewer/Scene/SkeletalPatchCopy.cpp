@@ -2319,6 +2319,7 @@ namespace Viewer
         m_Physics = physics;
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
+        m_PendingDetach = {};
         m_RemainLengthTables.clear();
         m_PatchBoundaryFlags.clear();
         m_Attachments.clear();
@@ -2739,6 +2740,23 @@ namespace Viewer
             const auto groups = BuildCutBodyGroups(parents, jointNodes, cutRoots);
             if (groups.AttachNodes.empty())
                 return;
+
+            // A 패치와 같은 요청 시점의 물리·애니메이션 입력을 성공 게시까지 보관한다.
+            if (!boneCut && !m_MultiPrepare)
+            {
+                m_PendingDetach.Owner = target->GetId();
+                m_PendingDetach.SourceModel = instance.GetModel();
+                m_PendingDetach.RootNode = cutRoots.front();
+                m_PendingDetach.Palette.assign(joints, joints + model.m_NumJoints);
+                m_PendingDetach.Nodes.assign(nodes, nodes + model.m_NumNodes);
+                if (mesh->GetPreparedAnimJoints() && mesh->GetPreparedAnimNodes())
+                {
+                    m_PendingDetach.AnimPalette.assign(mesh->GetPreparedAnimJoints(), mesh->GetPreparedAnimJoints() + model.m_NumJoints);
+                    m_PendingDetach.AnimNodes.assign(mesh->GetPreparedAnimNodes(), mesh->GetPreparedAnimNodes() + model.m_NumNodes);
+                }
+            }
+
+            // 몸체별 snapshot과 검증 입력을 준비한다.
             m_SkinSnapshots.resize(boneCut ? 1 : groups.AttachNodes.size());
             m_SkinPaletteErrors.assign(m_SkinSnapshots.size(), 0);
             m_RemainLengthTables.assign(m_SkinSnapshots.size(), {});
@@ -2798,7 +2816,7 @@ namespace Viewer
             // 비교 데모는 모드 0도 같은 LW 계산으로 비율을 기록하고, 재분배는 기존 옵션을 따른다.
             uint32_t lengthDemo = 0;
             CommandLineArgs::GetInteger(L"skeletal-break-demo", lengthDemo);
-            if (!boneCut && (PatchLengthWeightsMode() || PatchLengthBlendEnabled() || lengthDemo)
+            if (!boneCut && (PatchLengthWeightsMode() || PatchLengthBlendEnabled() || lengthDemo || !m_MultiPrepare)
                 && m_RemainLengthTables.size() == m_SkinSnapshots.size())
             {
                 // 절단 시점 pose의 월드 joint 위치를 구한다(snapshot의 JointsAtCut과 같은 pose).
@@ -2845,6 +2863,10 @@ namespace Viewer
                     cuts.push_back(cut);
                 }
                 auto lengthTable = BuildRemainLengthTable(cuts, positions, jointNodes, groups.NodeGroups);
+
+                // 옵션과 무관하게 이번 root의 원래 길이 비율을 이력 입력에 남긴다.
+                if (!m_MultiPrepare)
+                    m_PendingDetach.LengthRatio = lengthTable.Ratio;
 
                 // LB는 원래 비율 표를 snapshot에 보관하고 LW 모드 0·1의 P=1 처리는 별도로 유지한다.
                 if (PatchLengthBlendEnabled())
@@ -4094,6 +4116,7 @@ namespace Viewer
         m_Name.clear();
         m_SkinPatch.reset();
         m_SkinSnapshots.clear();
+        m_PendingDetach = {};
         m_RemainLengthTables.clear();
         m_PatchBoundaryFlags.clear();
         m_Attachments.clear();
@@ -4122,6 +4145,175 @@ namespace Viewer
             && !DeleteEditTarget(scene, &physics, &cutting, EditTarget::MakeOwner(m_CopyOwner)))
             throw std::runtime_error("Skeletal patch owner deletion failed");
         m_CopyOwner = 0;
+
+        // 요청 취소와 별개로 살아 있는 owner의 게시 이력은 보존한다.
+        PruneDetachHistory(scene);
+    }
+
+    // 삭제된 owner나 만료된 모델의 이력을 요청 취소와 별개로 회수한다.
+    void SkeletalPatchCopy::PruneDetachHistory(const Scene& scene)
+    {
+        // 모델이 다른 owner에 공유되어 살아 있어도 삭제된 owner의 기록은 제거한다.
+        m_DetachHistory.erase(std::remove_if(m_DetachHistory.begin(), m_DetachHistory.end(),
+            [&scene](const DetachRecord& record)
+            {
+                // Scene의 객체 수명과 weak 모델 수명을 함께 검사한다.
+                return !scene.FindObject(record.Owner) || record.SourceModel.expired();
+            }), m_DetachHistory.end());
+    }
+
+    // 성공한 단일 절단의 요청 snapshot을 이력에 추가하고 기존 패치의 신규 분리 슬롯만 고정한다.
+    void SkeletalPatchCopy::PublishDetachRecord(const Scene& scene, GameObject& owner, const MeshComponent& source,
+        const MeshComponent* newA, const std::vector<ComponentId>& newPieces, uint64_t request)
+    {
+        // 게시 유효성 판정 전에 만료된 이력을 회수한다.
+        PruneDetachHistory(scene);
+
+        // owner와 모델이 같은 요청만 소비하며 실패·취소 입력은 이력에 넣지 않는다.
+        const auto model = owner.GetModelInstance()->GetModel();
+        if (m_PendingDetach.Owner != owner.GetId() || m_PendingDetach.SourceModel.lock() != model
+            || m_PendingDetach.RootNode == UINT32_MAX)
+            return;
+        m_DetachHistory.push_back(std::move(m_PendingDetach));
+        m_PendingDetach = {};
+        const auto& record = m_DetachHistory.back();
+        const auto& parents = owner.GetModelInstance()->GetPoseParents();
+
+        // NodeId의 부모 체인으로 이번 분리 subtree 소속을 판정한다.
+        const auto inside = [&parents, &record](uint32_t node)
+        {
+            // 잘못된 노드는 subtree에 포함하지 않는다.
+            for (size_t depth = 0; node < parents.size() && depth < parents.size(); ++depth)
+            {
+                if (node == record.RootNode)
+                    return true;
+                node = parents[node];
+            }
+            return false;
+        };
+
+        // 새 A 팔레트는 게시 프레임 입력으로 한 번 만들어 슬롯 진단의 기준으로 쓴다.
+        std::vector<Joint> aPalette;
+        if (!CutPerf::Quiet() && newA && newA->HasSkinnedPatch())
+            BuildPatchPalette(newA->PatchSkin->Snapshot, source.GetPreparedJoints(), source.GetPreparedNodes(), aPalette,
+                source.GetPreparedAnimJoints(), source.GetPreparedAnimNodes(), PatchAnimFollowEnabled());
+
+        // 활성 기존 publication만 복사하여 RS가 참조 중인 이전 snapshot을 보존한다.
+        for (const auto& component : owner.GetMeshComponents())
+        {
+            if (std::find(newPieces.begin(), newPieces.end(), component->GetId()) != newPieces.end()
+                || !component->HasSkinnedPatch() || component->GetGeometry()->GetSource() != model
+                || component->PatchSkin->Snapshot.SourceFrozen || inside(component->PatchSkin->Snapshot.AttachNode))
+                continue;
+            auto snapshot = component->PatchSkin->Snapshot;
+            const size_t count = snapshot.JointsAtCut.size();
+            const Math::Matrix4 inverseDelta = Math::Invert(record.Nodes[snapshot.AttachNode] * Math::Invert(snapshot.AttachAtCut));
+            Math::Matrix4 correction(Math::kIdentity);
+            if (snapshot.AnimFollow)
+                correction = record.Nodes[snapshot.AttachNode] * Math::Invert(record.AnimNodes[snapshot.AttachNode]);
+            std::vector<size_t> added;
+
+            // K는 배열 밖에 있으므로 모델 팔레트 슬롯만 판정하고 기존 고정 값은 보존한다.
+            for (size_t k = 0; k < count; ++k)
+            {
+                if (snapshot.Frozen[k] || !inside(model->m_JointIndices[k]))
+                    continue;
+                snapshot.Frozen[k] = 1;
+                snapshot.JointsAtCut[k].posXform = inverseDelta * record.Palette[k].posXform;
+                snapshot.JointsAtCut[k].nrmXform = Math::InverseTranspose(snapshot.JointsAtCut[k].posXform.Get3x3());
+                if (snapshot.AnimFollow)
+                    snapshot.AnimOffset[k] = Math::Invert(correction * record.AnimPalette[k].posXform) * record.Palette[k].posXform;
+                if (snapshot.LengthBlendRatio.empty())
+                    snapshot.LengthBlendRatio.assign(count, 1.0f);
+                snapshot.LengthBlendRatio[k] = record.LengthRatio[k];
+                added.push_back(k);
+            }
+            if (added.empty())
+                continue;
+
+            // ByteAddressBuffer의 ComPtr 복사는 기존 VB를 공유하며 GPU 버퍼를 생성하지 않는다.
+            auto publication = std::make_shared<PatchSkinPublication>(*component->PatchSkin);
+            publication->Snapshot = std::move(snapshot);
+            component->PatchSkin = std::move(publication);
+
+            // 실제 위치 팔레트로 신규 고정 슬롯만 교체했을 때의 정점 위치 차이를 기록한다.
+            if (!CutPerf::Quiet())
+            {
+                const auto& skin = *component->PatchSkin;
+                const auto& cpu = skin.Vertices.DiagnosticSkin;
+                const size_t stride = skin.Vertices.Stride;
+                if (aPalette.size() < count || cpu.empty() || stride < ((skin.Vertices.Flags & kSkinExtFlag) ? kSkinExtInternal : 28u)
+                    || cpu.size() % stride != 0)
+                {
+                    PatchLog("SKINSTALE patch=%llu cut=%llu boundary=unavailable\n", component->GetId(), request);
+                    continue;
+                }
+
+                // 같은 프레임의 기존 패치 팔레트를 만들고 신규 고정 슬롯만 A 팔레트로 대체한다.
+                std::vector<Joint> palette;
+                BuildPatchPalette(skin.Snapshot, source.GetPreparedJoints(), source.GetPreparedNodes(), palette,
+                    source.GetPreparedAnimJoints(), source.GetPreparedAnimNodes(), PatchAnimFollowEnabled());
+                auto alternate = palette;
+                for (size_t k : added)
+                    alternate[k] = aPalette[k];
+                float maximum = 0;
+                size_t compared = 0;
+
+                // 확장 정점은 두 끝점을 각각 skin한 뒤 원래 보간 계수로 합친다.
+                for (size_t vertex = 0; vertex < cpu.size() / stride; ++vertex)
+                {
+                    // section 사이의 예약 공간은 실제 패치 정점이 아니므로 제외한다.
+                    if (std::none_of(skin.Sections.begin(), skin.Sections.end(), [vertex](const auto& section)
+                        {
+                            // 덧셈 넘침 없이 게시 section의 실제 정점 범위를 판정한다.
+                            return vertex >= section.FirstVertex && vertex - section.FirstVertex < section.VertexCount;
+                        }))
+                        continue;
+
+                    // 해당 정점의 일반 또는 확장 레코드를 읽는다.
+                    const auto* begin = cpu.data() + vertex * stride;
+                    const auto* end = begin + stride;
+                    uint32_t interpolation = 0;
+                    float t = 0;
+                    if (skin.Vertices.Flags & kSkinExtFlag)
+                        std::memcpy(&interpolation, end - kSkinExtInternal, sizeof(interpolation));
+                    if (interpolation)
+                        std::memcpy(&t, end - kSkinExtT, sizeof(t));
+                    Math::Vector4 positions[2] = { Math::Vector4(Math::kZero), Math::Vector4(Math::kZero) };
+                    bool affected = false;
+                    for (uint32_t e = 0; e < (interpolation ? 2u : 1u); ++e)
+                    {
+                        // 압축 joint와 weight를 복원하고 위치 전체에 회전·스케일·이동을 적용한다.
+                        const auto* endpoint = interpolation ? end - kSkinExtEndpoint0 + e * kSkinEndpointSize : begin;
+                        float bind[3];
+                        uint16_t ids[4], weights[4];
+                        std::memcpy(bind, endpoint, sizeof(bind));
+                        std::memcpy(ids, interpolation ? endpoint + kSkinEndpointJoints : end - 16, sizeof(ids));
+                        std::memcpy(weights, interpolation ? endpoint + kSkinEndpointWeights : end - 8, sizeof(weights));
+                        const float total = float(std::max(1u, uint32_t(weights[0]) + weights[1] + weights[2] + weights[3]));
+                        const Math::Vector4 point(bind[0], bind[1], bind[2], 1);
+                        for (uint32_t k = 0; k < 4; ++k)
+                        {
+                            const float weight = weights[k] / total * (interpolation ? (e ? t : 1 - t) : 1);
+                            if (weight <= 0 || ids[k] >= palette.size())
+                                continue;
+                            affected |= std::find(added.begin(), added.end(), ids[k]) != added.end();
+                            positions[0] = positions[0] + (palette[ids[k]].posXform * point) * weight;
+                            positions[1] = positions[1] + (alternate[ids[k]].posXform * point) * weight;
+                        }
+                    }
+                    if (!affected)
+                        continue;
+
+                    // 신규 고정 슬롯의 유효 가중치가 있는 정점만 한 번 집계한다.
+                    ++compared;
+                    const float difference = 1000.0f * float(Math::Length(Math::Vector3(positions[0] - positions[1])));
+                    maximum = std::isfinite(difference) ? std::max(maximum, difference) : INFINITY;
+                }
+                PatchLog("SKINSTALE patch=%llu cut=%llu boundaryMaxMm=%g verticesCompared=%zu newFrozen=%zu\n",
+                    component->GetId(), request, maximum, compared, added.size());
+            }
+        }
     }
 
     // 절단과 break 없이 같은 owner에 스키닝 가능한 패치와 제거 마스크를 게시한다.
@@ -4232,6 +4424,7 @@ namespace Viewer
     {
         // 압축과 취소 작업은 기존 게시 진행 여부와 관계없이 매 프레임 회수한다.
         PollBodyCompaction();
+        PruneDetachHistory(scene);
 
         // 압축 완료 뒤에만 스키닝과 break를 준비하고 실패하면 기존 side를 사용한다.
         if (m_ReadyCut && !DiscardStaleCutResult(scene))
@@ -4389,8 +4582,14 @@ namespace Viewer
                     }
                     if (!m_DemoUnmask && !source->SetTriangleMask(m_Removal))
                         throw std::runtime_error("SP7e invalid removal mask");
+
+                    // 기존 패치만 갱신하도록 이번 A/B의 ID를 보관한다.
+                    std::vector<ComponentId> newPieces;
+                    for (const auto& piece : pieces)
+                        newPieces.push_back(piece->GetId());
                     for (auto& piece : pieces)
                         owner->CommitMeshComponent(std::move(piece));
+                    PublishDetachRecord(scene, *owner, *source, owner->FindMeshComponent(newPieces.front()), newPieces, publishedRequest);
                     PatchLog("SP7e published owner=%llu patchTriangles=%u hidden=%u nodes=%u/%u\n",
                         m_Break.Owner, m_Result.PatchTriangles, m_DemoUnmask ? 0u : 1u, m_Attachments[0].NodeId, m_Attachments[1].NodeId);
 

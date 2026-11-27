@@ -43,7 +43,7 @@
 | [PatchAnimFollow.md](GPU/PatchAnimFollow.md) | 몸통 쪽 A 조각이 끊은 본의 키네마틱 애니메이션을 따르기: 고정 joint를 애니메이션 포즈로, rim·cap은 끝점 스키닝 | 완료 — AF-1~6 구현·기본값 1(2026-11-23) |
 | [PatchLengthWeights.md](GPU/PatchLengthWeights.md) | A 조각 가중치를 남은 본 길이 비율로 재분배: 자손 0·P×r_P 옵션, 경계 유지, bind 재계산, LW-1~4 | 진행 중 (2026-11-25, LW-1~4·84a41849 cap 법선 병합 미커밋, Release·회귀 0/2 PASS, 기본 0) |
 | [PatchLengthBlend.md](GPU/PatchLengthBlend.md) | 본 팔레트의 따르기·고정 혼합: 남은 길이 비율, snapshot 승계 | 진행 중 (2026-11-25, LB-1 `b1c00fda`·LB-2 완료·리뷰 진단 보완 미커밋, Release·회귀 LB 0/1·follow 0 PASS, 기본 0) |
-| [PatchStaleFrozenJoints.md](GPU/PatchStaleFrozenJoints.md) | 연속 절단 뒤 기존 패치가 새로 분리된 본을 따라 늘어나는 문제: owner별 분리 이력을 게시 때 모든 활성 패치에 고정으로 적용 | 진행 중 (2026-11-27), ST-1 진단(경계 거리 제외) 구현·Release 재현 확인(미커밋), ST-2 경계 위치 차 진단 포함·ST-2~4 대기 |
+| [PatchStaleFrozenJoints.md](GPU/PatchStaleFrozenJoints.md) | 연속 절단 뒤 기존 패치가 새로 분리된 본을 따라 늘어나는 문제: owner별 분리 이력을 게시 때 모든 활성 패치에 고정으로 적용 | 진행 중 (2026-11-27), ST-1·ST-2 완료(미커밋), 만료 owner/모델 이력 회수·정점 경계 진단·Release AF 1/0 재현 확인, ST-3~4 대기 |
 | [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 병렬 block scan과 Mode 2 scatter의 블록 offset 적용(CP-5 Mode 7 제거) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19); CP-5 Mode 7 제거 a23fe252 |
 | [PerfBaseline.md](GPU/PerfBaseline.md) | per-vertex 추출·compacted IB 변경 전 절단 GPU/CPU·메모리 및 렌더 측정 | 측정 기록 — 기준 `5f360fa7`, 임시 계측 패치 보관·코드 원복 (2026-11-20) |
 | [CutPerfImprovement.md](GPU/CutPerfImprovement.md) | 절단 성능 1차: CPU 압축 IB로 퇴화 IB·TriangleMaskCS 대체(CP-8에서 GPU 생성으로 이동), CPU Update 4.9 s 원인 확정, 추출 Mode 7 합치기·coarsening | 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 8a7812e6(K=1 유지), CP-4c a4b9ea23, CP-8 f49c2bab |

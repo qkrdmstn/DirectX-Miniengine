@@ -1,4 +1,4 @@
-상태: 진행 중 — ST-1 진단(경계 거리 제외) 구현·Release 재현 확인, 기준 master `d00194ea` (2026-11-27)
+상태: 진행 중 — ST-1·ST-2 완료·이력 수명/정점 경계 진단 보완(미커밋), ST-3·ST-4 대기, 기준 master `d00194ea` (2026-11-27)
 
 # 연속 절단 뒤 기존 패치의 고정 joint 갱신
 
@@ -71,7 +71,7 @@ void ReplacePatchSnapshot(const PatchSkinSnapshot& updated);
 | 단계 | 내용 | 규모 |
 | --- | --- | --- |
 | ST-1 | 진단 구현·Release 재현 확인(미커밋): `LogStaleSkin` 자기 몸 subtree 전체 제외·skip 건수·현재 위치/법선 팔레트 유한성·RS CPU 사본·stride 및 section 범위의 레이아웃 검증. 경계 거리 제외 | 기존 진단 포함 약 200줄 |
-| ST-2 | 분리 이력 기록(D1)과 단일 절단 게시에서 기존 패치에 적용(D2~D4), 경계 위치 차 진단(D7) | 약 250줄 |
+| ST-2 | 완료(미커밋): `Request`의 동일 t_s 입력을 성공한 단일 `Update` 게시에서 이력에 추가하고 기존 패치 신규 슬롯만 고정. publication 복사 후 교체·VB 공유. 만료 owner/모델 이력 회수, CPU skin의 정점별 위치 경계 진단 완료 | 리뷰 보완 추가 약 120줄 이내 |
 | ST-3 | 다중 절단·RS 게시와 새 패치 자신에 적용(D2·D5) | 약 200줄 |
 | ST-4 | 검증, 문서 상태 줄·README·CodeMap 갱신 | 문서 |
 
@@ -84,3 +84,18 @@ void ReplacePatchSnapshot(const PatchSkinSnapshot& updated);
 5. 1회 절단 장면(Xbot·CesiumMan 허벅지·위팔·몸통)의 MI 로그가 기준(`%TEMP%\g1a-equivalence-20261126`)과 같다. 연속 재절단 회귀(RS 계열, AR-4)가 기존처럼 PASS한다.
 6. 재현 장면을 육안으로 봤을 때 늘어난 삼각형이 없다(사용자 확인).
 7. Release 빌드 성공, D3D12 ERROR 0.
+
+## ST-2 검증 (2026-11-27, 미커밋)
+
+- `PublishDetachRecord`: owner·모델별 요청 입력을 보관하고 성공한 단일 게시에서만 이력에 추가한다. 이번 A/B는 제외한다. 기존 Frozen·K·AnimFollow 자격·기존 offset/비율을 보존한다.
+- `PruneDetachHistory`: 매 `PublishDetachRecord`·`Update`·`Reset`에서 Scene에 없는 owner 또는 `SourceModel` weak 참조가 만료된 기록을 제거한다. `Scene::DeleteObject`·`Scene::Clear`는 SkeletalPatchCopy에 통지하지 않는다. Reset의 요청 취소는 살아 있는 owner의 게시 이력을 지우지 않는다.
+- 물리 팔레트·node와 애니메이션 팔레트·node는 A snapshot과 같은 `Request`에서 복사한다. `JointsAtCut`과 `AnimOffset`은 기존 패치의 부착 기준으로 계산한다.
+- `PatchSkinPublication` 복사는 snapshot/CPU 배열을 값 복사하고 `ByteAddressBuffer`의 ComPtr·descriptor를 공유한다. 버퍼 생성이나 skin VB 재구축은 없다. RS가 가진 이전 publication은 변경하지 않는다.
+- Release/Windows 최종 빌드 성공(exit 0, 약 46.2초, 경고 16·오류 0). 기존 경고와 후처리의 `pwsh.exe` 부재 메시지가 있다. 리뷰 보완 빌드 로그: `%TEMP%/st2-review-release.log`.
+- NVIDIA GeForce MX450(드라이버 버전 조회는 권한 거부로 미확인), 요청한 480프레임 재현: AF 1/0 모두 exit 0(각 약 16.5/15.8초), `patch=2 cut=2 vertsWithDetachedLiveWeight=0`, 활성 패치 `cpu=exact paletteFinite=1`.
+- 정점 경계 지표: quiet=0의 기존 패치 `DiagnosticSkin`에서 신규 고정 슬롯에 유효 가중치가 있는 정점만 집계한다. `BuildPatchPalette`가 게시 프레임 입력으로 만든 위치 팔레트(회전·스케일 포함)로 skin한 위치와, 신규 고정 슬롯만 새 A 팔레트로 대체한 위치를 비교한다. 다른 슬롯은 기존 팔레트 그대로이며 확장 정점은 두 끝점을 skin한 뒤 보간한다. section 예약 공간은 제외하고 CPU 사본이나 새 A 팔레트가 없으면 `boundary=unavailable`이다.
+- `patch=2 cut=2`: AF 1 `boundaryMaxMm=0`, AF 0 `boundaryMaxMm=0.000243629`, 각각 `verticesCompared=188 newFrozen=5`. 이 값은 같은 기존 정점에 두 팔레트를 적용한 차이이며 원본 정점 ID로 패치 간 대응을 찾은 지표는 아니다. AF 0은 `-patch-anim-follow 0`으로 실행한다.
+- 단일 절단도 정상 종료(exit 0, 약 15.5초), `patch=2 cut=1` 0건·`paletteFinite=1`. 기존 `%TEMP%/SKINSTALE-control-patch.log`와 MI 행 차이 0건. AF 0 실행은 약 16.6초에 정상 종료했다.
+- 리뷰 보완의 요청한 480프레임 AF 1/0 로그는 `%TEMP%/st2-review-{af1,af0}-patch.log` 및 대응 `-perf.log`에 보관한다. 이전 단일 절단 로그는 `%TEMP%/st2-single-{patch,perf}.log`이다.
+- debug 출력 수집기는 임시 DLL 생성 권한 오류로 사용할 수 없었다. 요청 인수 `-debug 0`에서 D3D12 validation ERROR 0은 확정하지 않는다.
+- ST-3의 다중·RS 게시 및 새 A/B에 대한 이전 이력 적용, ST-4 전체 회귀와 사용자 육안 확인은 남아 있다.

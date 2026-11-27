@@ -277,6 +277,22 @@ namespace Viewer
         std::shared_ptr<SkeletalPatchBuffers> m_SkinPatch;
         // 추출된 section의 공통 N을 확정하고 체크 실행에서만 PS-1 결과를 기록한다.
         void CheckPatchSkin(const SkeletalPatchBuffers& patch);
+        struct DetachRecord
+        {
+            ObjectId Owner = InvalidObjectId;
+            std::weak_ptr<const Model> SourceModel;
+            uint32_t RootNode = UINT32_MAX;
+            std::vector<Joint> Palette, AnimPalette;
+            std::vector<Math::Matrix4> Nodes, AnimNodes;
+            std::vector<float> LengthRatio;
+        };
+        DetachRecord m_PendingDetach;
+        std::vector<DetachRecord> m_DetachHistory;
+        // 삭제된 owner와 만료된 모델의 게시 이력만 회수한다.
+        void PruneDetachHistory(const Scene& scene);
+        // 성공한 단일 게시의 이력을 저장하고 이번 A/B를 제외한 기존 패치에 적용한다.
+        void PublishDetachRecord(const Scene& scene, GameObject& owner, const MeshComponent& source,
+            const MeshComponent* newA, const std::vector<ComponentId>& newPieces, uint64_t request);
         std::vector<PatchSkinSnapshot> m_SkinSnapshots;
         std::vector<CollisionDebugDraw::WorldLine> m_TopologyViz; // -topology-island-viz가 만든 색 선분 snapshot이다.
         std::vector<RemainLengthTable> m_RemainLengthTables; // body별 남은 길이 비율 표(LW-1). 옵션 0·boneCut·B 조각은 빈 표다.
