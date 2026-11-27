@@ -43,10 +43,11 @@
 | [PatchAnimFollow.md](GPU/PatchAnimFollow.md) | 몸통 쪽 A 조각이 끊은 본의 키네마틱 애니메이션을 따르기: 고정 joint를 애니메이션 포즈로, rim·cap은 끝점 스키닝 | 완료 — AF-1~6 구현·기본값 1(2026-11-23) |
 | [PatchLengthWeights.md](GPU/PatchLengthWeights.md) | A 조각 가중치를 남은 본 길이 비율로 재분배: 자손 0·P×r_P 옵션, 경계 유지, bind 재계산, LW-1~4 | 진행 중 (2026-11-25, LW-1~4·84a41849 cap 법선 병합 미커밋, Release·회귀 0/2 PASS, 기본 0) |
 | [PatchLengthBlend.md](GPU/PatchLengthBlend.md) | 본 팔레트의 따르기·고정 혼합: 남은 길이 비율, snapshot 승계 | 진행 중 (2026-11-25, LB-1 `b1c00fda`·LB-2 완료·리뷰 진단 보완 미커밋, Release·회귀 LB 0/1·follow 0 PASS, 기본 0) |
-| [PatchStaleFrozenJoints.md](GPU/PatchStaleFrozenJoints.md) | 연속 절단 뒤 기존 패치가 새로 분리된 본을 따라 늘어나는 문제: owner별 분리 이력을 게시 때 모든 활성 패치에 고정으로 적용 | 진행 중 — ST-1~ST-4 구현·검증 완료 (ST-1 89e1ff81, ST-2 007c9306, ST-3 2411cd56, ST-4 미커밋); 미완료: 전체 모델·본 단일 절단 회귀(완료 조건 5), 사용자 육안 확인(완료 조건 6) |
+| [PatchStaleFrozenJoints.md](GPU/PatchStaleFrozenJoints.md) | 연속 절단 뒤 기존 패치가 새로 분리된 본을 따라 늘어나는 문제: owner별 분리 이력을 게시 때 모든 활성 패치에 고정으로 적용 | 진행 중 — ST-1~ST-4 구현·검증 완료 (ST-1 89e1ff81, ST-2 007c9306, ST-3 2411cd56, ST-4 3575718b); 미완료: 전체 모델·본 단일 절단 회귀(완료 조건 5), 사용자 육안 확인(완료 조건 6) |
 | [PatchPrefixScan.md](GPU/PatchPrefixScan.md) | 패치 추출 병렬 block scan과 Mode 2 scatter의 블록 offset 적용(CP-5 Mode 7 제거) | 완료 — PF-1 2aaef989, PF-2 재측정 통과(Xbot Mode 1 4411→19 µs) (2026-11-19); CP-5 Mode 7 제거 a23fe252 |
 | [PerfBaseline.md](GPU/PerfBaseline.md) | per-vertex 추출·compacted IB 변경 전 절단 GPU/CPU·메모리 및 렌더 측정 | 측정 기록 — 기준 `5f360fa7`, 임시 계측 패치 보관·코드 원복 (2026-11-20) |
 | [CutPerfImprovement.md](GPU/CutPerfImprovement.md) | 절단 성능 1차: CPU 압축 IB로 퇴화 IB·TriangleMaskCS 대체(CP-8에서 GPU 생성으로 이동), CPU Update 4.9 s 원인 확정, 추출 Mode 7 합치기·coarsening | 진행 중 — CP-1 측정, CP-2 7367a00a, CP-3 415fa819, CP-4a ad5c74cd, CP-4b 3e16d25a, CP-5 a23fe252, CP-6 8a7812e6(K=1 유지), CP-4c a4b9ea23, CP-8 f49c2bab |
+| [CutLatencyOptimization.md](GPU/CutLatencyOptimization.md) | 스켈레탈 절단 요청→게시 지연 단축: FinishCutResult 계측, quiet 이름 조회 생략, copy·cut 같은 프레임 제출, PSO 미리 만들기, 업로드 묶기(L1~L5) | 설계안 (2026-11-27) — 단계 순서 합의, 미착수 |
 | [VertexSelection.md](GPU/VertexSelection.md) | 패치 추출 Mode 0의 정점 판정 중복 제거: 정점당 한 번 판정한 1비트 배열(Mode 8)을 Mode 0이 읽음 | 완료 — VS-1 b9d9a999 (2026-11-24), 추출 시간 HEAD와 같음 |
 | [MaskingComparison.md](GPU/MaskingComparison.md) | 원본 메시 마스킹 네 방식(퇴화 IB·압축 IB·VC ClipDistance·VC PS discard) 성능 비교, 실험 패치·결과는 `GPU/MaskingExperiments/` | 완료 — 측정 기록 MC5~MC7 (2026-11-24), 코드 미반영 |
 | [PatchAdjacentMarks.md](GPU/PatchAdjacentMarks.md) | 패치 추출 Mode 5 인접 집계를 정점 표시 비트로 O(N)화(부분 제거 Mode 5 34.35 ms → Mode 8+5 0.28 ms) | 폐기 — RM-1에서 제거 (2026-11-19) |
