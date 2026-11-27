@@ -165,6 +165,9 @@ private:
     uint32_t m_SkeletalBreakDemo = 0, m_DemoAppliedFrame = 0, m_DemoCaptured = 0;
     bool m_SkeletalDemoRequested = false, m_SkeletalDemoFailed = false;
     bool m_CutPerfSecondDone = false; // -cut-perf-second-bone의 두 번째 절단을 이미 요청했는지
+    bool m_CutPerfThirdDone = false; // ST-4 세 번째 본 진단을 이미 요청했는지
+    std::wstring m_CutPerfSecondBone; // 초기화 때 한 번 읽은 두 번째 본
+    std::wstring m_CutPerfThirdBone; // 초기화 때 한 번 읽은 선택적 세 번째 본
     float m_DemoDelay = 0, m_DemoCutTime = -1, m_DemoSwitchDelay = 1, m_DemoTilt = 0, m_DemoBoneFraction = 0.5f;
     float m_DemoPlayback = 0, m_DemoPreviousTime = 0;
     uint32_t m_DemoStartClip = 0, m_DemoNextClip = 0, m_DemoStartFrame = 0;
@@ -398,6 +401,10 @@ void ModelViewer::Startup( void )
 {
     // 렌더 준비 전에 길이 혼합 옵션과 LW 동시 사용 오류를 검증한다.
     Viewer::PatchLengthBlendEnabled();
+
+    // 후속 본을 한 번 읽어 두 번째 절단 뒤 매 프레임 옵션 조회를 피한다.
+    CommandLineArgs::GetString(L"cut-perf-second-bone", m_CutPerfSecondBone);
+    CommandLineArgs::GetString(L"cut-perf-third-bone", m_CutPerfThirdBone);
 
     // 파이프라인 사전 준비보다 먼저 단면 스레드 그룹 크기를 적용한다.
     uint32_t capThreads = 512;
@@ -1447,26 +1454,35 @@ void ModelViewer::Update( float deltaT )
             }
     }
 
-    // -cut-perf-second-bone: 첫 게시 120프레임 뒤 같은 프로세스에서 다른 본을 한 번 더 잘라 warm 절단을 잰다.
-    std::wstring secondBone;
-    if (Viewer::CutPerf::Enabled() && m_SkeletalBreakDemo && m_DemoAppliedFrame && !m_CutPerfSecondDone
-        && m_QueryFrame >= m_DemoAppliedFrame + 120 && !m_SkeletalPatchCopy.IsPending() && !m_Cutting.IsBusy()
-        && CommandLineArgs::GetString(L"cut-perf-second-bone", secondBone) && !secondBone.empty())
+    // 직전 게시 뒤 두 번째 본은 120프레임, 선택한 세 번째 본은 280프레임 대기 후 자른다.
+    const bool thirdCut = m_CutPerfSecondDone;
+    const auto& secondBone = thirdCut ? m_CutPerfThirdBone : m_CutPerfSecondBone;
+    if ((!m_CutPerfSecondDone || (!m_CutPerfThirdBone.empty() && !m_CutPerfThirdDone))
+        && Viewer::CutPerf::Enabled() && m_SkeletalBreakDemo && m_DemoAppliedFrame
+        && m_QueryFrame >= m_DemoAppliedFrame + (thirdCut ? 280 : 120)
+        && !m_SkeletalPatchCopy.IsPending() && !m_Cutting.IsBusy()
+        && !secondBone.empty())
     {
-        m_CutPerfSecondDone = true;
+        // 생략한 추가 인자는 기존 두 번째 절단의 동작에 영향을 주지 않는다.
+        if (thirdCut)
+            m_CutPerfThirdDone = true;
+        else
+            m_CutPerfSecondDone = true;
+
+        // 시연 owner를 찾아 지정한 본의 후속 절단 요청을 제출한다.
         for (const auto& object : m_Scene.GetObjects())
             if (object->GetName() == (m_SkeletalBreakDemo == 1 ? "Xbot" : "CesiumMan"))
             {
-                // 두 번째 본의 node와 다음 번호 node 사이 중점 평면을 같은 경로로 제출한다.
+                // 지정한 본의 node와 다음 번호 node 사이 중점 평면을 같은 경로로 제출한다.
                 const std::string bone(secondBone.begin(), secondBone.end());
                 const auto names = Viewer::ReadRigDiagnosticNodeNames("Models/" + object->GetName() + ".glb");
                 const auto found = std::find(names.begin(), names.end(), bone);
                 if (found == names.end() || found + 1 == names.end())
-                    throw std::invalid_argument("cut-perf-second-bone not found: " + bone);
+                    throw std::invalid_argument("cut-perf subsequent bone not found: " + bone);
                 const uint32_t node = uint32_t(found - names.begin());
                 const auto plane = Viewer::BuildSkeletalBonePlane(*object, node, node + 1, m_DemoBoneFraction);
                 m_SkeletalPatchCopy.Request(m_Scene, plane, false, Viewer::SkeletalJointMode::Parent, UINT32_MAX, &m_Physics);
-                Utility::Printf("Skeletal demo second request frame=%u bone=%s\n", m_QueryFrame, bone.c_str());
+                Utility::Printf("Skeletal demo %s request frame=%u bone=%s\n", thirdCut ? "third" : "second", m_QueryFrame, bone.c_str());
                 break;
             }
     }

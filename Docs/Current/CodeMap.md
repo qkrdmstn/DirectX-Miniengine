@@ -2,6 +2,8 @@
 
 # 현재 Scene과 유한 평면 코드 지도
 
+ST-1~ST-4 구현·검증 완료 (ST-1 89e1ff81, ST-2 007c9306, ST-3 2411cd56, ST-4 미커밋), 기능 전체는 진행 중: `SkeletalPatchCopy::Request`가 요청 시점 분리 입력을 보관하고 `PublishDetachRecord`가 성공한 단일·다중 게시에만 root별 owner 이력을 추가한다. `ApplyDetachRecord`는 기존·새 패치의 아직 Frozen이 아닌 슬롯만 고정하며 `ApplyRecutDetachHistory`는 RS 자식에 전체 이력을 적용한다. `PruneDetachHistory`는 삭제 owner/만료 모델만 회수하고 `Reset`은 살아 있는 owner의 게시 이력을 보존한다. `ReadDetachCheckBytes`는 Joint 법선 행렬의 미사용 SIMD lane과 패딩을 제외한 값 필드만 비교한다. `-detach-history-checks 1`은 `RunBreakChecks`·`VerifyStale`에서 snapshot/이력 비교와 추가 Request 제출·Reset 취소를 수행하는 선택적 검증 인자다. 인자 생략 시 추가 요청은 없고 quiet=1이면 직렬화·할당·비교와 추가 요청도 건너뛴다. 미완료: 전체 모델·본 단일 절단 회귀(완료 조건 5), 사용자 육안 확인(완료 조건 6). 3회 절단·정역순·AF off·LB on·RS/AR4·D3D12 ERROR 0 PASS, 기존 다중 batch loop 실패와 검증 한계는 [결정·결과](../GPU/PatchStaleFrozenJoints.md)를 따른다.
+
 CutPerf 배포(2026-11-26, base `ba8299ce`, 미커밋): `Tools/CutPerf/Pack-CutPerf.ps1`은 Release 실행 파일·런타임과 기본 장면 에셋을 다른 Windows PC용 zip으로 묶는다.
 기본 출력은 `%TEMP%\CutPerfPackage-<시각>.zip`이며 `-OutZip`으로 바꾼다. 패키지의 한국어 README에 실행과 결과 회수 방법이 있다.
 `Run-CutPerf.ps1 -ExtraArgs "-island-gpu 1"`은 모든 실행에 옵션을 추가하고, `-WorkDir`은 에셋 폴더를 지정한다(배포본 기본값 `work`).

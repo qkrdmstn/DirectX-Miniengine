@@ -291,6 +291,9 @@ namespace Viewer
         DetachRecord m_PendingDetach;
         std::vector<uint32_t> m_PendingDetachRoots;
         std::vector<DetachRecord> m_DetachHistory;
+        // 진단에서 snapshot과 이력의 각 필드를 패딩 없는 바이트열로 읽는다.
+        std::vector<uint8_t> ReadDetachCheckBytes(const Scene& scene, ObjectId excluded = InvalidObjectId) const;
+        std::vector<uint8_t> m_DetachCheckBefore, m_DetachOtherBefore;
         // 삭제된 owner와 만료된 모델의 게시 이력만 회수한다.
         void PruneDetachHistory(const Scene& scene);
         // 성공한 단일·다중 게시의 root별 이력과 이전 이력을 모든 대상 패치에 적용한다.

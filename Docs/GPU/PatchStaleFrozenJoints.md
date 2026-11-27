@@ -1,4 +1,4 @@
-상태: 진행 중 — ST-1·ST-2 완료(`007c9306`), ST-3 구현·부분 검증 완료(기존 패치가 있는 다중 batch 미검증: Xbot·CesiumMan 연속 다중은 게시 전 MI4d2 loop 실패, 기존 결함 판정), ST-4 대기, 기준 master `007c9306` (2026-11-27)
+상태: 진행 중 — ST-1~ST-4 구현·검증 완료 (ST-1 89e1ff81, ST-2 007c9306, ST-3 2411cd56, ST-4 미커밋); 미완료: 전체 모델·본 단일 절단 회귀(완료 조건 5), 사용자 육안 확인(완료 조건 6)
 
 # 연속 절단 뒤 기존 패치의 고정 joint 갱신
 
@@ -70,10 +70,10 @@ void ReplacePatchSnapshot(const PatchSkinSnapshot& updated);
 
 | 단계 | 내용 | 규모 |
 | --- | --- | --- |
-| ST-1 | 진단 구현·Release 재현 확인(미커밋): `LogStaleSkin` 자기 몸 subtree 전체 제외·skip 건수·현재 위치/법선 팔레트 유한성·RS CPU 사본·stride 및 section 범위의 레이아웃 검증. 경계 거리 제외 | 기존 진단 포함 약 200줄 |
+| ST-1 | 완료(`89e1ff81`): 진단 구현·Release 재현 확인. `LogStaleSkin` 자기 몸 subtree 전체 제외·skip 건수·현재 위치/법선 팔레트 유한성·RS CPU 사본·stride 및 section 범위의 레이아웃 검증. 경계 거리 제외 | 기존 진단 포함 약 200줄 |
 | ST-2 | 완료(`007c9306`): `Request`의 동일 t_s 입력을 성공한 단일 `Update` 게시에서 이력에 추가하고 기존 패치 신규 슬롯만 고정. publication 복사 후 교체·VB 공유. 만료 owner/모델 이력 회수, CPU skin의 정점별 위치 경계 진단 완료 | 리뷰 보완 추가 약 120줄 이내 |
-| ST-3 | 구현·부분 검증 완료(미커밋): 다중 root별 기록·RS 자식 전체 이력·새 A/B 이전 이력 적용(D2·D5). 정순/역순·AF 0·LB 1·CesiumMan batch·RS/AR4 PASS. Xbot 다중 게시 및 기존 패치가 있는 batch 검증은 loop 실패로 미완료 | 코드 약 110줄 변경 |
-| ST-4 | 검증, 문서 상태 줄·README·CodeMap 갱신 | 문서 |
+| ST-3 | 구현·부분 검증 완료(`2411cd56`): 다중 root별 기록·RS 자식 전체 이력·새 A/B 이전 이력 적용(D2·D5). 정순/역순·AF 0·LB 1·CesiumMan batch·RS/AR4 PASS. Xbot 다중 게시 및 기존 패치가 있는 batch 검증은 loop 실패로 미완료 | 코드 약 110줄 변경 |
+| ST-4 | 완료(미커밋): snapshot/이력 바이트 비교·3회 절단·회귀·debug-layer 수집, 상태 줄·README·CodeMap 갱신 | 진단 코드 추가 131줄 |
 
 ## 완료 조건
 
@@ -124,3 +124,38 @@ void ReplacePatchSnapshot(const PatchSkinSnapshot& updated);
 - 성공 실행의 모든 검사에서 `cpu=exact paletteFinite=1`, `cpu=unavailable` 0건이다. forward/reverse 새 몸통 패치에 이전 root의 5개 슬롯이 고정된 `boundary=history` 로그를 확인했다. 이 로그 자체에는 수치 경계 비교가 없으며 위 ST-2 지표는 기존 패치의 신규 고정 슬롯 비교다.
 - RS 전용 검사는 demo·delay·physics-query-exit 병용을 거절한다. 초기 `rs`/`rs-valid` 시도는 옵션 충돌로 각각 exit -1073740791·SKINSTALE 0행이었다. 최종 실행은 이 옵션들을 제외했다. RS2b 전부 PASS, AR4 다섯 판정·RS4 연속 skinned 자식 게시/+60·전체 `Attached recut checks` PASS다. 과거 snapshot을 보관한 RS 도중 다른 break가 게시되는 동시 상황은 기존 옵션으로 재현하지 않았다.
 - 기존 옵션은 `cut-perf-second-bone` 한 번만 지원하므로 3회 절단은 실행하지 않았다. 다른 owner의 기존 snapshot 불변·취소·진행 중 RS의 늦은 이력 반영은 코드 경로로만 확인했고 별도 런타임 검증은 하지 않았다. debug 0 실행이므로 D3D12 validation ERROR 0 및 육안 결과는 확정하지 않는다. 완료 조건 2~5 전체 충족을 주장하지 않는다.
+
+## ST-4 검증 (2026-11-27, 미커밋, 기준 `2411cd56`)
+
+- 이전 실행의 부분 diff를 유지했다. `ReadDetachCheckBytes`는 snapshot의 모든 값 필드와 owner별 게시 이력을 길이 포함 바이트열로 읽는다. 벡터 주소·구조체 패딩·Joint 법선 행렬의 미사용 SIMD lane은 제외하고 모델은 identity를 기록한다. `-detach-history-checks 1`은 `RunBreakChecks`·`VerifyStale`의 비교와 추가 추출 Request 제출·Reset 취소를 수행하는 선택적 검증 인자다. 인자 생략 시 추가 요청은 실행하지 않으며, `-cut-perf-quiet 1`이면 직렬화·할당·비교와 추가 요청 자체를 건너뛴다.
+- `-cut-perf-third-bone`은 기존 시연 경로의 세 번째 요청만 추가한다. 두 번째 요청은 직전 게시 +120프레임, 세 번째는 직전 게시 +280프레임이다. 후속 본 인자는 Startup에서 한 번 읽으며, 세 번째 인자 생략 시 두 번째 절단 뒤 Update의 후속 요청 조건을 즉시 건너뛴다.
+- Release/Windows 빌드 PASS: MSBuild exit 0, 실제 70.78초(MSBuild 68.17초), 경고 29·오류 0. 외부 `%TEMP%/st4-verification`의 중간/출력/셰이더 경로를 사용하고 Jolt/MiniPhysics는 기존 Release 라이브러리를 복사해 링크했다. 이전 중단 빌드는 `CL.exe` 1073807364였으며 새 빌드 실패로 집계하지 않는다. 로그 `%TEMP%/st4-release-resumed.log`. 주석·빈 줄 정리 후 최종 Release 재빌드도 PASS(exit 0, 실제 56.62초, 경고 45·오류 0), `%TEMP%/st4-release-final.log`.
+- 모든 실행은 `MiniEngine/ModelViewer`에서 순차 실행하고 120초 후 강제 종료하도록 했다. 기본 인자는 ST-3 공통 인자와 RightUpLeg→LeftUpLeg이며 GPU는 NVIDIA GeForce MX450다(드라이버 버전 미조회). 각 실행 전 append 로그 `%TEMP%/SP6-SkeletalPatchChecks.log`의 바이트 offset을 기록했다.
+- 근거는 `%TEMP%/st4-<case>-{result.json,patch.log,perf.log}`다. result에는 실제 인자·offset·종료 코드·시간·검사 수를 보관한다. `detach`와 `rs` 전용 검사는 충돌하는 demo/delay/physics-query-exit 인자 없이 실행했다.
+
+| 검사 | 결과 | 실행 근거 |
+| --- | --- | --- |
+| 1. 다른 owner 불변 | PASS | `detach`, offset 816888, exit 0, 8.76초. Xbot에 두 번 게시한 뒤 CesiumMan 절단: `ST4 other-owner case=3 snapshots/history=PASS bytes=89024`. 앞 두 case의 0바이트 비교는 근거에서 제외 |
+| 2. 거절·취소 불변 | PASS | 같은 실행: AlreadyBroken 거절 3건 44244/89024/102260바이트, 실제 pending 추출의 Reset 취소 2건 44244/89024바이트, Stale 반환 중 기존 패치 2건 44244/89024바이트 모두 PASS. 별도 queued 취소 비교도 PASS, `SP7e cancelled break PASS: processed=6` |
+| 3. 동일 owner 3회 절단 | PASS | `triple`, offset 883194, exit 0, 17.09초. RightUpLeg→LeftUpLeg→RightArm, `-cut-perf-third-bone mixamorig:RightArm -physics-query-exit 720`. 요청 165/289/574프레임, 세 번 모두 게시, 12개 검사 전부 stale=0·cpu=exact·paletteFinite=1. 최초 480프레임 시도는 세 번째 시점 전 종료되어 PASS 근거로 쓰지 않음 |
+| 4. 회귀 | PASS | `single` offset 874022, exit 0: `%TEMP%/SKINSTALE-control-patch.log`와 `^MI` 21행 비교 차이 0. `rs` offset 877094, exit 0: RS2b·RS3·RS4, AR4 다섯 판정 및 `Attached recut checks PASS` |
+| 5. D3D12 debug-layer | PASS | `debug` offset 900243, `-debug 1` 정순 실행 exit 0, 약 13.98초. DBWIN 수집 `%TEMP%/st4-debug-capture.log`: D3D12 ERROR 0, WARNING 491(duplicate subresource transition 포함). 별도로 DXGI ERROR 1: GetContainingOutput에서 swapchain adapter와 현재 출력 불일치(#80). 두 절단의 Applied와 SKINSTALE 11행을 같은 실행에서 확인 |
+
+| stale=0 회귀 | offset | exit / 시간 | 검사 수 | 최대 경계 오차(mm) |
+| --- | --- | --- | --- | --- |
+| forward | 893712 | 0 / 14.74초 | 6 | 0 |
+| reverse | 788307 | 0 / 12.83초 | 6 | 0 |
+| af0: `-patch-anim-follow 0` | 794837 | 0 / 12.98초 | 6 | 0.000243629 |
+| lb1: `-patch-length-blend 1` | 801378 | 0 / 12.92초 | 6 | 0.000240736 |
+
+- 위 실행 모두 `cpu=unavailable`·`paletteFinite=0` 0건이며 timeout도 없었다. 3회 절단의 3차 경계 비교는 `verticesCompared=0`이므로 유효 가중치가 있는 정점의 3차 경계 오차까지 입증하지는 않는다.
+- debug 수집은 Add-Type의 임시 DLL 생성 및 명시 DLL LoadFile이 E_ACCESSDENIED로 실패했다. TEMP에 csc로 만든 외부 EXE의 DBWIN 수집으로 성공했으며, 실패한 초기 수집은 ERROR 0 근거로 쓰지 않았다. `%TEMP%/st4-debug-result.json`은 offset·인자·timeout, capture 로그는 실제 종료 코드를 보관한다.
+- 기존 실패는 수정·재실행하지 않았다: Xbot 다중 절단 `0xC0000409`, CesiumMan 연속 다중 절단 `MI4d2 missing multi-P loop`(ST-3 근거 유지). 기존 패치가 있는 다중 batch의 검증 상태도 그대로 미검증이다.
+- ST-1~ST-4 구현·검증 완료는 위 5개 검사와 문서 동기화 범위이며 기능 전체 완료를 뜻하지 않는다. 미완료 항목은 전체 모델·본 단일 절단 회귀(완료 조건 5)와 사용자 육안 확인(완료 조건 6)이다. 사용자 육안 확인, 진행 중 RS와 다른 break의 동시 게시, 단일 절단 전체 모델/본 조합 비교는 새로 검증하지 않았다. 빌드 출력 정리는 미완료: 자동 승인 검토가 TEMP 출력 삭제를 `blocked by policy`로 거절했다(검증한 절대 경로 직접 지정도 동일, 구체 사유 미제공). `%TEMP%/st4-verification/{build,jolt,solution,DebugCapture.exe}`가 남아 있으며 로그·재현 스크립트도 TEMP에 보관했다.
+
+## ST-4 리뷰 보완 검증 (2026-11-27, 미커밋)
+
+- Release/Windows 외부 TEMP 빌드 PASS: 71.10초, exit 0, 경고 45·오류 0. 기존 `st4-verification` 출력·중간·셰이더 경로와 사전 빌드 Jolt/MiniPhysics를 사용했다. 모든 빌드·실행에 120초 제한을 적용했고 timeout은 없었다. 인수 전달 오류와 LF/코드 페이지 해석으로 실패한 선행 시도는 PASS 근거에서 제외했다. ModelViewer.cpp의 CRLF를 복원한 최종 로그는 `%TEMP%/st4-review-release-final.log`다.
+- 요청한 RightUpLeg→LeftUpLeg 정순 데모 + `-detach-history-checks 1`: exit 0, 14.92초, 검사 6건 모두 detached live weight 0·cpu=exact·paletteFinite=1, 경계 최대 0 mm. 같은 인자의 quiet=1 실행은 exit 0, 17.10초, 새 patch 로그 0바이트·검사 행 0건이다.
+- 정순 데모는 `RunBreakChecks`를 호출하지 않으므로 `-skeletal-patch-break-checks 1 -detach-history-checks 1` 전용 실행을 추가했다. exit 0, 11.44초, ST4 13건 PASS·FAIL 0건이며 실제 pending Request의 Reset 취소 2건도 PASS다. 다른 owner의 비어 있지 않은 상태 82592바이트 비교도 PASS다. quiet=1 전용 실행은 exit 0, 12.81초, ST4·SP7·SKINSTALE 검사 행 0건이다. 기존 AF2b palette 진단 9행(910바이트)은 별도 경로에서 남으며 이번 수정 범위에 포함하지 않았다.
+- 근거: `%TEMP%/st4-review-{forward,forward-quiet,detach,detach-quiet}-{result.json,patch.log,perf.log}`. GPU는 NVIDIA GeForce MX450, 드라이버 버전은 미조회이며 실행은 모두 `-debug 0`이다. 완료 조건 5의 전체 모델·본 단일 절단 회귀와 조건 6의 사용자 육안 확인은 여전히 미완료다.

@@ -1336,6 +1336,11 @@ namespace Viewer
     // 실제 C 경로의 Dynamic 집합을 검증하고 경계 측정의 PASS·FAIL·N/A를 요약한다.
     bool SkeletalPatchCopy::RunBreakChecks(Scene& scene, PhysicsSystem& physics, CuttingSystem& cutting)
     {
+        // 명시한 ST-4 진단에서만 snapshot과 이력을 추가로 비교한다.
+        uint32_t detachCheckArg = 0;
+        CommandLineArgs::GetInteger(L"detach-history-checks", detachCheckArg);
+        const bool detachChecks = detachCheckArg && !CutPerf::Quiet();
+
         // 첫 요청을 pause 상태로 제출해 결과가 실제 step까지 대기하는지 확인한다.
         if (m_RequestId && !physics.IsSimulationRunning())
         {
@@ -1345,7 +1350,11 @@ namespace Viewer
 
             // 취소한 별도 요청은 이후 substep의 처리 수와 결과에 남지 않아야 한다.
             const auto cancelled = physics.QueueBreak(m_Break, true);
+            const auto beforeCancel = detachChecks ? ReadDetachCheckBytes(scene) : std::vector<uint8_t>{};
             physics.CancelBreak(cancelled);
+            if (detachChecks)
+                PatchLog("ST4 cancelled snapshots/history=%s bytes=%zu\n",
+                    beforeCancel == ReadDetachCheckBytes(scene) ? "PASS" : "FAIL", beforeCancel.size());
             physics.SetSimulationRunning(true);
         }
         if (IsPending() || cutting.IsBusy()) return false;
@@ -1367,6 +1376,12 @@ namespace Viewer
         // JointId는 독립 GLB palette 조사값을 쓰고 subtree는 pose ancestry에서 계산한다.
         if (m_CheckAwaiting)
         {
+            // 다른 owner의 실제 게시 패치와 이력이 성공한 절단 뒤에도 바이트 단위로 같은지 확인한다.
+            if (detachChecks)
+                PatchLog("ST4 other-owner case=%u snapshots/history=%s bytes=%zu\n", m_BreakCheck,
+                    m_DetachOtherBefore == ReadDetachCheckBytes(scene, m_Break.Owner) ? "PASS" : "FAIL",
+                    m_DetachOtherBefore.size());
+
             SkeletalRigState state;
             const auto* object = scene.FindObject(m_Break.Owner);
             if (!object || !skeletal.ReadDiagnosticState(m_Break.Owner, state)) throw std::runtime_error("SP7b missing rig");
@@ -1409,9 +1424,15 @@ namespace Viewer
             }
 
             // 현재 segment에 수직인 평면으로 같은 C의 재절단 거절을 확인한다.
+            const auto beforeReject = detachChecks ? ReadDetachCheckBytes(scene) : std::vector<uint8_t>{};
             Request(scene, BuildSkeletalBreakPlane(*object, m_BreakCheck - 1), false, checkMode, UINT32_MAX, &physics);
             if (IsPending() || m_Incoming.Status != IncomingJointStatus::AlreadyBroken) throw std::runtime_error("SP7b second C submitted");
             PatchLog("SP7b second C AlreadyBroken PASS\n");
+            if (detachChecks)
+                PatchLog("ST4 rejected snapshots/history=%s bytes=%zu\n",
+                    beforeReject == ReadDetachCheckBytes(scene) ? "PASS" : "FAIL", beforeReject.size());
+
+            // 비교를 마친 요청의 대기 상태를 지워 다음 부위를 준비한다.
             m_CheckAwaiting = false;
             m_StaleStage = 0;
         }
@@ -1438,9 +1459,29 @@ namespace Viewer
             Request(scene, plane, false, checkMode, UINT32_MAX, &off);
             if (IsPending()) throw std::runtime_error("SP7b physics off submitted cut");
             PatchLog("SP7b physics off PASS\n");
+
+            // 기존 패치가 있는 상태에서 실제 추출 요청을 취소해 Reset의 snapshot·이력 보존을 확인한다.
+            if (detachChecks && m_BreakCheck && !m_StaleStage)
+            {
+                const auto beforeReset = ReadDetachCheckBytes(scene);
+                Request(scene, plane, true, checkMode, UINT32_MAX, &physics);
+                const bool pending = IsPending();
+                Reset(scene, physics, cutting);
+                PatchLog("ST4 reset-cancel pending=%u snapshots/history=%s bytes=%zu\n", pending,
+                    beforeReset == ReadDetachCheckBytes(scene) ? "PASS" : "FAIL", beforeReset.size());
+            }
+
             if (!m_BreakCheck) physics.SetSimulationRunning(false);
             Request(scene, plane, true, checkMode, UINT32_MAX, &physics);
             if (!m_BreakReady || m_Incoming.Status != IncomingJointStatus::Ok) throw std::runtime_error("SP7b C rejected");
+
+            // 요청은 입력만 준비하므로 게시 전 상태를 거절 및 다른 owner 비교의 기준으로 보관한다.
+            if (detachChecks)
+            {
+                m_DetachCheckBefore = ReadDetachCheckBytes(scene);
+                m_DetachOtherBefore = ReadDetachCheckBytes(scene, m_Break.Owner);
+            }
+
             // 각 부위의 첫 시도만 generation 불일치를 주입하고 게시 전 상태를 저장한다.
             if (!m_OffsetCopy && !m_StaleStage)
             {
@@ -1453,6 +1494,92 @@ namespace Viewer
             return false;
         }
         throw std::runtime_error("SP7b missing diagnostic model");
+    }
+
+    // snapshot과 게시 이력의 값 필드를 직렬화해 벡터 주소와 구조체 패딩을 비교에서 제외한다.
+    std::vector<uint8_t> SkeletalPatchCopy::ReadDetachCheckBytes(const Scene& scene, ObjectId excluded) const
+    {
+        // 스칼라와 연속 배열은 길이를 함께 넣어 필드 경계를 보존한다.
+        std::vector<uint8_t> bytes;
+        const auto scalar = [&bytes](const auto& value)
+        {
+            // 기존 객체 표현을 복사하므로 부동소수점 비트도 그대로 비교한다.
+            const auto* first = reinterpret_cast<const uint8_t*>(&value);
+            bytes.insert(bytes.end(), first, first + sizeof(value));
+        };
+        const auto array = [&bytes, &scalar](const auto& values)
+        {
+            // 빈 배열은 길이만 기록해 널 포인터 산술을 피한다.
+            scalar(values.size());
+            if (values.empty())
+                return;
+            const auto* first = reinterpret_cast<const uint8_t*>(values.data());
+            bytes.insert(bytes.end(), first, first + values.size() * sizeof(values[0]));
+        };
+
+        // Joint는 위치 행렬과 법선 행렬의 유효 성분만 기록해 미사용 SIMD lane을 제외한다.
+        const auto joints = [&scalar](const std::vector<Joint>& values)
+        {
+            // 배열 길이 뒤에 각 Joint의 값 필드를 순서대로 기록한다.
+            scalar(values.size());
+            for (const auto& joint : values)
+            {
+                // 위치 행렬의 16개 값에는 미사용 lane이 없다.
+                scalar(joint.posXform);
+
+                // 법선 행렬의 세 축은 XYZ 성분만 비교한다.
+                for (const auto& axis : { joint.nrmXform.GetX(), joint.nrmXform.GetY(), joint.nrmXform.GetZ() })
+                {
+                    scalar(float(axis.GetX()));
+                    scalar(float(axis.GetY()));
+                    scalar(float(axis.GetZ()));
+                }
+            }
+        };
+
+        // 다른 owner 검사에서도 실제 publication이 있는 component만 기록한다.
+        for (const auto& owner : scene.GetObjects())
+        {
+            if (owner->GetId() == excluded)
+                continue;
+            for (const auto& mesh : owner->GetMeshComponents())
+            {
+                if (!mesh->PatchSkin)
+                    continue;
+                const auto& snapshot = mesh->PatchSkin->Snapshot;
+                scalar(owner->GetId());
+                scalar(mesh->GetId());
+                scalar(snapshot.AttachNode);
+                scalar(snapshot.MeshNode);
+                scalar(snapshot.SourceRevision);
+                scalar(snapshot.SourceFrame);
+                scalar(snapshot.SourceFrozen);
+                scalar(snapshot.AttachAtCut);
+                scalar(snapshot.MeshNodeAtCut);
+                joints(snapshot.JointsAtCut);
+                array(snapshot.Frozen);
+                scalar(snapshot.SkinningAllowed);
+                scalar(snapshot.AnimFollow);
+                array(snapshot.AnimOffset);
+                array(snapshot.LengthBlendRatio);
+            }
+        }
+
+        // owner별 분리 이력의 모든 값 배열도 같은 방식으로 비교한다.
+        for (const auto& record : m_DetachHistory)
+        {
+            if (record.Owner == excluded)
+                continue;
+            scalar(record.Owner);
+            scalar(record.SourceModel.lock().get());
+            scalar(record.RootNode);
+            joints(record.Palette);
+            joints(record.AnimPalette);
+            array(record.Nodes);
+            array(record.AnimNodes);
+            array(record.LengthRatio);
+        }
+        return bytes;
     }
 
     // Stale 전후 비교를 위해 원본 mask와 게시·물리 상태를 읽는다.
@@ -1479,6 +1606,13 @@ namespace Viewer
     // 실제 Stale 결과와 원본 mask·조각·물리 상태 보존을 검증한다.
     void SkeletalPatchCopy::VerifyStale(const Scene& scene, PhysicsSystem& physics)
     {
+        // 실제 Stale 반환 뒤 기존 snapshot과 게시 이력의 바이트 보존을 별도로 기록한다.
+        uint32_t detachCheckArg = 0;
+        CommandLineArgs::GetInteger(L"detach-history-checks", detachCheckArg);
+        if (detachCheckArg && !CutPerf::Quiet())
+            PatchLog("ST4 stale snapshots/history=%s bytes=%zu\n",
+                m_DetachCheckBefore == ReadDetachCheckBytes(scene) ? "PASS" : "FAIL", m_DetachCheckBefore.size());
+
         // A/B 준비 owner까지 제거된 뒤 저장 상태와 대조한다.
         const bool pass = m_LastBreakStatus == BreakStatus::Stale && !m_CopyOwner
             && m_StaleBefore == ReadOriginalState(scene, physics);
